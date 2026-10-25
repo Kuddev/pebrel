@@ -3,6 +3,14 @@ use std::sync::Arc;
 
 use crate::font_install::SystemFontFamily;
 
+pub const SYSTEM_MONO_FONT_FAMILY: &str = if cfg!(windows) {
+    "Consolas"
+} else if cfg!(target_os = "macos") {
+    "Menlo"
+} else {
+    "monospace"
+};
+
 pub fn system_families(text: Arc<gpui::TextSystem>) -> Vec<SystemFontFamily> {
     #[cfg(windows)]
     {

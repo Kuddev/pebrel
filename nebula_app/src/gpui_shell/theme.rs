@@ -541,6 +541,7 @@ pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
 /// 所有主题（含 Nord / Nord Light / Warm Sand）共用同一条 token 应用路径。启动、设置变更、系统外观变化
 /// 都走这里；主题名先经 [`effective_theme_name`] 折算 follow_system。
 pub fn apply_chrome_theme(cx: &mut App) {
+    super::font_loading::ensure_selected(cx);
     // 视效（模糊/透明度/壁纸）与主题同一时机刷新：设置热应用、系统外观
     // 变化都会走到这里，窗口级效果与 token 保持同帧一致。
     crate::gpui_shell::wallpaper::refresh(cx);
@@ -811,8 +812,8 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     // 我们是终端，所以等宽在这里是**语义标记**而不是全局字体：路径、键帽、
     // 命令、数值这类"机器读、要逐字符对齐、要能整段复制"的东西显式走 mono；
     // 标题和说明是给人读的，走 sans。
-    // UI 等宽元数据使用随应用提供的 Normal 字体，终端仍读取自己的字体组。
-    theme.mono_font_family = crate::font_install::REQUIRED_FONT_FAMILY.into();
+    // 元数据用系统等宽字体，不能因界面显示路径而隐式加载完整中文字体。
+    theme.mono_font_family = crate::font_install::SYSTEM_MONO_FONT_FAMILY.into();
     let default_ui_font = super::typography::UI_FONT_FAMILY;
     theme.font_family = ui_font_family.unwrap_or_else(|| default_ui_font.to_owned()).into();
     theme.radius = px(6.0);

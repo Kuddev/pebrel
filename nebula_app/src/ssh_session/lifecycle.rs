@@ -15,7 +15,9 @@ use nebula_terminal::term::Term;
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, client};
 use tokio::sync::{mpsc, watch};
 
-use super::{SessionError, SharedSession, SshDestination, SshEventHost, SshStage};
+use super::{
+    ResumeTarget, SessionError, SharedSession, SshDestination, SshEventHost, SshStage, resume,
+};
 
 pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(20);
 const AUTH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -160,6 +162,7 @@ fn input_bridge(receiver: Receiver<Msg>) -> (mpsc::UnboundedReceiver<Msg>, watch
 pub(super) async fn run<H: SshEventHost>(
     destination: String,
     initial_remote_cwd: Option<String>,
+    resume_target: Option<ResumeTarget>,
     initial_size: WindowSize,
     terminal: Arc<FairMutex<Term<H>>>,
     event_proxy: H,
@@ -181,28 +184,43 @@ pub(super) async fn run<H: SshEventHost>(
         .await??;
         let mut acquired =
             super::authenticated_session_at(&resolved, &profile, Some(&event_proxy), 0).await?;
-        let (mut channel, hook_token) =
-            match open_shell(&acquired, initial_size, initial_remote_cwd.as_deref(), &event_proxy)
-                .await
-            {
-                Ok(opened) => opened,
-                Err(first_error) if acquired.reused => {
-                    super::evict_pooled_session(&acquired.key, &acquired.session).await;
-                    log::info!("SSH pooled channel failed; reconnecting: {first_error}");
-                    acquired =
-                        super::authenticated_session_at(&resolved, &profile, Some(&event_proxy), 0)
-                            .await?;
-                    open_shell(&acquired, initial_size, initial_remote_cwd.as_deref(), &event_proxy)
-                        .await?
-                },
-                Err(error) => return Err(error),
-            };
+        let (mut channel, hook_token) = match open_shell(
+            &acquired,
+            initial_size,
+            initial_remote_cwd.as_deref(),
+            resume_target.as_ref(),
+            &event_proxy,
+        )
+        .await
+        {
+            Ok(opened) => opened,
+            Err(first_error) if acquired.reused => {
+                super::evict_pooled_session(&acquired.key, &acquired.session).await;
+                log::info!("SSH pooled channel failed; reconnecting: {first_error}");
+                acquired =
+                    super::authenticated_session_at(&resolved, &profile, Some(&event_proxy), 0)
+                        .await?;
+                open_shell(
+                    &acquired,
+                    initial_size,
+                    initial_remote_cwd.as_deref(),
+                    resume_target.as_ref(),
+                    &event_proxy,
+                )
+                .await?
+            },
+            Err(error) => return Err(error),
+        };
         let (_pane_connection_scope, connection) =
             super::pane_connection::PaneConnectionScope::new(&acquired.session);
         event_proxy.ssh_pane_connection(Some(connection));
         super::report_stage(Some(&event_proxy), SshStage::Ready);
-        let result =
-            pump(&mut channel, hook_token, initial_size, &terminal, &event_proxy, &mut input).await;
+        let identity = channel.identity.clone();
+        let result = tokio::select! {
+            biased;
+            result = pump(&mut channel, hook_token, initial_size, &terminal, &event_proxy, &mut input) => result,
+            never = resume::monitor(&acquired.session, identity, resume_target.as_ref(), &event_proxy) => match never {},
+        };
         if result.is_err() || acquired.session.is_closed() {
             super::evict_pooled_session(&acquired.key, &acquired.session).await;
         }
@@ -266,6 +284,8 @@ pub(super) struct ShellChannel {
     reader: ChannelReadHalf,
     pending: VecDeque<ChannelMsg>,
     pending_bytes: usize,
+    identity: Arc<std::sync::Mutex<Option<resume::PtyIdentity>>>,
+    identity_input: Option<resume::IdentityInput>,
 }
 
 /// The same close-on-drop ownership applies to shell and short-lived exec channels.
@@ -276,6 +296,8 @@ pub(super) fn own_channel(channel: Channel<client::Msg>) -> ShellChannel {
         reader,
         pending: VecDeque::new(),
         pending_bytes: 0,
+        identity: Default::default(),
+        identity_input: None,
     }
 }
 
@@ -334,15 +356,17 @@ async fn open_shell<H: SshEventHost>(
     acquired: &super::AcquiredSession,
     size: WindowSize,
     remote_cwd: Option<&str>,
+    target: Option<&ResumeTarget>,
     progress: &H,
 ) -> Result<(ShellChannel, String), SessionError> {
-    open_shell_with_budget(acquired, size, remote_cwd, progress, NETWORK_TIMEOUT).await
+    open_shell_with_budget(acquired, size, remote_cwd, target, progress, NETWORK_TIMEOUT).await
 }
 
 async fn open_shell_with_budget<H: SshEventHost>(
     acquired: &super::AcquiredSession,
     size: WindowSize,
     remote_cwd: Option<&str>,
+    target: Option<&ResumeTarget>,
     progress: &H,
     budget: Duration,
 ) -> Result<(ShellChannel, String), SessionError> {
@@ -352,7 +376,7 @@ async fn open_shell_with_budget<H: SshEventHost>(
     let result = network_with_budget(
         "shell channel",
         budget,
-        open_shell_channel(&acquired.session, size, remote_cwd),
+        open_shell_channel(&acquired.session, size, remote_cwd, target),
     )
     .await;
     if result.is_ok() {
@@ -365,6 +389,7 @@ async fn open_shell_channel(
     session: &SharedSession,
     size: WindowSize,
     remote_cwd: Option<&str>,
+    target: Option<&ResumeTarget>,
 ) -> Result<(ShellChannel, String), SessionError> {
     let hook_token = super::remote_hook_token()?;
     let bootstrap = super::integration::prepare(session, &hook_token).await;
@@ -381,12 +406,12 @@ async fn open_shell_channel(
         )
         .await?;
     wait_request_success(&mut channel, "PTY").await?;
-    if let Some(command) = bootstrap {
+    if bootstrap.is_some() || target.is_some() || resume::supported(session).await {
+        let command = resume::startup(&hook_token, bootstrap.as_deref(), target, remote_cwd);
         match super::integration::start(&mut channel, &command).await {
             Ok(()) => {
-                if let Some(command) = super::initial_remote_cd_command(remote_cwd) {
-                    channel.data_bytes(command).await?;
-                }
+                channel.identity_input =
+                    Some(resume::IdentityInput::new(&hook_token, channel.identity.clone()));
                 return Ok((channel, hook_token));
             },
             Err(error) => {
@@ -464,6 +489,13 @@ async fn pump<H: SshEventHost>(
     stream.resize(initial_size);
     stream.set_remote_hook_token(hook_token);
     let result = pump_stream(channel, &mut stream, terminal, event_proxy, input).await;
+    if let Some(filter) = &mut channel.identity_input {
+        let trailing = filter.finish();
+        if !trailing.is_empty() {
+            stream.feed(&mut *terminal.lock(), event_proxy, &trailing);
+            event_proxy.send_event(TerminalEvent::Wakeup);
+        }
+    }
     // An exit or network error can arrive before the synchronized frame ends.
     // Publish bytes already received before the pane reports its final state.
     if stream.next_sync_timeout().is_some() {
@@ -569,7 +601,16 @@ fn feed_ready_output<H: SshEventHost>(
         let mut terminal = terminal.lock();
         loop {
             match message {
-                ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                ChannelMsg::Data { data } => {
+                    bytes += data.len();
+                    messages += 1;
+                    let filtered = match &mut channel.identity_input {
+                        Some(filter) => filter.feed(data.as_ref()),
+                        None => std::borrow::Cow::Borrowed(data.as_ref()),
+                    };
+                    stream.feed(&mut terminal, event_proxy, &filtered);
+                },
+                ChannelMsg::ExtendedData { data, .. } => {
                     bytes += data.len();
                     messages += 1;
                     stream.feed(&mut terminal, event_proxy, data.as_ref());

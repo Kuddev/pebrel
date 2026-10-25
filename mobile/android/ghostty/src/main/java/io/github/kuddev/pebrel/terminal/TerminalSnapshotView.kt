@@ -186,10 +186,10 @@ class TerminalSnapshotView(context: Context) : View(context) {
         // Keep the chosen font readable. Pan across desktop columns instead of
         // compressing a wide desktop down to a few illegible phone pixels.
         paint.textSize = fontPixels * zoom
-        cellWidth = max(.1f, paint.measureText("M"))
-        val metrics = paint.fontMetrics
-        cellHeight = ceil(metrics.descent - metrics.ascent + metrics.leading)
-        baseline = -metrics.ascent
+        val metrics = TerminalGridMetrics.measure(paint)
+        cellWidth = metrics.width
+        cellHeight = metrics.height
+        baseline = metrics.baseline
     }
 
     private fun reproject() {
@@ -272,6 +272,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
         canvas.translate(-offsetX, -offsetY)
         val first = (offsetY / cellHeight).toInt().coerceAtLeast(0)
         val last = ceil((offsetY + height) / cellHeight).toInt().coerceAtMost(frame.rows.size)
+        for (y in first until last) frame.rows[y]?.let {
+            TerminalCellPainter.backgrounds(canvas, paint, frame, it, y, cellWidth, cellHeight)
+        }
         for (y in first until last) frame.rows[y]?.let {
             TerminalCellPainter.row(canvas, paint, frame, it, y, cellWidth, cellHeight, baseline)
         }

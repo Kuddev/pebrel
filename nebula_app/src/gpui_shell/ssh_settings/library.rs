@@ -641,11 +641,7 @@ impl SettingsPane {
             .flex()
             .items_center()
             .justify_center()
-            .child(host_icon(
-                os_icon.glyph,
-                crate::font_install::REQUIRED_FONT_FAMILY.into(),
-                muted,
-            ));
+            .child(host_icon(os_icon.glyph, crate::font_install::SYMBOL_FONT_FAMILY.into(), muted));
         h_flex()
             .id(SharedString::from(format!("ssh-host-row-{ix}")))
             .debug_selector(move || format!("ssh-host-row-{ix}"))
@@ -675,7 +671,7 @@ impl SettingsPane {
                         .truncate()
                         .text_size(px(12.0))
                         .line_height(px(18.0))
-                        .font_family(crate::font_install::REQUIRED_FONT_FAMILY)
+                        .font_family(cx.theme().mono_font_family.clone())
                         .text_color(muted)
                         .child(detail),
                 ),
