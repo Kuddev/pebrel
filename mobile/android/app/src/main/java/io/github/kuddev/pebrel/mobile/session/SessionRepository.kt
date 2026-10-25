@@ -231,14 +231,13 @@ class SessionRepository(private val context: Context,
     private var redraw: (() -> Unit)? = null
     val drafts = MutableStateFlow<Map<String, String>>(emptyMap())
     private val recentCommands = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    private val commandUsage = mutableMapOf<String, CommandUsage>()
     val commandHistory = recentCommands.asStateFlow()
     fun setDraft(id: String, text: String) { drafts.value = drafts.value + (id to text) }
     fun acknowledgeDraft(id: String, sent: String) {
         if (sent.isNotBlank()) {
             // Local composition history follows the live session, without writing shell input to disk.
-            var remaining = 32_768
-            val entries = (listOf(sent) + recentCommands.value[id].orEmpty())
-                .distinct().take(40).takeWhile { remaining -= it.length; remaining >= 0 }
+            val entries = commandUsage.getOrPut(id, ::CommandUsage).record(sent)
             recentCommands.value = recentCommands.value + (id to entries)
         }
         if (drafts.value[id] == sent) drafts.value = drafts.value - id
@@ -658,6 +657,7 @@ class SessionRepository(private val context: Context,
         live.value = live.value.filterNot { it.id == id }
         drafts.value = drafts.value - id
         recentCommands.value = recentCommands.value - id
+        commandUsage.remove(id)
         refreshSshNetworkMonitor()
         stopIdleService()
     }
@@ -991,6 +991,7 @@ class SessionRepository(private val context: Context,
         refreshLanDiscovery()
         drafts.value = emptyMap()
         recentCommands.value = emptyMap()
+        commandUsage.clear()
         scope.launch { clients.forEach { it.close() } }
         stopIdleService()
     }
@@ -1006,6 +1007,7 @@ class SessionRepository(private val context: Context,
         refreshLanDiscovery()
         drafts.value = drafts.value.filterKeys { !it.startsWith("$id:") }
         recentCommands.value = recentCommands.value.filterKeys { !it.startsWith("$id:") }
+        commandUsage.keys.removeAll { it.startsWith("$id:") }
         scope.launch { client?.close() }
         stopIdleService()
     }

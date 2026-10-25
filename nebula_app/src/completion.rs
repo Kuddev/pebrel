@@ -359,6 +359,8 @@ pub(crate) fn record_command(scope: &HistoryScope, line: &str, cwd: &str) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .record(scope, line, cwd);
+    // Repeating a command changes its rank even when the candidate text is unchanged.
+    HISTORY_REVISION.fetch_add(1, Ordering::Release);
 }
 
 pub(crate) fn record_directory(cwd: &str) {
