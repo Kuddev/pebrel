@@ -9,7 +9,11 @@ internal object SshPtyIdentity {
     private val servers = setOf("sshd", "sshd-session", "sshd-auth")
     private val terminal = Regex("(?:pts/[0-9]+|tty[a-zA-Z0-9]+)")
 
-    fun parse(output: String): String? {
+    data class Identity(val tty: String, val hasTmuxClient: Boolean)
+
+    fun parse(output: String): String? = inspect(output)?.tty
+
+    fun inspect(output: String): Identity? {
         if (output.length > 64 * 1024) return null
         val lines = output.lineSequence().iterator()
         val queryPid = if (lines.hasNext()) lines.next().trim().toLongOrNull() else null
@@ -39,7 +43,8 @@ internal object SshPtyIdentity {
         // One app transport owns one PTY. Multiple candidates are ambiguous, never "pick first".
         val candidates = processes.filter { (pid, process) ->
             terminal.matches(process.tty) && owner(pid) == ssh
-        }.values.map { it.tty }.distinct()
-        return candidates.singleOrNull()?.let { "/dev/$it" }
+        }.values
+        val tty = candidates.map { it.tty }.distinct().singleOrNull() ?: return null
+        return Identity("/dev/$tty", candidates.any { it.command == "tmux" || it.command.startsWith("tmux:") })
     }
 }

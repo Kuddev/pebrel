@@ -73,7 +73,7 @@ pub fn is_interactive_shell_command(command: &str) -> bool {
 }
 
 /// 一个可执行文件路径的基名（去掉目录与 `.exe`）是否在交互式 shell 表里。
-fn is_shell_executable(path: &str) -> bool {
+pub(crate) fn is_shell_executable(path: &str) -> bool {
     let name = path.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or(path);
     let name = name.to_ascii_lowercase();
     let stem = name.strip_suffix(".exe").unwrap_or(name.as_str());
@@ -130,6 +130,43 @@ fn is_stateless_process(executable: &str) -> bool {
 
 fn snapshot() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
     Ok(verified_parentage(process_snapshot::snapshot()?))
+}
+
+/// 全机枚举的唯一出口（含测试 seam）：生产走 `snapshot()`，测试可注入
+/// 慢枚举/计数伪实现（见 `with_cached_snapshot` 的并发测试）。
+fn enumerate() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+    #[cfg(test)]
+    if let Some(fake) = test_snapshot_hook() {
+        count_test_enumeration();
+        return fake();
+    }
+    snapshot()
+}
+
+fn test_snapshot_hook()
+-> Option<fn() -> Result<std::collections::HashMap<u32, (u32, String)>, String>> {
+    *HOOK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+type SnapshotFn = fn() -> Result<std::collections::HashMap<u32, (u32, String)>, String>;
+static HOOK: std::sync::LazyLock<std::sync::Mutex<Option<SnapshotFn>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// 注入/清除测试枚举实现，同时把枚举计数清零。
+#[cfg(test)]
+pub(crate) fn set_test_snapshot_hook(fake: Option<SnapshotFn>) {
+    *HOOK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = fake;
+    TEST_ENUMERATION_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 枚举计数：每次经 seam 触发的枚举 +1（生产路径不计数）。
+#[cfg(test)]
+pub(crate) static TEST_ENUMERATION_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn count_test_enumeration() {
+    TEST_ENUMERATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn verified_parentage(rows: Vec<ProcessRow>) -> std::collections::HashMap<u32, (u32, String)> {
@@ -224,11 +261,21 @@ pub(crate) struct ActivityEvidence {
     pub busy: bool,
 }
 
-pub(crate) fn activity_evidence(
+/// 进程树存活证据（看门狗对账用），走 [`with_cached_snapshot`] 的
+/// [`SNAPSHOT_TTL`] 窗口——看门狗多 pane 对账、hook 路由校验与祖先链查询
+/// 在同一窗口内共用一次全机枚举，而不是各查各的。快照失败返回 `Err`
+/// （= 无证据，调用方按无证据处理）。**只应在后台线程调用**：缓存未命中时
+/// 这里会同步 spawn `ps`（阻塞轮询最长 1s），上主线程就是可感知的周期性
+/// 卡顿。
+pub(crate) fn cached_activity_evidence(
     root_pid: u32,
     primary_pid: Option<u32>,
 ) -> Result<ActivityEvidence, String> {
-    Ok(activity_from_snapshot(&descendants(root_pid)?, primary_pid))
+    with_cached_snapshot(|processes| {
+        descendants_from_snapshot(root_pid, processes)
+            .map(|rows| activity_from_snapshot(&rows, primary_pid))
+    })
+    .unwrap_or_else(|| Err("process snapshot unavailable".to_owned()))
 }
 
 fn activity_from_snapshot(rows: &[ProcessEntry], primary_pid: Option<u32>) -> ActivityEvidence {
@@ -325,20 +372,38 @@ fn resolve_within_tree(
 /// 带 TTL 的全机进程快照，供路由校验和祖先链查询共用。
 ///
 /// 用闭包而不是把表交出去：调用方只需要读，克隆整张进程表纯属浪费。
-fn with_cached_snapshot<T>(
-    read: impl FnOnce(&std::collections::HashMap<u32, (u32, String)>) -> T,
-) -> Option<T> {
-    use std::collections::HashMap;
-    use std::sync::{LazyLock, Mutex};
-    use std::time::Instant;
+type ProcessSnapshotMap = std::collections::HashMap<u32, (u32, String)>;
+type SnapshotCacheCell = Option<(std::time::Instant, ProcessSnapshotMap)>;
+static SNAPSHOT_CACHE: std::sync::LazyLock<std::sync::Mutex<SnapshotCacheCell>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-    type Cached = Option<(Instant, HashMap<u32, (u32, String)>)>;
-    static CACHE: LazyLock<Mutex<Cached>> = LazyLock::new(|| Mutex::new(None));
+/// 测试：清空快照缓存（下一次调用强制走慢路径）。
+#[cfg(test)]
+fn reset_snapshot_cache_for_test() {
+    *SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
 
-    let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let fresh = cache.as_ref().is_some_and(|(taken, _)| taken.elapsed() < SNAPSHOT_TTL);
-    if !fresh {
-        *cache = Some((Instant::now(), snapshot().ok()?));
+fn with_cached_snapshot<T>(read: impl FnOnce(&ProcessSnapshotMap) -> T) -> Option<T> {
+    // 快路径：锁只覆盖新鲜度判定与纯读闭包（微秒级）。全机枚举绝不在这把
+    // 锁内发生——hook 路由校验（`is_within_tree`）与看门狗共用这把锁，
+    // 枚举挪进锁内会把 UI 线程挂在一次可达秒级的 `ps` 上。
+    {
+        let cache = SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((taken, processes)) = cache.as_ref()
+            && taken.elapsed() < SNAPSHOT_TTL
+        {
+            return Some(read(processes));
+        }
+    }
+    // 慢路径：锁外枚举。时间戳在枚举**完成后**取——发布出去的表不再先天
+    // 陈旧（旧实现先取戳再枚举，慢枚举把 TTL 预支给了枚举本身）。
+    let fresh = enumerate().ok()?;
+    let completed_at = std::time::Instant::now();
+    let mut cache = SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // 并发补位只认仍然陈旧的槽：不把别人刚发布的更新表换回自己的。
+    let stale = !cache.as_ref().is_some_and(|(taken, _)| taken.elapsed() < SNAPSHOT_TTL);
+    if stale {
+        *cache = Some((completed_at, fresh));
     }
     let (_, processes) = cache.as_ref()?;
     Some(read(processes))
@@ -485,7 +550,99 @@ mod tests {
         let evidence = super::activity_from_snapshot(&rows(&["pwsh.exe", "openconsole.exe"]), None);
         assert!(!evidence.child_present);
         assert!(!evidence.busy);
-        assert!(super::activity_evidence(0, None).is_err(), "no snapshot is not proof of idle");
+        // 根 pid 选一个任何平台快照里都不存在的值：Windows 的 Toolhelp 快照
+        // 含 pid 0（System Idle），用它当「不存在的 shell」反而能遍历出后代；
+        // Linux /proc 则没有 pid 0。u32::MAX 两边都不存在，判据才与平台无关。
+        // （走真实快照缓存，与 seam 测试共用互斥避免并发注入串扰。）
+        {
+            let _guard = cache_test_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            super::cached_activity_evidence(u32::MAX, None)
+                .err()
+                .expect("no snapshot is not proof of idle");
+        }
+    }
+
+    /// seam 测试共享的互斥：注入伪枚举期间独占快照缓存状态。
+    fn cache_test_state() -> &'static std::sync::Mutex<()> {
+        static STATE: std::sync::LazyLock<std::sync::Mutex<()>> =
+            std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+        &STATE
+    }
+
+    fn fake_snapshot_map() -> std::collections::HashMap<u32, (u32, String)> {
+        std::collections::HashMap::from([(1u32, (0u32, "shell".to_owned()))])
+    }
+
+    /// 评审 2：慢全机枚举绝不占用缓存锁——两个并发读者各自枚举、并行完成，
+    /// 而不是在锁上排成 2×枚举时长（旧实现枚举持锁，UI 的 hook 路由校验
+    /// 会被一次可达秒级的 `ps` 挂住）。
+    #[test]
+    fn slow_snapshot_does_not_serialize_concurrent_readers() {
+        let _guard = cache_test_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        static GATE: (std::sync::Mutex<(usize, bool)>, std::sync::Condvar) =
+            (std::sync::Mutex::new((0, false)), std::sync::Condvar::new());
+        fn slow_fake() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+            let mut state = GATE.0.lock().unwrap();
+            state.0 += 1;
+            GATE.1.notify_all();
+            drop(GATE.1.wait_while(state, |(_, released)| !*released).unwrap());
+            Ok(fake_snapshot_map())
+        }
+        *GATE.0.lock().unwrap() = (0, false);
+        super::set_test_snapshot_hook(Some(slow_fake));
+        super::reset_snapshot_cache_for_test();
+        let a = std::thread::spawn(|| super::with_cached_snapshot(|processes| processes.len()));
+        let b = std::thread::spawn(|| super::with_cached_snapshot(|processes| processes.len()));
+        // Both enumerators must enter before either can finish. The timeout only
+        // bounds a lock regression; scheduler latency is not the assertion.
+        let (mut state, _) = GATE
+            .1
+            .wait_timeout_while(
+                GATE.0.lock().unwrap(),
+                std::time::Duration::from_secs(10),
+                |(entered, _)| *entered < 2,
+            )
+            .unwrap();
+        let overlapped = state.0 == 2;
+        state.1 = true;
+        GATE.1.notify_all();
+        drop(state);
+        let (ra, rb) = (a.join().unwrap(), b.join().unwrap());
+        let enumerations = super::TEST_ENUMERATION_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        super::set_test_snapshot_hook(None);
+        assert_eq!((ra, rb), (Some(1), Some(1)), "both readers see the snapshot");
+        assert!(overlapped, "both cache misses must enumerate before either publishes");
+        assert_eq!(enumerations, 2, "each miss enumerates on its own");
+    }
+
+    /// 评审 2：发布时间戳在枚举完成后取——缓存表的「年龄」从枚举结束起算，
+    /// 不再把 TTL 预支给枚举本身（旧实现先取戳，慢枚举发布即先天陈旧）。
+    #[test]
+    fn snapshot_timestamp_is_taken_after_enumeration_completes() {
+        let _guard = cache_test_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        static FAKE_COMPLETED: std::sync::LazyLock<std::sync::Mutex<Option<std::time::Instant>>> =
+            std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+        fn timed_fake() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            *FAKE_COMPLETED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(std::time::Instant::now());
+            Ok(fake_snapshot_map())
+        }
+        super::set_test_snapshot_hook(Some(timed_fake));
+        super::reset_snapshot_cache_for_test();
+        let seen = super::with_cached_snapshot(|processes| processes.len());
+        super::set_test_snapshot_hook(None);
+        assert_eq!(seen, Some(1));
+        let completed = FAKE_COMPLETED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .expect("fake ran");
+        let cache = super::SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (published, _) = cache.as_ref().expect("cache published");
+        assert!(
+            *published >= completed,
+            "cache timestamp must follow enumeration completion, not its start"
+        );
     }
 
     fn row(pid: u32, parent: u32, created: u64, executable: &str) -> ProcessRow {

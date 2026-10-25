@@ -33,10 +33,13 @@ mod forward;
 mod integration;
 mod lifecycle;
 mod pane_connection;
+mod resume;
 mod route;
+mod sftp;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 pub use pane_connection::PaneConnection;
+pub use resume::ResumeTarget;
 use route::{ResolvedRoute, RouteTransport};
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
@@ -75,6 +78,9 @@ pub trait SshEventHost:
 {
     /// Access is scoped to this pane's live authenticated transport.
     fn ssh_pane_connection(&self, _connection: Option<PaneConnection>) {}
+
+    /// Last positively identified target survives transport loss; only a confirmed shell clears it.
+    fn ssh_resume_target(&self, _target: Option<ResumeTarget>) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
@@ -647,10 +653,29 @@ pub fn spawn_session_at<H: SshEventHost>(
     terminal: Arc<FairMutex<Term<H>>>,
     event_proxy: H,
 ) -> io::Result<EventLoopSender> {
+    spawn_session_resuming(
+        destination,
+        initial_remote_cwd,
+        None,
+        initial_size,
+        terminal,
+        event_proxy,
+    )
+}
+
+pub fn spawn_session_resuming<H: SshEventHost>(
+    destination: String,
+    initial_remote_cwd: Option<String>,
+    resume_target: Option<ResumeTarget>,
+    initial_size: WindowSize,
+    terminal: Arc<FairMutex<Term<H>>>,
+    event_proxy: H,
+) -> io::Result<EventLoopSender> {
     let (sender, receiver) = EventLoopSender::standalone()?;
     runtime()?.spawn(lifecycle::run(
         destination,
         initial_remote_cwd,
+        resume_target,
         initial_size,
         terminal,
         event_proxy,
@@ -1107,16 +1132,7 @@ pub(crate) async fn open_sftp(
 async fn sftp_on_session(
     session: &ClientSession,
 ) -> Result<russh_sftp::client::SftpSession, SessionError> {
-    let channel = lifecycle::network("SFTP channel", session.channel_open_session()).await?;
-    channel.request_subsystem(true, "sftp").await?;
-    // 显式给参数而不是用上游默认值：默认单包 256 KiB 会让每个 READ/WRITE 都
-    // 顶满一个巨型请求（部分服务端在这个尺寸上会静默出错），而默认在途写
-    // 请求只有 8 个，高时延链路上填不满管道。判据见 `ssh_sftp::limits`。
-    Ok(russh_sftp::client::SftpSession::new_with_config(
-        channel.into_stream(),
-        crate::ssh_sftp::limits::session_config(),
-    )
-    .await?)
+    sftp::open(session).await
 }
 
 // ---- 「测试连接」（SSH 编辑器页脚，spec ui-redesign 稿一） ----

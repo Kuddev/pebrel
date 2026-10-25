@@ -23,6 +23,7 @@ struct Frame {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CompletionContext {
     frames: Vec<Frame>,
+    pending_history: Option<(HistoryScope, String)>,
 }
 
 impl CompletionContext {
@@ -83,8 +84,16 @@ impl CompletionContext {
 }
 
 impl NebulaPaneState {
+    pub(crate) fn record_submitted_command(&mut self, line: &str) {
+        let scope = self.suggest_env.history_scope();
+        crate::completion::record_command(&scope, line, &self.cwd);
+        self.completion_context.pending_history = Some((scope, line.trim().to_owned()));
+    }
+
     pub(crate) fn record_completion_command(&mut self, history: &mut NebulaHistory, line: &str) {
-        history.record(&self.suggest_env.history_scope(), line, &self.cwd);
+        let scope = self.suggest_env.history_scope();
+        history.record(&scope, line, &self.cwd);
+        self.completion_context.pending_history = Some((scope, line.trim().to_owned()));
         self.completion_submitted(line);
     }
 
@@ -109,7 +118,14 @@ impl NebulaPaneState {
                 return;
             };
             let cwd = if frame.env == self.suggest_env { &self.cwd } else { &frame.cwd };
-            crate::completion::record_command(&frame.env.history_scope(), line, cwd);
+            let scope = frame.env.history_scope();
+            // PSReadLine can confirm an Enter already observed on the grid. Count that
+            // submission once, while still counting native recall and repeated commands.
+            let already_recorded = self.completion_context.pending_history.take()
+                == Some((scope.clone(), line.trim().to_owned()));
+            if !already_recorded {
+                crate::completion::record_command(&scope, line, cwd);
+            }
             self.last_committed = line.trim().to_owned();
         } else if name == COMMAND_VAR || name == ARGV_VAR {
             let Some((token, line)) = value.split_once('\n') else { return };
@@ -146,6 +162,9 @@ impl NebulaPaneState {
                 if env != self.suggest_env {
                     self.switch_completion_environment(env, cwd);
                 }
+            }
+            if self.completion_context.owns_current(value) {
+                self.completion_context.pending_history = None;
             }
         }
     }

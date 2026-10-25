@@ -51,7 +51,7 @@ fn remote_editor_completion_native_shell_end_to_end() {
                     fixture.known_hosts.as_deref().unwrap(),
                 ))
                 .unwrap();
-            TerminalLaunch::Ssh { destination, cwd: Some(fixture.cwd.clone()) }
+            TerminalLaunch::Ssh { destination, cwd: Some(fixture.cwd.clone()), resume_target: None }
         },
         _ => panic!("unknown owned fixture route"),
     };

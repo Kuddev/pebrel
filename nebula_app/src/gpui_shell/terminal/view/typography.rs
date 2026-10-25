@@ -60,20 +60,44 @@ pub(super) fn effective_line_height(height: f32, offset_y: f32, scale: f32) -> P
     px(((height * scale + offset_y).floor().max(1.0)) / scale)
 }
 
-/// A terminal row defaults to 1.2em, independently of a fallback font's hhea
-/// padding. With the bundled 0.6em monospace advance this gives a 1:2 grid
-/// before pixel rounding, as expected by block and Braille character art.
-/// This changes row spacing, not font size or glyph outlines. Text keeps its
-/// shaped ascent/descent for baseline placement and is not clipped per cell.
-/// Explicit theme line height and font.offset remain authoritative.
+/// 字形字号与网格分开：默认每列对应两倍高的行，Braille 的 2×4 点距才相等。
+/// 先吸附列宽再确定行高，避免 0.6em/1.2em 分别取整后在高 DPI 下重新拉长。
+/// 字体 ascent/descent 只参与基线定位；显式主题行高和设备像素偏移仍优先。
 pub(super) fn effective_line_height_with_theme(
+    cell_width: Pixels,
     font_size: f32,
     line_height_multiplier: Option<f32>,
     offset_y: f32,
     scale: f32,
 ) -> Pixels {
-    let target = (font_size * line_height_multiplier.unwrap_or(1.2)).max(1.0);
-    effective_line_height(target, offset_y, scale)
+    match line_height_multiplier {
+        Some(multiplier) => {
+            effective_line_height((font_size * multiplier).max(1.0), offset_y, scale)
+        },
+        None => {
+            let scale = scale.max(0.5);
+            let device_width = (cell_width.as_f32() * scale).round();
+            px((device_width * 2.0 + offset_y).floor().max(1.0) / scale)
+        },
+    }
+}
+
+pub(in crate::gpui_shell::terminal) fn baseline(
+    ascent: Pixels,
+    descent: Pixels,
+    line_height: Pixels,
+) -> Pixels {
+    (line_height + ascent - descent) * 0.5
+}
+
+/// fallback/粗斜体共用主字体的基线，只移动原点，不改字号、轮廓或行内裁剪。
+pub(in crate::gpui_shell::terminal) fn glyph_origin_y(
+    line: &gpui::ShapedLine,
+    row_top: Pixels,
+    line_height: Pixels,
+    row_baseline: Pixels,
+) -> Pixels {
+    row_top + row_baseline - baseline(line.ascent, line.descent, line_height)
 }
 
 fn measure_cell_metrics(
@@ -100,9 +124,11 @@ fn measure_cell_metrics(
         }],
         None,
     );
+    let width = effective_cell_width(sample.width.as_f32(), mode, scale, offset_x);
     (
-        effective_cell_width(sample.width.as_f32(), mode, scale, offset_x),
+        width,
         effective_line_height_with_theme(
+            width,
             font_size.as_f32(),
             line_height_multiplier,
             offset_y,

@@ -1,5 +1,9 @@
 {
   "native_result": {
+    "json_items": "{count} 项",
+    "json_expand": "展开内容",
+    "json_collapse": "折叠内容",
+    "json_invalid": "此输出不是有效的 JSON 或 NDJSON，已显示原文。",
     "diff_expand": "展开文件差异",
     "diff_collapse": "折叠文件差异",
     "diff_invalid": "此差异无法按双列行号显示，已保留原文。",
@@ -374,8 +378,8 @@
       "ui_size_description": "独立调整界面文字和组件字号，不影响终端文字。",
       "english": "英文终端字体",
       "chinese": "中文终端字体",
-      "chinese_description": "用于中文等全宽字符。输入字体名称，多个字体以逗号分隔；留空时使用 Maple Mono NF CN。按回车或离开输入框后生效。",
-      "fallback_description": "第 1 项优先显示；缺失字形依次使用后续字体，内置 Maple 是最终安全兜底。",
+      "chinese_description": "用于中文等全宽字符。输入字体名称，多个字体以逗号分隔；留空时沿用终端主字体和系统回退。按回车或离开输入框后生效。",
+      "fallback_description": "第 1 项优先显示；缺失字形依次使用后续字体。提示符图标由内置符号字库补齐，缺失文字使用系统回退。",
       "group_description": "第 1 项是主字体，其余按顺序回退",
       "loading": "正在枚举系统字体…",
       "no_matches": "没有匹配的字体",
@@ -1476,6 +1480,7 @@
       "stop_broadcast_input": "关闭广播输入",
       "broadcast_input_tooltip": "广播输入到本标签全部分栏",
       "close": "关闭此分栏",
+      "swap_release": "松开以交换分屏位置",
       "extract_release": "松手：拉出为独立标签",
       "extract_drag_hint": "拖到终端区外可拉出",
       "broadcast_enabled": "广播输入已开启：键入将同步到本标签的 {count} 个分栏",
@@ -1839,6 +1844,11 @@
     "pty_failure": "PTY 故障：{error}",
     "session_ended": "会话已结束",
     "ssh_start_failed": "SSH 会话启动失败: {error}",
+    "serial_test_hint": "请先保存串口连接，再从主机列表打开进行测试。",
+    "serial_ssh_options": "串口连接不使用 SSH 代理或跳板，请重置高级选项。",
+    "serial_read_failed": "串口已停止：{error}",
+    "serial_write_failed": "串口写入失败：{error}",
+    "serial_start_failed": "串口打开失败：{error}",
     "pty_start_failed": "PTY 启动失败: {error}"
   },
   "confirmation": {
@@ -1863,6 +1873,10 @@
   },
   "terminal.ssh_disconnected": "连接已断开，按 R 重新连接。",
   "terminal.ssh_reconnect": "重新连接 (R)",
+  "terminal.choose_shell": "选择 Shell…",
+  "terminal.failed_session_help": "此会话不可用。请选择 Shell 打开新标签，或到设置中更换默认 Shell。",
+  "session.tabs_reopened": "已重新打开 {count} 个标签。会话正在启动，启动错误会保留在对应标签中。",
+  "session.tabs_reopened_after_crash": "上次未正常退出，已重新打开 {count} 个标签。会话正在启动，启动错误会保留在对应标签中。",
   "terminal.ssh_session_stopped": "会话已结束。",
   "terminal.ssh_session_keys": "按 R 重新连接，按 Enter 关闭此终端。",
   "terminal.ssh_reconnecting": "正在重新连接…"

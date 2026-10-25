@@ -144,7 +144,7 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let port_forward_w = if port_forward_button.is_some() { 32.0 } else { 0.0 };
         let tab_capacity_w =
