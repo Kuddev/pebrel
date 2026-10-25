@@ -26,6 +26,21 @@ use std::os::windows::io::{
 };
 use std::process::{Child, Command};
 
+/// Native status encoding belongs to the process adapter, including event fixtures.
+#[cfg(test)]
+pub(crate) fn test_exit_status(code: u32) -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw((code as i32) << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw(code)
+    }
+}
+
 /// `CREATE_NO_WINDOW` 的**唯一定义处**。
 ///
 /// 需要它的地方几乎都该直接调 [`hidden_command`]；把这个常量单独导出，是为了

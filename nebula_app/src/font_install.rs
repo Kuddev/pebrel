@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 pub const REQUIRED_FONT_FAMILY: &str = "Maple Mono Normal NF CN";
+pub const SYMBOL_FONT_FAMILY: &str = "Pebrel Symbols";
+pub static SYMBOL_FONT_BYTES: &[u8] =
+    include_bytes!("../../assets/fonts/PebrelSymbols-Regular.ttf");
+#[cfg(feature = "gpui-shell")]
+pub use crate::platform::fonts::SYSTEM_MONO_FONT_FAMILY;
 
 /// The bundled face is shared by the legacy rasterizer and the GPUI text
 /// system. Keeping one static byte slice avoids letting the two shells drift
@@ -193,8 +198,8 @@ pub fn move_font_family(current: &str, index: usize, direction: i32) -> String {
     format_font_family_chain(&families)
 }
 
-/// 按终端渲染合同构造 GPUI 字体：即使用户没显式列出，内置 Maple 也始终
-/// 作为最后一层字形兜底。
+/// 图标使用独立小字库兜底，避免选择系统字体仍隐式解析完整 Maple 中文字库。
+/// 显式指定的文字字体和 fallback 顺序保持用户配置的权威。
 #[cfg(feature = "gpui-shell")]
 pub fn gpui_font_with_fallbacks(value: &str) -> gpui::Font {
     let mut families = font_family_chain(value);
@@ -202,10 +207,10 @@ pub fn gpui_font_with_fallbacks(value: &str) -> gpui::Font {
         families.push(REQUIRED_FONT_FAMILY.to_owned());
     }
     let primary = families.remove(0);
-    if !primary.eq_ignore_ascii_case(REQUIRED_FONT_FAMILY)
-        && !families.iter().any(|family| family.eq_ignore_ascii_case(REQUIRED_FONT_FAMILY))
+    if !primary.eq_ignore_ascii_case(SYMBOL_FONT_FAMILY)
+        && !families.iter().any(|family| family.eq_ignore_ascii_case(SYMBOL_FONT_FAMILY))
     {
-        families.push(REQUIRED_FONT_FAMILY.to_owned());
+        families.push(SYMBOL_FONT_FAMILY.to_owned());
     }
 
     let mut font = gpui::font(primary);
@@ -396,6 +401,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn independent_symbol_face_keeps_prompt_icons_without_text_glyphs() {
+        let symbols = ttf_parser::Face::parse(SYMBOL_FONT_BYTES, 0).unwrap();
+        let original = ttf_parser::Face::parse(REQUIRED_FONT_BYTES, 0).unwrap();
+        assert!(SYMBOL_FONT_BYTES.len() < REQUIRED_FONT_BYTES.len() / 8);
+        for code in [0xe0b0, 0xe0b5, 0xe0a0, 0xe70f, 0xf418, 0xf017, 0xf17a, 0xea68] {
+            let ch = char::from_u32(code).unwrap();
+            let glyph = symbols.glyph_index(ch).unwrap();
+            let old = original.glyph_index(ch).unwrap();
+            assert_eq!(symbols.glyph_hor_advance(glyph), original.glyph_hor_advance(old));
+        }
+        for ch in ['A', 'x', '中', '文'] {
+            assert!(symbols.glyph_index(ch).is_none(), "symbol fallback must not replace {ch}");
+        }
+    }
+
     fn sys(name: &str, monospaced: bool) -> SystemFontFamily {
         SystemFontFamily { name: name.to_owned(), monospaced }
     }
@@ -543,12 +564,12 @@ mod tests {
         assert_eq!(font.family.as_ref(), "Consolas");
         assert_eq!(
             font.fallbacks.as_ref().unwrap().fallback_list(),
-            &["Microsoft YaHei".to_owned(), REQUIRED_FONT_FAMILY.to_owned()]
+            &["Microsoft YaHei".to_owned(), SYMBOL_FONT_FAMILY.to_owned()]
         );
 
         let bundled = gpui_font_with_fallbacks(REQUIRED_FONT_FAMILY);
         assert_eq!(bundled.family.as_ref(), REQUIRED_FONT_FAMILY);
-        assert!(bundled.fallbacks.is_none());
+        assert_eq!(bundled.fallbacks.unwrap().fallback_list(), &[SYMBOL_FONT_FAMILY.to_owned()]);
     }
 
     #[test]

@@ -1,5 +1,9 @@
 {
   "native_result": {
+    "json_items": "{count} items",
+    "json_expand": "Expand value",
+    "json_collapse": "Collapse value",
+    "json_invalid": "This output is not valid JSON or NDJSON. Showing the original source.",
     "diff_expand": "Expand file diff",
     "diff_collapse": "Collapse file diff",
     "diff_invalid": "This diff cannot be displayed with paired line numbers. Showing the original source.",
@@ -372,8 +376,8 @@
       "ui_size_description": "Changes interface text and component sizing independently of terminal text.",
       "english": "English terminal font",
       "chinese": "Chinese terminal font",
-      "chinese_description": "Used for Chinese and other full-width characters. Enter a font family or comma-separated families; leave empty to use Maple Mono NF CN. Applies on Enter or leaving the field.",
-      "fallback_description": "The first family is preferred; missing glyphs fall back through the remaining families, with bundled Maple as the final safe fallback.",
+      "chinese_description": "Used for Chinese and other full-width characters. Enter a font family or comma-separated families; leave empty to use the main terminal font and system fallback. Applies on Enter or leaving the field.",
+      "fallback_description": "The first family is preferred; missing glyphs fall back through the remaining families. Bundled symbols cover prompt icons; missing text uses system fallback.",
       "group_description": "The first family is primary; the rest are used in fallback order.",
       "loading": "Enumerating system fonts...",
       "no_matches": "No matching fonts",
@@ -1474,6 +1478,7 @@
       "stop_broadcast_input": "Stop broadcasting input",
       "broadcast_input_tooltip": "Broadcast input to every pane in this tab",
       "close": "Close this pane",
+      "swap_release": "Release to exchange pane positions",
       "extract_release": "Release to extract as a new tab",
       "extract_drag_hint": "Drag outside the terminal to extract",
       "broadcast_enabled": "Broadcasting input to {count} panes in this tab",
@@ -1840,6 +1845,11 @@
     "pty_failure": "PTY failure: {error}",
     "session_ended": "Session ended",
     "ssh_start_failed": "Could not start the SSH session: {error}",
+    "serial_test_hint": "Save this serial connection, then open it from the host list to test it.",
+    "serial_ssh_options": "Serial connections do not use SSH proxies or jump hosts; reset the advanced options.",
+    "serial_read_failed": "Serial port stopped: {error}",
+    "serial_write_failed": "Serial write failed: {error}",
+    "serial_start_failed": "Could not open serial port: {error}",
     "pty_start_failed": "Could not start the PTY: {error}"
   },
   "confirmation": {
@@ -1864,6 +1874,10 @@
   },
   "terminal.ssh_disconnected": "Connection closed. Press R to reconnect.",
   "terminal.ssh_reconnect": "Reconnect (R)",
+  "terminal.choose_shell": "Choose a shell…",
+  "terminal.failed_session_help": "This session is unavailable. Choose a shell to open a new tab, or change the default shell in Settings.",
+  "session.tabs_reopened": "Reopened {count} tabs. Sessions are starting; any startup errors remain in their tabs.",
+  "session.tabs_reopened_after_crash": "After an unexpected exit, reopened {count} tabs. Sessions are starting; any startup errors remain in their tabs.",
   "terminal.ssh_session_stopped": "Session stopped.",
   "terminal.ssh_session_keys": "Press R to reconnect. Press Enter to close this terminal.",
   "terminal.ssh_reconnecting": "Reconnecting…"

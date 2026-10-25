@@ -79,6 +79,9 @@ enum Mode {
     CompletionMetadata,
     Integration,
     RejectIntegration,
+    RejectSftp,
+    HangSftp,
+    AcceptSftp,
 }
 
 struct Loopback {
@@ -103,6 +106,9 @@ impl server::Handler for Loopback {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if command == b"sh -c 'printf PEBREL_POSIX_1'" {
+            return session.channel_failure(channel);
+        }
         if self.mode == Mode::CompletionMetadata {
             if command == b"python3 -I -S -" {
                 self.scripts.insert(channel, Vec::new());
@@ -132,7 +138,7 @@ impl server::Handler for Loopback {
             }
             return session.channel_failure(channel);
         }
-        if command.starts_with(b"exec ")
+        if command.starts_with(b"sh -c ")
             && matches!(self.mode, Mode::Integration | Mode::RejectIntegration)
         {
             self.data.send(b"bootstrap".to_vec()).unwrap();
@@ -168,10 +174,39 @@ impl server::Handler for Loopback {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.channels.retain(|value| value.id() != channel);
-        if matches!(self.mode, Mode::ExecEof | Mode::ExecHang | Mode::CompletionMetadata) {
+        if matches!(
+            self.mode,
+            Mode::ExecEof
+                | Mode::ExecHang
+                | Mode::CompletionMetadata
+                | Mode::RejectSftp
+                | Mode::HangSftp
+                | Mode::AcceptSftp
+        ) {
             let _ = self.data.send(b"closed".to_vec());
         }
         Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(name, "sftp");
+        let _ = self.data.send(b"sftp-request".to_vec());
+        match self.mode {
+            Mode::HangSftp => Ok(()),
+            Mode::AcceptSftp => {
+                session.channel_success(channel)?;
+                let index = self.channels.iter().position(|c| c.id() == channel).unwrap();
+                let stream = self.channels.remove(index).into_stream();
+                tokio::spawn(russh_sftp::server::run(stream, sftp::Peer));
+                Ok(())
+            },
+            _ => session.channel_failure(channel),
+        }
     }
 
     async fn channel_open_session(
@@ -447,7 +482,8 @@ fn ssh_first_capability_query_receives_reply_and_input_keeps_flowing() {
         });
         assert!(!options.conpty_resize);
         let terminal = Arc::new(FairMutex::new(Term::new(options, &size(), events.clone())));
-        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
         let exchange = async {
             let mut replies = Vec::new();
             while !replies.ends_with(b"\x1b[?6c") {
@@ -612,7 +648,8 @@ fn integration_exec_routes_only_the_current_channel_token_without_accept_env() {
         let acquired = fixture.connect().await;
         let events = Events::default();
         let terminal = terminal(&events);
-        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
         for expected in [b"snapshot".as_slice(), b"apply", b"bootstrap"] {
             assert_eq!(fixture.data.recv().await.unwrap(), expected);
         }
@@ -634,7 +671,9 @@ fn rejected_integration_exec_falls_back_to_a_fresh_ordinary_shell_channel() {
         let mut fixture = Fixture::new(Mode::RejectIntegration).await;
         let acquired = fixture.connect().await;
         let (channel, _) =
-            open_shell(&acquired, size(), Some("/requested"), &Events::default()).await.unwrap();
+            open_shell(&acquired, size(), Some("/requested"), None, &Events::default())
+                .await
+                .unwrap();
         for expected in [b"snapshot".as_slice(), b"apply", b"bootstrap", b"cd '/requested'\r"] {
             assert_eq!(fixture.data.recv().await.unwrap(), expected);
         }
@@ -702,7 +741,7 @@ fn rejected_pty_and_shell_do_not_become_ready() {
             let fixture = Fixture::new(mode).await;
             let acquired = fixture.connect().await;
             let events = Events::default();
-            let result = open_shell(&acquired, size(), None, &events).await;
+            let result = open_shell(&acquired, size(), None, None, &events).await;
             assert!(result.is_err());
             assert!(
                 !events.stages.lock().unwrap().iter().any(|stage| matches!(stage, SshStage::Ready))
@@ -718,7 +757,7 @@ fn shell_confirmation_preserves_early_output_and_remote_directory() {
         let mut fixture = Fixture::new(Mode::Open).await;
         let acquired = fixture.connect().await;
         let (channel, _) =
-            open_shell(&acquired, size(), Some("/srv/Team's App "), &Events::default())
+            open_shell(&acquired, size(), Some("/srv/Team's App "), None, &Events::default())
                 .await
                 .unwrap();
         assert!(channel.pending.iter().any(
@@ -738,7 +777,8 @@ fn ssh_resize_updates_grid_and_remote_pty() {
         let acquired = fixture.connect().await;
         let events = Events::default();
         let terminal = terminal(&events);
-        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
         let (input_tx, mut input) = mpsc::unbounded_channel();
         let pump_terminal = Arc::clone(&terminal);
         let pump_events = events.clone();
@@ -793,7 +833,8 @@ fn ssh_delayed_synchronized_redraw_keeps_the_complete_screen_visible() {
         let (wake_tx, mut wakes) = mpsc::unbounded_channel();
         let events = Events { wakeups: Some(wake_tx), ..Default::default() };
         let terminal = terminal(&events);
-        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
         let (input_tx, mut input) = mpsc::unbounded_channel();
         let pump_terminal = Arc::clone(&terminal);
         let pump_events = events.clone();
@@ -854,7 +895,8 @@ fn ssh_unfinished_synchronized_output_is_preserved_on_exit_disconnect_and_shutdo
             let (wake_tx, mut wakes) = mpsc::unbounded_channel();
             let events = Events { wakeups: Some(wake_tx), ..Default::default() };
             let terminal = terminal(&events);
-            let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+            let (mut channel, token) =
+                open_shell(&acquired, size(), None, None, &events).await.unwrap();
             let (input_tx, mut input) = mpsc::unbounded_channel();
             let pump_terminal = Arc::clone(&terminal);
             let pump_events = events.clone();
@@ -892,7 +934,8 @@ fn ssh_queued_unmarked_redraw_publishes_once_and_preserves_split_text() {
         let (wake_tx, mut wakes) = mpsc::unbounded_channel();
         let events = Events { wakeups: Some(wake_tx), ..Default::default() };
         let terminal = terminal(&events);
-        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
         channel.pending.clear();
         // An already received redraw has no frame markers. Packet boundaries
         // must not each trigger a separate display update or alter UTF-8/VT order.
@@ -931,7 +974,7 @@ fn ssh_output_batches_yield_at_control_messages_and_work_limits() {
         let acquired = fixture.connect().await;
         let events = Events::default();
         let terminal = terminal(&events);
-        let (mut channel, _) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, _) = open_shell(&acquired, size(), None, None, &events).await.unwrap();
         let mut stream = StreamProcessor::default();
 
         for count in [1usize, 127, 128, 256] {
@@ -969,7 +1012,8 @@ fn unexpected_disconnect_preserves_pane_but_explicit_exit_closes_it() {
             let acquired = fixture.connect().await;
             let events = Events::default();
             let terminal = terminal(&events);
-            let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+            let (mut channel, token) =
+                open_shell(&acquired, size(), None, None, &events).await.unwrap();
             let (_input_tx, mut input) = mpsc::unbounded_channel();
             let result = pump(&mut channel, token, size(), &terminal, &events, &mut input).await;
             assert_eq!(result.is_ok(), mode == Mode::ExitAfterEof);
@@ -998,8 +1042,14 @@ fn hung_channel_does_not_lock_reuse_and_fresh_connection_can_retry() {
         let fixture = Fixture::new(Mode::HangFirstConnection).await;
         let acquired = fixture.connect().await;
         let events = Events::default();
-        let opening =
-            open_shell_with_budget(&acquired, size(), None, &events, Duration::from_millis(100));
+        let opening = open_shell_with_budget(
+            &acquired,
+            size(),
+            None,
+            None,
+            &events,
+            Duration::from_millis(100),
+        );
         let reuse = async {
             tokio::time::sleep(Duration::from_millis(20)).await;
             let reused = fixture.connect().await;
@@ -1010,7 +1060,7 @@ fn hung_channel_does_not_lock_reuse_and_fresh_connection_can_retry() {
         fixture.forget(&acquired.session).await;
         let replacement = fixture.connect().await;
         assert!(!Arc::ptr_eq(&replacement.session, &acquired.session));
-        let (channel, _) = open_shell(&replacement, size(), None, &events).await.unwrap();
+        let (channel, _) = open_shell(&replacement, size(), None, None, &events).await.unwrap();
         assert!(!super::super::evict_pooled_session(&replacement.key, &acquired.session).await);
         let reused = fixture.connect().await;
         assert!(Arc::ptr_eq(&reused.session, &replacement.session));
@@ -1308,7 +1358,8 @@ fn ssh_echo_keeps_draining_while_a_large_input_waits_for_window_space() {
         let (sender, mut input) = mpsc::unbounded_channel();
         let events = Events::default();
         let terminal = terminal(&events);
-        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
         let bytes = b"echo remains responsive\r\n".repeat(20_000);
         sender.send(Msg::Input(bytes.clone().into())).unwrap();
         let exchange = async {
@@ -1327,3 +1378,5 @@ fn ssh_echo_keeps_draining_while_a_large_input_waits_for_window_space() {
         fixture.forget(&acquired.session).await;
     });
 }
+
+mod sftp;
