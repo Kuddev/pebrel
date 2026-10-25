@@ -195,6 +195,10 @@ fn wsl_installs_guest_command_hooks_and_preserves_custom_notify() {
     let edits = snapshot.plan(Action::Install).unwrap().unwrap();
     assert!(!edits.iter().any(|edit| matches!(edit.name.as_str(), "opencode" | "pi")));
     apply(&mut snapshot, edits);
+    let claude: Value = serde_json::from_str(snapshot.raw("claude").unwrap().unwrap()).unwrap();
+    let prompt_hook = &claude["hooks"]["UserPromptSubmit"][0]["hooks"][0];
+    assert_eq!(prompt_hook["type"], "command");
+    assert!(prompt_hook.get("async").is_none());
     let hooks: Value = serde_json::from_str(snapshot.raw("codex").unwrap().unwrap()).unwrap();
     for name in [
         "SessionStart",

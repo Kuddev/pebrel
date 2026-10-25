@@ -15,17 +15,21 @@ pub(super) fn attach(
             // 合并同一批到达的事件，避免每个 Wakeup 都独立触发一帧。
             let mut batch = vec![event];
             while batch.len() < 128 {
-                match rx.try_recv() {
+                match rx.try_recv_queued() {
                     Ok(event) => batch.push(event),
                     _ => break,
                 }
             }
             let full_batch = batch.len() == 128;
-            let done = batch.iter().any(|e| matches!(e, TermEvent::Exit));
+            let done = batch.iter().any(|queued| matches!(&queued.event, TermEvent::Exit));
             if this
                 .update(cx, |view: &mut TerminalView, cx| {
-                    for event in batch {
-                        view.process_event(event, cx);
+                    for queued in batch {
+                        view.process_event_with_sequence(
+                            queued.event,
+                            queued.received_sequence,
+                            cx,
+                        );
                     }
                 })
                 .is_err()

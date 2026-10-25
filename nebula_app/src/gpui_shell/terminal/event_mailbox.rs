@@ -10,7 +10,7 @@ use nebula_terminal::event::Event;
 
 #[derive(Clone)]
 pub(super) struct EventSender {
-    sender: mpsc::UnboundedSender<Event>,
+    sender: mpsc::UnboundedSender<QueuedEvent>,
     wake_pending: Arc<AtomicBool>,
     status_pending: Arc<AtomicBool>,
     pub(super) native_prompt: NativePromptState,
@@ -27,8 +27,15 @@ pub(super) struct NativePrompt {
     pub pending: bool,
 }
 
+/// Keep raw Hook ingress order when UI parsing is deferred behind this queue.
+#[derive(Clone)]
+pub(super) struct QueuedEvent {
+    pub(super) event: Event,
+    pub(super) received_sequence: Option<u64>,
+}
+
 pub(super) struct EventReceiver {
-    receiver: mpsc::UnboundedReceiver<Event>,
+    receiver: mpsc::UnboundedReceiver<QueuedEvent>,
     wake_pending: Arc<AtomicBool>,
     status_pending: Arc<AtomicBool>,
 }
@@ -124,6 +131,8 @@ impl NativePromptState {
 
 impl EventSender {
     pub(super) fn send(&self, event: Event) {
+        let received_sequence =
+            matches!(&event, Event::AiHookEnvelope(_)).then(crate::ai_hook::next_receive_sequence);
         if matches!(&event, Event::UserVar { name, value }
             if name == "pebrel_cmd_prompt" && value == "1")
         {
@@ -137,7 +146,10 @@ impl EventSender {
         if pending.is_some_and(|flag| flag.swap(true, Ordering::AcqRel)) {
             return;
         }
-        if self.sender.unbounded_send(event).is_err()
+        if self
+            .sender
+            .unbounded_send(QueuedEvent { event, received_sequence })
+            .is_err()
             && let Some(flag) = pending
         {
             flag.store(false, Ordering::Release);
@@ -146,11 +158,11 @@ impl EventSender {
 }
 
 impl EventReceiver {
-    fn acknowledge(&self, event: &Event) {
-        if matches!(event, Event::ProgramStatusChanged) {
+    fn acknowledge(&self, queued: &QueuedEvent) {
+        if matches!(&queued.event, Event::ProgramStatusChanged) {
             self.status_pending.store(false, Ordering::Release);
         }
-        if matches!(event, Event::Wakeup) {
+        if matches!(&queued.event, Event::Wakeup) {
             // Clear before processing: output arriving during UI work must
             // still enqueue a subsequent repaint, even on an inactive tab.
             self.wake_pending.store(false, Ordering::Release);
@@ -158,18 +170,22 @@ impl EventReceiver {
     }
 
     pub(super) fn try_recv(&mut self) -> Result<Event, mpsc::TryRecvError> {
-        let event = self.receiver.try_recv()?;
-        self.acknowledge(&event);
-        Ok(event)
+        Ok(self.try_recv_queued()?.event)
+    }
+
+    pub(super) fn try_recv_queued(&mut self) -> Result<QueuedEvent, mpsc::TryRecvError> {
+        let queued = self.receiver.try_recv()?;
+        self.acknowledge(&queued);
+        Ok(queued)
     }
 }
 
 impl Stream for EventReceiver {
-    type Item = Event;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
+    type Item = QueuedEvent;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<QueuedEvent>> {
         let result = Pin::new(&mut self.receiver).poll_next(cx);
-        if let Poll::Ready(Some(event)) = &result {
-            self.acknowledge(event);
+        if let Poll::Ready(Some(queued)) = &result {
+            self.acknowledge(queued);
         }
         result
     }
@@ -189,7 +205,9 @@ mod tests {
         sender.send(Event::AiHookEnvelope(b"done".to_vec()));
         assert!(matches!(receiver.try_recv().unwrap(), Event::ProgramStatusChanged));
         assert!(matches!(receiver.try_recv().unwrap(), Event::CommandStart));
-        assert!(matches!(receiver.try_recv().unwrap(), Event::AiHookEnvelope(_)));
+        let hook = receiver.try_recv_queued().unwrap();
+        assert!(matches!(hook.event, Event::AiHookEnvelope(_)));
+        assert!(hook.received_sequence.is_some());
         assert!(receiver.try_recv().is_err());
         sender.send(Event::ProgramStatusChanged);
         assert!(matches!(receiver.try_recv().unwrap(), Event::ProgramStatusChanged));
@@ -221,19 +239,21 @@ mod tests {
             for _ in 0..1000 {
                 sender.send(Event::Wakeup);
             }
-            sender.send(Event::AiHookEnvelope(format!("working:{id}").into_bytes()));
-            sender.send(Event::AiHookEnvelope(format!("attention:{id}").into_bytes()));
-            sender.send(Event::AiHookEnvelope(format!("done:{id}").into_bytes()));
+            for edge in ["working", "attention", "done"] {
+                sender.send(Event::AiHookEnvelope(format!("{edge}:{id}").into_bytes()));
+            }
             sender.send(Event::CommandDone { exit_code: Some(0) });
         }
         for (id, (sender, receiver)) in sessions.iter_mut().enumerate() {
             assert!(matches!(receiver.try_recv().unwrap(), Event::CommandStart));
             assert!(matches!(receiver.try_recv().unwrap(), Event::Wakeup));
             for edge in ["working", "attention", "done"] {
-                let Event::AiHookEnvelope(bytes) = receiver.try_recv().unwrap() else {
+                let queued = receiver.try_recv_queued().unwrap();
+                let Event::AiHookEnvelope(bytes) = queued.event else {
                     panic!("lost agent edge")
                 };
                 assert_eq!(bytes, format!("{edge}:{id}").into_bytes());
+                assert!(queued.received_sequence.is_some());
             }
             assert!(matches!(
                 receiver.try_recv().unwrap(),

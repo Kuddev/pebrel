@@ -21,7 +21,7 @@ impl TerminalView {
         }
         if !self.agent_activity.accepts_hook(event) {
             log::debug!("ai_hook: pane={} ignored hook outside the active lifecycle", self.pane_id);
-            return true;
+            return false;
         }
         if !self.recovery.accepts_choice_event(event) {
             return false;
@@ -50,7 +50,9 @@ impl TerminalView {
             );
             return false;
         }
-        self.agent_activity.apply_hook(event);
+        if !self.agent_activity.apply_hook(event) {
+            return false;
+        }
         if matches!(
             event.kind,
             AiHookKind::SessionStart
@@ -136,6 +138,7 @@ impl TerminalView {
         {
             cx.emit(TerminalViewEvent::Notification(notification));
         }
+        self.schedule_auto_continue(event, cx);
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
         true

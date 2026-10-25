@@ -3,6 +3,7 @@
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod activity_tests;
 mod agent_activity;
+mod auto_continue;
 mod broadcast;
 mod completion;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -394,6 +395,9 @@ pub struct TerminalView {
     program_status: Option<program_status::ProgramStatus>,
     program_status_seen: bool,
     pty_failed: bool,
+    auto_continue: crate::ai_hook::auto_continue::AutoContinue,
+    auto_continue_task: Option<gpui::Task<()>>,
+    _auto_continue_subscription: gpui::Subscription,
     /// 程序上报的任务进度（OSC 9;4）。存在 pane 上、由宿主投到任务栏：一个
     /// 窗口只有一个任务栏按钮，谁被看着只有宿主知道。
     pub progress: crate::taskbar::TaskProgress,
@@ -642,6 +646,15 @@ impl TerminalView {
     }
 
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
+        self.process_event_with_sequence(event, None, cx);
+    }
+
+    pub(super) fn process_event_with_sequence(
+        &mut self,
+        event: TermEvent,
+        received_sequence: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
         // Both shell metadata channels update completion and directory history.
         if cwd_changed
@@ -826,7 +839,16 @@ impl TerminalView {
                 // ——比 OSC 133 的命令行嗅探准，后者漏掉包装启动和没有 shell
                 // 集成的会话。少了这一条，远端 agent 的侧栏图标和会话身份
                 // （fork/恢复要用）全都缺席。
-                if let Some(hook) = crate::ai_hook::parse_remote_envelope(&envelope, None) {
+                let hook = if let Some(received_sequence) = received_sequence {
+                    crate::ai_hook::parse_remote_envelope_with_sequence(
+                        &envelope,
+                        None,
+                        received_sequence,
+                    )
+                } else {
+                    crate::ai_hook::parse_remote_envelope(&envelope, None)
+                };
+                if let Some(hook) = hook {
                     self.handle_ai_hook(&hook, cx);
                 }
             },
@@ -907,6 +929,7 @@ impl TerminalView {
         if self.ssh_failed() {
             return;
         }
+        self.cancel_auto_continue();
         self.completion_editor.invalidate();
         self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
@@ -1586,6 +1609,9 @@ impl gpui::EntityInputHandler for TerminalView {
     ) {
         if self.answer_reader.is_some() || !self.focus_handle.is_focused(window) {
             return;
+        }
+        if !new_text.is_empty() {
+            self.cancel_auto_continue();
         }
         let marked_text = if new_text.is_empty() { None } else { Some(new_text.to_string()) };
         if self.marked_text != marked_text {
