@@ -50,6 +50,17 @@
 <table>
   <tr>
     <td align="center" width="240">
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><img src="extra/logo/sponsor_aiapi.png" alt="AIAPI" width="200" /></a><br />
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
+    </td>
+    <td>
+      <p><strong>感谢 AIAPI 对本项目的强力支持！</strong></p>
+      <p>AIAPI 致力于打造全网最稳定的 AI 模型中转站，面向个人开发者、技术团队与企业提供一站式统一接口。我们主打满血 Claude、满血 GPT 等顶尖模型，坚持原汁原味、绝不降智、不掺一滴水。依托动态多路调度保障高可用，性能、响应耗时与账单全程透明；配备顶级售后团队，问题极速响应、全程保驾护航。根据模型与路由策略，调用成本比官方基准价直降 40%–98%。</p>
+      <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">访问 AIAPI</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="240">
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
     </td>
