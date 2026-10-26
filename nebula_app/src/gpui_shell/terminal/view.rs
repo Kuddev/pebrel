@@ -34,7 +34,7 @@ mod startup_command;
 #[cfg(all(test, feature = "gpui-test-support"))]
 pub(super) mod startup_tests;
 mod tab_identity;
-pub(super) mod typography;
+mod typography;
 
 pub use broadcast::TerminalInput;
 pub use runtime::InputOrigin;
@@ -323,6 +323,7 @@ pub enum SidebarActivity {
 
 pub struct TerminalView {
     pub(super) native_results: super::native_results::Views,
+    pub(super) character_art: super::character_art::Layout,
     pub(super) answers: crate::assistant_answer::AnswerInbox,
     confirmation: super::confirmation::ConfirmationState,
     pub(super) answer_reader: Option<gpui::Entity<super::answer_reader::AnswerReader>>,
@@ -557,11 +558,11 @@ impl TerminalView {
         typography::effective_cell_width(raw_width, self.cell_width_mode, scale, self.font_offset_x)
     }
 
-    pub(super) fn line_height_for_width(&self, cell_width: Pixels, scale: f32) -> Pixels {
-        typography::effective_line_height_with_theme(
-            cell_width,
-            self.font_size.as_f32(),
+    pub(super) fn line_height_for_metrics(&self, natural_height: f32, scale: f32) -> Pixels {
+        typography::line_height_for_view(
+            self.font_size,
             self.line_height_multiplier,
+            natural_height,
             self.font_offset_y,
             scale,
         )
