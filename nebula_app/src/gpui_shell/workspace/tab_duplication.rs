@@ -148,6 +148,16 @@ impl NebulaWorkspace {
         copy_launch(launch, CopyKind::NewTab, PaneOrigin::of(view.read(cx)))
     }
 
+    /// SSH 聚焦任务的「新建终端」来源（用户 10-13 裁定）：同主机 + 当前
+    /// 远端任务目录。非 SSH 聚焦任务返回 `None` 走本地路径；远端 cwd 尚
+    /// 未上报时仍继承主机（`None` 目录落远端默认目录），与
+    /// [`Self::duplicate_tab`] 的 SSH 分支同一 `remote_cwd` 口径。
+    pub(super) fn focused_ssh_origin(&self, cx: &gpui::App) -> Option<(String, Option<String>)> {
+        let view = self.tabs.get(self.active).and_then(super::WorkspaceTab::focused_view)?;
+        let view = view.read(cx);
+        Some((view.ssh_destination.clone()?, view.remote_cwd()))
+    }
+
     pub(super) fn duplicate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(WorkspaceTab::Terminal { panes, tree, focused, .. }) = self.tabs.get(ix) else {
             return;

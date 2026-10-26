@@ -66,6 +66,7 @@ mod palette;
 mod pane_header;
 mod quick_jump;
 mod quick_terminal;
+mod recent_sessions;
 mod recipes;
 mod remote_files;
 mod remote_git;
@@ -87,6 +88,7 @@ mod terminal_activity;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
 mod sidebar;
+mod sidebar_tree;
 mod ssh_dialog;
 mod ssh_reconnect;
 mod tab_drag;
@@ -95,7 +97,10 @@ mod tab_menu;
 mod tab_presentation;
 use tab_presentation::TabMeta;
 use tab_presentation::TabPresentation;
+use tab_presentation::new_tab_insert_index;
 mod tab_scroll;
+mod task_groups;
+mod task_groups_ssh;
 mod top_tabs;
 mod update_dialog;
 mod vcs_panel;
@@ -587,20 +592,6 @@ fn workspace_ui_language() -> crate::display::UiLanguage {
         .resolved()
 }
 
-fn new_tab_insert_index(
-    position: nebula_settings::NewTabPositionName,
-    active: usize,
-    tab_count: usize,
-) -> usize {
-    match position {
-        nebula_settings::NewTabPositionName::AfterCurrent if tab_count > 0 => {
-            active.saturating_add(1).min(tab_count)
-        },
-        nebula_settings::NewTabPositionName::AfterCurrent
-        | nebula_settings::NewTabPositionName::End => tab_count,
-    }
-}
-
 fn settings_should_fold_sidebar(tabs_position: nebula_settings::TabsPositionName) -> bool {
     tabs_position == nebula_settings::TabsPositionName::Sidebar
 }
@@ -633,6 +624,8 @@ pub struct NebulaWorkspace {
     sidebar_collapsed: bool,
     /// 只折叠 TABS 分区，不影响整个左栏；与旧壳分区标题的 chevron 同义。
     tabs_section_collapsed: bool,
+    /// 折叠「SSH 主机」子分区：收起全部主机块只留子分区头（内存态不持久化）。
+    ssh_section_collapsed: bool,
     /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进标题栏。
     tabs_position: nebula_settings::TabsPositionName,
     density: nebula_settings::DensityName,
@@ -641,20 +634,28 @@ pub struct NebulaWorkspace {
     /// 首次手动切换后才启用折叠动画：启动帧保持静止落位（旧壳同感，
     /// spring 构造时直接初始化在端点上）。
     sidebar_fold_armed: bool,
-    /// 同理，tab 列表的折叠动画也只在首次手动切换后启用。
+    /// 旧壳 `nebula_tabs_scroll`：TABS 溢出时的整行窗口起点。
+    tabs_scroll: usize,
+    /// 揭示意图：事件路径只置位，render 侧行模型换算窗口（`rows_window`）。
+    tabs_scroll_pending_reveal: bool,
+    /// 经典侧栏的 TABS 卷帘折叠动画状态（与上游同名字段，`sidebar.rs`
+    /// 经典路径读写；分组树路径的折叠状态在 `sidebar_group_collapsed`）。
     tabs_fold_armed: bool,
     /// 折叠/展开动画期间冻结视口高度：旧壳 `tabs_avail` 来自面板剩余高度，
     /// 绝不把卷帘裁剪量回去再算窗口，否则溢出列表会被锁成一行滚动区。
     tabs_fold_frozen: bool,
     tabs_fold_seq: u64,
-    /// 旧壳 `nebula_tabs_scroll`：TABS 溢出时的整行窗口起点。
-    tabs_scroll: usize,
     /// 列表视口（逻辑 px），由 canvas 回写；0 表示尚未量到。
     tabs_viewport_h: f32,
     tabs_list_width: f32,
     tabs_list_origin: gpui::Point<gpui::Pixels>,
     tabs_scroll_grab: Option<f32>,
     tabs_list_hot: bool,
+    /// 侧栏分组的折叠状态与 cwd→组键缓存：分组是呈现（不持久化），git
+    /// 根探测只在事件路径（`resolve_project_group`），render 永远只查内存。
+    sidebar_group_collapsed: HashMap<SharedString, bool>,
+    project_group_cache: HashMap<String, task_groups::LocalProject>,
+    recent_sessions: recent_sessions::RecentSessionsState,
     /// 顶栏 tab 的水平滚动；ScrollHandle 负责内容边界钳制。
     top_tabs_scroll: gpui::ScrollHandle,
     /// 开窗时反推的目标网格（含小屏收拢）；首个终端按它 spawn。
@@ -763,11 +764,13 @@ pub struct NebulaWorkspace {
     /// 可见失焦窗口继续转圈；活跃状态只用于跳过不必要的最小化查询。
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
+    /// 本会话已注入的自定义键位 (gpui 绑定串, 动作名)。键位表没有删除
+    /// API,撤销靠后注 `Unbind(动作名)` 精确收回该键;这份清单就是撤销的依据。
+    custom_keybinds_applied: Vec<(String, String)>,
     /// 侧栏「运行中」spinner 的相位（0..1，每秒一圈）与上次帧时刻。
     /// 侧栏和顶栏共用 GPUI 屏幕帧时钟。
     spinner_phase: f32,
     spinner_last: std::time::Instant,
-    /// render 与 next-frame 回调之间的单槽门闩：防止其他 UI 更新重复挂帧。
     spinner_frame_pending: std::cell::Cell<bool>,
     /// 上一次 render 是否真的画出了运行态徽章；滚出视口后不应继续唤醒窗口。
     spinner_visible: std::cell::Cell<bool>,
@@ -791,15 +794,6 @@ pub struct NebulaWorkspace {
 }
 
 impl NebulaWorkspace {
-    /// 所有新建标签共用同一个插入口，避免本地/SSH/设置各自解释配置。
-    fn insert_new_tab(&mut self, tab: WorkspaceTab) {
-        let position = nebula_settings::RuntimeSettings::load().new_tab_position;
-        let at = new_tab_insert_index(position, self.active, self.tabs.len());
-        self.insert_tab_at(at, tab, TabMeta::default());
-        self.active = at;
-        self.reveal_active_tab();
-    }
-
     /// `tabs` + `tab_meta` 的唯一插入口（见 [`TabMeta`] 的同下标合同）。
     fn insert_tab_at(&mut self, at: usize, tab: WorkspaceTab, meta: TabMeta) {
         let at = at.min(self.tabs.len());
@@ -823,11 +817,6 @@ impl NebulaWorkspace {
             if ix < self.tab_meta.len() { self.tab_meta.remove(ix) } else { TabMeta::default() };
         self.clamp_tabs_scroll();
         Some((tab, meta))
-    }
-
-    /// 当前标签的元数据（下标越界时给一份默认值，读取点因此不必各自判空）。
-    fn meta(&self, ix: usize) -> TabMeta {
-        self.tab_meta.get(ix).cloned().unwrap_or_default()
     }
 
     pub fn new(
@@ -928,19 +917,24 @@ impl NebulaWorkspace {
             settings_restore_side_panel_open: false,
             sidebar_collapsed: false,
             tabs_section_collapsed: false,
+            ssh_section_collapsed: false,
             tabs_position: runtime.tabs_position,
             density: runtime.density,
             sidebar_width,
             sidebar_fold_armed: false,
+            tabs_scroll: 0,
+            tabs_scroll_pending_reveal: false,
             tabs_fold_armed: false,
             tabs_fold_frozen: false,
             tabs_fold_seq: 0,
-            tabs_scroll: 0,
             tabs_viewport_h: 0.0,
             tabs_list_width: 0.0,
             tabs_list_origin: gpui::point(px(0.0), px(0.0)),
             tabs_scroll_grab: None,
             tabs_list_hot: false,
+            sidebar_group_collapsed: HashMap::new(),
+            project_group_cache: HashMap::new(),
+            recent_sessions: Default::default(),
             top_tabs_scroll: gpui::ScrollHandle::new(),
             initial_grid,
             tab_drag: None,
@@ -998,6 +992,7 @@ impl NebulaWorkspace {
             _appearance_sub: appearance_sub,
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
+            custom_keybinds_applied: Vec::new(),
             spinner_phase: 0.0,
             spinner_last: cx.background_executor().now(),
             spinner_frame_pending: std::cell::Cell::new(false),
@@ -1154,6 +1149,13 @@ impl NebulaWorkspace {
     }
 
     fn add_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // SSH 聚焦任务（用户 10-13 裁定）：新终端继承同一 SSH 主机与当前
+        // 任务目录（远端 cwd）。设置页「启动目录」是本地路径，对 SSH 任务
+        // 不适用，SSH 分支优先于它。
+        if let Some((destination, remote_cwd)) = self.focused_ssh_origin(cx) {
+            self.add_ssh_terminal_at(destination, remote_cwd, window, cx);
+            return;
+        }
         // 旧壳合同（window_context `spawn_tab` 一族）：新 tab 的 cwd 先取
         // 设置页的「启动目录」（存在且是目录才算数），否则继承聚焦 pane
         // 的 cwd——`startup_directory=` 因此在两壳有同一效果。WSL 来宾目录

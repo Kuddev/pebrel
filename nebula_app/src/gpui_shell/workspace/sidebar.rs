@@ -235,6 +235,9 @@ impl NebulaWorkspace {
                     renaming,
                     pane_count,
                     local_administrator,
+                    // 分支给 TabPresentation 增补的 headline/is_agent_session
+                    // 字段经典路径不消费，用 `..` 吸收，保持与上游可合并。
+                    ..
                 } = self.tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("sidebar-tab-hover-{ix}").into();
                 let has_program_glyph = program_glyph.is_some();
@@ -874,7 +877,7 @@ impl NebulaWorkspace {
             return if collapsed {
                 div().into_any_element()
             } else {
-                self.render_sidebar(window, cx).into_any_element()
+                self.render_sidebar_dispatch(window, cx)
             };
         }
         let width = self.sidebar_closing_width.unwrap_or(self.sidebar_width);
@@ -883,7 +886,7 @@ impl NebulaWorkspace {
             .h_full()
             .flex_shrink_0()
             .overflow_hidden()
-            .child(self.render_sidebar(window, cx))
+            .child(self.render_sidebar_dispatch(window, cx))
             .with_animation(
                 ("sidebar-fold", collapsed as usize),
                 Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
@@ -1208,5 +1211,24 @@ mod tests {
         assert_eq!(resting_activity(SidebarActivity::Idle, false, true), SidebarActivity::Done);
         assert_eq!(resting_activity(SidebarActivity::Idle, true, true), SidebarActivity::Idle);
         assert_eq!(resting_activity(SidebarActivity::Idle, false, false), SidebarActivity::Idle);
+    }
+}
+
+/// `ai_agent_sidebar` 运行时开关的分派点（分支自有，上游无此块）：开 =
+/// `sidebar_tree` 的分组树；关 = 上面的经典扁平列表。内部两处调用点
+/// （`render_sidebar_slot` 的两条路径）改走本分派，使折叠槽位/卷帘动画
+/// 在两种模式下都拿到正确的列表。这是 sidebar.rs 与上游仅有的差异
+/// （本块 + 那两行调用），上游合并时冲突面缩到个位数行。
+impl NebulaWorkspace {
+    fn render_sidebar_dispatch(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if crate::gpui_shell::config::ai_agent_sidebar(cx) {
+            self.render_sidebar_tree(window, cx).into_any_element()
+        } else {
+            self.render_sidebar(window, cx).into_any_element()
+        }
     }
 }

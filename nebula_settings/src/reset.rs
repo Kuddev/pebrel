@@ -27,6 +27,7 @@ const RESET_KEYS: &[&str] = &[
     "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
+    "ai_agent_sidebar",
     "terminal_proxy",
     "refresh_environment",
     "powerline",
@@ -153,16 +154,6 @@ mod tests {
     use crate::{RawSettings, RuntimeSettings};
 
     #[test]
-    fn reset_restores_auto_scrollbar_visibility() {
-        let text = default_settings_text("scrollbar_visibility=always\ncustom=keep\n");
-        assert_eq!(
-            RuntimeSettings::from_raw(&RawSettings::from_text(&text)).scrollbar_visibility,
-            crate::ScrollbarVisibility::Auto,
-        );
-        assert!(text.contains("custom=keep"));
-    }
-
-    #[test]
     fn reset_preserves_explicit_hook_authorization_and_opt_out() {
         let text = "ai_hooks=0\nai_hooks_claude=0\nai_hooks_codex=1\nai_hooks_grok=1\n";
         let restored = RawSettings::from_text(&default_settings_text(text));
@@ -199,6 +190,25 @@ mod tests {
         let restored = default_settings_text(original);
         assert_eq!(restored, "custom_data=keep\n");
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ai_toasts);
+    }
+
+    #[test]
+    fn reset_restores_auto_scrollbar_visibility() {
+        let text = default_settings_text("scrollbar_visibility=always\ncustom=keep\n");
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(&text)).scrollbar_visibility,
+            crate::ScrollbarVisibility::Auto,
+        );
+        assert!(text.contains("custom=keep"));
+    }
+
+    #[test]
+    fn resetting_preferences_disables_the_ai_agent_sidebar() {
+        let original = "ai_agent_sidebar=1\ncustom_data=keep\n";
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(original)).ai_agent_sidebar);
+        let restored = default_settings_text(original);
+        assert_eq!(restored, "custom_data=keep\n");
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ai_agent_sidebar);
     }
 
     #[test]

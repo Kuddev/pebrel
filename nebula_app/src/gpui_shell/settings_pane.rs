@@ -773,6 +773,7 @@ impl SettingsPane {
             "dim_inactive_panes" => flag!(dim_inactive_panes),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
+            "ai_agent_sidebar" => flag!(ai_agent_sidebar),
             "terminal_proxy" => flag!(terminal_proxy),
             "refresh_environment" => flag!(refresh_environment),
             "powerline" => flag!(powerline),
@@ -807,7 +808,6 @@ impl SettingsPane {
             "windowing_behavior" => pick!(windowing_behavior),
             "cell_width_mode" => pick!(cell_width_mode),
             "ligatures" => pick!(ligatures),
-            "scrollbar_visibility" => pick!(scrollbar_visibility),
             "scrollback_lines" => Some((
                 cur.scrollback_lines != def.scrollback_lines,
                 def.scrollback_lines.to_string(),

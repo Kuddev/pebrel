@@ -203,6 +203,7 @@ impl NebulaWorkspace {
                 shell_tag: Self::launch_shell_tag(&saved_launch),
                 launch: Some(saved_launch),
                 has_bell: false,
+                ..Default::default()
             },
         );
         true
