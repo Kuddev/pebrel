@@ -53,6 +53,7 @@ pub(crate) struct PreparedUpdate {
     transaction: String,
     child: Child,
     committed: bool,
+    identity_pause: crate::platform::ai_session_identity::UpdatePause,
 }
 
 impl PreparedUpdate {
@@ -68,6 +69,7 @@ impl PreparedUpdate {
         crate::atomic_file::write(&self.directory.join("commit.json"), &commit)
             .map_err(|error| format!("Could not commit the update: {error}"))?;
         self.committed = true;
+        self.identity_pause.commit();
         Ok(())
     }
 }
@@ -172,9 +174,14 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
         &serde_json::to_vec(&plan_path).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    // The identity worker runs from the same executable as this participant.
+    // Reap it before the helper scans processes, and hold the gate through commit.
+    let identity_pause = crate::platform::ai_session_identity::UpdatePause::acquire()
+        .map_err(|error| format!("Could not stop session detection for update: {error}"))?;
     let child =
         crate::platform::update_installation::spawn_prepared_helper(&directory, &plan_path)?;
-    let mut prepared = PreparedUpdate { directory, transaction, child, committed: false };
+    let mut prepared =
+        PreparedUpdate { directory, transaction, child, committed: false, identity_pause };
     let timeout = if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
         600
     } else {
