@@ -50,6 +50,17 @@
 <table>
   <tr>
     <td align="center" width="240">
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><img src="extra/logo/sponsor_aiapi.png" alt="AIAPI" width="200" /></a><br />
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
+    </td>
+    <td>
+      <p><strong>满血 Claude / GPT，高速直达</strong></p>
+      <p>感谢 AIAPI 赞助本项目！AIAPI 提供满血 Claude 与 GPT 渠道，强劲推理、深度编程、高速响应。从复杂问题到高强度开发，让模型实力充分发挥；一个 API 地址，轻松接入常用 SDK 与 AI 编程工具。</p>
+      <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">访问 AIAPI</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="240">
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
     </td>

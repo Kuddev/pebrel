@@ -534,6 +534,11 @@
       "defaults_restored_hosts_and_credentials_v2": "Defaults restored. Hosts and credentials are unchanged.",
       "search_all_settings": "Search all settings",
       "import_terminal_directory": "Import terminal directory..."
+    },
+    "sponsor": {
+      "aiapi_headline": "Full-power Claude / GPT. Built for speed.",
+      "aiapi_description": "AIAPI brings full-power Claude and GPT together with powerful reasoning, advanced coding and fast responses. From complex problems to intensive development, put the models to work through one API endpoint that connects to common SDKs and AI coding tools.",
+      "visit": "Visit and sign up"
     }
   },
   "provider": {

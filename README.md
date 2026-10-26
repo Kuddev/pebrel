@@ -50,6 +50,17 @@
 <table>
   <tr>
     <td align="center" width="240">
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><img src="extra/logo/sponsor_aiapi.png" alt="AIAPI" width="200" /></a><br />
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
+    </td>
+    <td>
+      <p><strong>Full-power Claude / GPT. Built for speed.</strong></p>
+      <p>Thanks to AIAPI for sponsoring this project! AIAPI brings full-power Claude and GPT together with powerful reasoning, advanced coding and fast responses. From complex problems to intensive development, put the models to work through one API endpoint that connects to common SDKs and AI coding tools.</p>
+      <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">Visit AIAPI</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="240">
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
     </td>

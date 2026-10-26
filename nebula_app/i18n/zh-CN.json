@@ -534,6 +534,11 @@
       "defaults_restored_hosts_and_credentials_v2": "已恢复默认设置；主机与凭据保持不变。",
       "search_all_settings": "在全部设置中搜索",
       "import_terminal_directory": "导入终端目录…"
+    },
+    "sponsor": {
+      "aiapi_headline": "满血 Claude / GPT，高速直达",
+      "aiapi_description": "AIAPI 提供满血 Claude 与 GPT 渠道，强劲推理、深度编程、高速响应。从复杂问题到高强度开发，让模型实力充分发挥；一个 API 地址，轻松接入常用 SDK 与 AI 编程工具。",
+      "visit": "立即访问并注册"
     }
   },
   "provider": {
