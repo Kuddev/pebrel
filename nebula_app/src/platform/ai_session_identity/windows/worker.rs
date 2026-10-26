@@ -9,10 +9,13 @@ use std::mem;
 use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::io::{AsHandle as _, AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::ptr;
-use std::sync::{Mutex, TryLockError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE};
+use windows_sys::Win32::Foundation::{
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Pipes::{CreatePipe, PeekNamedPipe};
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
@@ -25,23 +28,65 @@ pub(super) const ARG: &str = "--internal-codex-session-worker";
 const READY: &[u8] = b"PEBREL_SESSION_PROBE_V1\n";
 const POLL: Duration = Duration::from_millis(5);
 static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
+static UPDATE_PAUSES: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct UpdatePause {
+    resume_on_drop: bool,
+}
+
+impl UpdatePause {
+    pub(crate) fn acquire() -> io::Result<Self> {
+        // Close the gate before waiting for an in-flight probe, so queued probes
+        // cannot create another executable after we have reaped the current one.
+        UPDATE_PAUSES.fetch_add(1, Ordering::AcqRel);
+        let pause = Self { resume_on_drop: true };
+        let mut slot = lock_worker(Instant::now() + PROBE_TIMEOUT + Duration::from_secs(1))?;
+        if let Some(mut worker) = slot.take() {
+            worker.stop()?;
+        }
+        Ok(pause)
+    }
+
+    pub(crate) fn commit(&mut self) {
+        self.resume_on_drop = false;
+    }
+}
+
+impl Drop for UpdatePause {
+    fn drop(&mut self) {
+        if self.resume_on_drop {
+            // This guard may return to the UI thread. Never wait for a probe here.
+            UPDATE_PAUSES.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
 
 pub(super) fn probe(pid: u32, created: u64) -> Option<super::CodexSession> {
+    if UPDATE_PAUSES.load(Ordering::Acquire) != 0 {
+        return None;
+    }
     let deadline = Instant::now() + PROBE_TIMEOUT;
-    // Several panes may ask together. Waiting for the shared worker uses the
-    // same request deadline, rather than serially adding unbounded waits.
-    let mut slot = loop {
-        if Instant::now() >= deadline {
-            return None;
-        }
-        match WORKER.try_lock() {
-            Ok(slot) => break slot,
-            Err(TryLockError::Poisoned(error)) => break error.into_inner(),
-            Err(TryLockError::WouldBlock) => std::thread::sleep(POLL),
-        }
-    };
+    let mut slot = lock_worker(deadline).ok()?;
+    if UPDATE_PAUSES.load(Ordering::Acquire) != 0 {
+        return None;
+    }
     let output = query_slot(&mut slot, pid, created, deadline).ok()?;
     super::parse_probe_context(&output)
+}
+
+fn lock_worker(deadline: Instant) -> io::Result<MutexGuard<'static, Option<Worker>>> {
+    // Several panes may ask together. Waiting for the shared worker uses the
+    // same request deadline, rather than serially adding unbounded waits.
+    loop {
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        match WORKER.try_lock() {
+            Ok(slot) => return Ok(slot),
+            Err(TryLockError::Poisoned(error)) => return Ok(error.into_inner()),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(POLL),
+        }
+    }
 }
 
 fn query_slot(
@@ -109,6 +154,20 @@ struct Worker {
 }
 
 impl Worker {
+    fn stop(&mut self) -> io::Result<()> {
+        drop(self.group.take());
+        // SAFETY: this is our owned process object, including startup failures.
+        // An already exited child is successful; no PID/name lookup can kill a peer.
+        unsafe {
+            TerminateProcess(self.process.as_raw_handle(), 1);
+            match WaitForSingleObject(self.process.as_raw_handle(), 500) {
+                WAIT_OBJECT_0 => Ok(()),
+                WAIT_TIMEOUT => Err(io::ErrorKind::TimedOut.into()),
+                _ => Err(io::Error::last_os_error()),
+            }
+        }
+    }
+
     fn start(args: &[String], deadline: Instant) -> io::Result<Self> {
         let (input_read, input_write) = pipe()?;
         let (output_read, output_write) = pipe()?;
@@ -195,13 +254,7 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        drop(self.group.take());
-        // SAFETY: the process handle belongs to this worker, including failures
-        // before job attachment. Cleanup is bounded and happens on the probing thread.
-        unsafe {
-            TerminateProcess(self.process.as_raw_handle(), 1);
-            WaitForSingleObject(self.process.as_raw_handle(), 500);
-        }
+        let _ = self.stop();
     }
 }
 
@@ -323,3 +376,5 @@ fn spawn(args: &[String], files: [&File; 3]) -> io::Result<(OwnedHandle, OwnedHa
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod update_tests;
