@@ -534,6 +534,11 @@
       "defaults_restored_hosts_and_credentials_v2": "Defaults restored. Hosts and credentials are unchanged.",
       "search_all_settings": "Search all settings",
       "import_terminal_directory": "Import terminal directory..."
+    },
+    "sponsor": {
+      "aiapi_headline": "Special thanks to AIAPI for sponsoring this project!",
+      "aiapi_description": "AIAPI is dedicated to building the most stable AI model relay on the web, providing a unified API for solo developers, tech teams, and enterprises. We deliver full-power, unthrottled Claude and GPT models—zero lobotomization, zero dilution, and 100% pure native performance. Backed by dynamic multi-route scheduling for high availability, complete transparency in latency and billing, and top-tier after-sales support that always has your back, AIAPI cuts API costs by 40%–98% compared to official rates.",
+      "visit": "Visit and sign up"
     }
   },
   "provider": {
@@ -1756,7 +1761,7 @@
   "terminal_line_height": {
     "label": "Line height",
     "auto": "Auto",
-    "description": "0.50–5.00; 1.00 uses the font’s natural height. An explicit value overrides theme line height. Auto keeps the theme or default line height."
+    "description": "0.50–5.00; 1.00 uses the font’s natural height. An explicit value overrides theme line height. Auto preserves the theme or natural height."
   },
   "ssh.ports.button": "Ports",
   "ssh.ports.title": "SSH port forwarding",

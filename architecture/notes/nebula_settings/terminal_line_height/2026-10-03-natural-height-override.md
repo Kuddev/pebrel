@@ -7,14 +7,14 @@ Proposed in the Issue #439 implementation.
 Users need independent terminal spacing without editing a custom theme.
 
 ## Evidence
-Terminal typography uses the custom theme's font-size multiplier, or the default
-1.2em row, followed by the configured device-pixel offset.
+Terminal typography previously used shaped ascent plus descent, or the custom
+theme's font-size multiplier, followed by the configured device-pixel offset.
 
 ## Decision
 `terminal_line_height` is optional, finite, clamped to 0.50–5.00, and rounded to
 two decimal places by nebula-settings. Explicit values multiply natural shaped
-font height and override theme line height. Auto removes the setting and keeps the
-theme/default geometry. The editor starts at 1.00; no default migration
+font height and override theme line height. Auto removes the setting and preserves
+existing theme/natural geometry. The editor starts at 1.00; no default migration
 changes existing spacing. Device-pixel offsets and rounding remain unchanged.
 
 ## Rejected alternatives

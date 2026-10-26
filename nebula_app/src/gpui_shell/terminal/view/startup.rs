@@ -295,6 +295,7 @@ impl TerminalView {
                     view.invalidate_completion_history(cx);
                 }),
             native_results: Default::default(),
+            character_art: Default::default(),
             pane_id,
             session,
             focus_handle,

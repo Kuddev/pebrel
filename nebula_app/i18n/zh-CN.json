@@ -534,6 +534,11 @@
       "defaults_restored_hosts_and_credentials_v2": "已恢复默认设置；主机与凭据保持不变。",
       "search_all_settings": "在全部设置中搜索",
       "import_terminal_directory": "导入终端目录…"
+    },
+    "sponsor": {
+      "aiapi_headline": "感谢 AIAPI 对本项目的强力支持！",
+      "aiapi_description": "AIAPI 致力于打造全网最稳定的 AI 模型中转站，面向个人开发者、技术团队与企业提供一站式统一接口。我们主打满血 Claude、满血 GPT 等顶尖模型，坚持原汁原味、绝不降智、不掺一滴水。依托动态多路调度保障高可用，性能、响应耗时与账单全程透明；配备顶级售后团队，问题极速响应、全程保驾护航。根据模型与路由策略，调用成本比官方基准价直降 40%–98%。",
+      "visit": "立即访问并注册"
     }
   },
   "provider": {
@@ -1756,7 +1761,7 @@
   "terminal_line_height": {
     "label": "行高",
     "auto": "自动",
-    "description": "0.50–5.00；1.00 为字体自然高度。显式值覆盖主题行高，自动保留主题或默认行高。"
+    "description": "0.50–5.00；1.00 为字体自然高度。显式值覆盖主题行高，自动保留主题或自然高度。"
   },
   "ssh.ports.button": "端口",
   "ssh.ports.title": "SSH 端口转发",

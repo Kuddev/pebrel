@@ -314,24 +314,16 @@ fn explicit_line_height_offset_is_still_measured_in_device_pixels() {
 }
 
 #[test]
-fn default_line_height_keeps_square_dot_pitch_across_fonts_dpi_and_zoom() {
+fn default_line_height_matches_2_2_2_natural_metrics_across_dpi_and_zoom() {
     for font_size in [10.0, 13.0, 14.0, 15.0, 18.0, 24.0] {
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5] {
-            for advance_ratio in [0.5, 0.55, 0.6, 0.65] {
-                for mode in [
-                    nebula_settings::CellWidthModeName::Compact,
-                    nebula_settings::CellWidthModeName::Relaxed,
-                ] {
-                    let width = typography::effective_cell_width(
-                        font_size * advance_ratio,
-                        mode,
-                        scale,
-                        0.0,
-                    );
+            for metric_ratio in [1.2, 1.32, 1.6] {
+                for offset in [0.0, 4.0] {
+                    let natural = font_size * metric_ratio;
                     let height = typography::effective_line_height_with_theme(
-                        width, font_size, None, 0.0, scale,
+                        natural, font_size, None, offset, scale,
                     );
-                    assert!((height.as_f32() / 4.0 - width.as_f32() / 2.0).abs() < 1e-5);
+                    assert_eq!(height, typography::effective_line_height(natural, offset, scale));
                 }
             }
         }
@@ -343,7 +335,7 @@ fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
     // 15px * 1.5 = 22.5 logical px; at 150% DPI with a 4px device offset,
     // floor(22.5 * 1.5 + 4) = 37 device px, or 37 / 1.5 logical px.
     let height =
-        typography::effective_line_height_with_theme(gpui::px(9.0), 15.0, Some(1.5), 4.0, 1.5);
+        typography::effective_line_height_with_theme(15.0 * 1.32, 15.0, Some(1.5), 4.0, 1.5);
 
     assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
 }
@@ -354,7 +346,6 @@ fn explicit_line_height_uses_natural_metrics_and_preserves_theme_in_auto() {
     for multiplier in [0.5, 1.0, 1.46, 5.0] {
         assert_eq!(
             typography::line_height_for_view(
-                px(9.0),
                 px(15.0),
                 Some(1.5),
                 Some(multiplier),
@@ -367,32 +358,28 @@ fn explicit_line_height_uses_natural_metrics_and_preserves_theme_in_auto() {
     }
     for theme in [None, Some(1.5)] {
         assert_eq!(
-            typography::line_height_for_view(px(9.0), px(15.0), theme, None, 20.0, 4.0, 1.5),
-            typography::effective_line_height_with_theme(px(9.0), 15.0, theme, 4.0, 1.5),
+            typography::line_height_for_view(px(15.0), theme, None, 20.0, 4.0, 1.5),
+            typography::effective_line_height_with_theme(20.0, 15.0, theme, 4.0, 1.5),
         );
     }
 }
 
 #[test]
-fn fallback_baseline_alignment_preserves_glyph_size_and_positions() {
-    use gpui::{LineLayout, ShapedLine, px};
-    let primary_baseline = typography::baseline(px(14.28), px(4.2), px(16.0));
-    for (ascent, descent) in [(14.28, 4.2), (16.0, 6.0), (12.0, 2.0)] {
-        let mut line = ShapedLine::default();
-        *line = std::sync::Arc::new(LineLayout {
-            font_size: px(14.0),
-            width: px(8.4),
-            ascent: px(ascent),
-            descent: px(descent),
-            runs: Vec::new(),
-            len: 1,
-        });
-        let original_layout = std::ops::Deref::deref(&line).clone();
-        let origin = typography::glyph_origin_y(&line, px(32.0), px(16.0), primary_baseline);
-        let painted_baseline = origin + typography::baseline(line.ascent, line.descent, px(16.0));
-        assert!((painted_baseline.as_f32() - (32.0 + primary_baseline.as_f32())).abs() < 1e-5);
-        assert!(std::sync::Arc::ptr_eq(&original_layout, &line));
-        assert_eq!(line.font_size, px(14.0));
-        assert_eq!(line.width, px(8.4));
+fn maple_reading_rows_restore_2_2_2_height_without_changing_columns() {
+    use gpui::px;
+    for (font_size, expected_device_height) in [(13.0, 29.0), (14.0, 31.0)] {
+        let width = typography::effective_cell_width(
+            font_size * 0.6,
+            nebula_settings::CellWidthModeName::Compact,
+            1.5,
+            0.0,
+        );
+        let height =
+            typography::line_height_for_view(px(font_size), None, None, font_size * 1.32, 4.0, 1.5);
+        assert!((height.as_f32() * 1.5 - expected_device_height).abs() < 1e-5);
+        assert!(
+            height > width * 2.0,
+            "reading space must not be tied to character-art proportions"
+        );
     }
 }

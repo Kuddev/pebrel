@@ -2,6 +2,8 @@
 
 ## Status
 
+Default typography is superseded by [the 2.2.2 reading-spacing restoration](2026-10-26-restore-2-2-2-reading-spacing.md).
+
 Implemented and inspected on native Windows at 150% scaling. Other native
 platforms remain covered by their selected CI jobs, not this desktop inspection.
 
