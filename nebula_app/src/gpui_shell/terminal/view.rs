@@ -323,6 +323,7 @@ pub enum SidebarActivity {
 
 pub struct TerminalView {
     pub(super) native_results: super::native_results::Views,
+    pub(super) character_art: super::character_art::Layout,
     pub(super) answers: crate::assistant_answer::AnswerInbox,
     confirmation: super::confirmation::ConfirmationState,
     pub(super) answer_reader: Option<gpui::Entity<super::answer_reader::AnswerReader>>,

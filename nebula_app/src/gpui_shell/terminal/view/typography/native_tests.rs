@@ -64,6 +64,10 @@ fn native_character_grid_preserves_art_text_and_viewport() {
     } else {
         fixture()
     };
+    let after = output
+        .join("after.vt")
+        .is_file()
+        .then(|| std::fs::read_to_string(output.join("after.vt")).unwrap());
     let success = Arc::new(Mutex::new(false));
     let result = success.clone();
     gpui_platform::application().with_assets(crate::gpui_shell::assets::NebulaAssets).run(move |cx| {
@@ -100,7 +104,6 @@ fn native_character_grid_preserves_art_text_and_viewport() {
             }, window, cx));
             receiver = Some(view.update(cx, |view, _| {
                 let receiver = view.install_completion_test_session();
-                startup_tests::feed(view, vt.as_bytes());
                 receiver
             }));
             terminal = Some(view.clone());
@@ -111,7 +114,8 @@ fn native_character_grid_preserves_art_text_and_viewport() {
         cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_millis(600)).await;
             let mut costs = Vec::new();
-            for _ in 0..60 {
+            let mut fed = false;
+            for frame_index in 0..60 {
                 cx.update_window(window_handle.into(), |_, window, cx| {
                     window.refresh();
                     let start = Instant::now();
@@ -128,6 +132,22 @@ fn native_character_grid_preserves_art_text_and_viewport() {
                             view.session.as_ref().unwrap().term.lock().resize(
                                 nebula_terminal::term::test::TermSize::new(size.num_cols as usize, size.num_lines as usize));
                         }
+                    }
+                    if !fed {
+                        // 先接收真实布局尺寸再送 VT，避免宽字符画在测试默认 80 列里提前换行。
+                        terminal.update(cx, |view, cx| {
+                            view.session.as_ref().unwrap().term.lock().resize(
+                                nebula_terminal::term::test::TermSize::new(view.cols, view.rows));
+                            startup_tests::feed(view, vt.as_bytes());
+                            cx.notify();
+                        });
+                        fed = true;
+                    }
+                    if frame_index == 20 && let Some(after) = &after {
+                        terminal.update(cx, |view, cx| {
+                            startup_tests::feed(view, after.as_bytes());
+                            cx.notify();
+                        });
                     }
                 }).unwrap();
                 cx.background_executor().timer(Duration::from_millis(16)).await;
@@ -155,12 +175,14 @@ fn native_character_grid_preserves_art_text_and_viewport() {
                         "width": line.width.as_f32(), "ascent": line.ascent.as_f32(), "descent": line.descent.as_f32(),
                         "fonts": line.runs.iter().map(|run| format!("{:?}",run.font_id)).collect::<Vec<_>>()})
                 }).collect::<Vec<_>>();
+                let fitted_cells = (0..view.rows).map(|row| (0..view.cols).filter(|&col|
+                    view.character_art.frame.cell(row, col, row as f32).1 < 1.0).count()).sum::<usize>();
                 serde_json::json!({"scale": window.scale_factor(), "font": view.font.family.as_ref(),
                     "font_id": format!("{font_id:?}"), "font_size": view.font_size.as_f32(),
                     "ascent": shaped.ascent.as_f32(), "descent": shaped.descent.as_f32(),
                     "cell": [w.as_f32(), h.as_f32()], "grid": [view.cols, view.rows],
                     "origin": [view.origin.x.as_f32(), view.origin.y.as_f32()],
-                    "text_probes": text_probes, "draw_cpu_ms": costs})
+                    "text_probes": text_probes, "fitted_cells": fitted_cells, "draw_cpu_ms": costs})
             }).unwrap();
             std::fs::write(output.join("metrics.json"), serde_json::to_vec_pretty(&metrics).unwrap()).unwrap();
             for _ in 0..100 {
