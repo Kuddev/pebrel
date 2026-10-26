@@ -20,7 +20,26 @@
 //! 那几处是**故意**要给用户看见窗口的。
 
 use std::io;
+#[cfg(windows)]
+use std::os::windows::io::{
+    AsHandle as _, AsRawHandle as _, BorrowedHandle, FromRawHandle as _, OwnedHandle,
+};
 use std::process::{Child, Command};
+
+/// Native status encoding belongs to the process adapter, including event fixtures.
+#[cfg(test)]
+pub(crate) fn test_exit_status(code: u32) -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw((code as i32) << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw(code)
+    }
+}
 
 /// `CREATE_NO_WINDOW` 的**唯一定义处**。
 ///
@@ -79,54 +98,54 @@ pub(crate) fn configure_process_group(_: &mut Command) {}
 
 pub(crate) struct ProcessGroup {
     #[cfg(windows)]
-    job: windows_sys::Win32::Foundation::HANDLE,
+    job: OwnedHandle,
     #[cfg(unix)]
     process_group: i32,
 }
 
 impl ProcessGroup {
+    /// Attach ownership while a native caller still holds the suspended initial thread.
+    /// The caller must resume that thread only after this succeeds.
+    #[cfg(windows)]
+    pub(super) fn attach_suspended(process: BorrowedHandle<'_>) -> io::Result<Self> {
+        use std::mem::{size_of, zeroed};
+        use std::ptr;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        // SAFETY: the process is borrowed for this call; the newly created job is
+        // immediately owned and closed on every failed setup path.
+        unsafe {
+            let job = CreateJobObjectW(ptr::null(), ptr::null());
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = OwnedHandle::from_raw_handle(job);
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job.as_raw_handle(),
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) == 0
+                || AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { job })
+        }
+    }
+
     pub(crate) fn attach(child: &Child) -> io::Result<Self> {
         #[cfg(windows)]
         {
-            use std::mem::{size_of, zeroed};
-            use std::os::windows::io::AsRawHandle as _;
-            use std::ptr;
-            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-            use windows_sys::Win32::System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject,
-            };
-
-            // SAFETY: all pointers reference initialized POD values for the duration of each
-            // call. The returned job handle is owned by ProcessGroup and closed exactly once.
-            unsafe {
-                let job = CreateJobObjectW(ptr::null(), ptr::null());
-                if job.is_null() {
-                    return Err(io::Error::last_os_error());
-                }
-                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                if SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    (&raw const limits).cast(),
-                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                ) == 0
-                {
-                    let error = io::Error::last_os_error();
-                    CloseHandle(job);
-                    return Err(error);
-                }
-                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
-                    let error = io::Error::last_os_error();
-                    CloseHandle(job);
-                    return Err(error);
-                }
-                let group = Self { job };
-                resume_owned_child(child.id())?;
-                return Ok(group);
-            }
+            let group = Self::attach_suspended(child.as_handle())?;
+            resume_owned_child(child.id())?;
+            return Ok(group);
         }
         #[cfg(unix)]
         {
@@ -143,7 +162,7 @@ impl ProcessGroup {
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::System::JobObjects::TerminateJobObject;
-            let _ = TerminateJobObject(self.job, 1);
+            let _ = TerminateJobObject(self.job.as_raw_handle(), 1);
         }
         #[cfg(unix)]
         unsafe {
@@ -204,13 +223,7 @@ fn resume_owned_child(process_id: u32) -> io::Result<()> {
 
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
-        #[cfg(windows)]
-        {
-            // SAFETY: `job` is the live handle created and exclusively owned by this guard.
-            unsafe {
-                let _ = windows_sys::Win32::Foundation::CloseHandle(self.job);
-            }
-        }
+        // Windows OwnedHandle closes the kill-on-close job after this body.
         #[cfg(unix)]
         {
             // A reader-thread creation failure must not leave the child tree

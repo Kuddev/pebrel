@@ -25,6 +25,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
+  <a href="https://atomgit.com/kettys/pebrel"><img src="https://atomgit.com/kettys/pebrel/star/badge.svg" alt="AtomGitStars" /></a>
   <img src="https://img.shields.io/github/forks/Kuddev/pebrel?style=flat-square&color=8957e5&logo=github" alt="Forks" />
   <img src="https://img.shields.io/github/last-commit/Kuddev/pebrel?style=flat-square&color=3fb950" alt="最近提交" />
   <a href="https://discord.gg/VFn4rcxmhn"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
@@ -77,6 +78,8 @@ Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行
 - 侧栏或顶部标签、可拖拽分屏，以及各窗格独立的工作目录。
 - 保存工作区布局，可选恢复 AI 对话。在 WSL 与 Linux 中，Codex 的 hook 未上报 ID 时，
   可从当前会话元数据补全身份。
+- Windows 原生 Codex 身份刷新复用后台辅助进程，并禁用启动光标提示。每次仍读取当前
+  元数据并限制等待时间；辅助进程卡住时先终止，后续刷新再创建替代进程。
 - Windows 下可选择后台驻留，让关窗后的会话继续运行。进程退出后重新接续已保存的对话
   是另一项功能，需要 CLI 支持恢复，并且有可用的会话身份。
 - 智能补齐与历史补齐、自定义快捷键，以及集成的 Shell 提示符。
@@ -91,6 +94,10 @@ Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行
 - 终端快捷键的改绑或清空会保留名称、命令等输入框自身的粘贴键；恢复默认立即作用于
   当前应用窗口，无需重启。运行时改为替换旧覆盖规则，避免追加方式留下禁用记录，
   配置文件格式保持兼容。详见[快捷键归属说明](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)。
+- Windows 本地 PowerShell 提示符支持将多行剪贴板粘贴保留在 PSReadLine 中检查，
+  按 Enter 才提交，一次撤销可移除整次粘贴。需要 Shell 集成生效且托管粘贴键没有被用户占用。
+  PSReadLine 会统一 CRLF 换行并将 Tab 展开为四个空格；其他编辑器沿用已协商的粘贴协议
+  或现有确认行为。详见[剪贴板粘贴边界](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
 
 ### 智能补齐
 
@@ -150,6 +157,8 @@ WSL 发行版，以及 `cat` 读取带空格的文件名。使用内置 Powerlin
 
 - GPU 加速的 GPUI 界面、浅色与深色主题、背景及不透明度设置。
 - 应用图标配色与十一种界面语言，未翻译内容回退英文。
+- 工作区对话框、命令操作反馈、Git/SVN 控件与默认通知随所选语言显示；切换语言保留
+  命令搜索内容与选区。详见[多语言说明](docs/internationalization.md)。
 - 可搜索的设置、命令面板，以及支持检查和热重载的 Lua 配置；已有 TOML 配置仍可使用。
 - Markdown 文档标签与原生数学公式排版，不依赖 WebView。
 

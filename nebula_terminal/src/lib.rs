@@ -8,6 +8,8 @@ pub mod event;
 pub mod event_loop;
 pub mod grid;
 pub mod index;
+pub mod inline_content;
+pub mod inline_image;
 pub mod osc_cwd;
 pub mod program_status;
 pub mod render;

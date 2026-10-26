@@ -201,7 +201,7 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         // 界面字号独立于终端缩放。
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
 
@@ -392,6 +392,7 @@ impl NebulaWorkspace {
                             pitch: row_pitch,
                             offset: 0.0,
                             active: false,
+                            force_tear_out: false,
                             dock: None,
                         });
                     }),
@@ -445,20 +446,47 @@ impl NebulaWorkspace {
                 .when_some(logo_image.clone(), |row, image| {
                     row.child(
                         div().w(px(TAB_LABEL_ICON_W)).flex_shrink_0().flex().items_center().justify_center().child(
-                            img(image).size(px(TAB_LABEL_ICON_SIZE)).object_fit(ObjectFit::Contain),
+                            // 共用原图和 GPU 灰度处理；hover 只切绘制层，不重解码或改变占位。
+                            div()
+                                .relative()
+                                .size(px(TAB_LABEL_ICON_SIZE))
+                                .child(
+                                    img(image.clone())
+                                        .id(("sidebar-logo-idle", ix))
+                                        .size_full()
+                                        .object_fit(ObjectFit::Contain)
+                                        .when(!active, |icon| {
+                                            icon.grayscale(true).opacity(0.85)
+                                                .group_hover(hover_group.clone(), |style| style.invisible())
+                                        }),
+                                )
+                                .when(!active, |slot| {
+                                    slot.child(
+                                        img(image)
+                                            .id(("sidebar-logo-hover", ix))
+                                            .absolute()
+                                            .inset_0()
+                                            .size_full()
+                                            .object_fit(ObjectFit::Contain)
+                                            .invisible()
+                                            .group_hover(hover_group.clone(), |style| style.visible()),
+                                    )
+                                }),
                         ),
                     )
                 })
                 .when_some(program_glyph, |row, glyph| {
                     row.child(
                         div()
+                            .id(("sidebar-program-icon", ix))
                             .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
                             .flex_shrink_0()
                             .font_family(symbol_family.clone())
                             .text_size(px(label_px))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(if active { active_fg } else { muted })
-                            .child(glyph),
+                            .group_hover(hover_group.clone(), |style| style.text_color(active_fg))
+                            .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                     )
                 })
                 .when(
@@ -514,17 +542,23 @@ impl NebulaWorkspace {
                     row.child(
                         div()
                             .id(("sidebar-pane-count", ix))
+                            .size(px(28.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.0))
+                            .hover(|style| style.bg(theme.muted.opacity(0.5)))
+                            .active(|style| style.bg(theme.muted))
                             .flex_shrink_0()
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.cycle_pane_focus(ix, window, cx);
                             }))
-                            .child(pane_header::split_badge(
-                                pane_count,
+                            .child(pane_header::split_layout_icon(
+                                &self.tabs[ix],
                                 label_px,
                                 if active { active_fg } else { muted },
-                                if active { active_bg } else { theme.muted },
                             )),
                     )
                 })
@@ -619,7 +653,7 @@ impl NebulaWorkspace {
             .flex_shrink_0()
             // workspace 根保持透明，侧栏自己只铺一层壳色；否则终端卡会
             // 叠到根底色上，把 Acrylic 的目标透明度二次增浓。
-            .bg(theme.background)
+            .bg(crate::gpui_shell::theme::tab_bar_background(cx))
             // 上边距为零：侧栏 / 终端卡 / 右侧抽屉三列顶边一律贴 chrome 下沿
             // （用户 08-26 裁定「左侧 tab 抬到和文件树顶部一致」）。左右和底部
             // 仍是旧壳的 8px。
@@ -723,7 +757,8 @@ impl NebulaWorkspace {
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
                                         gpui_component::tooltip::Tooltip::new(
-                                            "新建终端 (Ctrl+Shift+T)",
+                                            crate::gpui_shell::config::ui_language(cx)
+                                                .text(crate::i18n::Message::ChromeNewTerminalCtrlShiftT),
                                         )
                                         .build(window, cx)
                                     })
@@ -744,7 +779,10 @@ impl NebulaWorkspace {
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
-                                        gpui_component::tooltip::Tooltip::new("新建终端 (Ctrl+K)")
+                                        gpui_component::tooltip::Tooltip::new(
+                                            crate::gpui_shell::config::ui_language(cx)
+                                                .text(crate::i18n::Message::ChromeNewTerminalCtrlK),
+                                        )
                                             .build(window, cx)
                                     })
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -881,8 +919,7 @@ impl NebulaWorkspace {
                     .items_center()
                     .occlude()
                     .child(
-                        toolbar_button("toggle-sidebar", IconName::PanelLeft)
-                            .disabled(settings_active)
+                        toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
                             .selected(sidebar_visible)
@@ -901,7 +938,7 @@ impl NebulaWorkspace {
                             })),
                     )
                     .child(
-                        toolbar_button("open-settings", IconName::Settings)
+                        toolbar_button("open-settings", IconName::Settings, false)
                             .selected(settings_active)
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
@@ -914,14 +951,14 @@ impl NebulaWorkspace {
             )
             .child(self.render_collapsed_tab_title(cx))
             .child(
-                title_bar_panel_controls()
-                    .gap(px(8.0))
+                window_titlebar::title_bar_right_controls()
                     .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
                             "toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
                         )
                         .debug_selector(|| "command-manager-toggle".into())
                         .selected(self.command_manager_open)
@@ -960,11 +997,11 @@ impl NebulaWorkspace {
             return slot;
         }
         let theme = cx.theme();
-        let (ink, dim, badge_fill) = (theme.foreground, theme.muted_foreground, theme.muted);
+        let (ink, dim) = (theme.foreground, theme.muted_foreground);
         let dark = theme.is_dark();
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let chrome_family = theme.font_family.clone();
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let TabPresentation {
             title,
@@ -1006,7 +1043,7 @@ impl NebulaWorkspace {
                             .font_family(symbol_family)
                             .text_size(px(label_px))
                             .text_color(dim)
-                            .child(glyph),
+                            .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                     )
                 })
                 .child(
@@ -1019,9 +1056,9 @@ impl NebulaWorkspace {
                         .text_color(ink)
                         .child(title),
                 )
-                // 折叠态没有侧栏行可看，分屏数量只能挂在这里；> 1 才画。
+                // 折叠态在标题旁显示相同的分屏布局缩略图。
                 .when(pane_count > 1, |row| {
-                    row.child(pane_header::split_badge(pane_count, label_px, dim, badge_fill))
+                    row.child(pane_header::split_layout_icon(&self.tabs[self.active], label_px, dim))
                 }),
         )
     }

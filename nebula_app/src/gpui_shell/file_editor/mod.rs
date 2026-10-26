@@ -564,6 +564,7 @@ impl TextFileView {
                     Err(error) => {
                         view.notice = Some(match error {
                             SaveError::Changed => (Message::EditorConflict, None),
+                            SaveError::Busy => (Message::EditorSaveBusy, None),
                             SaveError::ReadOnly => (Message::EditorReadOnly, None),
                             SaveError::Io(error)
                                 if error.kind() == std::io::ErrorKind::Interrupted =>
