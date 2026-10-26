@@ -160,7 +160,8 @@ impl TerminalView {
         let rel_y = (position.y - self.origin.y).as_f32() / self.line_height.as_f32().max(1.0);
         let col = (rel_x.floor().max(0.0) as usize).min(self.cols.saturating_sub(1));
         let projection = self.native_results.projection.borrow();
-        let rel_y = projection.source_row(rel_y);
+        let art_row = self.character_art.frame.mapped_source_row(rel_x, rel_y);
+        let rel_y = art_row.unwrap_or_else(|| projection.source_row(rel_y));
         let row = (rel_y.floor().max(0.0) as usize)
             .min(projection.source_rows(self.rows).saturating_sub(1));
         let side = if rel_x.fract() > 0.5 { Side::Right } else { Side::Left };
@@ -169,7 +170,17 @@ impl TerminalView {
         };
         let term = session.term.lock();
         let viewport_origin = term.viewport_origin_for(self.rows);
-        let point = term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)));
+        let point = if let Some(row) = art_row {
+            // 压缩图案仍可显示源视口外的保留行，命中须返回真实源格。
+            TermPoint::new(
+                (viewport_origin + row.floor() as i32)
+                    .max(term.topmost_line())
+                    .min(term.bottommost_line()),
+                Column(col),
+            )
+        } else {
+            term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)))
+        };
         if self.reading.panel.is_some() {
             (point, side)
         } else {
