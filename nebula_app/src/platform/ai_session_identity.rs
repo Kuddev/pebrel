@@ -25,6 +25,28 @@ pub(crate) fn run_helper_if_requested() -> Option<i32> {
     None
 }
 
+/// Keep owned copies of the application executable stopped during installation.
+/// Acquisition waits on the background executor; cancellation only releases a gate.
+pub(crate) struct UpdatePause {
+    #[cfg(windows)]
+    inner: windows::UpdatePause,
+}
+
+impl UpdatePause {
+    pub(crate) fn acquire() -> io::Result<Self> {
+        Ok(Self {
+            #[cfg(windows)]
+            inner: windows::UpdatePause::acquire()?,
+        })
+    }
+
+    /// A committed handoff must keep probes stopped even when its owner is dropped.
+    pub(crate) fn commit(&mut self) {
+        #[cfg(windows)]
+        self.inner.commit();
+    }
+}
+
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PROBE_OUTPUT: usize = 64 * 1024;
 const MAX_PROBE_LINE: usize = 64 * 1024;
