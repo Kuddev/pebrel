@@ -18,6 +18,8 @@
 pub mod boxdraw;
 
 use crate::event::{EventListener, WindowSize};
+use crate::grid::Dimensions as _;
+use crate::index::Line;
 use crate::inline_image::{ImageRun, push_image_run};
 use crate::term::cell::Flags;
 use crate::term::color::Colors;
@@ -279,9 +281,21 @@ impl RenderSnapshot {
         include: impl Fn(usize) -> bool,
     ) -> Self {
         if term.grid().may_have_images() {
-            Self::capture_grid::<T, true>(term, cfg, include)
+            Self::capture_grid::<T, true>(term, cfg, include, None)
         } else {
-            Self::capture_grid::<T, false>(term, cfg, include)
+            Self::capture_grid::<T, false>(term, cfg, include, None)
+        }
+    }
+
+    /// Capture retained source rows for an in-place presentation whose visible
+    /// pixels can extend beyond the ordinary source viewport. This never scrolls
+    /// or mutates the terminal; colors, selection and glyph routing stay shared.
+    pub fn capture_from<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig, top: Line) -> Self {
+        let top = top.max(term.topmost_line()).min(term.bottommost_line());
+        if term.grid().may_have_images() {
+            Self::capture_grid::<T, true>(term, cfg, |_| true, Some(top))
+        } else {
+            Self::capture_grid::<T, false>(term, cfg, |_| true, Some(top))
         }
     }
 
@@ -290,10 +304,15 @@ impl RenderSnapshot {
         term: &Term<T>,
         cfg: &SnapshotConfig,
         include: impl Fn(usize) -> bool,
+        top: Option<Line>,
     ) -> Self {
         let rows = cfg.rows as usize;
         let cols = cfg.cols as usize;
-        let content = term.renderable_content_with_viewport(rows, cols);
+        let mut content = term.renderable_content_with_viewport(rows, cols);
+        if let Some(top) = top {
+            content.viewport_origin = top;
+            content.display_iter = term.grid().display_iter_from(top, rows, cols);
+        }
         let display_offset = content.display_offset;
         let viewport_origin = content.viewport_origin;
         let selection_range = content.selection;
@@ -750,6 +769,34 @@ mod tests {
         // Text segments keep only 'a' and 'b', split at the geometry cells.
         let segments: Vec<_> = snap.segments.iter().map(|s| (s.start_col, s.cells.len())).collect();
         assert_eq!(segments, vec![(0, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn capture_explicit_source_rows_preserves_colors_selection_and_viewport() {
+        let mut term = term_with(&["header", "⣿█", "visible"]);
+        let cell = &mut term.grid_mut()[Line(1)][Column(0)];
+        cell.fg = Color::Named(NamedColor::Red);
+        cell.bg = Color::Named(NamedColor::Blue);
+        cell.flags.insert(Flags::DIM | Flags::INVERSE);
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            crate::index::Point::new(Line(1), Column(0)),
+            Side::Left,
+        );
+        selection.update(crate::index::Point::new(Line(1), Column(1)), Side::Right);
+        term.selection = Some(selection);
+        let before = term.viewport_origin_for(4);
+        let ordinary = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let source = RenderSnapshot::capture_from(&term, &cfg(2, 8), Line(1));
+        assert_eq!(term.viewport_origin_for(4), before);
+        assert_eq!(source.box_glyphs[0].row, 0);
+        assert_eq!(source.box_glyphs[0].ch, '⣿');
+        assert_eq!(
+            (source.box_glyphs[0].fg, source.box_glyphs[0].dim),
+            (ordinary.box_glyphs[0].fg, ordinary.box_glyphs[0].dim)
+        );
+        assert!(source.selection_runs.iter().any(|r| r.row == 0 && r.start == 0 && r.end == 2));
+        assert!(source.segments.iter().any(|s| s.row == 1 && s.cells[0].text == "v"));
     }
 
     #[test]

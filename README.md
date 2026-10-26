@@ -14,18 +14,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-2024_edition-CE412B?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
-  <img src="https://img.shields.io/badge/OpenGL-ES_2.0%2B-5586A4?style=for-the-badge&logo=opengl&logoColor=white" alt="OpenGL ES 2.0+" />
-  <img src="https://img.shields.io/badge/Windows-10_%2F_11-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 10 and 11" />
-  <img src="https://img.shields.io/badge/macOS-14%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS 14+" />
-  <img src="https://img.shields.io/badge/Linux-glibc_2.35%2B-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux glibc 2.35+" />
-  <img src="https://img.shields.io/badge/PowerShell-Pebrel_prompt-5391FE?style=for-the-badge&logo=powershell&logoColor=white" alt="PowerShell" />
-  <img src="https://img.shields.io/badge/License-GPL--3.0-1f6feb?style=for-the-badge" alt="GPL-3.0 license" />
+  <a href="https://trendshift.io/repositories/127463?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-127463" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/127463/daily?language=Rust" alt="Kuddev/pebrel | Trendshift" width="250" height="55" /></a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
   <a href="https://atomgit.com/kettys/pebrel"><img src="https://atomgit.com/kettys/pebrel/star/badge.svg" alt="AtomGitStars" /></a>
+  <a href="https://hub.xerj.org/contributors/Kuddev"><img src="https://hub.xerj.org/contributors/Kuddev/badge.svg" alt="XERJ Corpus Hub contributor" /></a>
   <img src="https://img.shields.io/github/forks/Kuddev/pebrel?style=flat-square&color=8957e5&logo=github" alt="Forks" />
   <img src="https://img.shields.io/github/last-commit/Kuddev/pebrel?style=flat-square&color=3fb950" alt="Last commit" />
   <a href="https://discord.gg/VFn4rcxmhn"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
@@ -53,6 +48,17 @@
 ## 💖 Sponsors
 
 <table>
+  <tr>
+    <td align="center" width="240">
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><img src="extra/logo/sponsor_aiapi.png" alt="AIAPI" width="200" /></a><br />
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
+    </td>
+    <td>
+      <p><strong>Special thanks to AIAPI for sponsoring this project!</strong></p>
+      <p>AIAPI is dedicated to building the most stable AI model relay on the web, providing a unified API for solo developers, tech teams, and enterprises. We deliver full-power, unthrottled Claude and GPT models—zero lobotomization, zero dilution, and 100% pure native performance. Backed by dynamic multi-route scheduling for high availability, complete transparency in latency and billing, and top-tier after-sales support that always has your back, AIAPI cuts API costs by 40%–98% compared to official rates.</p>
+      <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">Visit AIAPI</a></p>
+    </td>
+  </tr>
   <tr>
     <td align="center" width="240">
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
