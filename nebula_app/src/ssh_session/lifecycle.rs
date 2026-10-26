@@ -376,7 +376,9 @@ async fn open_shell_with_budget<H: SshEventHost>(
     let result = network_with_budget(
         "shell channel",
         budget,
-        open_shell_channel(&acquired.session, size, remote_cwd, target),
+        // 分支分派点（同 sidebar.rs 的 render_sidebar_dispatch 模式）：上游
+        // `open_shell_channel` 保持字节一致，快路径差异全部在 fast_path。
+        fast_path::open_shell_channel_fast(acquired, size, remote_cwd, target),
     )
     .await;
     if result.is_ok() {
@@ -636,6 +638,8 @@ async fn wait_for_sync(deadline: Option<std::time::Instant>) {
         tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
     }
 }
+
+mod fast_path;
 
 #[cfg(test)]
 mod tests;

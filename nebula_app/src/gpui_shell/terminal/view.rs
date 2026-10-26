@@ -364,8 +364,21 @@ pub struct TerminalView {
     pub cwd: String,
     /// 同上标题协议的 git 分支字段（当前仅存备用）。
     pub branch: String,
+    /// 远端 shell 集成经 `SetUserVar=pebrel_git_root` 上报的仓库根（空 = 不在
+    /// 仓库内，离开仓库即清空）。本地与远端 pane 都会收到——rc 是同一份——
+    /// 但只有 SSH pane 的侧栏项目分组消费它。
+    pub git_root: String,
     /// 标题协议第 4 字段：远端 `nebula ssh` 上报的运行中程序，本地为空。
     pub running_program: Option<String>,
+    /// shell 最近一次自报 cwd（OSC 7 / `NEBULA|` 标题）的时刻，无论值是否
+    /// 变化——它证明的是**信道活着**。超时没有自报的 pane 视为「shell 不
+    /// 自报」（嵌套 bash/zsh、cmd），cwd 改由进程树兜底源接管（见
+    /// `runtime::probe_process_cwd`）；远端兜底探测同样用它判陈旧。
+    pub(crate) cwd_reported_at: Option<std::time::Instant>,
+    /// 进程树 cwd 兜底探测在后台在途（同一时刻至多一条）。
+    process_cwd_probe: Option<gpui::Task<()>>,
+    /// 上次进程树 cwd 探测的时刻，节流用。
+    last_cwd_probe: Option<std::time::Instant>,
     /// OSC 133;C 起、133;D 止：命令正在执行。自带 PowerShell prompt 靠
     /// `NEBULA|` 标题报 `running_program`，装了 OSC133 集成的 bash/zsh/nu 只
     /// 发这一对语义标记——两条路都要能点亮侧栏的「运行中」。
@@ -642,6 +655,14 @@ impl TerminalView {
 
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
+        // 信道活性：自报到过（无论值是否变化）就证明 shell 会在上报 cwd，
+        // 进程树兜底源据此退避——只有真正不自报的 shell（嵌套 bash/zsh、
+        // cmd）才付进程枚举的钱。
+        if matches!(&event, TermEvent::CwdReport(_))
+            || matches!(&event, TermEvent::Title(title) if title.starts_with("NEBULA|"))
+        {
+            self.cwd_reported_at = Some(std::time::Instant::now());
+        }
         // Both shell metadata channels update completion and directory history.
         if cwd_changed
             || ((matches!(&event, TermEvent::CwdReport(_))
@@ -658,6 +679,10 @@ impl TerminalView {
                 self.observe_reading_output(cx);
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
+                // 不自报 cwd 的 shell（嵌套 bash/zsh、cmd）没有任何元数据
+                // 事件，PTY 输出是唯一的跟随时机：cd 必然伴随输出（提示符
+                // 重绘），在输出沿上探测进程树 cwd。
+                self.probe_process_cwd(cx);
                 // PTY 输出也是「活动」：只刷新停闪静默计时，链活着就不动；
                 // 已停闪断链才重启闪烁（逐批重启相位会让输出风暴期光标
                 // 常亮并额外加帧）。
@@ -836,6 +861,16 @@ impl TerminalView {
                     && self.suggest.suggest_env.is_this_machine()
                 {
                     self.on_native_cmd_prompt(cx);
+                }
+                // 远端仓库根（进出仓库的变化沿才发）：侧栏 SSH 项目分组键的
+                // 输入，值变化走 TitleChanged → resolve_project_group 的现成
+                // 打点链。本地 pane 只存不用。
+                if name == "pebrel_git_root" {
+                    let root = value.trim().to_owned();
+                    if self.git_root != root {
+                        self.git_root = root;
+                        cx.emit(TerminalViewEvent::TitleChanged);
+                    }
                 }
                 self.suggest.completion_shell_report(&name, &value);
                 self.native_clipboard.observe(&name, &value);
@@ -1187,7 +1222,15 @@ impl TerminalView {
     /// `is_dir` at the host boundary and are left to the SFTP adapter.
     pub fn local_cwd(&self) -> Option<std::path::PathBuf> {
         let path = std::path::PathBuf::from(self.cwd.trim());
-        path.is_dir().then_some(path)
+        if path.is_dir() {
+            return Some(path);
+        }
+        // 无集成的嵌套 shell（fish、MSYS bash…）按 `$PWD` 原样上报挂载形态
+        // （`/d/…`、`/cygdrive/d/…`、WSL fish 的 `/mnt/d/…`）。原样 `is_dir`
+        // 必为假，先折回宿主盘再验一次——与左侧分组同一变换（10-10 修分组
+        // 时两侧就分叉了），右侧文件树/Git 视图由此跟进 fish 的 cwd。
+        let folded = crate::platform::host_paths::mounted_host_path(self.cwd.trim())?;
+        folded.is_dir().then_some(folded)
     }
 
     /// WSL 发行版：spawn 时 pin 进启动参数的 [`crate::shell_detect::wsl_spawn_distro`]
@@ -1203,6 +1246,30 @@ impl TerminalView {
         self.ssh_destination.as_ref()?;
         let path = self.cwd.as_str();
         (path.starts_with('/') && !path.chars().any(char::is_control)).then(|| path.to_owned())
+    }
+
+    /// shell 是否仍在自报 cwd（OSC 7/`NEBULA|` 标题在 `within` 内到过）。
+    /// 自报健在的 pane 不需要兜底源——自报更及时也更便宜。
+    pub fn cwd_self_reporting(&self, within: std::time::Duration) -> bool {
+        self.cwd_reported_at.is_some_and(|at| at.elapsed() < within)
+    }
+
+    /// 进程树兜底源回填 cwd：与 OSC 7 同一入口语义（更新 `cwd` 并广播
+    /// TitleChanged），分组、抽屉、Git 面板一齐跟随——所有消费方只认这一
+    /// 份 pane 身份。只接受宿主可见目录；兜底源读的是真实进程 cwd，防御性
+    /// 再验一次，坏值不进身份。
+    pub fn adopt_process_cwd(&mut self, path: &str, cx: &mut Context<Self>) {
+        let path = path.trim();
+        if path.is_empty()
+            || path == self.cwd
+            || !std::path::Path::new(path).is_absolute()
+            || !std::path::Path::new(path).is_dir()
+        {
+            return;
+        }
+        self.cwd = path.to_owned();
+        cx.emit(TerminalViewEvent::TitleChanged);
+        cx.notify();
     }
 
     /// 这个 pane 的远端身份，仅当会话**已经就绪**时才给。

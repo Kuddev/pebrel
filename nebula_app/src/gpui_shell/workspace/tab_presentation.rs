@@ -247,3 +247,76 @@ mod tests {
         }
     }
 }
+
+/// [`tooltip`] 的可寻址变体：内容根带 debug selector。tooltip 是窗口级覆盖
+/// 层，UI 测试断言「悬浮层确实画出了这段文本」只能靠 debug_bounds 寻址
+/// （同一时刻窗口至多画一个 tooltip，静态 selector 多行共用不冲突）。
+pub(super) fn tooltip_with_selector(
+    text: SharedString,
+    selector: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyView {
+    gpui_component::tooltip::Tooltip::element(move |_, _| {
+        div()
+            .debug_selector(move || selector.to_owned())
+            .max_w(px(560.0))
+            .whitespace_normal()
+            .child(text.clone())
+    })
+    .build(window, cx)
+}
+
+/// 「真被截断才显示悬浮全文」的截断探针（用户 10-23 需求）。
+///
+/// gpui 的 div tooltip API 不接受「不显示」，且省略号发生在 paint 阶段、
+/// 元素构建时无从得知文本是否被截断。做法：把返回的探针（一个零高全宽
+/// 的 canvas）放进被测的 `truncate()` div 里，layout 阶段拿到该 div 的
+/// 实际内容宽，与 [`text_line_width`] 的全文固有宽比较，结果写入共享
+/// Cell。tooltip 至少在悬浮延迟（默认 500ms）到期后才构建，那时读到的
+/// Cell 已是当前布局的真值；未截断时消费方返回空视图（[`gpui::Empty`]，
+/// 什么都不画，等效没有 tooltip）。
+///
+/// 探针高度为 0、不参与命中，不影响宿主 div 的布局；但 `w_full()` 依赖
+/// 宿主 div 自身宽度由外部约束（flex 收缩/`max_w`）决定——这正是被测
+/// 截断条件的来源。
+pub(super) fn truncation_probe(
+    text: SharedString,
+    font: gpui::Font,
+    font_size: gpui::Pixels,
+) -> (std::rc::Rc<std::cell::Cell<bool>>, impl gpui::IntoElement) {
+    let truncated = std::rc::Rc::new(std::cell::Cell::new(false));
+    let probe = truncated.clone();
+    let canvas = gpui::canvas(
+        move |bounds, window, _| {
+            let width = text_line_width(window.text_system(), &text, font, font_size);
+            // 半像素容差吸收字体取整：恰好等宽不算截断。
+            probe.set(width > bounds.size.width + px(0.5));
+        },
+        |_, _, _, _| {},
+    )
+    .w_full()
+    .h(px(0.0));
+    (truncated, canvas)
+}
+
+/// 单行文本按指定字体与字号的完整渲染宽度（不换行、不截断时的固有宽）。
+/// 「真被截断才显示提示」的两个消费方共用：行内探针（layout 时与可用宽
+/// 比较）与侧栏分支 chip（build 时的宽度预算比较）。字体度量来自应用
+/// 自带的内嵌字体，跨平台结果一致。
+pub(super) fn text_line_width(
+    text_system: &gpui::WindowTextSystem,
+    text: &str,
+    font: gpui::Font,
+    font_size: gpui::Pixels,
+) -> gpui::Pixels {
+    let run = gpui::TextRun {
+        len: text.len(),
+        font,
+        color: gpui::Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    text_system.shape_line(text.into(), font_size, &[run], None).width
+}

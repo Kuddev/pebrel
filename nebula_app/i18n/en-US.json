@@ -1113,7 +1113,8 @@
       "add_file": "Add to SVN",
       "resolve": "Resolve",
       "mark_resolved": "Keep the current contents and mark the conflict resolved"
-    }
+    },
+    "remote_runs_over_ssh": "Remote repository · actions run over SSH"
   },
   "launcher": {
     "open_admin": "Open as administrator",

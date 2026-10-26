@@ -64,6 +64,10 @@ impl NebulaWorkspace {
             return;
         }
 
+        // 打开抽屉（或经 `select_side_panel_view` 转发到此）停在 Git 视图：
+        // 请求远端面板强制刷新。关闭早退在上一行返回，关抽屉不置位。
+        self.wake_remote_git_refresh();
+
         self.sync_side_panel_to_active(true, cx);
 
         // The shared model builds snapshots on a worker and exposes a cheap,
@@ -358,6 +362,7 @@ impl NebulaWorkspace {
             match self.side_panel.view {
                 PanelView::Files if remote => self.render_remote_files(cx),
                 PanelView::Files => self.render_file_tree(cx),
+                PanelView::Git if remote => self.render_remote_git(window, cx),
                 PanelView::Git => self.render_git_tree(window, cx),
             }
         };

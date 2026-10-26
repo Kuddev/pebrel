@@ -1113,7 +1113,8 @@
       "add_file": "添加到 SVN",
       "resolve": "解决",
       "mark_resolved": "保留当前内容并标记冲突已解决"
-    }
+    },
+    "remote_runs_over_ssh": "远端仓库 · 操作经 SSH 在远端执行"
   },
   "launcher": {
     "open_admin": "以管理员身份打开",
