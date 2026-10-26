@@ -363,8 +363,12 @@ impl Settings {
 }
 
 fn default_font_offset() -> RawDelta {
-    // 正文通过独立基线放置，平台补偿不再隐式改变字符网格的比例。
-    RawDelta { x: 0, y: 0 }
+    // 恢复 2.2.2 的默认留白，不再为字符画比例压缩普通正文。
+    let y = match crate::platform::Platform::current() {
+        crate::platform::Platform::Windows => 4,
+        _ => 0,
+    };
+    RawDelta { x: 0, y }
 }
 
 fn runtime_background(
@@ -865,9 +869,13 @@ mod tests {
     }
 
     #[test]
-    fn font_offset_has_no_implicit_platform_padding_and_preserves_explicit_values() {
+    fn font_offset_restores_2_2_2_padding_and_preserves_explicit_values() {
+        let default_y = match crate::platform::Platform::current() {
+            crate::platform::Platform::Windows => 4,
+            _ => 0,
+        };
         for (input, expected) in [
-            ("", (0, 0)),
+            ("", (0, default_y)),
             ("[font.offset]\nx = 2\ny = 4", (2, 4)),
             ("[font.offset]\ny = -2", (0, -2)),
         ] {
