@@ -3,6 +3,8 @@
 
 mod worker;
 
+pub(super) use worker::UpdatePause;
+
 use super::*;
 use std::collections::HashMap;
 use std::mem;
