@@ -279,6 +279,14 @@ only for rendering. No LobeHub asset is embedded for Antigravity.
 
 ## Sponsor Logos
 
+### AIAPI
+
+`sponsor_aiapi.png` is the unmodified 2400 x 893 PNG supplied and selected by the
+maintainer for AIAPI sponsorship. Its off-white background, dark brown wordmark,
+letterforms and aspect ratio are preserved. The asset appears first in both
+README sponsor sections and in the application's Sponsors page, linking to
+https://cn.aiapi.bot/invite?code=MCYLZ5H6FR. It is resized only when displayed.
+
 ### Sidrune AI
 
 `sponsor_sidrune.png` is based on the 2219 x 558 transparent PNG supplied by the

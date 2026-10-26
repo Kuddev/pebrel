@@ -108,6 +108,8 @@ jobs:
       - name: Install native dependencies
         if: ${{ runner.os == 'Linux' }}
         run: |
+          # 避开 runner 默认 Azure 镜像的低速下载，保留现有发行版与签名配置。
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config zsh libasound2-dev libdbus-1-dev libudev-dev \
