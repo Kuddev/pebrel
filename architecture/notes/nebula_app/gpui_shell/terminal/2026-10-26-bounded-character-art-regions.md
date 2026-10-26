@@ -2,8 +2,9 @@
 
 ## Status
 
-Local preview implementation. Keep the approved 2.2.2 text spacing; desktop
-acceptance of the combined text and character-art scene precedes integration.
+Implemented. The combined Windows desktop preview was accepted on 2026-10-26.
+The approved 2.2.2 text spacing remains unchanged; native CI coverage is separate
+from that visual acceptance.
 
 ## Context
 
@@ -69,6 +70,12 @@ scrolling, erase/shrink history independence and reset. Native captures compare 
 approved reading scene pixel-for-pixel and measure a circle while retaining the
 29-device-pixel Maple 13px row at 150% display scale. Fastfetch uses its actual
 Windows 11 output; a live Codex preview remains separate from synthetic geometry.
+The live Codex logo and the circle before/after scrolling measured 355 by 355
+pixels, while the ordinary reading scene's client pixels stayed identical.
+Seventy focused regressions and the source-snapshot regression passed locally;
+Fastfetch returned zero in the real product PTY. The 60-frame local captures had
+median draw CPU costs of 4.09ms for reading, 5.29ms for the scrolling circle and
+6.59ms for Fastfetch; these are fixture results, not universal performance claims.
 
 ## Supersedes
 
