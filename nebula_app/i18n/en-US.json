@@ -536,8 +536,8 @@
       "import_terminal_directory": "Import terminal directory..."
     },
     "sponsor": {
-      "aiapi_headline": "Full-power Claude / GPT. Built for speed.",
-      "aiapi_description": "AIAPI brings full-power Claude and GPT together with powerful reasoning, advanced coding and fast responses. From complex problems to intensive development, put the models to work through one API endpoint that connects to common SDKs and AI coding tools.",
+      "aiapi_headline": "Special thanks to AIAPI for sponsoring this project!",
+      "aiapi_description": "AIAPI is dedicated to building the most stable AI model relay on the web, providing a unified API for solo developers, tech teams, and enterprises. We deliver full-power, unthrottled Claude and GPT models—zero lobotomization, zero dilution, and 100% pure native performance. Backed by dynamic multi-route scheduling for high availability, complete transparency in latency and billing, and top-tier after-sales support that always has your back, AIAPI cuts API costs by 40%–98% compared to official rates.",
       "visit": "Visit and sign up"
     }
   },

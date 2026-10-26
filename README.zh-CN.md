@@ -54,8 +54,8 @@
       <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
     </td>
     <td>
-      <p><strong>满血 Claude / GPT，高速直达</strong></p>
-      <p>感谢 AIAPI 赞助本项目！AIAPI 提供满血 Claude 与 GPT 渠道，强劲推理、深度编程、高速响应。从复杂问题到高强度开发，让模型实力充分发挥；一个 API 地址，轻松接入常用 SDK 与 AI 编程工具。</p>
+      <p><strong>感谢 AIAPI 对本项目的强力支持！</strong></p>
+      <p>AIAPI 致力于打造全网最稳定的 AI 模型中转站，面向个人开发者、技术团队与企业提供一站式统一接口。我们主打满血 Claude、满血 GPT 等顶尖模型，坚持原汁原味、绝不降智、不掺一滴水。依托动态多路调度保障高可用，性能、响应耗时与账单全程透明；配备顶级售后团队，问题极速响应、全程保驾护航。根据模型与路由策略，调用成本比官方基准价直降 40%–98%。</p>
       <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">访问 AIAPI</a></p>
     </td>
   </tr>
