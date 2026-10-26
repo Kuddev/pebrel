@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -30,6 +31,20 @@ class WindowsResourceTests(unittest.TestCase):
     def test_legacy_shell_still_embeds_its_manifest(self):
         resource = self.resource(False)
         self.assertEqual(len(re.findall(r"^1\s+24\s+nebula\.manifest$", resource, re.MULTILINE)), 1)
+
+    def test_product_versions_match_the_application_package(self):
+        manifest = tomllib.loads((ROOT / "nebula_app/Cargo.toml").read_text(encoding="utf-8"))
+        version = manifest["package"]["version"]
+        numeric = re.match(r"^\d+\.\d+\.\d+", version).group().replace(".", ",") + ",0"
+        for gpui in (False, True):
+            with self.subTest(gpui=gpui):
+                resource = self.resource(gpui)
+                for field in ("FILEVERSION", "PRODUCTVERSION"):
+                    values = re.findall(rf"^{field}\s+([\d,]+)$", resource, re.MULTILINE)
+                    self.assertEqual(values, [numeric])
+                for field in ("FileVersion", "ProductVersion"):
+                    values = re.findall(rf'VALUE\s+"{field}",\s+"([^"]+)"', resource)
+                    self.assertEqual(values, [version])
 
     def test_build_script_selects_the_resource_contract(self):
         source = (ROOT / "nebula_app/build.rs").read_text(encoding="utf-8")
