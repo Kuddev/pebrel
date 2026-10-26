@@ -558,19 +558,31 @@ impl SettingsPane {
             },
         ));
 
-        let ui_font_family_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(localized_input_placeholder("font_family", language))
-                .default_value(runtime.ui_font_family.clone().unwrap_or_default())
-        });
+        let ui_font_family_input =
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(localized_input_placeholder("font_family", language))
+                    .default_value(runtime.ui_font_family.clone().unwrap_or_else(|| {
+                        crate::gpui_shell::typography::UI_FONT_FAMILY.to_owned()
+                    }))
+            });
         subscriptions.push(cx.subscribe_in(
             &ui_font_family_input,
             window,
-            |this: &mut Self, input, event: &InputEvent, _, cx| {
+            |this: &mut Self, input, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    let value = input.read(cx).value().trim().to_owned();
+                    let default = crate::gpui_shell::typography::UI_FONT_FAMILY;
+                    let entered = input.read(cx).value().trim().to_owned();
+                    // 默认字体显示真实名称，但不把占位默认值变成用户覆盖设置。
+                    let value =
+                        if entered.eq_ignore_ascii_case(default) { String::new() } else { entered };
                     if value != this.runtime.ui_font_family.as_deref().unwrap_or_default() {
                         this.persist(&[("ui_font_family", value)], cx);
+                    }
+                    let displayed =
+                        this.runtime.ui_font_family.as_deref().unwrap_or(default).to_owned();
+                    if input.read(cx).value().as_ref() != displayed {
+                        input.update(cx, |state, cx| state.set_value(displayed, window, cx));
                     }
                 }
             },

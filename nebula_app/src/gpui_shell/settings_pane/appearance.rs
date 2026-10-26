@@ -258,7 +258,12 @@ mod tests {
         use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
         let _lock = lock_theme_studio();
         let _settings = SettingsBytesGuard::capture();
-        persist_keys(&[("font_size", "15".into()), ("ui_font_size", "14".into())]).unwrap();
+        persist_keys(&[
+            ("font_size", "15".into()),
+            ("ui_font_size", "14".into()),
+            ("ui_font_family", String::new()),
+        ])
+        .unwrap();
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_reduce_motion(true);
@@ -271,6 +276,10 @@ mod tests {
             gpui_component::Root::new(view, window, cx)
         });
         let pane = pane.unwrap();
+        assert_eq!(
+            pane.read_with(cx, |pane, cx| pane.ui_font_family_input.read(cx).value().to_string()),
+            "Geist"
+        );
         cx.simulate_resize(gpui::size(px(1280.0), px(1800.0)));
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
@@ -369,7 +378,7 @@ mod tests {
             }
         }
         let terminal_family = RuntimeSettings::load().font_family;
-        for value in ["Consolas", ""] {
+        for value in ["Geist", "Consolas", ""] {
             cx.update(|window, cx| {
                 pane.read(cx).ui_font_family_input.read(cx).focus_handle(cx).focus(window, cx);
                 let _ = window.draw(cx);
@@ -385,7 +394,16 @@ mod tests {
             cx.simulate_keystrokes("enter");
             cx.run_until_parked();
             let saved = RuntimeSettings::load();
-            assert_eq!(saved.ui_font_family.as_deref(), (!value.is_empty()).then_some(value));
+            let custom = (!value.is_empty() && value != "Geist").then_some(value);
+            assert_eq!(saved.ui_font_family.as_deref(), custom);
+            assert_eq!(
+                pane.read_with(cx, |pane, cx| pane
+                    .ui_font_family_input
+                    .read(cx)
+                    .value()
+                    .to_string()),
+                custom.unwrap_or("Geist")
+            );
             assert_eq!(saved.font_family, terminal_family);
         }
     }

@@ -102,6 +102,59 @@ fn move_over(cx: &mut VisualTestContext, button: Option<MouseButton>) {
 }
 
 #[gpui::test]
+fn character_art_drag_maps_visual_rows_back_to_exact_source_text(cx: &mut TestAppContext) {
+    cx.update(crate::gpui_shell::scientific_render::init);
+    let (probe, mut cx) = open(cx);
+    let terminal = probe.read_with(&cx, |probe, _| probe.terminal.clone());
+    let receiver = terminal.update(&mut cx, |view, cx| {
+        let receiver = view.install_completion_test_session();
+        view.copy_on_select = false;
+        // 虚拟字体的自然格是 9×13；显式构造高行格，验证本次比例修正的鼠标路径。
+        view.line_height_multiplier = Some(2.0);
+        let mut wire = String::from("\x1b[2J\x1b[HBody stays on its original row");
+        for row in 0..8 {
+            let ch = if row == 0 { '⣿' } else { '⣷' };
+            wire.push_str(&format!("\x1b[{};5H{}", row + 4, ch.to_string().repeat(12)));
+        }
+        wire.push_str("\x1b[13;1Hprompt>");
+        super::super::startup_tests::feed(view, wire.as_bytes());
+        cx.notify();
+        receiver
+    });
+    draw(&mut cx);
+    draw(&mut cx);
+    let (start, end, grid) = terminal.read_with(&cx, |view, _| {
+        let (top, height) = view.character_art.frame.cell(3, 4, 3.0);
+        assert!(height < 1.0, "the actual terminal element must mount character-art geometry");
+        let (next, _) = view.character_art.frame.cell(4, 15, 4.0);
+        (
+            point(
+                view.origin.x + view.cell_width * 4.1,
+                view.origin.y + view.line_height * (top + height * 0.5),
+            ),
+            point(
+                view.origin.x + view.cell_width * 15.9,
+                view.origin.y + view.line_height * (next + height * 0.5),
+            ),
+            (view.cell_width, view.line_height, view.cols, view.rows),
+        )
+    });
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    terminal.read_with(&cx, |view, _| {
+        assert_eq!(
+            view.session.as_ref().unwrap().term.lock().selection_to_string(),
+            Some(format!("{}\n    {}", "⣿".repeat(12), "⣷".repeat(12)))
+        );
+        assert_eq!((view.cell_width, view.line_height, view.cols, view.rows), grid);
+        assert_eq!(view.character_art.frame.cell(0, 0, 0.0), (0.0, 1.0));
+    });
+    assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+}
+
+#[gpui::test]
 fn hover_focus_requires_opt_in_and_emits_once(cx: &mut TestAppContext) {
     let (probe, mut cx) = open(cx);
     move_over(&mut cx, None);
