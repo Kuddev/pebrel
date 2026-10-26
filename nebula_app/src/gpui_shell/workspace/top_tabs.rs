@@ -19,6 +19,7 @@ use crate::gpui_shell::terminal::view::SidebarActivity;
 use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::{Message, UiLanguage};
 
+use super::window_titlebar::title_bar_right_controls;
 use super::{
     NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
     TabDragAxis, TabPresentation, ToggleShellPicker, pane_header, title_bar_panel_controls,
@@ -143,7 +144,7 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let port_forward_w = if port_forward_button.is_some() { 32.0 } else { 0.0 };
         let tab_capacity_w =
@@ -320,6 +321,7 @@ impl NebulaWorkspace {
                                 pitch,
                                 offset: 0.0,
                                 active: false,
+                                force_tear_out: false,
                                 dock: None,
                             });
                         }),
@@ -397,7 +399,7 @@ impl NebulaWorkspace {
                                 .text_size(px(label_px))
                                 .font_weight(FontWeight::NORMAL)
                                 .text_color(if active { active_fg } else { muted })
-                                .child(glyph),
+                                .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                         )
                     })
                     .when(
@@ -416,7 +418,7 @@ impl NebulaWorkspace {
                                     .child(pane_header::split_glyph(
                                         label_px * 0.78,
                                         if active { active_fg } else { muted },
-                                    )),
+                                )),
                             )
                         },
                     )
@@ -457,17 +459,23 @@ impl NebulaWorkspace {
                         row.child(
                             div()
                                 .id(("top-pane-count", ix))
+                                .size(px(28.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.0))
+                                .hover(|style| style.bg(theme.muted.opacity(0.5)))
+                                .active(|style| style.bg(theme.muted))
                                 .flex_shrink_0()
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.cycle_pane_focus(ix, window, cx);
                                 }))
-                                .child(pane_header::split_badge(
-                                    pane_count,
+                                .child(pane_header::split_layout_icon(
+                                    &self.tabs[ix],
                                     label_px,
                                     if active { active_fg } else { muted },
-                                    if active { active_bg } else { theme.muted },
                                 )),
                         )
                     })
@@ -692,14 +700,14 @@ impl NebulaWorkspace {
             // 共享详情侧栏入口固定在其右侧。
             .child(div().h_full().flex_1().min_w_0())
             .child(
-                title_bar_panel_controls()
-                    .gap(px(8.0))
+                title_bar_right_controls()
                     .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
                             "top-toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
                         )
                             .debug_selector(|| "command-manager-toggle".into())
                             .selected(self.command_manager_open)

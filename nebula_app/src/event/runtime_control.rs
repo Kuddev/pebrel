@@ -387,7 +387,7 @@ impl Processor {
                 let read = window.runtime_read(managed.pane_id, *lines, None)?;
                 Ok(serde_json::json!({ "agent": managed, "read": read }))
             },
-            RuntimeCommand::SshShell { .. } => {
+            RuntimeCommand::SshShell(_) => {
                 Err(ApiError::new("runtime_unavailable", "ssh.shell requires the GPUI shell"))
             },
         }

@@ -30,6 +30,29 @@ pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
 /// Max bytes to read from the PTY while the terminal is locked.
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
 
+/// Network-delivered synchronized frames can span several transport reads.
+/// This is a watchdog for a missing end marker, not a delay for complete frames.
+const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct SyncTimeout {
+    deadline: Option<Instant>,
+}
+
+impl ansi::Timeout for SyncTimeout {
+    fn set_timeout(&mut self, _duration: Duration) {
+        self.deadline = Some(Instant::now() + SYNC_UPDATE_TIMEOUT);
+    }
+
+    fn clear_timeout(&mut self) {
+        self.deadline = None;
+    }
+
+    fn pending_timeout(&self) -> bool {
+        self.deadline.is_some()
+    }
+}
+
 /// ConPTY 光标对账的静默期：最后一次 resize 提交后等这么久再探针，给
 /// conhost 的内部整理（缓冲区塌缩/重锚）和 shell 的 resize 反应留时间。
 const ALIGN_DELAY: Duration = Duration::from_millis(120);
@@ -161,10 +184,15 @@ fn conpty_cursor_probe(_pid: u32) -> Option<ConhostCursor> {
 /// OSC 提取必须紧贴 VT 解析，避免两类会话产生不同的目录、命令和图片状态。
 #[derive(Default)]
 pub struct StreamProcessor {
-    parser: ansi::Processor,
+    parser: ansi::Processor<SyncTimeout>,
     cwd_sniffer: crate::osc_cwd::CwdSniffer,
     window_size: Option<WindowSize>,
     remote_hook_token: Option<String>,
+    // The stream owns unreplayed payloads: disconnecting drops them even if
+    // the pane retains its Term. The Term only holds weak replay entries.
+    pending_images: Vec<Arc<crate::term::PendingImage>>,
+    inline_content: crate::inline_content::Registry,
+    command_capture: crate::inline_content::CommandCapture,
 }
 
 impl StreamProcessor {
@@ -177,7 +205,7 @@ impl StreamProcessor {
     }
 
     pub fn next_sync_timeout(&self) -> Option<Instant> {
-        self.parser.sync_timeout().sync_timeout()
+        self.parser.sync_timeout().deadline
     }
 
     pub fn sync_bytes_count(&self) -> usize {
@@ -187,6 +215,7 @@ impl StreamProcessor {
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
         terminal.cancel_redraw_anchor();
         terminal.with_program_status_preserved(|terminal| self.parser.stop_sync(terminal));
+        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
     }
 
     fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
@@ -198,18 +227,23 @@ impl StreamProcessor {
                     terminal.cancel_redraw_anchor();
                 }
                 self.parser.advance(terminal, chunk);
+                self.command_capture.observe(terminal);
             }
         });
     }
 
+    /// Returns the input byte count passed to VTE, including ordered image
+    /// markers. Synchronization-buffer accounting uses this count; transport
+    /// byte counts remain unchanged.
     pub fn feed<U: EventListener>(
         &mut self,
         terminal: &mut Term<U>,
         event_proxy: &U,
         bytes: &[u8],
-    ) {
+    ) -> usize {
         let osc_events = self.cwd_sniffer.feed(bytes);
         let mut advanced = 0;
+        let mut parser_input_bytes = bytes.len();
         for (offset, event) in osc_events {
             // Titles and shell identity/cwd reports must retain wire order:
             // coalescing a remote cwd past a parent prompt would attribute that
@@ -217,14 +251,51 @@ impl StreamProcessor {
             self.advance(terminal, &bytes[advanced..offset]);
             advanced = offset;
             match event {
+                OscEvent::InlineContent(packet) => {
+                    self.command_capture.cancel();
+                    // 原生内容是显式布局边界；先提交同步缓冲，才可在真实光标处占位。
+                    if self.next_sync_timeout().is_some() {
+                        self.stop_sync(terminal);
+                    }
+                    if terminal.mode().intersects(
+                        crate::term::TermMode::ALT_SCREEN | crate::term::TermMode::MOUSE_MODE,
+                    ) {
+                        continue;
+                    }
+                    let row = match &packet {
+                        crate::inline_content::Packet::Place { row, .. } => *row,
+                        _ => 0,
+                    };
+                    if matches!(
+                        &packet,
+                        crate::inline_content::Packet::Begin { .. }
+                            | crate::inline_content::Packet::Place { .. }
+                    ) && terminal.grid().cursor.point.column.0 != 0
+                    {
+                        continue;
+                    }
+                    if let Some(surface) = self.inline_content.apply(packet) {
+                        // 换行由发送端写出，ConPTY 与前端必须共同看到占位，不能只推进本地网格。
+                        let grid = terminal.inline_content_grid_mut();
+                        let point = grid.cursor.point;
+                        if point.column.0 == 0 {
+                            grid[point.line].reset(&crate::term::cell::Cell::default());
+                            grid[point]
+                                .set_inline_marker(crate::inline_content::Marker { surface, row });
+                        }
+                    }
+                },
                 OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
                 OscEvent::CommandStart => {
                     terminal.acknowledge_program_status_results();
+                    self.command_capture.start(terminal, self.parser.sync_bytes_count() == 0);
                     terminal.reading_shell_marker(b'C', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_end_prompt();
                     event_proxy.send_event(Event::CommandStart);
                 },
                 OscEvent::CommandDone { exit_code } => {
+                    self.command_capture.finish(terminal, &mut self.inline_content, exit_code);
+                    self.inline_content.finish_pending();
                     terminal.reading_shell_marker(
                         b'D',
                         exit_code,
@@ -234,6 +305,7 @@ impl StreamProcessor {
                     event_proxy.send_event(Event::CommandDone { exit_code })
                 },
                 OscEvent::UserVar { name, value } => {
+                    self.command_capture.report(&name, &value, event_proxy);
                     event_proxy.send_event(Event::UserVar { name, value })
                 },
                 OscEvent::Notify(text) => event_proxy.send_event(Event::Notify(text)),
@@ -250,6 +322,7 @@ impl StreamProcessor {
                     }
                 },
                 OscEvent::PromptMark => {
+                    self.command_capture.cancel();
                     terminal.end_program_status_activity();
                     terminal.reading_shell_marker(b'A', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_add_prompt_mark();
@@ -258,29 +331,27 @@ impl StreamProcessor {
                     terminal.reading_shell_marker(b'B', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_mark_prompt_input();
                 },
-                OscEvent::InlineImage { data, width, height } => {
-                    let (cell_w, cell_h) = self.window_size.map_or((9.0, 20.0), |ws| {
-                        (f32::from(ws.cell_width), f32::from(ws.cell_height))
+                OscEvent::InlineImage { data, width, height, options } => {
+                    let viewport = self.window_size.unwrap_or(WindowSize {
+                        num_cols: terminal.columns() as u16,
+                        num_lines: terminal.screen_lines() as u16,
+                        cell_width: 9,
+                        cell_height: 20,
                     });
-                    let max_w = terminal.columns() as f32 * cell_w;
-                    let scale = (max_w / width as f32).min(1.0);
-                    let disp_w = width as f32 * scale;
-                    let disp_h = height as f32 * scale;
-                    let rows = (disp_h / cell_h).ceil().max(1.0) as usize;
-                    let abs_line = terminal.nebula_cursor_abs_line();
-                    for _ in 0..=rows {
-                        self.advance(terminal, b"\r\n");
+                    if let Some((marker, image)) =
+                        terminal.nebula_queue_inline_image(data, width, height, options, viewport)
+                    {
+                        self.pending_images.push(image);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
                     }
-                    event_proxy.send_event(Event::InlineImage {
-                        data: std::sync::Arc::new(data),
-                        abs_line,
-                        width: disp_w,
-                        height: disp_h,
-                    });
                 },
             }
         }
         self.advance(terminal, &bytes[advanced..]);
+        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
+        parser_input_bytes
     }
 }
 
@@ -443,6 +514,7 @@ where
     {
         let mut unprocessed = 0;
         let mut processed = 0;
+        let mut parser_input_bytes = 0;
 
         // Reserve the next terminal lock for PTY reading.
         let _terminal_lease = Some(self.terminal.lease());
@@ -503,7 +575,8 @@ where
                 writer.write_all(&buf[..unprocessed]).unwrap();
             }
 
-            state.stream.feed(&mut **terminal, &self.event_proxy, &buf[..unprocessed]);
+            parser_input_bytes +=
+                state.stream.feed(&mut **terminal, &self.event_proxy, &buf[..unprocessed]);
             trace_terminal_state("after-pty-read", &terminal);
 
             processed += unprocessed;
@@ -515,8 +588,9 @@ where
             }
         }
 
-        // Queue terminal redraw unless all processed bytes were synchronized.
-        if state.stream.sync_bytes_count() < processed && processed > 0 {
+        // Compare parser input with its buffered tail, including injected
+        // markers on both sides. Wire bytes alone can hide a committed prefix.
+        if state.stream.sync_bytes_count() < parser_input_bytes && processed > 0 {
             self.event_proxy.send_event(Event::Wakeup);
         }
 
@@ -991,6 +1065,229 @@ mod tests {
     use crate::term::test::TermSize;
 
     #[test]
+    fn ordinary_command_view_preserves_grid_cursor_and_chunk_boundaries() {
+        use crate::inline_content::CommandView;
+        struct Lens;
+        impl EventListener for Lens {
+            fn command_view(&self, shell: &str, line: &str) -> Option<CommandView> {
+                (shell == "pwsh:1" && line == "cat long.md")
+                    .then(|| CommandView { mime: "text/markdown".into(), title: line.into() })
+            }
+        }
+        let start = b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmNhdCBsb25nLm1k\x07\x1b]133;C\x07";
+        let output = "# 中文\r\n\r\nThis line is deliberately longer than the terminal grid width.\r\n1234567890123456789012345界suffix\r\n";
+        // 同一字节流会同时承载状态报告与原文，合并协议入口后不能重复消费或丢失其一。
+        for (previous, working, done) in [
+            ("", "", ""),
+            (
+                "\x1b]7501;state=done:id=previous\x07",
+                "\x1b]7501;state=working:id=task\x1b\\",
+                "\x1b]7501;state=done:id=task\x07",
+            ),
+        ] {
+            let wire = [
+                previous.as_bytes(),
+                start.as_slice(),
+                working.as_bytes(),
+                output.as_bytes(),
+                done.as_bytes(),
+                b"\x1b]133;D;0\x07\x1b]133;A\x07prompt>",
+            ]
+            .concat();
+            for split in 0..=wire.len() {
+                let mut term = Term::new(
+                    Config { scrolling_history: 0, ..Config::default() },
+                    &TermSize::new(24, 24),
+                    Lens,
+                );
+                let mut plain = Term::new(Config::default(), &TermSize::new(24, 24), VoidListener);
+                let mut stream = StreamProcessor::default();
+                stream.feed(&mut term, &Lens, &wire[..split]);
+                stream.feed(&mut term, &Lens, &wire[split..]);
+                StreamProcessor::default().feed(&mut plain, &VoidListener, &wire);
+                assert_eq!(term.grid().cursor.point, plain.grid().cursor.point);
+                let surface = &term.grid()[crate::index::Line(0)][crate::index::Column(0)]
+                    .inline_marker()
+                    .unwrap()
+                    .surface;
+                assert!(surface.has_grid_source());
+                // Native text markers require cleanup, not per-cell image lookup.
+                assert!(!term.grid().may_have_images());
+                let text = &surface.update_since(0).chunks[0].text;
+                assert_eq!(text, &output.replace("\r\n", "\n"));
+                assert_eq!(
+                    term.bounds_to_string(
+                        crate::index::Point::new(crate::index::Line(0), crate::index::Column(0)),
+                        term.grid().cursor.point
+                    ),
+                    plain.bounds_to_string(
+                        crate::index::Point::new(crate::index::Line(0), crate::index::Column(0)),
+                        plain.grid().cursor.point
+                    )
+                );
+                let records = term.program_statuses().iter().collect::<Vec<_>>();
+                if previous.is_empty() {
+                    assert!(records.is_empty());
+                } else {
+                    assert_eq!(records.len(), 2);
+                    assert!(
+                        records
+                            .iter()
+                            .find(|record| record.id == "previous")
+                            .unwrap()
+                            .result_acknowledged
+                    );
+                    let task = records.iter().find(|record| record.id == "task").unwrap();
+                    assert_eq!(task.state, crate::program_status::State::Done);
+                    assert!(!task.result_acknowledged);
+                }
+                let lifetime = Arc::downgrade(surface);
+                stream.feed(&mut term, &Lens, &b"\r\n".repeat(24));
+                assert!(lifetime.upgrade().is_none());
+                stream.feed(&mut term, &Lens, b"\x1bc");
+                assert!(lifetime.upgrade().is_none());
+                assert!(!term.grid().may_have_images());
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_command_view_leaves_failed_or_interactive_output_plain() {
+        struct Lens;
+        impl EventListener for Lens {
+            fn command_view(&self, _: &str, _: &str) -> Option<crate::inline_content::CommandView> {
+                Some(crate::inline_content::CommandView {
+                    mime: "text/markdown".into(),
+                    title: "cat".into(),
+                })
+            }
+        }
+        let start = b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmNhdCBsb25nLm1k\x07\x1b]133;C\x07";
+        for suffix in [
+            b"error\r\n\x1b]133;D;1\x07".as_slice(),
+            b"\x1b[?1049hfull screen\x1b[?1049l\r\n\x1b]133;D;0\x07",
+            b"partial\x1b]133;D;0\x07",
+        ] {
+            let mut term = Term::new(Config::default(), &TermSize::new(80, 24), Lens);
+            StreamProcessor::default().feed(&mut term, &Lens, &[start.as_slice(), suffix].concat());
+            assert!((term.topmost_line().0..=term.bottommost_line().0).all(|row| {
+                term.grid()[crate::index::Line(row)][crate::index::Column(0)]
+                    .inline_marker()
+                    .is_none()
+            }));
+        }
+    }
+
+    #[test]
+    fn native_content_grows_in_wire_order_and_rejects_non_column_zero() {
+        use crate::index::{Column, Line, Point};
+        use crate::inline_content::Packet;
+        let mut terminal = Term::new(Config::default(), &TermSize::new(80, 24), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let begin = Packet::Begin {
+            wire_id: 7,
+            rows: 8,
+            mime: "text/plain".into(),
+            title: "compact".into(),
+        };
+        stream.feed(&mut terminal, &VoidListener, begin.encode().as_bytes());
+        let surface = terminal.grid()[Point::new(Line(0), Column(0))]
+            .inline_marker()
+            .unwrap()
+            .surface
+            .clone();
+        assert_eq!(surface.rows(), 1);
+        stream.feed(&mut terminal, &VoidListener, b"\r\nx");
+        stream.feed(
+            &mut terminal,
+            &VoidListener,
+            Packet::Place { wire_id: 7, row: 1 }.encode().as_bytes(),
+        );
+        assert_eq!(surface.rows(), 1);
+        stream.feed(&mut terminal, &VoidListener, b"\r");
+        for row in 1..4 {
+            let wire = format!(
+                "{}\r\n{}",
+                Packet::Place { wire_id: 7, row }.encode(),
+                Packet::Append { wire_id: 7, text: "part".into() }.encode()
+            );
+            for byte in wire.as_bytes() {
+                stream.feed(&mut terminal, &VoidListener, &[*byte]);
+            }
+            assert_eq!(surface.rows(), row + 1);
+        }
+        stream.feed(
+            &mut terminal,
+            &VoidListener,
+            Packet::End { wire_id: 7, code: 0 }.encode().as_bytes(),
+        );
+        stream.feed(&mut terminal, &VoidListener, b"after");
+        for row in 0..4 {
+            assert_eq!(
+                terminal.grid()[Point::new(Line(row), Column(0))].inline_marker().unwrap().row,
+                row as u16
+            );
+        }
+        assert_eq!(terminal.grid()[Point::new(Line(4), Column(0))].c, 'a');
+    }
+
+    #[test]
+    fn native_content_survives_split_frames_and_reflow_without_cell_growth() {
+        use crate::index::{Column, Line, Point};
+        use crate::inline_content::{Packet, Status};
+        let packets = [
+            Packet::Begin {
+                wire_id: 55,
+                rows: 8,
+                mime: "text/markdown".into(),
+                title: "结果".into(),
+            },
+            Packet::Append { wire_id: 55, text: "# 中文\nhello".into() },
+            Packet::End { wire_id: 55, code: 0 },
+        ];
+        let mut wire = packets[0].encode();
+        for row in 1..8 {
+            wire.push_str("\r\n");
+            wire.push_str(&Packet::Place { wire_id: 55, row }.encode());
+        }
+        wire.push_str("\r\n");
+        wire.extend(packets[1..].iter().map(Packet::encode));
+        for (stride, synchronized) in [(1, false), (2, true), (7, true), (wire.len(), false)] {
+            let mut terminal = Term::new(Config::default(), &TermSize::new(80, 24), VoidListener);
+            let mut stream = StreamProcessor::default();
+            if synchronized {
+                stream.feed(&mut terminal, &VoidListener, b"\x1b[?2026h");
+            }
+            stream.feed(&mut terminal, &VoidListener, b"long prefix before content\r\n");
+            for chunk in wire.as_bytes().chunks(stride) {
+                stream.feed(&mut terminal, &VoidListener, chunk);
+            }
+            if synchronized {
+                stream.feed(&mut terminal, &VoidListener, b"\x1b[?2026l");
+            }
+            stream.feed(&mut terminal, &VoidListener, b"after");
+            let marker =
+                terminal.grid()[Point::new(Line(1), Column(0))].inline_marker().unwrap().clone();
+            assert_eq!(marker.surface.update_since(0).chunks[0].text, "# 中文\nhello");
+            assert_eq!(marker.surface.update_since(0).status, Status::Finished(0));
+            for width in [10, 120, 2, 80] {
+                terminal.resize(TermSize::new(width, 24));
+                let markers: Vec<_> = (terminal.topmost_line().0..=terminal.bottommost_line().0)
+                    .filter_map(|line| {
+                        terminal.grid()[Point::new(Line(line), Column(0))].inline_marker()
+                    })
+                    .collect();
+                assert_eq!(markers.len(), 8, "width {width}");
+                assert!(markers.iter().all(|m| m.surface.id == marker.surface.id));
+            }
+            stream.feed(&mut terminal, &VoidListener, b"\x1bc");
+            assert!((terminal.topmost_line().0..=terminal.bottommost_line().0).all(|line| {
+                terminal.grid()[Point::new(Line(line), Column(0))].inline_marker().is_none()
+            }));
+        }
+    }
+
+    #[test]
     fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
         use crate::render::{RenderSnapshot, SnapshotConfig};
         let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
@@ -1012,6 +1309,31 @@ mod tests {
         assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
         stream.stop_sync(&mut term);
         assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
+
+    #[test]
+    fn synchronized_output_has_a_network_tolerant_deadline_and_bounded_buffer() {
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let started = Instant::now();
+        stream.feed(&mut term, &VoidListener, b"old\x1b[?2026h");
+        let deadline = stream.next_sync_timeout().unwrap();
+        assert!(deadline >= started + Duration::from_secs(1));
+        assert!(deadline <= Instant::now() + Duration::from_secs(1));
+        stream.feed(&mut term, &VoidListener, b"\rnew");
+        assert_eq!(stream.next_sync_timeout(), Some(deadline));
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026l");
+        assert!(stream.next_sync_timeout().is_none());
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h");
+        // The existing parser cap still forces progress when a producer never
+        // ends a large update. A longer watchdog must not remove that cap.
+        stream.feed(&mut term, &VoidListener, &vec![b'x'; 2 * 1024 * 1024]);
+        assert!(stream.next_sync_timeout().is_none());
+        assert_eq!(stream.sync_bytes_count(), 0);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'x');
     }
 
     #[test]
@@ -1138,3 +1460,7 @@ mod tests {
         assert!(!terminal.nebula_prompt_active());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "event_loop/sync_tests.rs"]
+mod sync_tests;

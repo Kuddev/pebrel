@@ -14,6 +14,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import io.github.kuddev.pebrel.ssh.NativeSshException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -229,14 +231,13 @@ class SessionRepository(private val context: Context,
     private var redraw: (() -> Unit)? = null
     val drafts = MutableStateFlow<Map<String, String>>(emptyMap())
     private val recentCommands = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    private val commandUsage = mutableMapOf<String, CommandUsage>()
     val commandHistory = recentCommands.asStateFlow()
     fun setDraft(id: String, text: String) { drafts.value = drafts.value + (id to text) }
     fun acknowledgeDraft(id: String, sent: String) {
         if (sent.isNotBlank()) {
             // Local composition history follows the live session, without writing shell input to disk.
-            var remaining = 32_768
-            val entries = (listOf(sent) + recentCommands.value[id].orEmpty())
-                .distinct().take(40).takeWhile { remaining -= it.length; remaining >= 0 }
+            val entries = commandUsage.getOrPut(id, ::CommandUsage).record(sent)
             recentCommands.value = recentCommands.value + (id to entries)
         }
         if (drafts.value[id] == sent) drafts.value = drafts.value - id
@@ -485,17 +486,27 @@ class SessionRepository(private val context: Context,
                 if (it.status == "connecting") it.copy(stage = stage) else it
             } }
         }, keySource = sshKeySource(context, host))
-        val files = SftpClient(connection::sftp) {
-            live.value.any { it.id == id && it.status == "ready" } && sshConnections[id] === connection
-        }
+        // Keep the transfer owner and its confirmed offsets across transport generations.
+        val files = previous?.files ?: SftpClient({ request ->
+            (sshConnections[id] ?: throw NativeSshException("SFTP_CLOSED")).sftp(request)
+        }, recover = {
+            val current = live.first { sessions ->
+                val session = sessions.find { it.id == id }
+                session == null || session.status == "ready" ||
+                    (session.status in setOf("failed", "ended") && !SshReconnect.retryable(session.failure))
+            }.find { it.id == id }
+            if (current?.status != "ready") throw NativeSshException("SFTP_CLOSED")
+        }, active = { live.value.any { it.id == id && it.status == "ready" } && sshConnections.containsKey(id) })
         discoveryJobs.remove(id)?.cancel()
         tmuxCheckpoints.remove(id)?.cancel()
         tmuxControls.remove(id)
-        val detectShell = attachment == null && host.sessionMode == SshSessionMode.SHELL
+        val detectShell = host.sessionMode == SshSessionMode.SHELL && attachment?.session?.kind != "herdr"
         val control = if (detectShell || attachment?.session?.kind == "tmux" || (attachment == null && host.sessionMode == SshSessionMode.TMUX))
             TmuxSessionControl(connection::query, { target -> main.post {
-                if (sshConnections[id] === connection) update(id) { it.copy(attachment = target) }
-            } }, detectShell = detectShell) else null
+                if (sshConnections[id] === connection) update(id) {
+                    if (it.status == "ready") it.copy(attachment = target) else it
+                }
+            } }, detectShell = detectShell, endpoint = attachment?.session?.endpoint ?: TmuxEndpoint()) else null
         if (control != null) tmuxControls[id] = control
         cancelTrust(id)
         sshConnections[id] = connection
@@ -558,10 +569,10 @@ class SessionRepository(private val context: Context,
                 if (sshConnections[id] !== connection) return@withContext
                 val inventory = result.getOrNull()
                 val host = live.value.find { it.id == id }?.host
+                // Inventory is for browsing, not proof that this PTY attached to a session.
+                // In particular, a vanished target must not be replaced by a reused name.
                 update(id) { it.copy(remote = inventory ?: it.remote, discovering = false, discoveryFailed = result.isFailure,
-                    host = if (inventory == null || inventory.os == "term") it.host else it.host?.copy(icon = inventory.os),
-                    attachment = it.attachment ?: if (inventory != null && it.host != null)
-                        RemoteSessions.configuredAttachment(it.host, inventory) else null) }
+                    host = if (inventory == null || inventory.os == "term") it.host else it.host?.copy(icon = inventory.os)) }
                 if (host != null && inventory != null && inventory.os != "term") {
                     val next = savedHosts.value.map { if (sameSshLogin(it, host) && it.icon == host.icon) it.copy(icon = inventory.os) else it }
                     if (next != savedHosts.value) { savedHosts.value = next; persistHosts() }
@@ -646,6 +657,7 @@ class SessionRepository(private val context: Context,
         live.value = live.value.filterNot { it.id == id }
         drafts.value = drafts.value - id
         recentCommands.value = recentCommands.value - id
+        commandUsage.remove(id)
         refreshSshNetworkMonitor()
         stopIdleService()
     }
@@ -979,6 +991,7 @@ class SessionRepository(private val context: Context,
         refreshLanDiscovery()
         drafts.value = emptyMap()
         recentCommands.value = emptyMap()
+        commandUsage.clear()
         scope.launch { clients.forEach { it.close() } }
         stopIdleService()
     }
@@ -994,6 +1007,7 @@ class SessionRepository(private val context: Context,
         refreshLanDiscovery()
         drafts.value = drafts.value.filterKeys { !it.startsWith("$id:") }
         recentCommands.value = recentCommands.value.filterKeys { !it.startsWith("$id:") }
+        commandUsage.keys.removeAll { it.startsWith("$id:") }
         scope.launch { client?.close() }
         stopIdleService()
     }

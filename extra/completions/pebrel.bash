@@ -52,6 +52,9 @@ _pebrel() {
             pebrel,theme)
                 cmd="pebrel__theme"
                 ;;
+            pebrel,view)
+                cmd="pebrel__view"
+                ;;
             pebrel,window)
                 cmd="pebrel__window"
                 ;;
@@ -372,6 +375,9 @@ _pebrel() {
                 ;;
             pebrel__help,theme)
                 cmd="pebrel__help__theme"
+                ;;
+            pebrel__help,view)
+                cmd="pebrel__help__view"
                 ;;
             pebrel__help,window)
                 cmd="pebrel__help__window"
@@ -731,7 +737,7 @@ _pebrel() {
 
     case "${cmd}" in
         pebrel)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --config-file --socket --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] ctl env window tab pane agent migrate config plugin theme setup-ai cli help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --launched-at-login --config-file --socket --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] view ctl env window tab pane agent migrate config plugin theme setup-ai cli help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2816,7 +2822,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help)
-            opts="ctl env window tab pane agent migrate config plugin theme setup-ai cli help"
+            opts="view ctl env window tab pane agent migrate config plugin theme setup-ai cli help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3935,6 +3941,20 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__help__view)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__help__window)
             opts="close"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -4867,6 +4887,24 @@ _pebrel() {
                     ;;
                 --version)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__view)
+            opts="-h --type --native --plain --help [INPUT] [COMMAND]..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --type)
+                    COMPREPLY=($(compgen -W "markdown table git" -- "${cur}"))
                     return 0
                     ;;
                 *)

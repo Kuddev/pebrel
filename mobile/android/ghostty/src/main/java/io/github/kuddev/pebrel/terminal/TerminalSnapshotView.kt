@@ -19,6 +19,9 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/** The desktop grid scale is independent of the user's base font size. */
+fun normalizedSnapshotZoom(value: Float): Float = value.takeIf { it.isFinite() }?.coerceIn(.5f, 5f) ?: 1f
+
 /** A grid mirror with optional authorized input. Gestures never resize the PC PTY. */
 class TerminalSnapshotView(context: Context) : View(context) {
     private var inputGeneration = 0
@@ -167,8 +170,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
     }
 
     fun setZoomScale(value: Float) {
-        val bounded = if (value.isFinite()) value.coerceIn(.5f, 5f) else 1f
+        val bounded = normalizedSnapshotZoom(value)
         if (pinchInProgress || zoom == bounded) return
+        selection.clear()
         zoom = bounded
         stopScrolling()
         metrics()
@@ -182,10 +186,10 @@ class TerminalSnapshotView(context: Context) : View(context) {
         // Keep the chosen font readable. Pan across desktop columns instead of
         // compressing a wide desktop down to a few illegible phone pixels.
         paint.textSize = fontPixels * zoom
-        cellWidth = max(.1f, paint.measureText("M"))
-        val metrics = paint.fontMetrics
-        cellHeight = ceil(metrics.descent - metrics.ascent + metrics.leading)
-        baseline = -metrics.ascent
+        val metrics = TerminalGridMetrics.measure(paint)
+        cellWidth = metrics.width
+        cellHeight = metrics.height
+        baseline = metrics.baseline
     }
 
     private fun reproject() {
@@ -269,6 +273,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
         val first = (offsetY / cellHeight).toInt().coerceAtLeast(0)
         val last = ceil((offsetY + height) / cellHeight).toInt().coerceAtMost(frame.rows.size)
         for (y in first until last) frame.rows[y]?.let {
+            TerminalCellPainter.backgrounds(canvas, paint, frame, it, y, cellWidth, cellHeight)
+        }
+        for (y in first until last) frame.rows[y]?.let {
             TerminalCellPainter.row(canvas, paint, frame, it, y, cellWidth, cellHeight, baseline)
         }
         if (frame.cursorVisible && !selection.active) {
@@ -301,7 +308,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
             if (!pinchZoom) return false
             val oldWidth = cellWidth
             val oldHeight = cellHeight
-            zoom = (zoom * detector.scaleFactor).coerceIn(.5f, 5f)
+            zoom = normalizedSnapshotZoom(zoom * detector.scaleFactor)
             metrics()
             reproject()
             offsetX = (offsetX + detector.focusX) * cellWidth / oldWidth - detector.focusX

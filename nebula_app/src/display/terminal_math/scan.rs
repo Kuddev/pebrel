@@ -2,6 +2,9 @@
 
 use super::*;
 
+// Non-text grid content must neither become TeX nor lend its occupied height.
+const OBJECT: char = '\u{fffc}';
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TextGrid {
     pub(super) rows: Vec<Vec<Option<char>>>,
@@ -12,14 +15,11 @@ pub(super) struct TextGrid {
 }
 
 impl TextGrid {
-    pub(super) fn from_term<T>(terminal: &Term<T>, size: &SizeInfo) -> Self {
-        Self::from_term_with_lookback(terminal, size, 0)
-    }
-
-    pub(super) fn from_term_with_lookback<T>(
+    fn from_term<T>(
         terminal: &Term<T>,
         size: &SizeInfo,
         requested_lookback: usize,
+        include: &impl Fn(usize) -> bool,
     ) -> Self {
         let grid = terminal.grid();
         // Grid and PTY resizes are committed together while display geometry
@@ -45,16 +45,22 @@ impl TextGrid {
 
         for row in 0..row_count {
             let line = origin + (row as i32 - lookback as i32);
+            let included = row.checked_sub(lookback).is_none_or(include);
             let mut cells = Vec::with_capacity(columns);
             for column in 0..columns {
                 let cell = &grid[line][Column(column)];
                 let spacer = cell
                     .flags
                     .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
-                cells.push((!spacer).then_some(cell.c));
+                cells.push(if !included || cell.image().is_some() {
+                    Some(OBJECT)
+                } else {
+                    (!spacer).then_some(cell.c)
+                });
             }
-            let is_wrapped =
-                columns > 0 && grid[line][Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+            let is_wrapped = included
+                && columns > 0
+                && grid[line][Column(columns - 1)].flags.contains(Flags::WRAPLINE);
             rows.push(cells);
             wrapped.push(is_wrapped);
         }
@@ -325,6 +331,9 @@ impl TextGrid {
         let mut position = start;
         while position < end {
             if let Some(character) = self.character(position) {
+                if character == OBJECT {
+                    return None;
+                }
                 output.push(character);
                 if output.len() > DEFAULT_LIMITS.max_source_bytes {
                     return None;
@@ -374,10 +383,22 @@ impl TextGrid {
     /// overlap even where the cells are technically empty.
     pub(super) fn row_ink_columns(&self, row: usize) -> Option<(usize, usize)> {
         let cells = self.rows.get(row)?;
+        // Adjacent rows may have different horizontal formula projections.
+        // A non-text attachment keeps its height across those projections.
+        if cells.contains(&Some(OBJECT)) {
+            return Some((0, self.columns));
+        }
         let occupied = |cell: &Option<char>| cell.is_some_and(|character| character != ' ');
         let start = cells.iter().position(occupied)?;
         let end = cells.iter().rposition(occupied)? + 1;
         Some((start, end))
+    }
+
+    fn row_has_object(&self, row: i32) -> bool {
+        usize::try_from(row)
+            .ok()
+            .and_then(|row| self.rows.get(row))
+            .is_some_and(|cells| cells.contains(&Some(OBJECT)))
     }
 
     pub(super) fn spans(&self, start: GridPosition, end: GridPosition) -> Vec<RowSpan> {
@@ -417,8 +438,9 @@ pub(crate) fn scan_visible<T>(
     filter_reasoning_style: bool,
     cursor: Option<Point<usize>>,
     default_foreground: Rgb,
+    include: impl Fn(usize) -> bool,
 ) -> Vec<FormulaOverlay> {
-    let grid = TextGrid::from_term(terminal, size);
+    let grid = TextGrid::from_term(terminal, size, 0, &include);
     let active_edit_rows = cursor.and_then(|cursor| grid.logical_rows_containing(cursor.line));
     state.synchronize_grid(&grid);
     if let Some(anchor) = state.scan_visible_grid(&grid, active_edit_rows.as_ref()) {
@@ -439,7 +461,7 @@ pub(crate) fn scan_visible<T>(
             grid.absolute_top - anchor.row
         };
         if lookback <= source_rows {
-            let history = TextGrid::from_term_with_lookback(terminal, size, lookback);
+            let history = TextGrid::from_term(terminal, size, lookback, &include);
             state.complete_pending_from_history(&history);
         } else {
             state.pending_display = None;
@@ -523,6 +545,12 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
     };
     overlay.neighbours_above = neighbour_rows(grid, first.row, -1, overlay.display);
     overlay.neighbours_below = neighbour_rows(grid, last.row, 1, overlay.display);
+    for distance in 0..MAX_ABSORBED_BLANK_ROWS {
+        overlay.formula_neighbours_above[distance] =
+            grid.row_has_object(first.row - distance as i32 - 1);
+        overlay.formula_neighbours_below[distance] =
+            grid.row_has_object(last.row + distance as i32 + 1);
+    }
 
     // Rows that hold nothing right of the source span let a display formula
     // lay out across the rest of the line, so its rendered size no longer
@@ -556,14 +584,14 @@ pub(super) fn mark_formula_neighbours(overlays: &mut [FormulaOverlay]) {
             let distance = (distance + 1) as i32;
             let above = first.row - distance;
             let below = last.row + distance;
-            overlay.formula_neighbours_above[distance as usize - 1] =
+            overlay.formula_neighbours_above[distance as usize - 1] |=
                 spans.iter().enumerate().any(|(other_index, other_spans)| {
                     other_index != index
                         && other_spans.iter().any(|&(row, start, end)| {
                             row == above && start < source_end && end > source_start
                         })
                 });
-            overlay.formula_neighbours_below[distance as usize - 1] =
+            overlay.formula_neighbours_below[distance as usize - 1] |=
                 spans.iter().enumerate().any(|(other_index, other_spans)| {
                     other_index != index
                         && other_spans.iter().any(|&(row, start, end)| {
@@ -747,7 +775,7 @@ pub(super) fn find_dollar_formula(
     }
     if close.row > source_start.row
         && !grid.wrapped[close.row - 1]
-        && !inline_math_fragment(grid, close.row, 0, close.column)
+        && !inline_math_fragment(grid, close.row, 0, close.column, false)
     {
         return None;
     }
@@ -786,25 +814,38 @@ pub(super) fn find_inline_dollar_closing(
         if position.row != previous_row && !grid.wrapped[previous_row] {
             hard_rows += 1;
             let column = if previous_row == start.row { start.column } else { 0 };
-            if hard_rows > 8 || !inline_math_fragment(grid, previous_row, column, grid.columns) {
+            if hard_rows > 8
+                || !inline_math_fragment(grid, previous_row, column, grid.columns, hard_rows == 1)
+            {
                 return None;
             }
         }
     }
 }
 
-fn inline_math_fragment(grid: &TextGrid, row: usize, start: usize, end: usize) -> bool {
+fn inline_math_fragment(
+    grid: &TextGrid,
+    row: usize,
+    start: usize,
+    end: usize,
+    initial: bool,
+) -> bool {
     let source: String =
         grid.rows[row][start.min(grid.columns)..end.min(grid.columns)].iter().flatten().collect();
     let source = source.trim();
     if source.is_empty() || obviously_non_math(source) {
         return false;
     }
+    // 提示符后的 ls/pwd 等短词也能被解释为隐式乘积；只有已经出现数学结构，
+    // 才允许跨硬换行继续，避免借下一条提示符把目录输出整段吞成公式。
+    if initial && source.chars().count() > 1 && source.chars().all(char::is_alphabetic) {
+        return false;
+    }
     // TUI 的硬折行不带 WRAPLINE；只接数学片段，绝不跨空段或普通说明文字。
     let operand = source.trim_start_matches(['=', '+', '-', '*']).trim();
-    standard_formula_source(source, true)
+    standard_formula_source(source, !initial)
         || explicit_operand(operand)
-        || implicit_product_operand(operand)
+        || implicit_product_operand(operand) && (!initial || operand.contains(['^', '_']))
         || source.chars().all(|character| matches!(character, '{' | '}'))
 }
 

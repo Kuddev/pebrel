@@ -97,6 +97,7 @@ internal class SshTerminalTransport(private val connection: SshConnection, priva
     }
     override fun input(): InputStream = stream ?: (historyControl?.input(connection.input()) ?: connection.input()).also { stream = it }
     override fun scrollHistory(lines: Int): Boolean = historyControl?.scroll(lines) ?: false
+    override fun applicationScrolled() { historyControl?.applicationScrolled() }
     override fun returnToLiveInput() { historyControl?.returnToInput() }
     override fun output(): OutputStream = connection.output()
     override fun resize(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) = connection.resize(columns, rows, cellWidth, cellHeight)

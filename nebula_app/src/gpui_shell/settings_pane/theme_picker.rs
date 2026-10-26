@@ -150,7 +150,7 @@ fn theme_sample_values(colors: ThemeSampleColors, token: bool, compact: bool) ->
             .border_color(ink.opacity(0.10))
             .bg(background)
             .font(crate::font_install::gpui_font_with_fallbacks(
-                "Maple Mono Normal NF CN, Cascadia Code, Consolas, monospace",
+                crate::font_install::SYSTEM_MONO_FONT_FAMILY,
             ))
             .text_size(px(if compact { 9.5 } else { 10.0 }))
             .line_height(gpui::relative(1.5))

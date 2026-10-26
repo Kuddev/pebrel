@@ -150,6 +150,18 @@ removed. The viewBox and path geometry are unchanged. The two embedded SVGs tota
 2,393 bytes; the other settings icons reuse the sidebar's existing small textures.
 These marks identify the installed tools and do not imply endorsement.
 
+### Qoder, Qwen Code, CodeBuddy and Antigravity settings icons
+
+`nebula_app/assets/icons/nebula-agent-{qoder,qwen,codebuddy,antigravity}.svg` use the
+monochrome marks from `@lobehub/icons-static-svg` 1.95.0
+(`icons/{qoder,qwen,codebuddy,antigravity}.svg`), retrieved on
+2026-10-07 and licensed under the [MIT license](LICENSE-lobe-icons). Only the unused title,
+CSS sizing attributes and explicit closing path tags were removed; the viewBox and path
+geometry are unchanged. GPUI renders them as alpha masks in the theme ink, like Cursor and
+Copilot above. This is separate from Antigravity's sidebar logo, which stays the official
+press icon below. Droid has no mark in the package and keeps its glyph. These marks identify
+the installed tools and do not imply endorsement.
+
 ### Claude Code and Trae CLI
 
 `ai_claude.svg` and `ai_trae.svg` are vector masters from LobeHub's icon
@@ -266,6 +278,14 @@ Both UI shells keep its original colors on light and dark themes and resize it
 only for rendering. No LobeHub asset is embedded for Antigravity.
 
 ## Sponsor Logos
+
+### AIAPI
+
+`sponsor_aiapi.png` is the unmodified 2400 x 893 PNG supplied and selected by the
+maintainer for AIAPI sponsorship. Its off-white background, dark brown wordmark,
+letterforms and aspect ratio are preserved. The asset appears first in both
+README sponsor sections and in the application's Sponsors page, linking to
+https://cn.aiapi.bot/invite?code=MCYLZ5H6FR. It is resized only when displayed.
 
 ### Sidrune AI
 

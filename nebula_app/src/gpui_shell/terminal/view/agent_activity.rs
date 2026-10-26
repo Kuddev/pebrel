@@ -142,7 +142,8 @@ impl TerminalView {
     }
 
     /// Check shell boundaries first; only an integration lacking lifecycle
-    /// authority may then consume a screen observation. Silence has no meaning.
+    /// authority may then consume a screen observation. Missing matches cannot
+    /// establish completion.
     pub fn refresh_agent_screen_state(&mut self, cx: &mut Context<Self>) {
         if self.exited.is_some()
             || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
@@ -155,6 +156,11 @@ impl TerminalView {
         self.on_native_cmd_prompt(cx);
         self.probe_missing_codex_session(cx);
         let Some(session) = &self.session else { return };
+        // 远端（SSH/WSL）回合停滞对账也需要屏幕证据：hook 权威在场时
+        // `allows_screen()` 为 false，但远端没有进程树这第二重证据，丢一次
+        // Stop 就永久 Working（见 reconcile_stalled_turn 的合同说明）。
+        let reconcile_remote =
+            !self.suggest.suggest_env.is_this_machine() && self.agent_activity.hook_seen();
         let (prompt_restored, screen) = {
             let term = session.term.lock();
             let lines = term.screen_lines();
@@ -170,14 +176,20 @@ impl TerminalView {
                         &self.suggest.suggest_env,
                     )
                 });
-            let screen = (self.effective_program_status().is_none()
+            // 上游：无程序状态时屏幕证据才进 observe 路径；本分支：停滞对账
+            // 需要 hook 持有回合的屏幕（reconcile 门内已自带权威判定），不受
+            // 该门限制。
+            let screen = ((self.effective_program_status().is_none()
                 && self.agent_activity.allows_screen())
-            .then(|| {
-                let start = Point::new(Line((lines - lines.min(24)) as i32), Column(0));
-                let end =
-                    Point::new(Line(lines as i32 - 1), Column(term.columns().saturating_sub(1)));
-                term.bounds_to_string(start, end)
-            });
+                || reconcile_remote)
+                .then(|| {
+                    let start = Point::new(Line((lines - lines.min(24)) as i32), Column(0));
+                    let end = Point::new(
+                        Line(lines as i32 - 1),
+                        Column(term.columns().saturating_sub(1)),
+                    );
+                    term.bounds_to_string(start, end)
+                });
             (prompt_restored, screen)
         };
         if prompt_restored
@@ -200,7 +212,7 @@ impl TerminalView {
         let Some(program) =
             notifications::screen_program(self.running_program.as_deref(), detected)
         else {
-            self.agent_activity.observe_screen(None);
+            self.agent_activity.reset_screen_samples();
             return;
         };
         if self.running_program.as_deref() != Some(program.as_str()) {
@@ -208,6 +220,30 @@ impl TerminalView {
             self.agent_activity.identify(AgentStatusSource::Screen);
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
+        }
+        // hook 权威在场（`allows_screen()` false）：正常屏幕观察退出，只留远端
+        // 停滞对账这一条通道。它双向收敛「hook 静默超阈值 + 屏幕连续两拍同一
+        // 形态」的回合：两拍 idle 收敛 Working→Done，两拍转圈把丢了点火事件
+        // （UserPromptSubmit/权限答复）的回合从 Done/Blocked 拉回 Working；不
+        // 重写身份、不发完成通知——迟到的真 hook 会照常到达并被同 turn 去重
+        // 兜住。
+        if !self.agent_activity.allows_screen() {
+            let previous = self.agent_activity.status();
+            if reconcile_remote
+                && self.agent_activity.reconcile_stalled_turn(
+                    crate::ai_agents::detect(&program, &screen).as_ref(),
+                    self.agent_activity.turn_quiet_for(super::REMOTE_TURN_STALL),
+                )
+            {
+                log::info!(
+                    "agent remote turn reconciled by screen: pane={} program={program} {previous:?} -> {:?}",
+                    self.pane_id,
+                    self.agent_activity.status()
+                );
+                cx.emit(TerminalViewEvent::TitleChanged);
+                cx.notify();
+            }
+            return;
         }
         let previous = self.agent_activity.status();
         if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, &screen)) {

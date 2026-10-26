@@ -918,10 +918,7 @@ pub enum RuntimeCommand {
     },
     /// 在 GUI 里新开一个 SSH 标签并聚焦。纯 IO 的 `ssh.*` 方法不走这里，
     /// 只有"要开窗口"这一个动作需要 UI 线程。
-    SshShell {
-        window_id: Option<u64>,
-        asset_id: String,
-    },
+    SshShell(ssh_api::ShellParams),
 }
 
 #[derive(Debug)]
@@ -931,6 +928,11 @@ pub struct RuntimeDispatch {
 }
 
 impl RuntimeDispatch {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn test(command: RuntimeCommand) -> (Arc<Self>, Receiver<Result<Value, ApiError>>) {
+        Self::new(command)
+    }
+
     fn new(command: RuntimeCommand) -> (Arc<Self>, Receiver<Result<Value, ApiError>>) {
         let (reply, receiver) = mpsc::sync_channel(1);
         (Arc::new(Self { command, reply }), receiver)

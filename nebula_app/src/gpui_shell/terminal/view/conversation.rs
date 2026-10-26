@@ -88,7 +88,7 @@ impl TerminalView {
             let reader = self
                 .session
                 .as_ref()
-                .and_then(|session| session.remote_reader.lock().ok()?.clone())
+                .and_then(|session| session.remote_connection.lock().ok()?.clone())
                 .ok_or_else(|| {
                     ApiError::new(
                         "conversation_unavailable",

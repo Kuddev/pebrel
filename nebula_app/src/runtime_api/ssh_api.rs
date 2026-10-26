@@ -329,12 +329,12 @@ use files::{Direction, sync, transfer};
 
 // ---- 在 GUI 里开 tab ----
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ShellParams {
-    asset_id: String,
+pub(crate) struct ShellParams {
+    pub(crate) asset_id: String,
     #[serde(default)]
-    window_id: Option<u64>,
+    pub(crate) window_id: Option<u64>,
 }
 
 fn shell(params: &Value, sink: &EventSink, hub: &RuntimeHub) -> Result<Value, ApiError> {
@@ -342,11 +342,7 @@ fn shell(params: &Value, sink: &EventSink, hub: &RuntimeHub) -> Result<Value, Ap
     require_ai_control("ssh.shell", &params.asset_id)?;
     // 开 tab 是 UI 线程上的毫秒级动作，和 `new-tab` 同量级；
     // 真正的 SSH 连接由新建的 pane 自己建立。
-    let result = dispatch_runtime_command(
-        RuntimeCommand::SshShell { window_id: params.window_id, asset_id: params.asset_id.clone() },
-        sink,
-        hub,
-    )?;
+    let result = dispatch_runtime_command(RuntimeCommand::SshShell(params.clone()), sink, hub)?;
     audit("ssh.shell", &params.asset_id, true, json!({ "window_id": result.get("window_id") }));
     Ok(result)
 }

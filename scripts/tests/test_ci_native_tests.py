@@ -176,13 +176,14 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_reserves_only_shared_settings_and_exact_bounded_git_fixtures(self):
+    def test_nextest_reserves_only_shared_settings_and_exact_bounded_process_fixtures(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
         self.assertEqual(config["profile"]["default"], {
             "overrides": [{
-                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)"
+                "filter": "test(serial_editor_saves_reloads_and_reopens_without_ssh_username)"
+                          " or test(gpui_shell::settings_pane::theme_studio_tests::)"
                           " or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll)"
                           " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)"
                           " or test(environment_refresh_switch_is_searchable_and_persists)"
@@ -193,8 +194,10 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(cjk_dropdown_selection_preserves_the_english_font_chain)"
                           " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)"
                           " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)"
+                          " or test(=gpui_shell::workspace::windowing::startup::startup_tests::launch_visibility_reaches_the_actual_workspace)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_reuses_window_and_preserves_each_program_and_directory)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::update_recovery_tracks_its_windows_and_retries_only_missing_slots)"
                           " or test(=gpui_shell::settings_pane::tests::rename_keymap_row_is_searchable_and_enters_capture)"
                           " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)",
                 "test-group": "theme-studio",
@@ -214,8 +217,24 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)"
                           " or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)",
                 "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=ai_hook::unix::tests::"
+                          "local_hook_socket_routes_identity_and_releases_its_private_directory)",
+                "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=tty::windows::test::bash_input::"
+                          "git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales)",
+                "threads-required": "num-test-threads",
             }],
         })
+
+        unix_hook = (root / "nebula_app/src/ai_hook/unix.rs").read_text(encoding="utf-8")
+        self.assertIn("fn local_hook_socket_routes_identity_and_releases_its_private_directory(", unix_hook)
+
+        serial = (root / "nebula_app/src/gpui_shell/ssh_settings/serial_tests.rs").read_text(encoding="utf-8")
+        self.assertIn("fn serial_editor_saves_reloads_and_reopens_without_ssh_username(", serial)
+        self.assertIn("let _lock = lock_theme_studio();", serial)
+        self.assertIn("SettingsBytesGuard::capture()", serial)
 
         # 核对真实函数名，避免配置和期望同时保留旧名字却漏掉写设置的测试。
         segmented = (root / "nebula_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")
@@ -225,13 +244,23 @@ class NativeSuiteTests(unittest.TestCase):
         ):
             self.assertIn(f"fn {name}(", segmented)
 
-        # 新夹具同样会写共享设置；只加入这两个真实函数，不放宽其它测试的调度。
+        # 这些夹具同样会写共享设置；只加入真实函数，不放宽其它测试的调度。
         elevated = (root / "nebula_app/src/gpui_shell/workspace/windowing/elevated_launch.rs").read_text(encoding="utf-8")
         for name in (
             "elevated_launch_reuses_window_and_preserves_each_program_and_directory",
             "elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs",
+            "update_recovery_tracks_its_windows_and_retries_only_missing_slots",
         ):
             self.assertIn(f"fn {name}(", elevated)
+
+        startup = (root / "nebula_app/src/gpui_shell/workspace/windowing/startup.rs").read_text(encoding="utf-8")
+        self.assertIn("fn launch_visibility_reaches_the_actual_workspace(", startup)
+
+        bash_input = (root / "nebula_terminal/src/tty/windows/test/bash_input.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales()",
+            bash_input,
+        )
 
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]

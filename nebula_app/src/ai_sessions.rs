@@ -282,14 +282,20 @@ pub fn scan(limit: usize) -> Vec<AiSession> {
 }
 
 /// 「3 分钟前 / 2 小时前 / 5 天前」式的相对时间，面板右侧的 hint 用。
-pub fn relative_label(modified: SystemTime) -> String {
+pub fn relative_label(modified: SystemTime, language: crate::i18n::UiLanguage) -> String {
+    use crate::i18n::Message;
     let elapsed = SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO);
     let minutes = elapsed.as_secs() / 60;
-    match minutes {
-        0 => "刚刚".to_owned(),
-        1..=59 => format!("{minutes} 分钟前"),
-        60..=1439 => format!("{} 小时前", minutes / 60),
-        _ => format!("{} 天前", minutes / 1440),
+    let (singular, plural, count) = match minutes {
+        0 => return language.text(Message::VcsTimeNow).to_owned(),
+        1..=59 => (Message::VcsTimeMinute, Message::VcsTimeMinutes, minutes),
+        60..=1439 => (Message::VcsTimeHour, Message::VcsTimeHours, minutes / 60),
+        _ => (Message::VcsTimeDay, Message::VcsTimeDays, minutes / 1440),
+    };
+    if count == 1 {
+        language.text(singular).to_owned()
+    } else {
+        language.format(plural, &[("count", &count.to_string())])
     }
 }
 
