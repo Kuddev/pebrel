@@ -292,8 +292,9 @@ impl MathOverlay {
             candidates,
             size: *size,
             pixels_per_point,
-            // 与旧壳一致：TUI/备用屏继续拥有固定列坐标，但公式覆盖本身仍可用。
-            reflow_inline: !alt_screen,
+            // 备用屏同样重排：边框、独立列和着色表面由 `reflow_limit`
+            // 固定在原列，只有公式后面的正文跟着压缩。
+            reflow_inline: true,
             selection,
             viewport_origin: origin,
         }
@@ -966,22 +967,19 @@ mod tests {
     }
 
     #[test]
-    fn alt_screen_renders_agent_math() {
+    fn alt_screen_compacts_agent_prose_but_keeps_tui_columns() {
+        let formula = r"$n! \approx \sqrt{2\pi n}\left(\dfrac{n}{e}\right)^n$";
+        let line = format!("{formula} tail   sidebar │ edge");
+        let column_of = |needle: &str| line[..line.find(needle).unwrap()].chars().count();
+        let (tail, sidebar, border) = (column_of("tail"), column_of("sidebar"), column_of("│"));
         let mut overlay = MathOverlay::default();
-        let mut term = term_with(
-            96,
-            4,
-            &[r"$n! \approx \sqrt{2\pi n}\left(\dfrac{n}{e}\right)^n$", "", "prompt"],
-        );
+        let mut term = term_with(96, 4, &[&line, "", "prompt"]);
         let main_frame = plan(&mut overlay, &term, 96, 4);
-        let source_end = r"$n! \approx \sqrt{2\pi n}\left(\dfrac{n}{e}\right)^n$".chars().count();
-        assert!(main_frame.project_cell(0, source_end, 96).unwrap() < source_end);
+        assert!(main_frame.project_cell(0, tail, 96).unwrap() < tail);
         term.swap_alt();
         // `swap_alt` 按终端语义先清空备用网格；测试内容必须写进交换后的活动
-        // 网格，才能验证 ALT_SCREEN 的覆盖与固定列合同。
-        for (column, character) in
-            r"$n! \approx \sqrt{2\pi n}\left(\dfrac{n}{e}\right)^n$".chars().enumerate()
-        {
+        // 网格，才能验证 ALT_SCREEN 的覆盖与重排合同。
+        for (column, character) in line.chars().enumerate() {
             term.grid_mut()[Line(0)][Column(column)].c = character;
         }
         let frame = plan(&mut overlay, &term, 96, 4);
@@ -990,11 +988,38 @@ mod tests {
             frame.formulas[0].source.as_ref(),
             r"n! \approx \sqrt{2\pi n}\left(\dfrac{n}{e}\right)^n"
         );
-        assert_eq!(
-            frame.project_cell(0, source_end, 96),
-            Some(source_end),
-            "alternate-screen formulas may overlay but must keep fixed TUI columns"
+        assert!(
+            frame.project_cell(0, tail, 96).unwrap() < tail,
+            "agent prose after an inline formula must close the gap left by the TeX source"
         );
+        assert_eq!(frame.project_cell(0, sidebar, 96), Some(sidebar), "gap-aligned column");
+        assert_eq!(frame.project_cell(0, border, 96), Some(border), "box-drawing border");
+    }
+
+    #[test]
+    fn coloured_tui_surface_after_a_formula_keeps_its_column() {
+        use nebula_terminal::event_loop::StreamProcessor;
+        let mut term = Term::new(Config::default(), &TestSize { cols: 40, rows: 4 }, VoidListener);
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut term, &VoidListener, b"$x^2$ tail \x1b[44mband\x1b[0m\r\n\r\nprompt");
+        let mut overlay = MathOverlay::default();
+        let frame = plan(&mut overlay, &term, 40, 4);
+        assert!(frame.project_cell(0, 6, 40).unwrap() < 6, "prose follows the formula");
+        assert_eq!(frame.project_cell(0, 11, 40), Some(11), "coloured surface stays put");
+    }
+
+    #[test]
+    fn alt_screen_agent_answer_renders_subscripted_capitals() {
+        use nebula_terminal::event_loop::StreamProcessor;
+        let mut term = Term::new(Config::default(), &TestSize { cols: 40, rows: 4 }, VoidListener);
+        let mut stream = StreamProcessor::default();
+        // 全屏 Agent TUI：回答在上方，可见光标停在底部自绘输入框里。
+        stream.feed(&mut term, &VoidListener, b"\x1b[?1049hconst $C_1$ and $C_2$ end\x1b[4;3H");
+        let mut overlay = MathOverlay::default();
+        let frame = plan(&mut overlay, &term, 40, 4);
+        let sources: Vec<_> = frame.formulas.iter().map(|f| f.source.to_string()).collect();
+        assert_eq!(sources, ["C_1", "C_2"]);
+        assert!(frame.project_cell(0, 22, 40).unwrap() < 22, "answer prose closes the gap");
     }
 
     #[test]

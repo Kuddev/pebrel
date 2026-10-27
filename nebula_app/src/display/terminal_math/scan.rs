@@ -508,6 +508,22 @@ pub(crate) fn scan_visible<T>(
             }
 
             apply_layout_hints(&mut overlay, &grid);
+            // A cell with its own background after the formula is a TUI
+            // surface (status band, floating hint); moving it would tear it.
+            if let [span] = overlay.spans.as_slice()
+                && !overlay.display
+            {
+                let coloured = rendered_cells
+                    .iter()
+                    .filter(|cell| {
+                        usize::try_from(span.row) == Ok(cell.point.line)
+                            && cell.point.column.0 >= span.end
+                            && cell.bg_alpha > 0.0
+                    })
+                    .map(|cell| cell.point.column.0)
+                    .min();
+                overlay.reflow_limit = overlay.reflow_limit.into_iter().chain(coloured).min();
+            }
             Some(overlay)
         })
         .collect();
@@ -564,6 +580,44 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
             _ => true,
         }))
     .then_some(grid.columns.max(source_right));
+
+    overlay.reflow_limit = match overlay.spans.as_slice() {
+        [span] if !overlay.display => {
+            usize::try_from(span.row).ok().and_then(|row| reflow_barrier(grid, row, span.end))
+        },
+        _ => None,
+    };
+}
+
+/// Blank cells that separate independently positioned columns. Prose puts
+/// one space between words; TUIs align sidebars, cards and table columns with
+/// wider gaps.
+const COLUMN_GAP_CELLS: usize = 2;
+
+/// First column at or after `from` that a compacted inline formula must leave
+/// where the terminal put it: a box-drawing or block element (table, card and
+/// pane borders, scroll bars), an ASCII `|` separator, or the first glyph
+/// after a gap of [`COLUMN_GAP_CELLS`] blanks. `None` means the rest of the
+/// row is prose that may follow the formula. Coloured surfaces need the
+/// renderer's cells and are added by `scan_visible`.
+pub(super) fn reflow_barrier(grid: &TextGrid, row: usize, from: usize) -> Option<usize> {
+    let cells = grid.rows.get(row)?;
+    let mut blanks = 0usize;
+    for (column, cell) in cells.iter().enumerate().skip(from) {
+        match *cell {
+            Some(' ') => blanks += 1,
+            // A wide-glyph spacer belongs to the glyph before it.
+            None => {},
+            Some(character) => {
+                let border = ('\u{2500}'..='\u{259f}').contains(&character) || character == '|';
+                if border || blanks >= COLUMN_GAP_CELLS {
+                    return Some(column);
+                }
+                blanks = 0;
+            },
+        }
+    }
+    None
 }
 
 /// Mark rows occupied by a *different* formula after all visible overlays have
@@ -1282,7 +1336,9 @@ pub(super) fn obviously_non_math(source: &str) -> bool {
     let shell_identifier = source.chars().all(|character| {
         character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
     });
-    currency || (shell_identifier && source.chars().count() > 1)
+    // 变量名至少两个字母；`C_1`、`A_n` 这种单个大写字母带下标的是数学符号。
+    let letters = source.chars().filter(char::is_ascii_alphabetic).count();
+    currency || (shell_identifier && letters > 1)
 }
 
 /// At least one structural sign of mathematics. `lax` (display blocks) lifts
@@ -1298,6 +1354,13 @@ pub(super) fn has_math_evidence(source: &str, lax: bool) -> bool {
         let base_qualifies = if lax { !base.trim().is_empty() } else { explicit_operand(base) };
         base_qualifies && !suffix.trim().is_empty()
     });
+    // `^{…}` / `_{…}` 只出现在 TeX 里：shell 变量、路径和散文都不这样写。
+    // 它让 `C_1e^{r_1x}` 这类省略乘号的多字母乘积不必再靠 `\` 命令作证。
+    let braced_script = ["^{", "_{"].into_iter().any(|opener| {
+        source.find(opener).is_some_and(|index| {
+            !source[..index].trim().is_empty() && source[index + opener.len()..].contains('}')
+        })
+    });
     let relation = ["<=", ">=", "!=", "==", "=", "<", ">"].into_iter().any(|operator| {
         source.find(operator).is_some_and(|index| {
             relation_operand(&source[..index])
@@ -1310,6 +1373,7 @@ pub(super) fn has_math_evidence(source: &str, lax: bool) -> bool {
         .strip_suffix('!')
         .is_some_and(|base| explicit_operand(base) || implicit_product_operand(base));
     let structural = script
+        || braced_script
         || relation
         || factorial
         || source.chars().any(|character| {
@@ -1344,16 +1408,16 @@ pub(super) fn has_math_evidence(source: &str, lax: bool) -> bool {
             "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "lim" | "det" | "max" | "min"
         )
     });
-    let function_application = source.find('(').is_some_and(|open| {
-        let name = source[..open].trim();
-        let arguments = source[open + 1..].strip_suffix(')').unwrap_or("").trim();
-        name.chars().count() == 1 && name.chars().all(char::is_alphabetic) && !arguments.is_empty()
-    });
+    let function_application = function_call_operand(source);
+    // 坐标点与区间：`(0,f(0))`、`(x_0,f(x_0))` 的分量可以是函数值。
     let parenthesized_variable = source
         .strip_prefix('(')
         .and_then(|source| source.strip_suffix(')'))
         .or_else(|| source.strip_prefix('[').and_then(|source| source.strip_suffix(']')))
-        .is_some_and(|body| body.split(',').all(explicit_operand));
+        .is_some_and(|body| {
+            top_level_items(body)
+                .all(|item| explicit_operand(item) || function_call_operand(item.trim()))
+        });
     let compact_operator = ['+', '-', '*', '/'].into_iter().any(|operator| {
         source.find(operator).is_some_and(|index| {
             let (left, right) = source.split_at(index);
@@ -1414,13 +1478,38 @@ pub(super) fn relation_operand(operand: &str) -> bool {
                 .trim_start_matches(['+', '-'])
                 .split(['+', '-'])
                 .all(|term| explicit_operand(term) || implicit_product_operand(term))
-        || operand.find('(').is_some_and(|open| {
-            let name = operand[..open].trim();
-            let arguments = operand[open + 1..].strip_suffix(')').unwrap_or("").trim();
-            name.chars().count() == 1
-                && name.chars().all(char::is_alphabetic)
-                && !arguments.is_empty()
-        })
+        || function_call_operand(operand)
+}
+
+/// A single-letter function applied to a non-empty argument list: `f(x)`,
+/// `g(x_0)`, `f(0)`.
+pub(super) fn function_call_operand(operand: &str) -> bool {
+    operand.find('(').is_some_and(|open| {
+        let name = operand[..open].trim();
+        let arguments = operand[open + 1..].strip_suffix(')').unwrap_or("").trim();
+        name.chars().count() == 1 && name.chars().all(char::is_alphabetic) && !arguments.is_empty()
+    })
+}
+
+/// Comma-separated items of a tuple body, ignoring commas nested inside
+/// parentheses, brackets or braces (`0, f(a,b)` has two items).
+fn top_level_items(body: &str) -> impl Iterator<Item = &str> {
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut items = Vec::new();
+    for (index, character) in body.char_indices() {
+        match character {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                items.push(&body[start..index]);
+                start = index + 1;
+            },
+            _ => {},
+        }
+    }
+    items.push(&body[start..]);
+    items.into_iter()
 }
 
 /// A bare bracket or parenthesis has no explicit TeX intent after Markdown has
@@ -1462,5 +1551,6 @@ pub(super) fn make_overlay(
         formula_neighbours_above: [false; MAX_ABSORBED_BLANK_ROWS],
         formula_neighbours_below: [false; MAX_ABSORBED_BLANK_ROWS],
         widen_right_to: None,
+        reflow_limit: None,
     }
 }
