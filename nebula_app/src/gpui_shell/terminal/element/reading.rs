@@ -24,11 +24,14 @@ impl TerminalElement {
         let color = cx.theme().primary.opacity(0.30);
         let projection = view.native_results.projection.borrow();
         // 折叠后的可见尾行可能来自屏幕范围以外；隐藏原文也不能把高亮压到控制行上。
-        for row in 0..projection.source_rows(layout.rows) {
-            if projection.covers(row) {
+        let art_rows = view.character_art.frame.source_bounds();
+        for row in
+            art_rows.start.min(0)..art_rows.end.max(projection.source_rows(layout.rows) as i64)
+        {
+            if projection.covers_source_row(row) {
                 continue;
             }
-            let absolute = viewport_top + row as i64;
+            let absolute = viewport_top + row;
             if absolute < 0 {
                 continue;
             }
@@ -43,16 +46,23 @@ impl TerminalElement {
             if start >= end {
                 continue;
             }
-            let highlight = Bounds::new(
-                point(
-                    bounds.origin.x + layout.cell_width * start as f32,
-                    bounds.origin.y + layout.line_height * projection.row(row as f32),
-                ),
-                size(layout.cell_width * (end - start) as f32, layout.line_height),
+            view.character_art.frame.spans(
+                row,
+                start..end,
+                projection.row(row as f32),
+                |columns, y, h| {
+                    let highlight = Bounds::new(
+                        point(
+                            bounds.origin.x + layout.cell_width * columns.start as f32,
+                            bounds.origin.y + layout.line_height * y,
+                        ),
+                        size(layout.cell_width * columns.len() as f32, layout.line_height * h),
+                    );
+                    #[cfg(all(test, feature = "gpui-test-support"))]
+                    snapshot_probe::record_reading_highlight(self.view.entity_id(), highlight, cx);
+                    window.paint_quad(fill(highlight, color));
+                },
             );
-            #[cfg(all(test, feature = "gpui-test-support"))]
-            snapshot_probe::record_reading_highlight(self.view.entity_id(), highlight, cx);
-            window.paint_quad(fill(highlight, color));
         }
     }
 }

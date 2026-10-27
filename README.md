@@ -50,6 +50,17 @@
 <table>
   <tr>
     <td align="center" width="240">
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><img src="extra/logo/sponsor_aiapi.png" alt="AIAPI" width="200" /></a><br />
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
+    </td>
+    <td>
+      <p><strong>Special thanks to AIAPI for sponsoring this project!</strong></p>
+      <p>AIAPI is dedicated to building the most stable AI model relay on the web, providing a unified API for solo developers, tech teams, and enterprises. We deliver full-power, unthrottled Claude and GPT models—zero lobotomization, zero dilution, and 100% pure native performance. Backed by dynamic multi-route scheduling for high availability, complete transparency in latency and billing, and top-tier after-sales support that always has your back, AIAPI cuts API costs by 40%–98% compared to official rates.</p>
+      <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">Visit AIAPI</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="240">
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
       <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
     </td>

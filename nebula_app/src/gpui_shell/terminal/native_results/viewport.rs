@@ -28,7 +28,11 @@ pub(in crate::gpui_shell::terminal) struct Projection {
 
 impl Projection {
     pub fn covers(&self, row: usize) -> bool {
-        let source = self.origin + row as i64;
+        self.covers_source_row(row as i64)
+    }
+
+    pub fn covers_source_row(&self, row: i64) -> bool {
+        let source = self.origin + row;
         self.active
             && self.slots.iter().any(|slot| {
                 slot.hide_source
