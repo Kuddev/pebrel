@@ -325,13 +325,14 @@ mod bash_sync_tests {
     }
 
     /// PATH 上的 `bash` 未必是 msys 运行时（Windows 自带的 WSL 启动器同名，
-    /// CI runner 上先命中它）；Git for Windows 自带的 bash 与 msys-2.0.dll
-    /// 同源，按标准安装位置解析。找不到说明本机覆盖不了这条兜底，由调用
-    /// 方跳过。
+    /// CI runner 上先命中它）。Git for Windows 里必须取 `usr\bin\bash.exe`：
+    /// 它才是链接 msys-2.0.dll 的本体（DLL 就在同目录）；`bin\bash.exe` 是
+    /// 不加载 msys 运行时的转发启动器，模块判定在它的进程里永远看不到
+    /// 目标 DLL。找不到说明本机覆盖不了这条兜底，由调用方跳过。
     fn msys_bash_exe() -> Option<std::path::PathBuf> {
         let program_files =
             std::env::var_os("ProgramFiles").unwrap_or_else(|| r"C:\Program Files".into());
-        let candidate = std::path::Path::new(&program_files).join(r"Git\bin\bash.exe");
+        let candidate = std::path::Path::new(&program_files).join(r"Git\usr\bin\bash.exe");
         candidate.is_file().then_some(candidate)
     }
 }
