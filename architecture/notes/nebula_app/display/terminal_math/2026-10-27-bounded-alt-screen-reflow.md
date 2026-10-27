@@ -15,7 +15,8 @@ answer line kept a hole as wide as the hidden source after each formula.
 
 The same answers also showed formulas that stayed literal although the
 rest of the screen rendered: `$C_1$`, `$C_2$`,
-`$y=C_1e^{r_1x}+C_2e^{r_2x}$` and `$(0,f(0))$`.
+`$y=C_1e^{r_1x}+C_2e^{r_2x}$`, `$(0,f(0))$` and every derivative written
+with Lagrange primes (`$f'(x_0)=0$`, `$f''(x_0)<0$`, `$f'$`).
 
 ## Evidence
 
@@ -29,7 +30,8 @@ The scanner regression for the reported line returned only `f(x_0)>0` and
 the shell-variable filter that keeps `$LONG_VARIABLE$` literal rejected it.
 `C_1e^{r_1x}` is an implicit product of more than three letters without a
 TeX command, and `(0,f(0))` a tuple whose item is a function value; inline
-evidence accepted neither.
+evidence accepted neither. A prime made `f'` a two-character name, so it was
+neither a single variable, an operand nor a function name.
 
 A cursor-row exclusion was also suspected. The runtime screen read of the
 live Claude Code pane reported a visible cursor on the input row (`❯`), not
@@ -52,7 +54,9 @@ A shell variable needs at least two letters, so a single capital with a
 subscript (`C_1`, `X_0`) is math while `$AB$`, `$A1$` and `$LONG_VARIABLE$`
 stay literal. Inline evidence additionally accepts a braced script
 (`^{…}`/`_{…}` after a non-empty base) and tuple items that are
-single-letter function values, split on top-level commas. Bare delimiters
+single-letter function values, split on top-level commas. One letter
+followed by primes (`f'`, `y''`) is a symbol, an operand and a function name;
+a prime that does not follow a letter (`$'abc'$`, `$it's$`) is not. Bare delimiters
 keep their stricter TeX-command requirement.
 
 ## Rejected alternatives

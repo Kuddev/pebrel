@@ -139,6 +139,33 @@ fn agent_answer_shapes_from_the_report_are_recognized() {
     }
 }
 
+/// Lagrange primes are how agents write derivatives: `$f'(x_0)=0$`.
+#[test]
+fn derivative_primes_are_math() {
+    let row = "若 $f'(x_0)=0$：$f''(x_0)<0$ ⇒ 极大值，$f'$ 在 $x_0$ 附近递减";
+    let found: Vec<_> = scan_grid(&TextGrid::from_rows(&[row]))
+        .into_iter()
+        .map(|formula| formula.source.to_string())
+        .collect();
+    assert_eq!(found, ["f'(x_0)=0", "f''(x_0)<0", "f'", "x_0"]);
+    for source in &found[..3] {
+        let layout = compile_formula(source, false, 18.0, 1.0, DEFAULT_LIMITS)
+            .unwrap_or_else(|error| panic!("primed formula failed: {source:?}: {error:?}"));
+        assert!(layout.metrics.width > 0.0);
+    }
+
+    for source in ["y''-2y'+4y=0", "f'''(0)=1", "y'", "f''(x_0)=e^{\\sin x_0}>0"] {
+        let row = format!("方程 ${source}$ 成立");
+        let found = scan_grid(&TextGrid::from_rows(&[&row]));
+        assert_eq!(found.len(), 1, "{row}");
+        assert_eq!(found[0].source.as_ref(), source);
+    }
+
+    for row in ["quote $it's$ fine", "shell $'abc'$ quoting", "say $'$ alone", "$ab'$ word"] {
+        assert!(scan_grid(&TextGrid::from_rows(&[row])).is_empty(), "{row}");
+    }
+}
+
 #[test]
 fn widened_evidence_still_rejects_shell_and_prose() {
     for row in [

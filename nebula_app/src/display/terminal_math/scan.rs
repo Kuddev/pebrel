@@ -1346,7 +1346,8 @@ pub(super) fn obviously_non_math(source: &str) -> bool {
 /// `mc^2` qualify; inline keeps it so `$foo^bar$` stays literal text.
 pub(super) fn has_math_evidence(source: &str, lax: bool) -> bool {
     let chars: Vec<_> = source.chars().collect();
-    let single_variable = chars.len() == 1 && chars[0].is_alphabetic();
+    let single_variable =
+        chars.len() == 1 && chars[0].is_alphabetic() || primed_symbol(source.trim());
     let tex_command = chars.windows(2).any(|pair| pair[0] == '\\' && pair[1].is_alphabetic());
     let script = source.find(['^', '_']).is_some_and(|index| {
         let (base, suffix) = source.split_at(index);
@@ -1439,6 +1440,12 @@ pub(super) fn has_math_evidence(source: &str, lax: bool) -> bool {
 /// Multi-letter runs are rejected so `$foo^bar$` and `key=value` stay text.
 pub(super) fn explicit_operand(operand: &str) -> bool {
     let operand = operand.trim().trim_matches(['(', ')', '[', ']', '{', '}']);
+    // 导数撇号只能跟在字母后面：`y''`、`2y'` 是运算项，孤立的 `'` 不是。
+    let unprimed = operand.trim_end_matches('\'');
+    if unprimed.len() != operand.len() && !unprimed.ends_with(char::is_alphabetic) {
+        return false;
+    }
+    let operand = unprimed;
     if operand.is_empty() || operand.contains(char::is_whitespace) {
         return false;
     }
@@ -1482,13 +1489,23 @@ pub(super) fn relation_operand(operand: &str) -> bool {
 }
 
 /// A single-letter function applied to a non-empty argument list: `f(x)`,
-/// `g(x_0)`, `f(0)`.
+/// `g(x_0)`, `f(0)`, and its derivatives `f'(x)`, `f'''(0)`.
 pub(super) fn function_call_operand(operand: &str) -> bool {
     operand.find('(').is_some_and(|open| {
         let name = operand[..open].trim();
         let arguments = operand[open + 1..].strip_suffix(')').unwrap_or("").trim();
-        name.chars().count() == 1 && name.chars().all(char::is_alphabetic) && !arguments.is_empty()
+        let single_letter = name.chars().count() == 1 && name.chars().all(char::is_alphabetic);
+        (single_letter || primed_symbol(name)) && !arguments.is_empty()
     })
+}
+
+/// One letter followed by Lagrange primes: `f'`, `y''`, `f'''`.
+pub(super) fn primed_symbol(source: &str) -> bool {
+    let mut chars = source.chars();
+    chars.next().is_some_and(char::is_alphabetic) && {
+        let rest = chars.as_str();
+        !rest.is_empty() && rest.chars().all(|character| character == '\'')
+    }
 }
 
 /// Comma-separated items of a tuple body, ignoring commas nested inside
