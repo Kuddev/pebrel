@@ -652,17 +652,22 @@ mod tests {
             String::from_utf8_lossy(&output.stdout).into_owned()
         }
         fn stub_shell(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-            use std::os::unix::fs::PermissionsExt as _;
-
             let path = dir.join(name);
             std::fs::write(
                 &path,
                 "#!/bin/sh\nprintf 'STUB_ARGS:%s\\n' \"$*\"\nenv | LC_ALL=C sort\n",
             )
             .unwrap();
-            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&path, permissions).unwrap();
+            // 权限位用 chmod 子进程而不是 PermissionsExt：后者是 unix-only
+            // API，Windows 编译期就失败，而本组用例在每个测试首行按 FAMILY
+            // 早退，非 Unix 宿主永远不会执行到这里；平台 cfg 预算也不允许
+            // 再加门控。与 run_command 直接 spawn /bin/sh 同一风格。
+            let status = std::process::Command::new("chmod")
+                .arg("+x")
+                .arg(&path)
+                .status()
+                .expect("spawn chmod");
+            assert!(status.success(), "chmod +x {}", path.display());
             path
         }
         fn temp_root() -> (tempfile::TempDir, String) {
