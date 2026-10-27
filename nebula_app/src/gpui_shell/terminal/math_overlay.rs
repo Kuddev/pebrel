@@ -1009,6 +1009,28 @@ mod tests {
     }
 
     #[test]
+    fn markdown_inline_code_quoting_tex_stays_literal() {
+        use nebula_terminal::event_loop::StreamProcessor;
+        let mut term = Term::new(Config::default(), &TestSize { cols: 40, rows: 8 }, VoidListener);
+        let mut stream = StreamProcessor::default();
+        // Claude Code 把行内代码画成 #B1BAF9 前景、无背景（实测）。
+        stream.feed(
+            &mut term,
+            &VoidListener,
+            b"code \x1b[38;2;177;186;249m$f'(x_0)=0$\x1b[0m end\r\n\
+              math $f'(x_0)=0$ end\r\n\
+              \x1b[32mlog $x^2$ ok\x1b[0m\r\n\
+              \x1b[32m$y^2$\x1b[0m\r\n\
+              see \x1b[34mlink\x1b[0m $z^2$ \x1b[34mlink\x1b[0m\r\n\r\nprompt",
+        );
+        let mut overlay = MathOverlay::default();
+        let frame = plan(&mut overlay, &term, 40, 8);
+        let sources: Vec<_> = frame.formulas.iter().map(|f| f.source.to_string()).collect();
+        assert_eq!(sources, ["f'(x_0)=0", "x^2", "y^2", "z^2"]);
+        assert!(!frame.covers(0, 5), "the code span keeps its TeX source");
+    }
+
+    #[test]
     fn alt_screen_agent_answer_renders_subscripted_capitals() {
         use nebula_terminal::event_loop::StreamProcessor;
         let mut term = Term::new(Config::default(), &TestSize { cols: 40, rows: 4 }, VoidListener);

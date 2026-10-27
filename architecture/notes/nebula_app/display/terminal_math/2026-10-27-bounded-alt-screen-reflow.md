@@ -59,6 +59,14 @@ followed by primes (`f'`, `y''`) is a symbol, an operand and a function name;
 a prime that does not follow a letter (`$'abc'$`, `$it's$`) is not. Bare delimiters
 keep their stricter TeX-command requirement.
 
+Markdown inline code stays literal. A runtime screen read of Claude Code
+showed `` `$f'(x_0)=0$` `` drawn in an accent foreground (#B1BAF9) with no
+background, so the existing ANSI-background rule for code blocks missed it,
+and wider evidence (primes) made such quoted source render. An inline
+formula whose glyphs share one non-default foreground that differs from the
+nearest glyph on both sides is treated as a code span. Whole coloured lines
+and a coloured formula alone on its row still render.
+
 ## Rejected alternatives
 
 - Gate alternate-screen reflow on detecting an agent process: WSL and SSH

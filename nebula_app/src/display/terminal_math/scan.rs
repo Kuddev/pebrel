@@ -506,6 +506,14 @@ pub(crate) fn scan_visible<T>(
             if filter_reasoning_style && formula_uses_reasoning_style(&overlay) {
                 return None;
             }
+            // Agent Markdown renderers draw inline code (`` `$x$` ``) in an
+            // accent foreground without a background. It quotes TeX source on
+            // purpose, so it stays literal like a fenced code block does.
+            if !overlay.display
+                && formula_is_inline_code(&overlay, rendered_cells, default_foreground)
+            {
+                return None;
+            }
 
             apply_layout_hints(&mut overlay, &grid);
             // A cell with its own background after the formula is a TUI
@@ -545,6 +553,42 @@ pub(super) fn formula_uses_reasoning_style(overlay: &FormulaOverlay) -> bool {
             (total + 1, dim + usize::from(cell.flags.contains(Flags::DIM)))
         });
     source_cells > 0 && dim_cells * 4 >= source_cells * 3
+}
+
+/// Whether an inline formula is a Markdown code span: every source glyph
+/// shares one non-default foreground, and the nearest glyph on each side
+/// within the same rows uses a different one. A whole coloured line (logs,
+/// prompts) has same-coloured neighbours, and a formula alone on its row has
+/// none, so both keep rendering.
+pub(super) fn formula_is_inline_code(
+    overlay: &FormulaOverlay,
+    rendered_cells: &[RenderableCell],
+    default_foreground: Rgb,
+) -> bool {
+    let mut glyphs = overlay.fallback.iter().filter(|cell| !cell.character.is_whitespace());
+    let Some(foreground) = glyphs.next().map(|cell| cell.fg) else {
+        return false;
+    };
+    if foreground == default_foreground || glyphs.any(|cell| cell.fg != foreground) {
+        return false;
+    }
+    let (Some(first), Some(last)) = (overlay.spans.first(), overlay.spans.last()) else {
+        return false;
+    };
+    let on_row = |cell: &&RenderableCell, row: i32| {
+        usize::try_from(row) == Ok(cell.point.line) && !cell.character.is_whitespace()
+    };
+    let before = rendered_cells
+        .iter()
+        .filter(|cell| on_row(cell, first.row) && cell.point.column.0 < first.start)
+        .max_by_key(|cell| cell.point.column.0);
+    let after = rendered_cells
+        .iter()
+        .filter(|cell| on_row(cell, last.row) && cell.point.column.0 >= last.end)
+        .min_by_key(|cell| cell.point.column.0);
+    let neighbours = [before, after];
+    neighbours.iter().any(Option::is_some)
+        && neighbours.iter().flatten().all(|cell| cell.fg != foreground)
 }
 
 /// Room the surrounding grid can lend an overlay, decided purely by what its
