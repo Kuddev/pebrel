@@ -299,7 +299,10 @@ mod bash_sync_tests {
         };
         let start = tempfile::tempdir().unwrap();
         let mut command = std::process::Command::new(&bash);
-        command.args(["-c", "cd /d/gopath/src/pebrel && sleep 15"]).current_dir(start.path());
+        // cd 目标必须是任何 msys 环境都存在的路径：写死具体盘符的路径
+        // 在没有该盘的机器（CI runner）上 cd 失败、`&&` 短路，sleep 不执行、
+        // bash 秒退，轮询等不到运行时 DLL。兜底拒绝与 cwd 值无关，`/` 足够。
+        command.args(["-c", "cd /; sleep 15"]).current_dir(start.path());
         let spawned = crate::platform::process::hidden_command(&mut command).spawn().unwrap();
         let pid = spawned.id();
         // 等模块表就绪再断言：进程刚起时模块快照可能尚未可用（按未加载
