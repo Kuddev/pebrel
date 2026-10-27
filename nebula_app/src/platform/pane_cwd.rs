@@ -292,8 +292,13 @@ mod bash_sync_tests {
     /// 由 `loads_runtime` 的 DLL 判定保证。
     #[test]
     fn msys_bash_cd_is_refused_by_the_runtime_check() {
+        let Some(bash) = msys_bash_exe() else {
+            // 本机没有 msys bash（PATH 上的 bash 可能是 WSL 启动器，比如
+            // CI runner 镜像）：前提不成立，跳过而不是当作实现回归。
+            return;
+        };
         let start = tempfile::tempdir().unwrap();
-        let mut command = std::process::Command::new("bash");
+        let mut command = std::process::Command::new(&bash);
         command.args(["-c", "cd /d/gopath/src/pebrel && sleep 15"]).current_dir(start.path());
         let spawned = crate::platform::process::hidden_command(&mut command).spawn().unwrap();
         let pid = spawned.id();
@@ -314,5 +319,16 @@ mod bash_sync_tests {
                 .status();
         assert!(runtime_seen, "测试前提：本机 bash 是 msys 运行时");
         assert!(refused, "msys 运行时的 shell 即使读到进程目录也不得回填");
+    }
+
+    /// PATH 上的 `bash` 未必是 msys 运行时（Windows 自带的 WSL 启动器同名，
+    /// CI runner 上先命中它）；Git for Windows 自带的 bash 与 msys-2.0.dll
+    /// 同源，按标准安装位置解析。找不到说明本机覆盖不了这条兜底，由调用
+    /// 方跳过。
+    fn msys_bash_exe() -> Option<std::path::PathBuf> {
+        let program_files =
+            std::env::var_os("ProgramFiles").unwrap_or_else(|| r"C:\Program Files".into());
+        let candidate = std::path::Path::new(&program_files).join(r"Git\bin\bash.exe");
+        candidate.is_file().then_some(candidate)
     }
 }
