@@ -279,3 +279,62 @@ fn missing_os_release_and_keyboard_focus_change_end_drag_once(cx: &mut TestAppCo
     window.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
     assert!(input(&receiver).is_empty());
 }
+
+#[gpui::test]
+fn legacy_drag_releases_at_last_encodable_cell(cx: &mut TestAppContext) {
+    let (view, mut window, receiver) = link_fixture(cx, b"\x1b[?1049h\x1b[?1002hhello");
+    view.update(&mut window, |view, _| view.mark_structural_resize());
+    window.simulate_resize(gpui::size(px(2600.0), px(400.0)));
+    draw(&mut window);
+    view.read_with(&window, |view, _| assert!(view.cols > 240));
+    // The standalone test session has no PTY event loop to apply resize messages.
+    view.update(&mut window, |view, _| {
+        view.session
+            .as_ref()
+            .unwrap()
+            .term
+            .lock()
+            .resize(session::GridSize { columns: view.cols, screen_lines: view.rows });
+    });
+    let start = cell(&view, &window, 1);
+    let last_valid = cell(&view, &window, 222);
+    let outside_encoding = cell(&view, &window, 240);
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_move(last_valid, Some(MouseButton::Left), Modifiers::default());
+    window.simulate_mouse_move(outside_encoding, Some(MouseButton::Left), Modifiers::default());
+    window.simulate_mouse_up(outside_encoding, MouseButton::Left, Modifiers::default());
+    assert_eq!(
+        input(&receiver),
+        vec![
+            b"\x1b[M\x20\x22\x21".to_vec(),
+            b"\x1b[M\x40\xff\x21".to_vec(),
+            b"\x1b[M\x23\xff\x21".to_vec(),
+        ],
+        "the application must receive a release even beyond the legacy coordinate limit"
+    );
+    window.simulate_mouse_move(start, None, Modifiers::default());
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn scrollback_during_application_drag_keeps_a_valid_release(cx: &mut TestAppContext) {
+    let text = format!("{}\x1b[?1002h\x1b[?1006h", "line\r\n".repeat(80));
+    let (view, mut window, receiver) = link_fixture(cx, text.as_bytes());
+    let start = cell(&view, &window, 1);
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    view.update(&mut window, |view, _| {
+        view.session.as_ref().unwrap().term.lock().scroll_display(Scroll::Delta(5));
+    });
+    draw(&mut window);
+    window.simulate_mouse_move(
+        cell(&view, &window, 5),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    window.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+    assert_eq!(
+        input(&receiver),
+        vec![b"\x1b[<0;2;1M".to_vec(), b"\x1b[<0;2;1m".to_vec()],
+        "scrollback has no application coordinates, but the original press still needs its release"
+    );
+}
