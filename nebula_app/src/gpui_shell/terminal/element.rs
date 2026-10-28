@@ -49,15 +49,17 @@ impl TerminalElement {
         Self { view }
     }
 
-    fn capture_completion_scrollbar_drag(&self, window: &mut Window, cx: &App) {
-        if self.view.read(cx).completion_viewport.scrollbar_grab.is_none() {
-            return;
-        }
+    fn capture_pointer_drag(&self, window: &mut Window) {
+        // Register even before a press: input can arrive between paint frames.
+        // The owning view decides whether to consume the gesture at dispatch.
         let view = self.view.downgrade();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
             if phase == DispatchPhase::Capture
                 && view
-                    .update(cx, |view, cx| view.move_completion_popup_scrollbar(event, cx))
+                    .update(cx, |view, cx| {
+                        view.move_application_mouse(event)
+                            || view.move_completion_popup_scrollbar(event, cx)
+                    })
                     .unwrap_or(false)
             {
                 cx.stop_propagation();
@@ -69,7 +71,8 @@ impl TerminalElement {
                 && event.button == MouseButton::Left
                 && view
                     .update(cx, |view, cx| {
-                        view.finish_completion_popup_scrollbar(event.position, cx)
+                        view.finish_application_mouse(Some(event))
+                            || view.finish_completion_popup_scrollbar(event.position, cx)
                     })
                     .unwrap_or(false)
             {
@@ -252,7 +255,7 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.capture_completion_scrollbar_drag(window, cx);
+        self.capture_pointer_drag(window);
         let theme = self.view.read(cx).palette.clone();
         // 元素不画底色：卡容器统一负责"卡底色（带窗口透明度）→ 壁纸"
         // 两层（旧壳 draw_window_backdrop 同模型），元素只画单元格背景、

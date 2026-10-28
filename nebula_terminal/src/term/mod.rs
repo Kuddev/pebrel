@@ -36,6 +36,7 @@ mod input;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
+mod mouse;
 mod program_status;
 mod prompt;
 pub mod reading;
@@ -198,6 +199,7 @@ pub struct Term<T> {
 
     /// Mode flags.
     mode: TermMode,
+    mouse_input_generation: u64,
 
     /// Scroll region.
     ///
@@ -430,6 +432,7 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+            mouse_input_generation: 0,
         }
     }
 
@@ -730,6 +733,7 @@ impl<T> Term<T> {
 
         self.reset_input_cluster();
         debug!("New num_cols is {num_cols} and num_lines is {num_lines}");
+        self.invalidate_mouse_input();
 
         // Move vi mode cursor with the content.
         let history_size = self.history_size();
@@ -796,6 +800,7 @@ impl<T> Term<T> {
 
     /// Swap primary and alternate screen buffer.
     pub fn swap_alt(&mut self) {
+        self.invalidate_mouse_input();
         self.reset_input_cluster();
         self.reading.invalidate();
         self.cancel_redraw_anchor();
@@ -1860,6 +1865,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Reset all important fields in the term struct.
     #[inline]
     fn reset_state(&mut self) {
+        self.invalidate_mouse_input();
         self.reset_program_status();
         self.reset_input_cluster();
         self.cancel_redraw_anchor();
@@ -1997,32 +2003,13 @@ impl<T: EventListener> Handler for Term<T> {
             NamedPrivateMode::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
             NamedPrivateMode::CursorKeys => self.mode.insert(TermMode::APP_CURSOR),
             // Mouse protocols are mutually exclusive.
-            NamedPrivateMode::ReportMouseClicks => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::MOUSE_REPORT_CLICK);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportCellMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::MOUSE_DRAG);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportAllMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::MOUSE_MOTION);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
+            NamedPrivateMode::ReportMouseClicks
+            | NamedPrivateMode::ReportCellMouseMotion
+            | NamedPrivateMode::ReportAllMouseMotion
+            | NamedPrivateMode::SgrMouse
+            | NamedPrivateMode::Utf8Mouse => self.set_mouse_mode(mode, true),
             NamedPrivateMode::ReportFocusInOut => self.mode.insert(TermMode::FOCUS_IN_OUT),
             NamedPrivateMode::BracketedPaste => self.mode.insert(TermMode::BRACKETED_PASTE),
-            // Mouse encodings are mutually exclusive.
-            NamedPrivateMode::SgrMouse => {
-                self.mode.remove(TermMode::UTF8_MOUSE);
-                self.mode.insert(TermMode::SGR_MOUSE);
-            },
-            NamedPrivateMode::Utf8Mouse => {
-                self.mode.remove(TermMode::SGR_MOUSE);
-                self.mode.insert(TermMode::UTF8_MOUSE);
-            },
             NamedPrivateMode::AlternateScroll => self.mode.insert(TermMode::ALTERNATE_SCROLL),
             NamedPrivateMode::LineWrap => self.mode.insert(TermMode::LINE_WRAP),
             NamedPrivateMode::Origin => {
@@ -2066,22 +2053,13 @@ impl<T: EventListener> Handler for Term<T> {
             },
             NamedPrivateMode::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
             NamedPrivateMode::CursorKeys => self.mode.remove(TermMode::APP_CURSOR),
-            NamedPrivateMode::ReportMouseClicks => {
-                self.mode.remove(TermMode::MOUSE_REPORT_CLICK);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportCellMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_DRAG);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportAllMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_MOTION);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
+            NamedPrivateMode::ReportMouseClicks
+            | NamedPrivateMode::ReportCellMouseMotion
+            | NamedPrivateMode::ReportAllMouseMotion
+            | NamedPrivateMode::SgrMouse
+            | NamedPrivateMode::Utf8Mouse => self.set_mouse_mode(mode, false),
             NamedPrivateMode::ReportFocusInOut => self.mode.remove(TermMode::FOCUS_IN_OUT),
             NamedPrivateMode::BracketedPaste => self.mode.remove(TermMode::BRACKETED_PASTE),
-            NamedPrivateMode::SgrMouse => self.mode.remove(TermMode::SGR_MOUSE),
-            NamedPrivateMode::Utf8Mouse => self.mode.remove(TermMode::UTF8_MOUSE),
             NamedPrivateMode::AlternateScroll => self.mode.remove(TermMode::ALTERNATE_SCROLL),
             NamedPrivateMode::LineWrap => self.mode.remove(TermMode::LINE_WRAP),
             NamedPrivateMode::Origin => self.mode.remove(TermMode::ORIGIN),

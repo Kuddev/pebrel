@@ -3,6 +3,7 @@
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod activity_tests;
 mod agent_activity;
+mod application_mouse;
 mod broadcast;
 mod completion;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -490,6 +491,7 @@ pub struct TerminalView {
     copy_on_select: bool,
     /// 鼠标模式下最后上报的单元格：move 事件按"进入新单元格"去重。
     last_report_point: Option<TermPoint>,
+    application_mouse: Option<application_mouse::Gesture>,
     /// GPUI 没有旧壳 scheduler 的 `BlinkCursor` 事件，视图自己只维护可见相位；
     /// 光标是否允许闪烁仍由共享 `Term::cursor_style()` 裁定。
     cursor_visible: bool,
@@ -612,6 +614,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         if !visible {
+            self.cancel_pointer_gesture();
             self.clear_output_hover(cx);
         }
         if self.output_visible != visible {
@@ -865,6 +868,8 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        self.application_mouse = None;
+        self.cancel_pointer_gesture();
         self.clear_output_hover(cx);
         self.reading.cancel_query();
         self.reading.cancel_copy();
