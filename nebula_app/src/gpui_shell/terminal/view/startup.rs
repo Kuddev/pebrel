@@ -113,7 +113,7 @@ impl TerminalView {
         let (
             ssh_destination,
             initial_title,
-            intro_shell_name,
+            intro_program,
             suggest_env,
             exec_context,
             session_launch,
@@ -152,6 +152,12 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
+                // 欢迎屏要按**真正 spawn 的**可执行文件挑命令：cmd 不认
+                // `Clear-Host`，PowerShell 不认 `cls`。
+                let intro_program = spawn_shell
+                    .as_ref()
+                    .map(|shell| shell.program().to_owned())
+                    .or_else(|| snapshot_shell.as_ref().map(|shell| shell.program().to_owned()));
                 let options = session::local_options(spawn_shell, pane_id, cwd);
                 if let Some(cwd) = &options.working_directory {
                     initial_cwd = cwd.to_string_lossy().into_owned();
@@ -178,7 +184,7 @@ impl TerminalView {
                 (
                     None,
                     String::from("shell"),
-                    shell_name,
+                    intro_program,
                     suggest_env,
                     Some(exec_context),
                     session_launch,
@@ -217,26 +223,15 @@ impl TerminalView {
                 let runtime = nebula_settings::RuntimeSettings::load();
                 if runtime.fetch && !is_ssh && startup_intro {
                     use nebula_terminal::event::Notify as _;
-                    let id = intro_shell_name
-                        .as_deref()
-                        .or(runtime.shell.as_deref())
-                        .unwrap_or_default()
-                        .to_ascii_lowercase();
-                    // Unix 没有 PowerShell 版欢迎脚本：一律走 fastfetch 回退链。
-                    let intro_shell = if !cfg!(windows) || id.contains("wsl") || id.contains("bash")
-                    {
-                        crate::display::NebulaShell::Bash
-                    } else {
-                        crate::display::NebulaShell::PowerShell
-                    };
+                    // 会话恢复时冻结的 launch 优先，其次才是当前设置里的 shell。
+                    let program =
+                        intro_program.as_deref().or(runtime.shell.as_deref()).unwrap_or_default();
                     let notifier =
                         nebula_terminal::event_loop::Notifier(session.notifier.0.clone());
-                    notifier.notify(
-                        crate::window_context::welcome::nebula_fastfetch_intro_command_for(
-                            usize::from(spawn_grid.0),
-                            intro_shell,
-                        ),
-                    );
+                    notifier.notify(crate::window_context::welcome::nebula_intro_command_for(
+                        usize::from(spawn_grid.0),
+                        crate::window_context::welcome::IntroShell::from_program(program),
+                    ));
                 }
                 super::super::session_pump::attach(rx, stage_rx, is_ssh, cx);
                 (Some(session), None)

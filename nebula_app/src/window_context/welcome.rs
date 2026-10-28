@@ -10,8 +10,9 @@ use crate::display::NebulaShell;
 #[cfg(any(windows, test))]
 use std::sync::Mutex;
 
+/// 欢迎内容的一份落盘副本：内容在 Rust 侧生成一次，只按需重建文件。
 #[cfg(any(windows, test))]
-struct CachedIntroScript {
+struct CachedIntroFile {
     bytes: Vec<u8>,
     needs_write: bool,
 }
@@ -133,8 +134,29 @@ fn nebula_fastfetch_script_bytes(narrow: bool) -> Vec<u8> {
 }
 
 #[cfg(any(windows, test))]
+fn cached_intro_file(
+    cell: &Mutex<Option<CachedIntroFile>>,
+    path: std::path::PathBuf,
+    bytes: impl FnOnce() -> Vec<u8>,
+    write_file: impl FnOnce(&std::path::Path, &[u8]) -> std::io::Result<()>,
+) -> Option<std::path::PathBuf> {
+    // Keep the bytes, not the lifetime of a file in the system temp directory.
+    // Serialize recreation so callers in this process cannot read a partial write.
+    let mut cached = cell.lock().ok()?;
+    let file = cached.get_or_insert_with(|| CachedIntroFile { bytes: bytes(), needs_write: true });
+    if file.needs_write || !path.is_file() {
+        // Initial requests replace files left by older processes. Keep this flag
+        // set after an error, including a failed write that leaves a partial file.
+        file.needs_write = true;
+        write_file(&path, &file.bytes).ok()?;
+        file.needs_write = false;
+    }
+    Some(path)
+}
+
+#[cfg(any(windows, test))]
 fn cached_fastfetch_script_path(
-    cell: &Mutex<Option<CachedIntroScript>>,
+    cell: &Mutex<Option<CachedIntroFile>>,
     path: std::path::PathBuf,
     narrow: bool,
 ) -> Option<std::path::PathBuf> {
@@ -143,32 +165,82 @@ fn cached_fastfetch_script_path(
 
 #[cfg(any(windows, test))]
 fn cached_fastfetch_script_path_with(
-    cell: &Mutex<Option<CachedIntroScript>>,
+    cell: &Mutex<Option<CachedIntroFile>>,
     path: std::path::PathBuf,
     narrow: bool,
     write_script: impl FnOnce(&std::path::Path, &[u8]) -> std::io::Result<()>,
 ) -> Option<std::path::PathBuf> {
-    // Keep the bytes, not the lifetime of a file in the system temp directory.
-    // Serialize recreation so callers in this process cannot read a partial write.
-    let mut cached = cell.lock().ok()?;
-    let script = cached.get_or_insert_with(|| CachedIntroScript {
-        bytes: nebula_fastfetch_script_bytes(narrow),
-        needs_write: true,
-    });
-    if script.needs_write || !path.is_file() {
-        // Initial requests replace files left by older processes. Keep this flag
-        // set after an error, including a failed write that leaves a partial file.
-        script.needs_write = true;
-        write_script(&path, &script.bytes).ok()?;
-        script.needs_write = false;
+    cached_intro_file(cell, path, || nebula_fastfetch_script_bytes(narrow), write_script)
+}
+
+/// 纯文本版欢迎内容，给 cmd 的 `type` 与 POSIX shell 的 `cat` 读。
+///
+/// 不带 BOM（`cat` 会把 BOM 原样打到屏幕上），换行用 CRLF：cmd 的 `type` 不
+/// 做换行转换，单独一个 LF 只会让光标回到行首、覆盖上一行。
+#[cfg(any(windows, test))]
+fn nebula_fastfetch_text_bytes(narrow: bool) -> Vec<u8> {
+    nebula_fastfetch_text(narrow)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n")
+        .into_bytes()
+}
+
+#[cfg(any(windows, test))]
+fn cached_fastfetch_text_path(narrow: bool) -> Option<std::path::PathBuf> {
+    static WIDE: Mutex<Option<CachedIntroFile>> = Mutex::new(None);
+    static NARROW: Mutex<Option<CachedIntroFile>> = Mutex::new(None);
+    let (cell, file) = if narrow {
+        (&NARROW, "nebula_fastfetch_intro_narrow.txt")
+    } else {
+        (&WIDE, "nebula_fastfetch_intro.txt")
+    };
+    cached_intro_file(
+        cell,
+        std::env::temp_dir().join(file),
+        || nebula_fastfetch_text_bytes(narrow),
+        |path, bytes| std::fs::write(path, bytes),
+    )
+}
+
+/// 欢迎屏要发给哪一种 shell。
+///
+/// 只有把命令写对，欢迎屏才不依赖用户恰好用 PowerShell：cmd 认 `cls`/`type`，
+/// POSIX shell 认 `printf`/`cat`，谁都不认识对方的 `Clear-Host; & '…ps1'`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntroShell {
+    PowerShell,
+    Cmd,
+    Posix,
+}
+
+impl IntroShell {
+    /// 按 spawn 的可执行文件名判断（`cmd.exe` / `wsl.exe` / `bash.exe` …）。
+    pub(crate) fn from_program(program: &str) -> Self {
+        let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+        let name = name.to_ascii_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(name.as_str());
+        match name {
+            "powershell" | "pwsh" => Self::PowerShell,
+            "cmd" => Self::Cmd,
+            "wsl" | "bash" | "zsh" | "sh" | "dash" | "fish" | "nu" | "nushell" | "ksh" | "ash"
+            | "elvish" | "xonsh" => Self::Posix,
+            // 未知 shell 维持既有行为：Windows 上按 PowerShell 注入。
+            _ => {
+                if cfg!(windows) {
+                    Self::PowerShell
+                } else {
+                    Self::Posix
+                }
+            },
+        }
     }
-    Some(path)
 }
 
 #[cfg(windows)]
 fn nebula_fastfetch_script_path(narrow: bool) -> Option<std::path::PathBuf> {
-    static WIDE: Mutex<Option<CachedIntroScript>> = Mutex::new(None);
-    static NARROW: Mutex<Option<CachedIntroScript>> = Mutex::new(None);
+    static WIDE: Mutex<Option<CachedIntroFile>> = Mutex::new(None);
+    static NARROW: Mutex<Option<CachedIntroFile>> = Mutex::new(None);
     let (cell, file) = if narrow {
         (&NARROW, "nebula_fastfetch_intro_narrow.ps1")
     } else {
@@ -182,10 +254,28 @@ fn powershell_single_quoted_path(path: &std::path::Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
+/// cmd 的欢迎屏：切到 UTF-8 再打印纯文本，否则图标与框线按本地代码页解码成乱码。
+#[cfg(windows)]
+fn cmd_intro_command(path: &std::path::Path) -> String {
+    format!("chcp 65001>nul & cls & type \"{}\"\r\n", path.display())
+}
+
+/// POSIX shell 的欢迎屏：装了 fastfetch 就让它出（与原行为一致），否则打印同一份
+/// 欢迎卡；Windows 上先经 `wslpath`/`cygpath` 把路径翻译成来宾可读的形式。
+#[cfg(windows)]
+fn posix_intro_command(path: &std::path::Path) -> String {
+    let quoted = path.to_string_lossy().replace('\'', "'\\''");
+    format!(
+        "printf '\\033[H\\033[2J'; if command -v fastfetch >/dev/null 2>&1; then fastfetch; else \
+         p='{quoted}'; if command -v wslpath >/dev/null 2>&1; then p=$(wslpath -u \"$p\"); elif \
+         command -v cygpath >/dev/null 2>&1; then p=$(cygpath -u \"$p\"); fi; cat \"$p\"; fi\n"
+    )
+}
+
 /// Bytes to send to a freshly spawned shell so it prints the Nebula intro.
 #[cfg(windows)]
 pub(super) fn nebula_fastfetch_intro_command() -> Vec<u8> {
-    nebula_fastfetch_intro_command_for(usize::MAX, NebulaShell::PowerShell)
+    nebula_intro_command_for(usize::MAX, IntroShell::PowerShell)
 }
 
 /// Width-aware intro: the two-column layout needs ~150 columns (62-col art +
@@ -193,20 +283,36 @@ pub(super) fn nebula_fastfetch_intro_command() -> Vec<u8> {
 /// Also used to *re-print* the intro after a resize reflows a pristine pane.
 /// `pub(crate)`：GPUI 壳的新会话欢迎屏走同一入口（fetch=1 设置）。
 #[cfg(windows)]
-pub(crate) fn nebula_fastfetch_intro_command_for(columns: usize, shell: NebulaShell) -> Vec<u8> {
-    if shell == NebulaShell::Bash {
-        return b"clear; if command -v fastfetch >/dev/null 2>&1; then fastfetch; else printf '\\033[36mPebrel\\033[0m\\n'; uname -a; fi\n".to_vec();
-    }
-
-    // 新 tab 必须秒出：所有系统信息在 Rust 侧一次性缓存；交给 PowerShell 的
-    // 只有执行一个纯输出脚本，避免把 ANSI/Logo 当成用户输入逐行解析。
+pub(crate) fn nebula_intro_command_for(columns: usize, shell: IntroShell) -> Vec<u8> {
     let narrow = columns < 132;
-    match nebula_fastfetch_script_path(narrow) {
-        Some(path) => {
-            format!("Clear-Host; & {}\r", powershell_single_quoted_path(&path)).into_bytes()
+    match shell {
+        // 新 tab 必须秒出：所有系统信息在 Rust 侧一次性缓存；交给 PowerShell 的
+        // 只有执行一个纯输出脚本，避免把 ANSI/Logo 当成用户输入逐行解析。
+        IntroShell::PowerShell => match nebula_fastfetch_script_path(narrow) {
+            Some(path) => {
+                format!("Clear-Host; & {}\r", powershell_single_quoted_path(&path)).into_bytes()
+            },
+            None => b"Clear-Host\r".to_vec(),
         },
-        None => b"Clear-Host\r".to_vec(),
+        IntroShell::Cmd => match cached_fastfetch_text_path(narrow) {
+            Some(path) => cmd_intro_command(&path).into_bytes(),
+            None => b"cls\r\n".to_vec(),
+        },
+        IntroShell::Posix => match cached_fastfetch_text_path(narrow) {
+            Some(path) => posix_intro_command(&path).into_bytes(),
+            None => b"printf '\\033[H\\033[2J'\n".to_vec(),
+        },
     }
+}
+
+/// 旧壳（legacy-shell）按提示符主题挑欢迎屏，语义保持原样。
+#[cfg(windows)]
+pub(crate) fn nebula_fastfetch_intro_command_for(columns: usize, shell: NebulaShell) -> Vec<u8> {
+    let shell = match shell {
+        NebulaShell::PowerShell => IntroShell::PowerShell,
+        NebulaShell::Bash => IntroShell::Posix,
+    };
+    nebula_intro_command_for(columns, shell)
 }
 
 /// Bytes to send to a freshly spawned shell so it prints the Nebula intro.
@@ -216,13 +322,19 @@ pub(super) fn nebula_fastfetch_intro_command() -> Vec<u8> {
 }
 
 /// Width-aware variant; the Unix intro delegates to fastfetch, which already
-/// adapts to the terminal width, so `columns` is unused there.
+/// adapts to the terminal width, so `columns` and the shell family are unused.
+#[cfg(not(windows))]
+pub(crate) fn nebula_intro_command_for(_columns: usize, _shell: IntroShell) -> Vec<u8> {
+    nebula_fastfetch_intro_command()
+}
+
+/// Width-aware variant kept for the legacy shell call sites.
 #[cfg(not(windows))]
 pub(crate) fn nebula_fastfetch_intro_command_for(
-    _columns: usize,
+    columns: usize,
     _shell: crate::display::NebulaShell,
 ) -> Vec<u8> {
-    nebula_fastfetch_intro_command()
+    nebula_intro_command_for(columns, IntroShell::Posix)
 }
 
 #[cfg(test)]
@@ -340,6 +452,64 @@ mod tests {
         fs::remove_dir(&path).unwrap();
         assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
         assert_eq!(fs::read(path).unwrap(), expected);
+    }
+
+    #[test]
+    fn intro_shell_is_detected_from_the_spawned_program() {
+        for program in [
+            "powershell",
+            "powershell.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "pwsh.exe",
+        ] {
+            assert_eq!(IntroShell::from_program(program), IntroShell::PowerShell, "{program}");
+        }
+        for program in ["cmd", "cmd.exe", r"C:\Windows\system32\CMD.EXE"] {
+            assert_eq!(IntroShell::from_program(program), IntroShell::Cmd, "{program}");
+        }
+        for program in
+            ["wsl.exe", "bash", r"C:\Windows\system32\bash.exe", "/bin/zsh", "fish", "nu"]
+        {
+            assert_eq!(IntroShell::from_program(program), IntroShell::Posix, "{program}");
+        }
+    }
+
+    /// cmd 与 POSIX shell 读的是同一份纯文本：不能带 BOM，换行必须是 CRLF
+    /// （cmd 的 `type` 不做换行转换，只有 LF 会让每一行覆盖上一行）。
+    #[test]
+    fn cached_text_is_crlf_without_a_bom() {
+        let bytes = nebula_fastfetch_text_bytes(false);
+        assert!(!bytes.starts_with(&[0xEF, 0xBB, 0xBF]));
+        assert!(bytes.windows(2).any(|pair| pair == b"\r\n"));
+        // 每个换行都必须是 CRLF：裸 LF（或裸 CR）会让 cmd 的 `type` 覆盖上一行。
+        let bare: Vec<usize> = (0..bytes.len())
+            .filter(|index| bytes[*index] == b'\n')
+            .filter(|index| *index == 0 || bytes[*index - 1] != b'\r')
+            .take(5)
+            .collect();
+        assert!(bare.is_empty(), "bare newlines at {bare:?}");
+        let stray_carriage_returns = (0..bytes.len())
+            .filter(|index| bytes[*index] == b'\r' && bytes.get(index + 1) != Some(&b'\n'));
+        assert_eq!(stray_carriage_returns.count(), 0);
+        assert!(std::str::from_utf8(&bytes).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_intro_switches_to_utf8_before_printing() {
+        let command = cmd_intro_command(std::path::Path::new(r"C:\Temp\intro.txt"));
+        assert_eq!(command, "chcp 65001>nul & cls & type \"C:\\Temp\\intro.txt\"\r\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn posix_intro_prefers_fastfetch_and_can_translate_the_path() {
+        let command = posix_intro_command(std::path::Path::new(r"C:\Temp\intro.txt"));
+        assert!(command.starts_with("printf '\\033[H\\033[2J'; if command -v fastfetch"));
+        assert!(command.contains("p='C:\\Temp\\intro.txt'"));
+        assert!(command.contains("wslpath -u"));
+        assert!(command.contains("cygpath -u"));
+        assert!(command.ends_with("cat \"$p\"; fi\n"));
     }
 
     #[test]
