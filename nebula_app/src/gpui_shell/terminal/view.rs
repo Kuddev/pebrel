@@ -14,6 +14,9 @@ mod cwd_report;
 mod editor;
 mod image_paste;
 mod layout;
+mod native_clipboard;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod native_clipboard_tests;
 #[cfg(all(test, windows, feature = "gpui-test-support"))]
 mod native_cmd_tests;
 mod notifications;
@@ -21,8 +24,11 @@ mod notifications;
 mod output_tests;
 mod path_drop;
 mod pointer;
+mod program_status;
 mod reading;
 mod runtime;
+mod session_failure;
+mod ssh_reconnect;
 mod startup;
 mod startup_command;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -83,6 +89,16 @@ const SELECTION_SCROLL_STEP: f32 = 20.0;
 /// 这个值到 +1s；取 1.2s 是为了让它至少跨过一个复核点，不会一闪就没。
 pub(super) const COMPLETION_FLASH: std::time::Duration = std::time::Duration::from_millis(1200);
 
+/// 远端回合停滞对账的阈值：hook 权威在场的回合静默这么久、且屏幕连续两拍是
+/// agent 自家的同一形态，才允许双向对账（见
+/// `ai_hook::lifecycle::AgentActivity::reconcile_stalled_turn`）：两拍 idle
+/// 提示符把回合收敛为结束；两拍转圈把丢了点火事件（UserPromptSubmit/权限
+/// 答复在远端 bridge 丢失）的回合从 Done/Blocked 拉回 Working。这是远端的
+/// 第二重证据——本地有进程树对账，SSH/WSL 没有进程可见性，hook 一旦在远端
+/// bridge 丢失，回合会钉死在丢失前的状态。权限等待屏是 Blocked 检测、不参与
+/// 对账；真正的防线是「稳定的屏幕形态」而非纯计时。
+pub(super) const REMOTE_TURN_STALL: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// 一次自动回滚该滚几行：指针在网格上方为正（往回滚历史）、下方为负，网格
 /// 内为 0。贴边即 1 行，之后每远离 `SELECTION_SCROLL_STEP` 像素加一档。
 ///
@@ -116,6 +132,39 @@ fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mu
     *cursor_visible = true;
     *cursor_blink_epoch = cursor_blink_epoch.wrapping_add(1);
     *cursor_blink_epoch
+}
+
+/// 空闲停闪的静默阈值：输入与 PTY 输出连续静默这么久后，750ms 翻转链
+/// 停止翻转、保持常亮并断链（桌面终端的通行停闪惯例）。静止终端
+/// 由此不再产生任何渲染帧；任何输入/输出/IME/模式事件走
+/// `restart_cursor_blink` 立即重启。输出只刷新静默计时，不停链重启。
+const CURSOR_BLINK_IDLE_PAUSE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// 纯判定：静默时长是否已到停闪阈值。
+fn cursor_blink_silence_pauses(silence: std::time::Duration) -> bool {
+    silence >= CURSOR_BLINK_IDLE_PAUSE
+}
+
+/// 输出驱动帧的最小间隔（输出批合并的通行做法）：PTY 每读到一批就发一次
+/// Wakeup，TUI 动画高频输出时逐批 `cx.notify()` 逐帧渲染；8ms 下限把风暴
+/// 收敛到 ≤125fps，视觉上无差别（远高于显示器刷新率的渲染本就丢帧）。
+const OUTPUT_FRAME_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// 输出帧的合并决策（纯函数）：距上一帧不足最小间隔就并入一次尾帧
+/// （等待剩余时长补渲染），否则立即渲染。
+#[derive(Debug, PartialEq, Eq)]
+enum OutputFrameTiming {
+    Now,
+    Trail(std::time::Duration),
+}
+
+fn output_frame_timing(since_last_frame: Option<std::time::Duration>) -> OutputFrameTiming {
+    match since_last_frame {
+        Some(elapsed) if elapsed < OUTPUT_FRAME_MIN_INTERVAL => {
+            OutputFrameTiming::Trail(OUTPUT_FRAME_MIN_INTERVAL - elapsed)
+        },
+        _ => OutputFrameTiming::Now,
+    }
 }
 
 /// 粘贴体量按「落到终端算几行」数，不用 `str::lines`。
@@ -174,6 +223,8 @@ pub enum TerminalViewEvent {
     RequestClose,
     /// 失败后在当前分屏叶原位重建同一 SSH 目标。
     RetrySsh(String),
+    /// A failed local session needs an explicit choice of a working shell.
+    ChooseShell,
     /// Ctrl+滚轮改了终端字号：宿主应对所有 pane 热应用并写盘。
     FontSizeChanged,
     /// BEL（`^G`）。后台 tab 记铃点；本 tab 的闪烁/声音由视图自己处理。
@@ -213,6 +264,10 @@ pub enum TerminalLaunch {
         /// Remote cwd inherited by duplicate-tab. `None` starts in the
         /// account's ordinary login directory.
         cwd: Option<String>,
+        resume_target: Option<crate::ssh_session::ResumeTarget>,
+    },
+    Serial {
+        destination: String,
     },
 }
 
@@ -267,6 +322,8 @@ pub enum SidebarActivity {
 }
 
 pub struct TerminalView {
+    pub(super) native_results: super::native_results::Views,
+    pub(super) character_art: super::character_art::Layout,
     pub(super) answers: crate::assistant_answer::AnswerInbox,
     confirmation: super::confirmation::ConfirmationState,
     pub(super) answer_reader: Option<gpui::Entity<super::answer_reader::AnswerReader>>,
@@ -322,6 +379,9 @@ pub struct TerminalView {
     command_started: Option<std::time::Instant>,
     /// 上次跑进程树探测的时刻，用于节流。
     last_process_probe: Option<std::time::Instant>,
+    /// 看门狗的进程树探测在后台线程在途：缓存未命中时 `ps` 全机枚举可阻塞
+    /// 秒级，主线程只收结果；同一时刻至多一条在途。
+    activity_probe_pending: bool,
     prompt_process_probe: Option<gpui::Task<()>>,
     prompt_input_epoch: u64,
     native_prompt_seen: bool,
@@ -331,6 +391,9 @@ pub struct TerminalView {
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
     agent_activity: crate::ai_hook::lifecycle::AgentActivity,
+    program_status: Option<program_status::ProgramStatus>,
+    program_status_seen: bool,
+    pty_failed: bool,
     /// 程序上报的任务进度（OSC 9;4）。存在 pane 上、由宿主投到任务栏：一个
     /// 窗口只有一个任务栏按钮，谁被看着只有宿主知道。
     pub progress: crate::taskbar::TaskProgress,
@@ -342,6 +405,7 @@ pub struct TerminalView {
     /// 只用事件携带的绝对行锚定到对应的 scrollback 位置。
     pub(super) inline_images: super::inline_image::InlineImageStore,
     image_paste: image_paste::ImagePasteState,
+    native_clipboard: native_clipboard::NativeClipboard,
     path_drop: path_drop::PathDropState,
     /// SSH 直连目的地（`user@host[:port]`）；本地会话为 None。
     pub ssh_destination: Option<String>,
@@ -353,6 +417,7 @@ pub struct TerminalView {
     pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
     /// SSH 连接阶段（业务层上报）：Ready 前画连接横幅，Failed 驻留错误。
     ssh_stage: Option<crate::ssh_session::SshStage>,
+    ssh_retry_pending: bool,
     /// SSH 连接卡片状态（旧壳 `display::ssh_connect::SshConnectState` 的
     /// 直接复用：阶段日志、粒子相位、进度插值、350ms 显示门槛都在里面）。
     pub(super) ssh_connect: Option<crate::display::ssh_connect::SshConnectState>,
@@ -370,6 +435,7 @@ pub struct TerminalView {
     pub(super) last_ai_session_probe: Option<std::time::Instant>,
     error: Option<String>,
     exited: Option<String>,
+    retain_failed_session: bool,
     /// 滚动条拖拽中：按下时记下的「指针在拇指内的 y 偏移」，拖动全程据此
     /// 反算 `display_offset`，拇指不会在按下那一刻跳到指针中心。
     scrollbar_drag: Option<f32>,
@@ -377,7 +443,7 @@ pub struct TerminalView {
     scrollbar_visibility: nebula_settings::ScrollbarVisibility,
     origin: Point<Pixels>,
     cell_width: Pixels,
-    line_height: Pixels,
+    pub(super) line_height: Pixels,
     cols: usize,
     rows: usize,
     /// 子进程已被告知的几何。`cols`/`rows`
@@ -429,13 +495,25 @@ pub struct TerminalView {
     cursor_visible: bool,
     cursor_animation: cursor::CursorAnimation,
     cursor_blink_epoch: u64,
+    /// 最近一次「用户可感知的活动」时刻（输入 / PTY 输出 / IME / 模式变化
+    /// 都刷新）。翻转链每 tick 对照 [`CURSOR_BLINK_IDLE_PAUSE`]：静默满阈值
+    /// 即停闪断链，把静止终端的渲染帧归零。
+    cursor_blink_last_activity: std::time::Instant,
+    /// 停闪断链后为 true：PTY 输出到来时据此（且仅据此）重启闪烁——输出
+    /// 期间只刷新静默计时，不逐批重启相位。
+    cursor_blink_paused: bool,
     /// OS 窗口前台状态与 pane 内焦点是两层独立条件。缓存它们是因为 blink
     /// timer 回调没有 `Window`，状态变化由 GPUI observer 立即重启相位。
     cursor_window_active: bool,
     cursor_pane_focused: bool,
     /// Workspace presentation is independent of keyboard/window focus.
     output_visible: bool,
+    /// 上一次输出驱动帧的时刻（[`Self::schedule_output_frame`] 的合并基准）。
+    last_output_frame: Option<std::time::Instant>,
+    /// 在途的输出尾帧定时器（间隔内批次的补帧）。
+    output_trailing_frame: Option<gpui::Task<()>>,
     _cursor_blink_subscriptions: [gpui::Subscription; 3],
+    _history_subscription: gpui::Subscription,
     /// 最近一次由设置页下发的默认样式。只在它真正变化时清理 shell 的
     /// DECSCUSR/DEC mode 12 覆盖，避免无关设置变更打断 vim 等程序光标。
     default_cursor_style: CursorStyle,
@@ -538,6 +616,12 @@ impl TerminalView {
         }
         if self.output_visible != visible {
             self.cursor_animation.reset();
+            if !visible {
+                // 隐藏即输出帧时间线的终结：恢复可见后的第一批输出按「无上一
+                // 帧」立即渲染。不清的话，快速翻转（隐藏不足 8ms）会让恢复后
+                // 的首批输出并入隐藏前遗留的合并窗口，白等一个尾帧才上屏。
+                self.last_output_frame = None;
+            }
 
             super::effects::visibility_changed(self, cx);
         }
@@ -575,9 +659,14 @@ impl TerminalView {
                 self.observe_reading_output(cx);
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
-                if self.output_visible {
-                    cx.notify();
+                // PTY 输出也是「活动」：只刷新停闪静默计时，链活着就不动；
+                // 已停闪断链才重启闪烁（逐批重启相位会让输出风暴期光标
+                // 常亮并额外加帧）。
+                self.cursor_blink_last_activity = std::time::Instant::now();
+                if self.cursor_blink_paused {
+                    self.restart_cursor_blink(cx);
                 }
+                self.schedule_output_frame(cx);
             },
             TermEvent::MouseCursorDirty => {
                 cx.notify();
@@ -612,7 +701,11 @@ impl TerminalView {
             // OSC 9;4：程序自报任务进度。只在真的变了的时候上报——任务栏那条
             // 路要过 COM，`cargo build` 每秒发好几次进度更新，逐条投过去纯属
             // 浪费。
+            TermEvent::ProgramStatusChanged => self.refresh_program_status(cx),
             TermEvent::Progress { state, value } => {
+                if self.program_status_seen {
+                    return;
+                }
                 let progress = crate::taskbar::TaskProgress::from_osc(state, value);
                 if progress != self.progress {
                     self.progress = progress;
@@ -641,13 +734,25 @@ impl TerminalView {
                 self.write_bytes(formatter(self.window_size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
-                self.mark_exited(format!("进程已退出（{code:?}）"), cx);
+                self.retain_failed_session |= !code.success() && self.local_startup_unconfirmed();
+                let message = crate::gpui_shell::config::ui_language(cx).format(
+                    crate::i18n::Message::TerminalProcessExited,
+                    &[("code", &format!("{code:?}"))],
+                );
+                self.mark_exited(message, cx);
             },
             TermEvent::PtyFailure(reason) => {
-                self.mark_exited(format!("PTY 故障：{reason}"), cx);
+                self.pty_failed = true;
+                self.retain_failed_session |= self.ssh_destination.is_none();
+                let message = crate::gpui_shell::config::ui_language(cx)
+                    .format(crate::i18n::Message::TerminalPtyFailure, &[("error", &reason)]);
+                self.mark_exited(message, cx);
             },
             TermEvent::Exit => {
-                self.mark_exited(String::from("会话已结束"), cx);
+                let message = crate::gpui_shell::config::ui_language(cx)
+                    .text(crate::i18n::Message::TerminalSessionEnded)
+                    .to_owned();
+                self.mark_exited(message, cx);
             },
             TermEvent::CwdReport(_) => {
                 // 标准 OSC 7 / 9;9 的目录上报。只动 cwd，`NEBULA|` 标题带来的
@@ -661,16 +766,33 @@ impl TerminalView {
                     cx.emit(TerminalViewEvent::TitleChanged);
                     cx.notify();
                 }
+                // 无集成的嵌套交互 shell（Cygwin fish、MSYS bash…）没有
+                // 133;D 完成边：Enter 提交靠弱推断标记运行中。OSC 7 随这类
+                // shell 的每次提示符渲染到达，是「回到提示符」的候选证据——
+                // 但 OSC 7 本身只是 cwd 信号，运行中的命令同样能发它
+                // （`bash -c 'printf OSC7; sleep 60'`）。清运行态必须等进程树
+                // 证据：pane 进程树里只剩交互 shell（无命令子进程）才算回到
+                // 提示符；证据在途期间维持运行态。带集成的 shell 先收到
+                // 133;D，这条弱边只是兜底；hook 拥有的 agent 会话不走它。
+                // SSH pane 的进程树在远端，本地看不见命令子进程——该形态
+                // 维持提示符渲染推断（远端进程可见性是已知边界，见 note）。
+                if self.command_running
+                    && !self.command_running_disproved
+                    && !self.agent_activity.hook_seen()
+                {
+                    self.probe_osc7_prompt_evidence(cx);
+                }
             },
-            TermEvent::InlineImage { data, abs_line, width, height } => {
-                let cell_height = f32::from(self.window_size.cell_height.max(1));
-                let row_span = (height / cell_height).ceil().max(1.0) as usize;
-                match self.inline_images.enqueue(data, abs_line, width, height, row_span) {
+            TermEvent::InlineImage { data, placement } => {
+                match self.inline_images.enqueue(data, placement) {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }
             },
-            TermEvent::CommandStart => self.on_command_start(cx),
+            TermEvent::CommandStart => {
+                self.native_clipboard.clear();
+                self.on_command_start(cx);
+            },
             // 退出码接到「上一条命令失败」的未读徽章上（⚠ 三角）；`Some(0)` 与
             // `None`（没带退出码的 133;D）都算过关。记在下面那道 barrier 之后：
             // 属于上一轮/初始化的那个边沿不能改写徽章。
@@ -717,6 +839,7 @@ impl TerminalView {
                     self.on_native_cmd_prompt(cx);
                 }
                 self.suggest.completion_shell_report(&name, &value);
+                self.native_clipboard.observe(&name, &value);
                 self.handle_completion_editor_report(&name, &value, cx);
                 cx.notify();
             },
@@ -759,6 +882,7 @@ impl TerminalView {
             self.exited = Some(message);
             cx.emit(TerminalViewEvent::Exited);
         }
+        self.sync_program_progress(cx);
         cx.notify();
     }
 
@@ -770,6 +894,9 @@ impl TerminalView {
     }
 
     fn write_bytes(&self, bytes: Vec<u8>) {
+        if self.ssh_failed() {
+            return;
+        }
         if let Some(session) = &self.session {
             session.notifier.notify(bytes);
         }
@@ -777,17 +904,24 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if self.ssh_failed() {
+            return;
+        }
         self.completion_editor.invalidate();
         self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
         self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
-        self.path_drop.invalidate();
+        self.path_drop.observe_input(&bytes);
         self.image_paste.observe_input(&bytes);
         self.confirmation.observe_input(&bytes);
         self.awaiting_input = false;
+        let mut status_acknowledged = false;
         if let Some(session) = &self.session {
             {
                 let mut term = session.term.lock();
+                if !bytes.is_empty() {
+                    status_acknowledged = term.acknowledge_program_status_results();
+                }
                 // Match the parser's Term-lock order before attributing queued prompts.
                 let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);
                 session.native_prompt.observe_input(self.prompt_input_epoch, preserves_prompt);
@@ -798,6 +932,9 @@ impl TerminalView {
                 term.selection = None;
             }
             session.notifier.notify(bytes);
+        }
+        if status_acknowledged {
+            self.refresh_program_status(cx);
         }
         self.sync_native_prompt();
         self.restart_cursor_blink(cx);
@@ -820,6 +957,8 @@ impl TerminalView {
     }
 
     fn restart_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_blink_last_activity = std::time::Instant::now();
+        self.cursor_blink_paused = false;
         let epoch =
             restart_cursor_blink_phase(&mut self.cursor_visible, &mut self.cursor_blink_epoch);
         self.schedule_cursor_blink_tick(epoch, cx);
@@ -841,6 +980,17 @@ impl TerminalView {
                     }
                     return;
                 }
+                // 空闲停闪：静默满阈值后保持常亮并断链。链死了就没有下一
+                // tick，静止终端的渲染帧归零；恢复由 restart_cursor_blink
+                // （输入/IME/模式）与 PTY 输出（Wakeup 里按 paused 重启）负责。
+                if cursor_blink_silence_pauses(view.cursor_blink_last_activity.elapsed()) {
+                    view.cursor_blink_paused = true;
+                    if !view.cursor_visible {
+                        view.cursor_visible = true;
+                        cx.notify();
+                    }
+                    return;
+                }
                 view.cursor_visible = !view.cursor_visible;
                 view.schedule_cursor_blink_tick(epoch, cx);
                 cx.notify();
@@ -851,6 +1001,39 @@ impl TerminalView {
 
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
+    }
+
+    /// 输出驱动的渲染帧按 [`OUTPUT_FRAME_MIN_INTERVAL`] 合并：间隔内的批次
+    /// 只挂一次尾帧定时器（在途则不重挂，最早的补点生效），间隔外立即渲染
+    /// 并取消等待中的尾帧。邮箱侧的 Wakeup 原子去重只塌缩「已有一条在排队」
+    /// 的并发，持续输出流仍近似逐帧——这里的下限才是风暴期的节流阀。
+    fn schedule_output_frame(&mut self, cx: &mut Context<Self>) {
+        if !self.output_visible {
+            return;
+        }
+        match output_frame_timing(self.last_output_frame.map(|at| at.elapsed())) {
+            OutputFrameTiming::Now => {
+                self.output_trailing_frame = None;
+                self.last_output_frame = Some(std::time::Instant::now());
+                cx.notify();
+            },
+            OutputFrameTiming::Trail(wait) => {
+                if self.output_trailing_frame.is_some() {
+                    return;
+                }
+                let executor = cx.background_executor().clone();
+                self.output_trailing_frame = Some(cx.spawn(async move |this, cx| {
+                    executor.timer(wait).await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.output_trailing_frame = None;
+                        if view.output_visible {
+                            view.last_output_frame = Some(std::time::Instant::now());
+                            cx.notify();
+                        }
+                    });
+                }));
+            },
+        }
     }
 
     fn on_bell(&mut self, cx: &mut Context<Self>) {
@@ -922,6 +1105,7 @@ impl TerminalView {
     /// 热应用运行时设置（设置页改动后由宿主调用）。默认光标样式只更新
     /// `Term` 的 fallback；程序通过 DECSCUSR 设置的临时样式仍保持权威。
     pub fn apply_settings(&mut self, cx: &mut Context<Self>) {
+        crate::gpui_shell::font_loading::ensure_selected(cx);
         self.cursor_animation.reset();
         self.refresh_ssh_label();
         let Some(settings) = cx.try_global::<Settings>() else { return };
@@ -1144,6 +1328,11 @@ impl TerminalView {
         let ks = &event.keystroke;
         let mods = &ks.modifiers;
 
+        if self.handle_ssh_reconnect_key(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
+
         if self.reading.panel.is_some() && ks.key.as_str() == "escape" {
             self.close_reading(window, cx);
             cx.stop_propagation();
@@ -1225,9 +1414,17 @@ impl TerminalView {
                 _ => None,
             };
             if let Some(scroll) = scroll {
-                if let Some(session) = &self.session {
-                    session.term.lock().scroll_display(scroll);
-                }
+                let (offset, history) = self.scroll_state();
+                let target = match scroll {
+                    Scroll::PageUp => offset.saturating_add(self.rows).min(history),
+                    Scroll::PageDown => offset.saturating_sub(self.rows),
+                    Scroll::Top => history,
+                    Scroll::Bottom => 0,
+                    Scroll::Delta(delta) => {
+                        (offset as i64 + i64::from(delta)).clamp(0, history as i64) as usize
+                    },
+                };
+                self.scroll_to_offset(target, offset);
                 cx.notify();
                 cx.stop_propagation();
                 return;
@@ -1367,7 +1564,7 @@ impl gpui::EntityInputHandler for TerminalView {
             return;
         }
         let had_marked_text = self.marked_text.take().is_some();
-        if !text.is_empty() && self.exited.is_none() {
+        if !text.is_empty() && self.exited.is_none() && !self.ssh_failed() {
             // 行镜像吃 IME 管道的字符（含中文提交与普通击键文本）。
             if !self.term_mode().contains(TermMode::ALT_SCREEN) {
                 crate::display::nebula_input_text(&mut self.suggest, text);
@@ -1479,7 +1676,11 @@ impl Render for TerminalView {
                  window: &mut Window,
                  cx| {
                     cx.stop_propagation();
-                    this.paste_dropped_paths(&[drag.path_text.clone()], window, cx);
+                    if this.ssh_destination.is_some() {
+                        this.drop_external_paths(std::slice::from_ref(&drag.local_path), window, cx);
+                    } else {
+                        this.paste_dropped_paths(&[drag.path_text.clone()], window, cx);
+                    }
                 },
             ))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
@@ -1499,6 +1700,11 @@ impl Render for TerminalView {
             root = root.child(div().p_4().text_color(gpui::red()).child(error.clone()));
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
+            root = root.children(self.file_upload_indicator(cx));
+            root = root.children(self.native_result_elements(window, cx));
+            if self.ssh_disconnected() {
+                root = root.child(self.ssh_disconnect_notice(cx));
+            }
             // SSH 连接卡片（旧壳 `display::ssh_connect` 的 GPUI 形态）：
             // 状态机/文案/常量直接复用，卡片遮罩盖住空 grid。350ms 显示
             // 门槛由 `visible()` 决定；动画帧驱动粒子与进度插值。
@@ -1521,7 +1727,9 @@ impl Render for TerminalView {
                     }
                 }
             }
-            if let Some(exited) = &self.exited {
+            if let Some(exited) = &self.exited
+                && !self.local_session_failed()
+            {
                 root = root.child(
                     div()
                         .absolute()
@@ -1535,6 +1743,9 @@ impl Render for TerminalView {
                         .child(exited.clone()),
                 );
             }
+        }
+        if self.local_session_failed() {
+            root = root.child(self.session_failure_banner(cx));
         }
         if self.session.is_some() {
             root = root.child(self.reading_chrome(cx));

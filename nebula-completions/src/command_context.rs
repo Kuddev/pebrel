@@ -44,6 +44,18 @@ pub struct CommandContext {
 }
 
 impl CommandContext {
+    /// Complete literal argv for display-only command matching; never evaluates expansions.
+    pub fn literal_arguments(line: &str, syntax: ShellSyntax) -> Option<Vec<String>> {
+        if line.len() > 4096 {
+            return None;
+        }
+        let words = words(line.trim(), syntax)?;
+        if words.iter().any(|word| !word.closed || word.home) {
+            return None;
+        }
+        Some(words.into_iter().map(|word| word.value).collect())
+    }
+
     pub fn parse(line: &str, cursor: usize, syntax: ShellSyntax) -> Option<Self> {
         Self::parse_words(line, cursor, syntax, false)
     }

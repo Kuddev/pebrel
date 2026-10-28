@@ -1,5 +1,36 @@
 use super::*;
-use gpui::TestAppContext;
+use gpui::{AppContext as _, TestAppContext};
+
+#[gpui::test]
+fn background_refresh_keeps_root_transparent_without_native_wallpaper(cx: &mut TestAppContext) {
+    struct Content;
+    impl gpui::Render for Content {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().size_full()
+        }
+    }
+
+    cx.update(gpui_component::init);
+    let (root, window) = cx.add_window_view(|window, cx| {
+        let content = cx.new(|_| Content);
+        gpui_component::Root::new(content, window, cx).bg(gpui::transparent_black())
+    });
+    for opacity in [1.0, 0.8, 0.6, 0.4, 0.0, 1.0] {
+        window.update(|_, cx| {
+            test_install_visual_effects(cx, opacity, BlurModeName::None);
+            assert!(!native_underlay_active(cx));
+            refresh_surface_opacity(cx);
+        });
+        window.run_until_parked();
+        root.update(window, |root, _| {
+            assert_eq!(
+                gpui::Styled::style(root).background,
+                Some(gpui::Fill::from(gpui::transparent_black())),
+                "refresh must not restore the extra background at {opacity}"
+            );
+        });
+    }
+}
 
 #[test]
 fn letterbox_edges_stay_square_and_native_alignment_inherits_card_corners() {
@@ -13,6 +44,26 @@ fn letterbox_edges_stay_square_and_native_alignment_inherits_card_corners() {
     assert_eq!(corners.top_right, px(0.0));
     assert_eq!(corners.bottom_left, px(0.0));
     assert_eq!(corners.bottom_right, px(0.0));
+}
+
+#[test]
+fn native_underlay_composites_exactly_like_a_wallpaper_painted_above_the_surface() {
+    for surface in [0.0, 0.3, 0.62, 0.78, 1.0] {
+        for wallpaper in [0.0, 0.2, 0.38, 0.75, 1.0] {
+            let (alpha, layer) = underlay_composition(surface, wallpaper);
+            // Weights of video, surface color and whatever lies behind the window.
+            let above =
+                [wallpaper, surface * (1.0 - wallpaper), (1.0 - surface) * (1.0 - wallpaper)];
+            let below = [(1.0 - alpha) * layer, alpha, (1.0 - alpha) * (1.0 - layer)];
+            for (expected, actual) in above.iter().zip(below) {
+                assert!(
+                    (expected - actual).abs() < 1e-6,
+                    "surface {surface}, wallpaper {wallpaper}: {above:?} != {below:?}"
+                );
+            }
+            assert!((0.0..=1.0).contains(&layer));
+        }
+    }
 }
 
 fn settings(path: Option<PathBuf>) -> nebula_settings::RuntimeSettings {

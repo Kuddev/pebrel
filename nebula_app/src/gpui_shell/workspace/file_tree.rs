@@ -22,6 +22,7 @@ use crate::i18n::Message;
 use super::NebulaWorkspace;
 
 mod path_bar;
+mod sticky;
 pub(super) use path_bar::PathEditor;
 
 /// 行距（旧壳 `PanelLayout::row_h`）。
@@ -34,6 +35,124 @@ pub(super) const ROW_WASH_H: f32 = 30.0;
 pub(super) const ROW_WASH_INSET: f32 = 2.0;
 /// 抽屉内容左右留白（旧壳 `px + 12`：比水洗再多 2px）。
 pub(super) const DRAWER_TEXT_INSET: f32 = 4.0;
+
+fn hover_text_color(cx: &gpui::App) -> gpui::Hsla {
+    let mut color = cx.theme().primary;
+    // 悬停文字保持主题色相；暗底提亮、浅底加深，小面积强调不沿用按钮的暗压色。
+    if color.s > 0.05 {
+        color.s = color.s.max(0.65);
+    }
+    color.l = if cx.theme().is_dark() { color.l.max(0.78) } else { color.l.min(0.40) };
+    color.a = 1.0;
+    color
+}
+
+fn color_feedback_button(
+    id: impl Into<SharedString>,
+    content: impl gpui::IntoElement,
+    color: gpui::Hsla,
+    hover: gpui::Hsla,
+) -> Button {
+    let group = id.into();
+    // Button 内部已注册 hover；内容必须有稳定 ID，才能在排版前恢复 group 的悬停色。
+    Button::new(group.clone()).text().group(group.clone()).child(
+        div()
+            .id("color-feedback-content")
+            .min_w_0()
+            .overflow_hidden()
+            .text_color(color)
+            .group_hover(group, |style| style.text_color(hover))
+            .child(content),
+    )
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod hover_tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(gpui::IntoElement)]
+    struct ColorProbe {
+        color: Rc<Cell<gpui::Hsla>>,
+        icon: bool,
+    }
+
+    impl gpui::RenderOnce for ColorProbe {
+        fn render(self, window: &mut Window, _: &mut gpui::App) -> impl gpui::IntoElement {
+            // 文字 run 与 Icon 都在排版阶段读取继承色；不能只检查 paint 回调是否触发。
+            self.color.set(window.text_style().color);
+            if self.icon {
+                Icon::new(IconName::SquareTerminal).size(px(14.0)).into_any_element()
+            } else {
+                "Aa".into_any_element()
+            }
+        }
+    }
+
+    struct HoverProbe {
+        color: Rc<Cell<gpui::Hsla>>,
+        icon: bool,
+        normal: gpui::Hsla,
+        highlighted: gpui::Hsla,
+    }
+
+    impl gpui::Render for HoverProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+            div().size_full().p_5().child(
+                color_feedback_button(
+                    "color-feedback-probe",
+                    ColorProbe { color: self.color.clone(), icon: self.icon },
+                    self.normal,
+                    self.highlighted,
+                )
+                .debug_selector(|| "color-feedback-probe".into())
+                .size(px(32.0)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn text_and_icon_color_follow_the_whole_button_hover_and_restore(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let normal: gpui::Hsla = gpui::rgb(0x64748b).into();
+        let highlighted: gpui::Hsla = gpui::rgb(0x0066ff).into();
+        for icon in [false, true] {
+            let color = Rc::new(Cell::new(gpui::transparent_black()));
+            let recorded = color.clone();
+            let (_, mut visual) =
+                cx.add_window_view(|_, _| HoverProbe { color, icon, normal, highlighted });
+            visual.update(|window, _| window.activate_window());
+            visual.simulate_mouse_move(
+                gpui::point(px(0.0), px(0.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(recorded.get(), normal);
+            let bounds = visual.debug_bounds("color-feedback-probe").unwrap();
+            for position in [bounds.origin + gpui::point(px(2.0), px(2.0)), bounds.center()] {
+                visual.simulate_mouse_move(position, None, gpui::Modifiers::default());
+                visual.run_until_parked();
+                visual.update(|window, cx| window.draw(cx).clear(cx));
+                assert_eq!(
+                    recorded.get(),
+                    highlighted,
+                    "icon={icon}: hover must change the rendered color"
+                );
+            }
+            visual.simulate_mouse_move(
+                gpui::point(px(0.0), px(0.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            visual.run_until_parked();
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(recorded.get(), normal, "icon={icon}: leaving must restore the color");
+        }
+    }
+}
 
 /// 文件树右键菜单的宿主：必须挂在 workspace 根上，不能当抽屉行的 child。
 ///
@@ -78,6 +197,15 @@ impl NebulaWorkspace {
 
     /// 单行：34px 行距里画一张 30px 高的水洗（旧壳 side_panel.rs:2712-2800）。
     fn render_file_tree_row(&self, visible_ix: usize, cx: &Context<Self>) -> gpui::AnyElement {
+        self.render_file_tree_row_at(visible_ix, false, cx)
+    }
+
+    fn render_file_tree_row_at(
+        &self,
+        visible_ix: usize,
+        sticky: bool,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(row) = self.side_panel.file_rows().get(visible_ix).cloned() else {
             return div().h(px(ROW_PITCH)).into_any_element();
         };
@@ -91,7 +219,7 @@ impl NebulaWorkspace {
         let selected_ring = theme.ring.opacity(0.16);
         // 文件树字位是内置 Nerd Font 图标；固定 Maple，不能让终端主字体
         // 改变折叠箭头和文件图标的 advance。
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let selected = self.side_panel.selected.as_ref() == Some(&row.path);
         let searching = !self.side_panel.search.trim().is_empty();
         let path_hint = searching.then(|| {
@@ -151,7 +279,8 @@ impl NebulaWorkspace {
             .px(px(ROW_WASH_INSET))
             .child(
                 h_flex()
-                .id(SharedString::from(format!("file-tree-row-{visible_ix}")))
+                .id(SharedString::from(format!("file-tree-row-{visible_ix}-{sticky}")))
+                .debug_selector(move || format!("file-tree-row-{visible_ix}-{sticky}"))
                 .h(px(ROW_WASH_H))
                 .flex_1()
                 .min_w_0()
@@ -206,7 +335,8 @@ impl NebulaWorkspace {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_sm()
+                        .text_size(theme.font_size)
+                        .font_weight(gpui::FontWeight::NORMAL)
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .when(row.ignored, |label| label.italic())
@@ -217,7 +347,8 @@ impl NebulaWorkspace {
                         div()
                             .max_w(px(108.0))
                             .flex_shrink_0()
-                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(theme.font_size - px(2.5))
                             .text_color(muted)
                             .overflow_hidden()
                             .whitespace_nowrap()
@@ -317,6 +448,7 @@ impl NebulaWorkspace {
         let path_bar = self.render_file_tree_path(cx);
         let editing_path = self.file_tree_path.is_some();
         let theme = cx.theme();
+        let hover_ink = hover_text_color(cx);
         let muted = theme.muted_foreground;
         let language = crate::gpui_shell::config::ui_language(cx);
         let search_options = self.side_panel.file_search_options();
@@ -348,13 +480,21 @@ impl NebulaWorkspace {
             .gap_1()
             .child(
                 h_flex()
+                    .id("file-tree-filter")
+                    .debug_selector(|| "file-tree-filter".into())
+                    .track_focus(&self.file_tree_search_input.focus_handle(cx))
                     .w_full()
                     .h(px(control::MIN_HIT_TARGET))
                     .flex_shrink_0()
                     .rounded(px(radius::CONTROL))
                     .border_1()
-                    .border_color(if search_error { theme.danger } else { theme.border })
-                    .bg(theme.muted)
+                    .border_color(if search_error {
+                        theme.danger
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .bg(theme.muted.opacity(theme.muted.a * 0.35))
+                    .focus(|field| field.border_color(theme.ring).bg(theme.sidebar))
                     .overflow_hidden()
                     .child(
                         div().flex_1().min_w_0().child(
@@ -373,48 +513,76 @@ impl NebulaWorkspace {
                             .pr_1()
                             .gap(px(2.0))
                             .child(
-                                Button::new("file-search-match-case")
-                                    .label("Aa")
-                                    .ghost()
-                                    .xsmall()
-                                    .selected(search_options.match_case)
-                                    .tooltip(language.pick("区分大小写", "Match case"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                color_feedback_button(
+                                    "file-search-match-case",
+                                    "Aa",
+                                    if search_options.match_case { theme.primary } else { muted },
+                                    hover_ink,
+                                )
+                                .debug_selector(|| "file-search-match-case".into())
+                                .xsmall()
+                                .h_5()
+                                .px_1()
+                                .selected(search_options.match_case)
+                                .toggled(search_options.match_case)
+                                .aria_label(language.text(Message::FilesMatchCase))
+                                .tooltip(language.text(Message::FilesMatchCase))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         this.side_panel.toggle_file_search_match_case();
                                         this.file_tree_scroll
                                             .scroll_to_item(0, gpui::ScrollStrategy::Top);
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new("file-search-whole-word")
-                                    .label("ab")
-                                    .ghost()
-                                    .xsmall()
-                                    .selected(search_options.whole_word)
-                                    .tooltip(language.pick("全词匹配", "Match whole word"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                color_feedback_button(
+                                    "file-search-whole-word",
+                                    "ab",
+                                    if search_options.whole_word { theme.primary } else { muted },
+                                    hover_ink,
+                                )
+                                .debug_selector(|| "file-search-whole-word".into())
+                                .xsmall()
+                                .h_5()
+                                .px_1()
+                                .selected(search_options.whole_word)
+                                .toggled(search_options.whole_word)
+                                .aria_label(language.text(Message::FilesMatchWholeWord))
+                                .tooltip(language.text(Message::FilesMatchWholeWord))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         this.side_panel.toggle_file_search_whole_word();
                                         this.file_tree_scroll
                                             .scroll_to_item(0, gpui::ScrollStrategy::Top);
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new("file-search-regex")
-                                    .label(".*")
-                                    .ghost()
-                                    .xsmall()
-                                    .selected(search_options.regex)
-                                    .tooltip(
-                                        language.pick("使用正则表达式", "Use regular expression"),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                color_feedback_button(
+                                    "file-search-regex",
+                                    ".*",
+                                    if search_options.regex { theme.primary } else { muted },
+                                    hover_ink,
+                                )
+                                .debug_selector(|| "file-search-regex".into())
+                                .xsmall()
+                                .h_5()
+                                .px_1()
+                                .selected(search_options.regex)
+                                .toggled(search_options.regex)
+                                .aria_label(language.text(Message::FilesUseRegex))
+                                .tooltip(language.text(Message::FilesUseRegex))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         this.side_panel.toggle_file_search_regex();
                                         this.file_tree_scroll
                                             .scroll_to_item(0, gpui::ScrollStrategy::Top);
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             )
@@ -451,10 +619,15 @@ impl NebulaWorkspace {
                         div().flex_1().min_w_0().child(path_bar),
                     )
                     .when(!editing_path, |bar| bar.child(
-                        Button::new("file-tree-terminal-here")
-                            .icon(IconName::SquareTerminal)
-                            .ghost()
-                            .xsmall()
+                        color_feedback_button(
+                            "file-tree-terminal-here",
+                            // 图标与 UI 字号同源，点击区独立保留，避免 xsmall 把图标缩成 12px。
+                            Icon::new(IconName::SquareTerminal).size(theme.font_size),
+                            muted,
+                            hover_ink,
+                        )
+                            .size(px(control::MIN_HIT_TARGET))
+                            .aria_label(language.text(Message::FilesOpenTerminalHere))
                             .disabled(root_dir.is_none())
                             .tooltip(language.text(Message::FilesOpenTerminalHere))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -477,50 +650,7 @@ impl NebulaWorkspace {
                                 }
                             })),
                     )
-                    .child(
-                        Button::new("file-tree-reveal")
-                            .icon(IconName::FolderOpen)
-                            .ghost()
-                            .xsmall()
-                            .disabled(root_dir.is_none())
-                            .tooltip(language.text(Message::FilesTreeOpenInExplorer))
-                            .on_click(cx.listener(|this, _, _, _cx| {
-                                let wsl = this
-                                    .side_panel
-                                    .file_wsl_root()
-                                    .map(|root| (root.distro.clone(), root.guest.clone()));
-                                let path = match wsl {
-                                    Some((distro, guest)) => {
-                                        crate::shell_detect::wsl_unc_path(&distro, &guest)
-                                    },
-                                    None => match this.side_panel.root() {
-                                        Some(root) => root.to_path_buf(),
-                                        None => return,
-                                    },
-                                };
-                                // 这颗钮是「打开这个目录」，不是「在父目录里选中它」。
-                                // 之前走 reveal（`explorer /select,<root>`）＝让资源
-                                // 管理器打开**父目录**并高亮该项：只要父目录的窗口已经
-                                // 开着（实测 `D:\` 常驻），explorer 就复用那个后台窗口
-                                // 重设选中项、既不新开也不前置，点击看上去毫无反应。
-                                // 行级右键的「在资源管理器中显示」才该用 reveal。
-                                super::open_in_file_manager(&path);
-                            })),
-                    )
-                    .child(
-                        Button::new("file-tree-refresh")
-                            .icon(IconName::Redo2)
-                            .ghost()
-                            .xsmall()
-                            .tooltip(language.text(Message::FilesTreeFollowRefresh))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.side_panel.request_refresh();
-                                // 刷新同时恢复“跟随当前 pane”；否则点过 `..` 后
-                                // custom root 会继续压住当前终端，按钮只会刷新旧目录。
-                                this.sync_side_panel_to_active(true, cx);
-                                cx.notify();
-                            })),
-                    )),
+                    ),
             )
             .when_some(self.file_tree_path_error(), |panel, error| {
                 panel.child(div().text_xs().text_color(theme.danger).child(error.clone()))
@@ -553,6 +683,7 @@ impl NebulaWorkspace {
                             }),
                         )
                         .w_full()
+                        .with_decoration(sticky::DirectoryHeader::new(cx.entity().downgrade()))
                         // 返回上级仍保留一行；空态使用剩余高度居中，不挤到左上角。
                         .when(empty.is_some(), |list| {
                             list.h(px(row_count as f32 * ROW_PITCH))

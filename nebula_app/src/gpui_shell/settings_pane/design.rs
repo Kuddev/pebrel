@@ -48,7 +48,7 @@ pub(super) fn group_heading(
 ) -> gpui::Div {
     div()
         .text_size(px(item_font_size * GROUP_TITLE_SCALE))
-        .font_weight(FontWeight::SEMIBOLD)
+        .font_weight(FontWeight::MEDIUM)
         .text_color(cx.theme().foreground)
         .child(title.into())
 }
@@ -144,7 +144,7 @@ impl SettingsPane {
                 .tooltip(|window, cx| {
                     gpui_component::tooltip::Tooltip::new(
                         crate::gpui_shell::config::ui_language(cx)
-                            .pick("还原为默认值", "Restore default"),
+                            .text(crate::i18n::Message::SettingsPaneRestoreDefault),
                     )
                     .build(window, cx)
                 })
@@ -175,7 +175,7 @@ impl SettingsPane {
             return desc.into_any_element();
         }
         let theme = cx.theme();
-        let sans = gpui::font(theme.font_family.clone());
+        let sans = crate::gpui_shell::typography::ui_font(cx);
         let mono = gpui::font(theme.mono_font_family.clone());
         let (dim, ink) = (theme.muted_foreground, theme.foreground);
 
@@ -216,6 +216,11 @@ impl SettingsPane {
         let base_px = self.font_size_px(cx);
         let expanded = self.expanded_setting_help.contains(label);
         let pad_y = self.row_padding_y();
+        let hover_group = Self::row_hover_group(label);
+        let mut title_hover = theme.foreground;
+        title_hover.l =
+            (title_hover.l + if theme.is_dark() { 0.035 } else { -0.035 }).clamp(0.0, 1.0);
+        let detail_hover = theme.muted_foreground.blend(theme.foreground.opacity(0.18));
         let text = v_flex()
             .child(
                 h_flex()
@@ -225,16 +230,19 @@ impl SettingsPane {
                         div()
                             .min_w_0()
                             .text_size(px(base_px))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::NORMAL)
                             .text_color(theme.foreground)
+                            .group_hover(hover_group.clone(), move |text| {
+                                text.text_color(title_hover)
+                            })
                             .child(label),
                     )
                     .when(desc.details.is_some(), |heading| {
                         let language = crate::gpui_shell::config::ui_language(cx);
                         let action = if expanded {
-                            language.pick("收起说明", "Hide details")
+                            language.text(crate::i18n::Message::SettingsPaneHideDetails)
                         } else {
-                            language.pick("详细说明", "More details")
+                            language.text(crate::i18n::Message::SettingsPaneMoreDetails)
                         };
                         heading.child(
                             Button::new(SharedString::from(format!("settings-help-{label}")))
@@ -264,6 +272,7 @@ impl SettingsPane {
                         .text_size(px(base_px * DESC_SCALE))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(theme.muted_foreground)
+                        .group_hover(hover_group.clone(), move |text| text.text_color(detail_hover))
                         .child(Self::desc_text(desc.summary, cx)),
                 )
             })

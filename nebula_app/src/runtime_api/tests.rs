@@ -1160,6 +1160,16 @@ fn protocol_schema_is_valid_json_and_tracks_v1() {
     let schema: Value =
         serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json")).unwrap();
     assert_eq!(schema["properties"]["version"]["const"], PROTOCOL_VERSION);
+    let sources =
+        schema["$defs"]["agent"]["properties"]["state_source"]["enum"].as_array().unwrap();
+    for source in [
+        RuntimeAgentStateSource::Hook,
+        RuntimeAgentStateSource::Osc7501,
+        RuntimeAgentStateSource::Screen,
+        RuntimeAgentStateSource::Process,
+    ] {
+        assert!(sources.contains(&serde_json::to_value(source).unwrap()), "{source:?}");
+    }
 }
 
 #[test]

@@ -81,7 +81,7 @@ fn switching_to_instant_removes_closed_panel_geometry(cx: &mut TestAppContext) {
         });
         if !close_before_switch {
             assert!(cx.debug_bounds("workspace-details-slot").unwrap().size.width > px(0.0));
-            let close = cx.debug_bounds("workspace-details-close").unwrap();
+            let close = cx.debug_bounds("toggle-right-sidebar").unwrap();
             cx.simulate_click(close.center(), Modifiers::default());
             cx.update(|window, cx| window.draw(cx).clear(cx));
         }
@@ -114,7 +114,10 @@ fn file_path_edit_navigates_and_keeps_the_last_directory_on_error_or_escape(
         crate::platform::Platform::MacOS => "cmd-a",
         _ => "ctrl-a",
     };
-    let directory = tempfile::tempdir().unwrap();
+    let fixture_root = tempfile::tempdir().unwrap();
+    let fixture_parent = tempfile::tempdir_in(fixture_root.path()).unwrap();
+    // 系统临时目录的深度因平台而异；主动嵌套才能稳定覆盖三级面包屑的祖先菜单。
+    let directory = tempfile::tempdir_in(fixture_parent.path()).unwrap();
     let path = directory.path().join("sidebar.md");
     let target = directory.path().join("中文 folder");
     std::fs::write(&path, "# Heading").unwrap();
@@ -130,6 +133,11 @@ fn file_path_edit_navigates_and_keeps_the_last_directory_on_error_or_escape(
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let path_button = cx.debug_bounds("file-tree-path").unwrap();
+    let breadcrumbs = cx.debug_bounds("file-tree-breadcrumbs").unwrap();
+    assert!(
+        path_button.right() <= breadcrumbs.right() + px(0.5),
+        "current directory must stay inside the clickable breadcrumb bar"
+    );
     cx.simulate_click(path_button.center(), Modifiers::default());
     cx.simulate_keystrokes(select_all);
     cx.simulate_input("中文 folder");
@@ -178,6 +186,32 @@ fn file_path_edit_navigates_and_keeps_the_last_directory_on_error_or_escape(
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     workspace.read_with(&cx, |view, _| assert!(view.file_tree_path.is_none()));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let parent = cx.debug_bounds("file-tree-crumb-parent").unwrap();
+    cx.simulate_click(parent.center(), Modifiers::default());
+    cx.run_until_parked();
+    workspace.read_with(&cx, |view, _| {
+        assert_eq!(
+            view.side_panel.root().unwrap().canonicalize().unwrap(),
+            directory.path().canonicalize().unwrap()
+        );
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let overflow = cx.debug_bounds("file-tree-crumb-overflow").unwrap();
+    assert!(
+        cx.debug_bounds("file-tree-crumb-0").is_none(),
+        "earlier levels belong in the ancestor menu"
+    );
+    cx.simulate_click(overflow.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    workspace.read_with(&cx, |view, _| {
+        let root = view.side_panel.root().unwrap().canonicalize().unwrap();
+        let directory = directory.path().canonicalize().unwrap();
+        assert_ne!(root, directory, "selecting an ancestor must navigate");
+        assert!(directory.starts_with(root));
+    });
 }
 
 #[gpui::test]
@@ -218,6 +252,52 @@ fn shared_sidebar_drag_changes_actual_geometry_and_escape_cancels(cx: &mut TestA
 }
 
 #[gpui::test]
+fn both_sidebar_drags_commit_outside_the_window_after_non_client_moves(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("outside-release.md");
+    std::fs::write(&path, "# Heading\n\nBody").unwrap();
+    let (workspace, mut cx) = open(path, cx);
+    for left in [true, false] {
+        workspace.update(&mut cx, |view, cx| {
+            view.sidebar_collapsed = false;
+            view.tabs_position = nebula_settings::TabsPositionName::Sidebar;
+            view.side_panel.open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let handle = if left { "sidebar-resize-handle" } else { "workspace-details-resize" };
+        let start = cx.debug_bounds(handle).unwrap().center();
+        let outside = cx.update(|window, _| {
+            point(if left { px(-100.0) } else { window.viewport_size().width + px(100.0) }, start.y)
+        });
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_move(outside, Some(MouseButton::Left), Modifiers::default());
+        cx.run_until_parked();
+        workspace.read_with(&cx, |view, _| {
+            let drag = if left { view.sidebar_resizing } else { view.details_panel.resize };
+            assert!(drag.is_some_and(|drag| drag.close));
+        });
+        // Windows can send this while crossing its non-client border, before the release.
+        cx.simulate_mouse_move(outside, None, Modifiers::default());
+        cx.run_until_parked();
+        assert!(workspace.read_with(&cx, |view, _| view.pointer_drag_active()));
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        workspace.read_with(&cx, |view, _| {
+            assert!(!view.pointer_drag_active());
+            assert!(if left { view.sidebar_collapsed } else { !view.side_panel.open });
+        });
+        // A duplicate bubbled release must not reopen the panel or leave a new gesture.
+        cx.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        assert!(!workspace.read_with(&cx, |view, _| view.pointer_drag_active()));
+    }
+}
+
+#[gpui::test]
 fn sidebar_tabs_keep_square_hit_targets_and_files_precedes_git(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("controls.md");
@@ -226,11 +306,12 @@ fn sidebar_tabs_keep_square_hit_targets_and_files_precedes_git(cx: &mut TestAppC
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-    for id in ["details-info", "side-panel-files", "side-panel-git", "workspace-details-close"] {
+    for id in ["details-info", "side-panel-files", "side-panel-git"] {
         let bounds = cx.debug_bounds(id).unwrap();
         assert_eq!(bounds.size.width, px(32.0), "{id}: {bounds:?}");
         assert_eq!(bounds.size.height, px(32.0), "{id}: {bounds:?}");
     }
+    assert!(cx.debug_bounds("workspace-details-close").is_none());
     let files = cx.debug_bounds("side-panel-files").unwrap();
     assert!(files.right() <= cx.debug_bounds("side-panel-git").unwrap().left());
     let corner = point(files.left() + px(3.0), files.top() + px(3.0));
@@ -243,6 +324,27 @@ fn sidebar_tabs_keep_square_hit_targets_and_files_precedes_git(cx: &mut TestAppC
     assert!(workspace.read_with(&cx, |view, cx| view.active_document_section(cx).is_none()));
     assert_eq!(cx.debug_bounds("details-outline").unwrap().size.width, px(32.0));
     assert!(cx.debug_bounds("side-panel-files").unwrap().size.width > px(32.0));
+    // 真实打开、悬停和反复切换过滤按钮，覆盖组件内外重复注册 hover 的崩溃路径。
+    for id in ["file-search-match-case", "file-search-whole-word", "file-search-regex"] {
+        let enabled = |view: &NebulaWorkspace| {
+            let options = view.side_panel.file_search_options();
+            match id {
+                "file-search-match-case" => options.match_case,
+                "file-search-whole-word" => options.whole_word,
+                _ => options.regex,
+            }
+        };
+        let initial = workspace.read_with(&cx, |view, _| enabled(view));
+        let button = cx.debug_bounds(id).unwrap();
+        cx.simulate_mouse_move(button.center(), None, Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_click(button.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert_ne!(workspace.read_with(&cx, |view, _| enabled(view)), initial);
+        cx.simulate_click(button.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(workspace.read_with(&cx, |view, _| enabled(view)), initial);
+    }
     let selected = cx.debug_bounds("side-panel-files").unwrap().center();
     cx.simulate_mouse_down(selected, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(selected, MouseButton::Left, Modifiers::default());

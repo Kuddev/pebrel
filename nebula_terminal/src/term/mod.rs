@@ -29,15 +29,21 @@ pub mod cell;
 mod clear;
 pub mod color;
 mod damage;
+mod grid_content;
+mod inline_image;
+pub(crate) use inline_image::PendingImage;
 mod input;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
+mod program_status;
 mod prompt;
 pub mod reading;
 mod redraw_anchor;
 mod renderable;
 pub mod search;
+mod title;
+mod viewport;
 
 use damage::TermDamageState;
 pub use damage::{LineDamageBounds, TermDamage, TermDamageIterator};
@@ -160,6 +166,7 @@ pub fn viewport_to_point_from(origin: Line, point: Point<usize>) -> Point {
 }
 
 pub struct Term<T> {
+    pending_images: inline_image::PendingImages,
     redraw_anchor: redraw_anchor::RedrawAnchor,
     input_cluster: Option<input::EmojiInput>,
     input_end: Option<(Point, bool)>,
@@ -232,6 +239,12 @@ pub struct Term<T> {
 
     /// Shell markers and bounded reading share the grid lifecycle.
     reading: reading::ReadingState,
+    program_statuses: crate::program_status::Records,
+
+    /// Frontend presentation may start inside the live grid when an attachment expands.
+    /// This never changes VT cursor coordinates, scroll regions, or PTY dimensions.
+    presentation_origin: Option<Line>,
+    presentation_scroll_generation: u64,
 
     /// One-shot suppression of the next primary-DA answer: the side-loaded
     /// ConPTY host's bring-up DA1 query was already answered by the response
@@ -340,6 +353,11 @@ impl<T> Term<T> {
     where
         T: EventListener,
     {
+        self.presentation_origin = None;
+        if !self.mode.contains(TermMode::ALT_SCREEN) {
+            self.presentation_scroll_generation =
+                self.presentation_scroll_generation.wrapping_add(1);
+        }
         self.cancel_redraw_anchor();
         let old_display_offset = self.grid.display_offset();
         self.grid.scroll_display(scroll);
@@ -363,8 +381,8 @@ impl<T> Term<T> {
         let num_lines = dimensions.screen_lines();
 
         let history_size = config.scrolling_history;
-        let mut grid = Grid::new(num_lines, num_cols, history_size);
-        let mut inactive_grid = Grid::new(num_lines, num_cols, 0);
+        let mut grid = Grid::new_for_terminal(num_lines, num_cols, history_size);
+        let mut inactive_grid = Grid::new_for_terminal(num_lines, num_cols, 0);
 
         // Keep the grid's logical rows reversible on both in-box and side-loaded
         // ConPTY. The host has a private buffer, while the terminal grid remains
@@ -381,6 +399,7 @@ impl<T> Term<T> {
         let damage = TermDamageState::new(num_cols, num_lines);
 
         Term {
+            pending_images: Default::default(),
             redraw_anchor: Default::default(),
             input_cluster: None,
             input_end: None,
@@ -398,6 +417,9 @@ impl<T> Term<T> {
             inactive_keyboard_mode_stack: Default::default(),
             keyboard_mode_stack: Default::default(),
             reading: Default::default(),
+            presentation_origin: None,
+            presentation_scroll_generation: 0,
+            program_statuses: Default::default(),
             active_charset: Default::default(),
             vi_mode_cursor: Default::default(),
             cursor_style: Default::default(),
@@ -590,8 +612,8 @@ impl<T> Term<T> {
         res.strip_suffix('\n').map(str::to_owned).unwrap_or(res)
     }
 
-    /// Convert a single line in the grid to a String.
-    fn line_to_string(
+    /// 逐行捕获关闭选区末尾补字；普通选区仍可包含下一行的跨行宽字。
+    pub(crate) fn line_to_string(
         &self,
         line: Line,
         mut cols: Range<Column>,
@@ -686,54 +708,14 @@ impl<T> Term<T> {
         RenderableContent::with_viewport(self, lines, columns)
     }
 
-    /// First grid row shown at line zero of a `lines`-tall visual viewport.
-    ///
-    /// While an interactive resize is between commit points the visual
-    /// viewport can be smaller than the grid. The crop previews exactly the
-    /// rows the deferred shrink will keep visible — the same anchor
-    /// [`Grid::resize`]/[`Grid::resize_conpty`] will use — so the settled
-    /// reflow lands without a visual jump. A user scrolled into history stays
-    /// anchored to the row they are reading instead.
-    #[inline]
-    pub fn viewport_origin_for(&self, lines: usize) -> Line {
-        let display_offset = self.grid.display_offset();
-        if display_offset != 0 || lines >= self.grid.screen_lines() {
-            return Line(-(display_offset as i32));
-        }
-
-        // The alternate screen is repainted by its application after the
-        // commit, and its shrink only ever follows the cursor.
-        let conpty = self.config.conpty_resize && !self.mode.contains(TermMode::ALT_SCREEN);
-        Line(self.grid.shrink_scroll_amount(conpty, lines) as i32)
-    }
-
-    /// Convert a point in a `lines`-tall visual viewport to grid space.
-    ///
-    /// The result is clamped to cells that exist in the grid: during a
-    /// deferred resize the visual viewport can extend past the committed
-    /// grid, and input must not index rows or columns that are not there yet.
-    #[inline]
-    pub fn visual_viewport_to_point(&self, lines: usize, point: Point<usize>) -> Point {
-        let mut point = viewport_to_point_from(self.viewport_origin_for(lines), point);
-        point.line = cmp::min(point.line, self.bottommost_line());
-        point.column = cmp::min(point.column, self.grid.last_column());
-        point
-    }
-
     /// Access to the raw grid data structure.
     pub fn grid(&self) -> &Grid<Cell> {
         &self.grid
     }
 
-    /// Mutable access to the raw grid data structure.
-    pub fn grid_mut(&mut self) -> &mut Grid<Cell> {
-        self.reset_input_cluster();
-        self.reading.invalidate();
-        &mut self.grid
-    }
-
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
+        self.presentation_origin = None;
         self.cancel_redraw_anchor();
         let old_cols = self.columns();
         let old_lines = self.screen_lines();
@@ -819,7 +801,7 @@ impl<T> Term<T> {
         self.cancel_redraw_anchor();
         if !self.mode.contains(TermMode::ALT_SCREEN) {
             // Set alt screen cursor to the current primary screen cursor.
-            self.inactive_grid.cursor = self.grid.cursor.clone();
+            self.inactive_grid.copy_cursor_from(&self.grid);
 
             // Drop information about the primary screens saved cursor.
             self.grid.saved_cursor = self.grid.cursor.clone();
@@ -960,14 +942,6 @@ impl<T> Term<T> {
         // Clear grid.
         self.grid.reset_region(..);
         self.mark_fully_damaged();
-    }
-
-    #[inline]
-    pub fn exit(&mut self)
-    where
-        T: EventListener,
-    {
-        self.event_proxy.send_event(Event::Exit);
     }
 
     /// Toggle the vi mode.
@@ -1886,6 +1860,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Reset all important fields in the term struct.
     #[inline]
     fn reset_state(&mut self) {
+        self.reset_program_status();
         self.reset_input_cluster();
         self.cancel_redraw_anchor();
         if self.mode.contains(TermMode::ALT_SCREEN) {
@@ -2305,40 +2280,17 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_title(&mut self, title: Option<String>) {
-        trace!("Setting title to '{title:?}'");
-
-        self.title.clone_from(&title);
-
-        let title_event = match title {
-            Some(title) => Event::Title(title),
-            None => Event::ResetTitle,
-        };
-
-        self.event_proxy.send_event(title_event);
+        self.apply_title(title);
     }
 
     #[inline]
     fn push_title(&mut self) {
-        trace!("Pushing '{:?}' onto title stack", self.title);
-
-        if self.title_stack.len() >= TITLE_STACK_MAX_DEPTH {
-            let removed = self.title_stack.remove(0);
-            trace!(
-                "Removing '{removed:?}' from bottom of title stack that exceeds its maximum depth"
-            );
-        }
-
-        self.title_stack.push(self.title.clone());
+        self.save_title();
     }
 
     #[inline]
     fn pop_title(&mut self) {
-        trace!("Attempting to pop title from stack...");
-
-        if let Some(popped) = self.title_stack.pop() {
-            trace!("Title '{popped:?}' popped from stack");
-            self.set_title(popped);
-        }
+        self.restore_title();
     }
 
     #[inline]

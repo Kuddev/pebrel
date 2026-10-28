@@ -31,10 +31,8 @@ pub enum Event {
 
     /// An OSC 1337 inline image, sniffed out of the PTY stream.
     ///
-    /// `abs_line` anchors the image's top row in the grid's absolute line
-    /// numbering (see `Grid::scrolled_out`); `width`/`height` are the display
-    /// size in pixels, already scaled to fit the terminal width.
-    InlineImage { data: Arc<Vec<u8>>, abs_line: usize, width: f32, height: f32 },
+    /// Grid cells own placement and lifetime; frontends only decode/cache pixels.
+    InlineImage { data: Arc<Vec<u8>>, placement: crate::inline_image::ImagePlacement },
 
     /// OSC 133;C — a command started executing in this pane.
     CommandStart,
@@ -53,6 +51,9 @@ pub enum Event {
     /// OSC 9;4 — ConEmu 任务进度（`state` 原始码，`value` 为 0..=100）。
     /// Windows 任务栏原生支持这套语义，映射在消费端。
     Progress { state: u8, value: Option<u8> },
+
+    /// OSC 7501 records changed; consumers read the latest bounded set from Term.
+    ProgramStatusChanged,
 
     /// 已通过 SSH 通道令牌校验的远端 AI Hook 原始信封。
     AiHookEnvelope(Vec<u8>),
@@ -109,8 +110,8 @@ impl Debug for Event {
             Event::PtyWrite(text) => write!(f, "PtyWrite({text})"),
             Event::Title(title) => write!(f, "Title({title})"),
             Event::CwdReport(cwd) => write!(f, "CwdReport({cwd})"),
-            Event::InlineImage { data, abs_line, width, height } => {
-                write!(f, "InlineImage({} bytes @{abs_line}, {width}x{height})", data.len())
+            Event::InlineImage { data, placement } => {
+                write!(f, "InlineImage({} bytes, id={})", data.len(), placement.id)
             },
             Event::CommandStart => write!(f, "CommandStart"),
             Event::CommandDone { exit_code } => write!(f, "CommandDone({exit_code:?})"),
@@ -119,6 +120,7 @@ impl Debug for Event {
             },
             Event::Notify(text) => write!(f, "Notify({text})"),
             Event::Progress { state, value } => write!(f, "Progress({state}, {value:?})"),
+            Event::ProgramStatusChanged => write!(f, "ProgramStatusChanged"),
             Event::AiHookEnvelope(envelope) => {
                 write!(f, "AiHookEnvelope({} bytes)", envelope.len())
             },
@@ -175,6 +177,15 @@ pub trait OnResize {
 /// Event Loop for notifying the renderer about terminal events.
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
+
+    /// The host chooses a renderer for a literal shell command. Core only owns its source range.
+    fn command_view(
+        &self,
+        _shell: &str,
+        _command: &str,
+    ) -> Option<crate::inline_content::CommandView> {
+        None
+    }
 }
 
 /// Null sink for events.

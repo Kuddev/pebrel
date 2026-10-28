@@ -25,19 +25,33 @@ use nebula_terminal::tty::EventedPty as _;
 pub struct EventProxy {
     events: super::event_mailbox::EventSender,
     stages: UnboundedSender<crate::ssh_session::SshStage>,
-    remote_reader: Arc<std::sync::Mutex<Option<crate::ssh_session::TranscriptReader>>>,
+    remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
+    resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         self.events.send(event);
     }
+
+    fn command_view(
+        &self,
+        shell: &str,
+        command: &str,
+    ) -> Option<nebula_terminal::inline_content::CommandView> {
+        crate::command_lenses::classify(shell, command)
+    }
 }
 
 impl crate::ssh_session::SshEventHost for EventProxy {
-    fn ssh_transcript_reader(&self, reader: Option<crate::ssh_session::TranscriptReader>) {
-        if let Ok(mut current) = self.remote_reader.lock() {
-            *current = reader;
+    fn ssh_pane_connection(&self, connection: Option<crate::ssh_session::PaneConnection>) {
+        if let Ok(mut current) = self.remote_connection.lock() {
+            *current = connection;
+        }
+    }
+    fn ssh_resume_target(&self, target: Option<crate::ssh_session::ResumeTarget>) {
+        if let Ok(mut current) = self.resume_target.lock() {
+            *current = target;
         }
     }
     fn ssh_stage(&self, stage: crate::ssh_session::SshStage) {
@@ -73,7 +87,8 @@ pub struct TerminalSession {
     /// PTY 直系 shell PID；关闭确认沿用旧壳 `busy_child(shell_pid)` 判据。
     /// SSH 没有本地 shell 进程，固定为 0。
     pub shell_pid: u32,
-    pub(super) remote_reader: Arc<std::sync::Mutex<Option<crate::ssh_session::TranscriptReader>>>,
+    pub(super) remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
+    pub(crate) resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -92,7 +107,12 @@ pub(super) fn test_session_with_events() -> (
 ) {
     let (events, event_rx) = super::event_mailbox::channel();
     let (stages, _) = unbounded();
-    let proxy = EventProxy { events, stages, remote_reader: Default::default() };
+    let proxy = EventProxy {
+        events,
+        stages,
+        remote_connection: Default::default(),
+        resume_target: Default::default(),
+    };
     let term =
         Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
     let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
@@ -102,7 +122,8 @@ pub(super) fn test_session_with_events() -> (
             notifier: Notifier(sender),
             native_prompt: proxy.events.native_prompt.clone(),
             shell_pid: 0,
-            remote_reader: proxy.remote_reader.clone(),
+            remote_connection: proxy.remote_connection.clone(),
+            resume_target: proxy.resume_target.clone(),
         },
         receiver,
         event_rx,
@@ -136,6 +157,7 @@ pub(super) fn local_options(
         log::warn!("Could not prepare shell integration: {error}");
     }
     crate::platform::environment::prepare_local_pty(&mut options);
+    options.env.insert("PEBREL_NATIVE_RESULTS".into(), "1".into());
     // WSL tab 的命令边界（OSC 133;D/A）与 cwd（OSC 7）：来宾登录 shell 默认
     // 不发，Agent 生命周期、目录树与 Git 视图都会失去来宾侧事实。只对
     // `wsl.exe` 启动生效，见 [`crate::shell_detect::wsl_cwd_report_env`]。
@@ -176,7 +198,12 @@ pub fn spawn(
 ) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
+    let proxy = EventProxy {
+        events: tx,
+        stages: stage_tx,
+        remote_connection: Default::default(),
+        resume_target: Default::default(),
+    };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -192,7 +219,7 @@ pub fn spawn(
     // 用于 resize 锚定问题的字节级取证。
     let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
     let native_prompt = proxy.events.native_prompt.clone();
-    let remote_reader = proxy.remote_reader.clone();
+    let remote_connection = proxy.remote_connection.clone();
     let mut event_loop =
         EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
     if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
@@ -201,7 +228,57 @@ pub fn spawn(
     let notifier = Notifier(event_loop.channel());
     let _io_thread = event_loop.spawn();
 
-    Ok((TerminalSession { term, notifier, native_prompt, shell_pid, remote_reader }, rx, stage_rx))
+    Ok((
+        TerminalSession {
+            term,
+            notifier,
+            native_prompt,
+            shell_pid,
+            remote_connection,
+            resume_target: Default::default(),
+        },
+        rx,
+        stage_rx,
+    ))
+}
+
+/// 启动一个串口会话：无 PTY，字节流直接进入 grid。端口打开失败由调用方展示。
+pub fn spawn_serial(
+    destination: &str,
+    window_size: WindowSize,
+    term_config: Config,
+) -> std::io::Result<SpawnedSession> {
+    let term_config = crate::ssh_session::terminal_config(term_config);
+    let (tx, rx) = super::event_mailbox::channel();
+    let (stage_tx, stage_rx) = unbounded();
+    let proxy = EventProxy {
+        events: tx,
+        stages: stage_tx,
+        remote_connection: Default::default(),
+        resume_target: Default::default(),
+    };
+
+    let grid = GridSize {
+        columns: window_size.num_cols as usize,
+        screen_lines: window_size.num_lines as usize,
+    };
+    let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+    let native_prompt = proxy.events.native_prompt.clone();
+    let remote_connection = proxy.remote_connection.clone();
+    let sender = crate::serial_session::spawn_session(destination, Arc::clone(&term), proxy)?;
+
+    Ok((
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt,
+            shell_pid: 0,
+            remote_connection,
+            resume_target: Default::default(),
+        },
+        rx,
+        stage_rx,
+    ))
 }
 
 /// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
@@ -210,13 +287,19 @@ pub fn spawn(
 pub fn spawn_ssh(
     destination: String,
     initial_remote_cwd: Option<String>,
+    resume_target: Option<crate::ssh_session::ResumeTarget>,
     window_size: WindowSize,
     term_config: Config,
 ) -> std::io::Result<SpawnedSession> {
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
+    let proxy = EventProxy {
+        events: tx,
+        stages: stage_tx,
+        remote_connection: Default::default(),
+        resume_target: Default::default(),
+    };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -224,10 +307,13 @@ pub fn spawn_ssh(
     };
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
     let native_prompt = proxy.events.native_prompt.clone();
-    let remote_reader = proxy.remote_reader.clone();
-    let sender = crate::ssh_session::spawn_session_at(
+    let remote_connection = proxy.remote_connection.clone();
+    *proxy.resume_target.lock().unwrap() = resume_target.clone();
+    let resume_state = proxy.resume_target.clone();
+    let sender = crate::ssh_session::spawn_session_resuming(
         destination,
         initial_remote_cwd,
+        resume_target,
         window_size,
         Arc::clone(&term),
         proxy,
@@ -239,7 +325,8 @@ pub fn spawn_ssh(
             notifier: Notifier(sender),
             native_prompt,
             shell_pid: 0,
-            remote_reader,
+            remote_connection,
+            resume_target: resume_state,
         },
         rx,
         stage_rx,

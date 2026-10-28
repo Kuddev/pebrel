@@ -45,6 +45,7 @@ mod appearance_picker;
 mod background_color;
 mod background_shader;
 mod backup;
+mod command_history;
 mod cursor_motion;
 mod design;
 mod font_picker;
@@ -97,6 +98,7 @@ pub enum SettingsPaneEvent {
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。
     LaunchSsh(String),
+    InstallAgent(crate::ai_agents::AgentKind),
 }
 
 pub(super) type SharedSelect = Entity<SelectState<Vec<SharedString>>>;
@@ -168,8 +170,9 @@ pub struct SettingsPane {
     pub(super) proxy_test_seq: u64,
     pub(super) proxy_test_status: crate::display::ProxyTestStatus,
     provider_store: crate::ai_providers::ProviderStore,
-    /// Name / note / website / endpoint / model. API keys deliberately do not
-    /// use a GPUI text widget; the native credential dialog is write-only.
+    provider_ui: providers::ProviderUi,
+    /// Name / note / website / endpoint / model. Auth JSON is an ephemeral
+    /// editor draft owned by ProviderUi; secrets never enter ProviderStore.
     provider_inputs: Vec<Entity<InputState>>,
     provider_status: Option<ProviderStatus>,
     provider_test_seq: u64,
@@ -225,6 +228,7 @@ pub struct SettingsPane {
     font_imported: Vec<String>,
     font_family_input: Entity<InputState>,
     font_family_cjk_input: Entity<InputState>,
+    ui_font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     font_size_editing: Option<bool>,
     /// 字体输入框上一帧的窗口坐标。字体目录是宽弹层，不能把整条设置行当
@@ -342,6 +346,7 @@ impl SettingsPane {
             (&self.ssh_icon_filter_input, "ssh_icon_filter"),
             (&self.font_family_input, "font_family"),
             (&self.font_family_cjk_input, "font_family"),
+            (&self.ui_font_family_input, "font_family"),
             (&self.backup_pass_input, "backup_password"),
             (&self.backup_secret_input, "backup_secret"),
         ] {
@@ -1326,7 +1331,8 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsCompletionMode),
                 help("completion_style", language),
                 cx,
-            ));
+            ))
+            .child(self.command_history_row(cx));
         v_flex().w_full().gap(px(GROUP_GAP)).child(terminal).child(completion).child(alerts)
     }
 
@@ -1495,7 +1501,7 @@ impl SettingsPane {
             0 => self.section_home(window, cx),
             1 => self.section_appearance(window, cx),
             2 => self.section_profiles(window, cx),
-            3 => self.section_providers(cx),
+            3 => self.section_providers(window, cx),
             4 => self.section_ssh(window, cx),
             5 => self.section_network(cx),
             6 => self.section_interaction(cx),
@@ -1574,12 +1580,8 @@ impl SettingsPane {
                     .gap(px(10.0))
                     .rounded_md()
                     .cursor_pointer()
-                    // 选中态同时改变底色、墨色和字重，余光扫过也能确认当前位置。
-                    .font_weight(if active {
-                        gpui::FontWeight::MEDIUM
-                    } else {
-                        gpui::FontWeight::NORMAL
-                    })
+                    // 底色和墨色表达选中，避免中文导航因字重匹配而突然变粗。
+                    .font_weight(gpui::FontWeight::NORMAL)
                     .when(active, |item| item.bg(active_bg).text_color(active_fg))
                     .when(!active, |item| item.text_color(muted).hover(|s| s.bg(hover_bg)))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1629,10 +1631,7 @@ impl Render for SettingsPane {
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
         let nav = self.render_nav(window, cx);
         let content = self.section_content(window, cx);
-        // 这里**不再**挂 font_family。旧壳设置页整页走终端 mono，是因为自绘
-        // 只有一套字形缓存；GPUI 壳没有这个限制，继承那个观感只会让中文说明
-        // 字距发虚、行更长。根字体由 `theme.font_family`（Windows 上是雅黑
-        // UI）提供，等宽退回它真正的职责：标记机器可读的字面量。
+        // 设置页复用 UI 西文与本机中文回退，终端字体不参与表单排版。
         let base_px = self.font_size_px(cx);
         let font_picker_open = self.font_picker_open;
         let bg_picker_open = self.bg_picker_open && self.active_section == 1;
@@ -1644,11 +1643,13 @@ impl Render for SettingsPane {
         let theme_package_modal = self.theme_package_modal(window, cx);
         let backup_drawer = self.backup_drawer(window, cx);
         let mobile_relay_modal = self.mobile_relay_modal(cx);
+        let provider_drawer = self.provider_drawer(window, cx);
         let application_page = self.active_section == 0;
         let mobile_page = self.active_section == MOBILE_SECTION;
 
         div()
             .size_full()
+            .font(crate::gpui_shell::typography::ui_font(cx))
             .track_focus(&self.focus_handle)
             // 旧壳 `input/chrome.rs` 的合同是页面任何左键先撤销捕获。
             // 行自身会 stop_propagation 并完成「同行取消 / 他行转移」；其它
@@ -1680,14 +1681,8 @@ impl Render for SettingsPane {
                     },
                 ))
             })
-            // 旧壳设置页是独立的不透明 panel；终端壁纸只属于终端内容，
-            // 不应穿透设置文字和控件。
-            //
-            // 这层不透明底必须自带卡圆角：外层终端卡虽然 `overflow_hidden`，
-            // 但 GPUI 的裁剪是矩形 content_mask、不跟圆角，方角底会直接盖掉
-            // 卡的四个圆角——这就是设置页看着「四角是直角」的原因。
+            // 背景和圆角归 workspace 卡容器；此处再次铺底会叠加不透明度。
             .rounded(crate::gpui_shell::theme::card_radius(cx))
-            .bg(crate::gpui_shell::theme::settings_panel_bg(cx))
             .text_color(cx.theme().foreground)
             // 正文继承主字号；导航和搜索使用组件小字号，说明与徽标单独缩小。
             .text_size(px(base_px))
@@ -1713,6 +1708,7 @@ impl Render for SettingsPane {
                             .pb(px(22.0))
                             .when(!application_page, |content| content.pt(px(28.0)).pb(px(30.0)))
                             .when(mobile_page, |content| content.p_0())
+                            .when(self.active_section == 3, |content| content.p_0())
                             // 注意这层包装 `v_flex` 的 `w_full` 不能删（2026-08-23
                             // 又栽了一次）：`overflow_y_scrollbar` 把内容层清成
                             // `Display::Block`，而 flex 容器在 block 父里
@@ -1760,6 +1756,7 @@ impl Render for SettingsPane {
                     ),
             )
             .when_some(backup_drawer, |root, drawer| root.child(drawer))
+            .when_some(provider_drawer, |root, drawer| root.child(drawer))
             .when_some(ssh_editor_modal, |root, modal| root.child(modal))
             .when_some(appearance_picker_modal, |root, modal| root.child(modal))
             .when_some(theme_editor_modal, |root, modal| root.child(modal))

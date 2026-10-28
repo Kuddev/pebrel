@@ -18,6 +18,9 @@
 pub mod boxdraw;
 
 use crate::event::{EventListener, WindowSize};
+use crate::grid::Dimensions as _;
+use crate::index::Line;
+use crate::inline_image::{ImageRun, push_image_run};
 use crate::term::cell::Flags;
 use crate::term::color::Colors;
 use crate::term::{Term, point_to_viewport_from};
@@ -229,9 +232,9 @@ pub struct CursorSnapshot {
 }
 
 /// A cell rendered by built-in geometry ([`boxdraw`]) instead of a font:
-/// box-drawing, block elements and Powerline separators must cover the cell
-/// exactly and join seamlessly across cells — no font (CJK fonts above all)
-/// guarantees that, so these never enter a text segment.
+/// box-drawing, block elements and Powerline separators join seamlessly, and
+/// Braille dots keep the same pitch across cells. Font metrics cannot ensure
+/// this, so these never enter a text segment.
 pub struct BoxGlyph {
     pub row: u16,
     pub col: u16,
@@ -257,6 +260,7 @@ pub struct RenderSnapshot {
     pub segments: Vec<TextSegment>,
     /// Cells routed to built-in geometry; disjoint from `segments`.
     pub box_glyphs: Vec<BoxGlyph>,
+    pub image_runs: Vec<ImageRun>,
     pub cursor: Option<CursorSnapshot>,
 }
 
@@ -267,9 +271,48 @@ pub struct SnapshotConfig {
 
 impl RenderSnapshot {
     pub fn capture<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig) -> Self {
+        Self::capture_rows(term, cfg, |_| true)
+    }
+
+    /// A host may replace source rows with inline content without altering the VT grid.
+    pub fn capture_rows<T: EventListener>(
+        term: &Term<T>,
+        cfg: &SnapshotConfig,
+        include: impl Fn(usize) -> bool,
+    ) -> Self {
+        if term.grid().may_have_images() {
+            Self::capture_grid::<T, true>(term, cfg, include, None)
+        } else {
+            Self::capture_grid::<T, false>(term, cfg, include, None)
+        }
+    }
+
+    /// Capture retained source rows for an in-place presentation whose visible
+    /// pixels can extend beyond the ordinary source viewport. This never scrolls
+    /// or mutates the terminal; colors, selection and glyph routing stay shared.
+    pub fn capture_from<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig, top: Line) -> Self {
+        let top = top.max(term.topmost_line()).min(term.bottommost_line());
+        if term.grid().may_have_images() {
+            Self::capture_grid::<T, true>(term, cfg, |_| true, Some(top))
+        } else {
+            Self::capture_grid::<T, false>(term, cfg, |_| true, Some(top))
+        }
+    }
+
+    // Select once per snapshot; marker-only output keeps the no-image loop.
+    fn capture_grid<T: EventListener, const IMAGES: bool>(
+        term: &Term<T>,
+        cfg: &SnapshotConfig,
+        include: impl Fn(usize) -> bool,
+        top: Option<Line>,
+    ) -> Self {
         let rows = cfg.rows as usize;
         let cols = cfg.cols as usize;
-        let content = term.renderable_content_with_viewport(rows, cols);
+        let mut content = term.renderable_content_with_viewport(rows, cols);
+        if let Some(top) = top {
+            content.viewport_origin = top;
+            content.display_iter = term.grid().display_iter_from(top, rows, cols);
+        }
         let display_offset = content.display_offset;
         let viewport_origin = content.viewport_origin;
         let selection_range = content.selection;
@@ -285,6 +328,7 @@ impl RenderSnapshot {
             selection_runs: Vec::new(),
             segments: Vec::new(),
             box_glyphs: Vec::new(),
+            image_runs: Vec::new(),
             cursor: None,
         };
 
@@ -319,10 +363,13 @@ impl RenderSnapshot {
         for indexed in content.display_iter {
             let Some(vp) = point_to_viewport_from(viewport_origin, indexed.point) else { continue };
             let (row, col) = (vp.line, vp.column.0);
-            if row >= rows || col >= cols {
+            if row >= rows || col >= cols || !include(row) {
                 continue;
             }
             let (row, col) = (row as u16, col as u16);
+            if IMAGES && let Some(tile) = indexed.cell.image() {
+                push_image_run(&mut snap.image_runs, row, col, tile);
+            }
             let flags = indexed.cell.flags;
             let bold = flags.intersects(Flags::BOLD);
             let mut fg = indexed.cell.fg;
@@ -377,7 +424,7 @@ impl RenderSnapshot {
                 continue;
             }
             if c == ' '
-                && indexed.cell.extra.is_none()
+                && indexed.cell.zerowidth().is_none_or(|chars| chars.is_empty())
                 && !flags.intersects(Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
             {
                 continue;
@@ -722,5 +769,72 @@ mod tests {
         // Text segments keep only 'a' and 'b', split at the geometry cells.
         let segments: Vec<_> = snap.segments.iter().map(|s| (s.start_col, s.cells.len())).collect();
         assert_eq!(segments, vec![(0, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn capture_explicit_source_rows_preserves_colors_selection_and_viewport() {
+        let mut term = term_with(&["header", "⣿█", "visible"]);
+        let cell = &mut term.grid_mut()[Line(1)][Column(0)];
+        cell.fg = Color::Named(NamedColor::Red);
+        cell.bg = Color::Named(NamedColor::Blue);
+        cell.flags.insert(Flags::DIM | Flags::INVERSE);
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            crate::index::Point::new(Line(1), Column(0)),
+            Side::Left,
+        );
+        selection.update(crate::index::Point::new(Line(1), Column(1)), Side::Right);
+        term.selection = Some(selection);
+        let before = term.viewport_origin_for(4);
+        let ordinary = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let source = RenderSnapshot::capture_from(&term, &cfg(2, 8), Line(1));
+        assert_eq!(term.viewport_origin_for(4), before);
+        assert_eq!(source.box_glyphs[0].row, 0);
+        assert_eq!(source.box_glyphs[0].ch, '⣿');
+        assert_eq!(
+            (source.box_glyphs[0].fg, source.box_glyphs[0].dim),
+            (ordinary.box_glyphs[0].fg, ordinary.box_glyphs[0].dim)
+        );
+        assert!(source.selection_runs.iter().any(|r| r.row == 0 && r.start == 0 && r.end == 2));
+        assert!(source.segments.iter().any(|s| s.row == 1 && s.cells[0].text == "v"));
+    }
+
+    #[test]
+    fn braille_capture_preserves_grid_colors_selection_and_cursor() {
+        use crate::index::Side;
+        use crate::selection::{Selection, SelectionType};
+
+        let mut term = term_with(&["A⠀⠁⣿B"]);
+        let position = crate::index::Point::new(Line(0), Column(3));
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(4));
+        let cell = &mut term.grid_mut()[Line(0)][Column(3)];
+        cell.fg = Color::Named(NamedColor::Red);
+        cell.bg = Color::Named(NamedColor::Blue);
+        cell.flags.insert(Flags::BOLD | Flags::DIM | Flags::INVERSE);
+        let mut selection = Selection::new(SelectionType::Simple, position, Side::Left);
+        selection.update(position, Side::Right);
+        term.selection = Some(selection);
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        assert_eq!(
+            snap.box_glyphs.iter().map(|g| (g.col, g.ch)).collect::<Vec<_>>(),
+            vec![(1, '⠀'), (2, '⠁'), (3, '⣿')]
+        );
+        let full = &snap.box_glyphs[2];
+        assert_eq!(full.fg, Color::Named(NamedColor::Blue));
+        assert!(full.bold);
+        assert!(!full.dim, "inverse keeps DIM on the original foreground, now background");
+        assert!(snap.bg_runs.iter().any(|g| g.start <= 3 && g.end > 3 && g.dim));
+        assert!(snap.selection_runs.iter().any(|g| g.start == 3 && g.end == 4));
+        assert_eq!(snap.cursor.unwrap().col, 4);
+        assert_eq!(term.selection_to_string().as_deref(), Some("⣿"));
+        assert_eq!(
+            snap.segments
+                .iter()
+                .flat_map(|s| &s.cells)
+                .map(|c| c.text.as_str())
+                .collect::<String>(),
+            "AB"
+        );
+        assert_eq!(term.grid()[Line(0)][Column(3)].c, '⣿', "source text is still copyable");
     }
 }

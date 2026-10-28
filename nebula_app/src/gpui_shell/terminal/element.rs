@@ -32,6 +32,9 @@ mod cell_fit;
 #[path = "element/color_tests.rs"]
 mod color_tests;
 mod reading;
+mod snapshot;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(in crate::gpui_shell) mod snapshot_probe;
 
 #[path = "element/app_colors.rs"]
 mod app_colors;
@@ -85,61 +88,6 @@ pub struct TermLayout {
 }
 
 impl TerminalElement {
-    /// 在一次锁内通过渲染合同截取快照；锁外解析颜色与绘制。第三项是回滚
-    /// 历史行数——滚动条拇指的分母，顺着这一次锁一起取回，免得绘制路径
-    /// 为了它再抢一次 `Term` 锁。
-    fn snapshot(
-        &self,
-        rows: usize,
-        cols: usize,
-        cx: &App,
-    ) -> Option<(
-        RenderSnapshot,
-        Option<String>,
-        usize,
-        super::osc_links::LinkCells,
-        usize,
-        i64,
-        bool,
-    )> {
-        let view = self.view.read(cx);
-        let session = view.session.as_ref()?;
-        let hint_config = view.hint_config.clone();
-        let term = session.term.lock();
-        let prompt_line = if term.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
-            None
-        } else {
-            let cursor = term.grid().cursor.point;
-            crate::display::nebula_prompt_line_from_raw_grid(
-                &term,
-                cursor,
-                &view.suggest.line_buf,
-                &view.suggest.suggest_env,
-            )
-            .map(|line| line.input)
-        };
-        // 分段只反映内容与宽度类，绝不掺入光标状态：per-cell 绘制下反色只是
-        // 换色，若让闪烁相位改变分段，整行会随闪烁重塑形而跳字。
-        let snapshot = RenderSnapshot::capture(
-            &term,
-            &SnapshotConfig { rows: rows as u16, cols: cols as u16 },
-        );
-        let history = term.history_size();
-        let dashed = super::osc_links::dashed_cells(&term, &hint_config, rows, cols);
-        let scrollback_floor = term.grid().scrolled_out();
-        let image_anchor = scrollback_floor.saturating_add(history) as i64;
-        let viewport_top_abs = image_anchor + i64::from(term.viewport_origin_for(rows).0);
-        Some((
-            snapshot,
-            prompt_line,
-            history,
-            dashed,
-            scrollback_floor,
-            viewport_top_abs,
-            term.mode().contains(TermMode::ALT_SCREEN),
-        ))
-    }
-
     /// 把**应用写死的**颜色按当前主题矫正，直接写回快照。
     ///
     /// 用的是旧壳那一个 `TerminalColorResolver`（`display::terminal_color`）：最低
@@ -320,18 +268,22 @@ impl Element for TerminalElement {
         let focused = focus_handle.is_focused(window);
         // 旧壳只让光标本身参与闪烁；ghost、弹窗补齐和 IME 仍复用同一个坐标锚点。
         let cursor_visible = self.view.read(cx).cursor_visible();
-        let Some((
+        let Some(snapshot::FrameSnapshot {
             mut snap,
+            mut art_source,
             prompt_line,
             history,
             mut dashed,
-            scrollback_floor,
             viewport_top_abs,
-            alternate_screen,
-        )) = self.snapshot(layout.rows, layout.cols, cx)
+            mode,
+            reading_epoch,
+        }) = self.snapshot(layout.rows, layout.cols, cx)
         else {
             return;
         };
+        let alternate_screen = mode.contains(TermMode::ALT_SCREEN);
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        snapshot_probe::record(&self.view, &snap, bounds, layout, cx);
         let suggest_anchor =
             snap.cursor.as_ref().map(|cursor| (cursor.row as usize, cursor.col as usize));
         self.view.update(cx, |view, cx| {
@@ -342,6 +294,9 @@ impl Element for TerminalElement {
         });
         let overrides = snap.color_overrides;
         self.resolve_app_colors(&mut snap, &mut dashed, &theme, &overrides, cx);
+        if let Some((_, source)) = &mut art_source {
+            self.resolve_app_colors(source, &mut Default::default(), &theme, &overrides, cx);
+        }
         let (theme_anchor, theme_is_light) = themed_anchor(&theme, cx);
         let host_cursor_follows_theme = is_default_host_cursor(&theme);
         let app_cursor = snap.cursor.as_ref().filter(|cursor| {
@@ -369,8 +324,13 @@ impl Element for TerminalElement {
             );
             self.view.update(cx, |view, cx| {
                 view.math.bind_resources(cx);
-                let size_info =
-                    super::math_overlay::grid_size_info(layout.cols, layout.rows, cell_w, line_h);
+                let vertical = view.native_results.projection.borrow();
+                let size_info = super::math_overlay::grid_size_info(
+                    layout.cols,
+                    vertical.source_rows(layout.rows),
+                    cell_w,
+                    line_h,
+                );
                 if view.reading.panel.is_some() {
                     return view.math.clear_frame(&size_info, math_pixels_per_point);
                 }
@@ -381,7 +341,14 @@ impl Element for TerminalElement {
                     return view.math.clear_frame(&size_info, math_pixels_per_point);
                 };
                 let term = term.lock();
-                view.math.plan_frame(&term, &size_info, foreground, font_px, math_pixels_per_point)
+                view.math.plan_frame(
+                    &term,
+                    &size_info,
+                    foreground,
+                    font_px,
+                    math_pixels_per_point,
+                    |row| !vertical.covers(row),
+                )
             })
         };
         // 位图预检必须在格子绘制之前、term 锁之外：合成不出位图的公式不能进
@@ -391,11 +358,38 @@ impl Element for TerminalElement {
             .view
             .update(cx, |view, cx| view.math.finalize_frame(pending_math_frame, scale_factor, cx));
 
+        let vertical = self.view.read(cx).native_results.projection.borrow().clone();
+        let art = self.view.update(cx, |view, _| {
+            let screen =
+                view.session.as_ref().map_or(0, |s| std::sync::Arc::as_ptr(&s.term) as usize);
+            let (offset, source) =
+                art_source.as_ref().map_or((0, &snap), |(offset, source)| (*offset, source));
+            view.character_art.update(
+                source,
+                (screen, reading_epoch, alternate_screen, snap.cols),
+                viewport_top_abs + offset,
+                layout.cell_width.as_f32(),
+                layout.line_height.as_f32(),
+                mode.contains(TermMode::VI),
+                |row| vertical.row(row + offset as f32),
+                |row, col| {
+                    let row = row as i64 + offset;
+                    !vertical.covers_source_row(row)
+                        && (row < 0
+                            || (!math_frame.covers(row as usize, col)
+                                && math_frame.project_cell(row as usize, col, layout.cols)
+                                    == Some(col)))
+                },
+            );
+            view.character_art.frame.shift_source(offset);
+            view.character_art.frame.clone()
+        });
+        let row_y = |row: f32| layout.line_height * vertical.row(row);
         let cell_rect = |row: usize, start: usize, count: usize| -> Bounds<Pixels> {
             Bounds::new(
                 point(
                     bounds.origin.x + layout.cell_width * start as f32,
-                    bounds.origin.y + layout.line_height * row as f32,
+                    bounds.origin.y + row_y(row as f32),
                 ),
                 size(layout.cell_width * count as f32, layout.line_height),
             )
@@ -422,6 +416,10 @@ impl Element for TerminalElement {
                 .cursor
                 .as_ref()
                 .map_or(0, |c| target_col as i32 - i32::from(c.col)),
+            row_projection_shift: snap
+                .cursor
+                .as_ref()
+                .map_or(0.0, |c| vertical.row(c.row as f32) - c.row as f32),
             shape: snap.cursor.as_ref().map_or(CursorShape::Hidden, |c| c.shape),
         };
         let visual = self.view.update(cx, |view, cx| {
@@ -429,7 +427,7 @@ impl Element for TerminalElement {
                 snap.cursor.as_ref(),
                 target_col,
                 cursor_geometry,
-                snap.display_offset == 0,
+                vertical.scroll_state().map_or(snap.display_offset == 0, |(offset, _)| offset == 0),
                 window,
                 cx,
             )
@@ -526,10 +524,26 @@ impl Element for TerminalElement {
                 layout.cols,
                 false,
             ) {
-                window.paint_quad(fill(
-                    cell_rect(run.row as usize, visual.start, visual.len()),
-                    selection_fill,
-                ));
+                art.spans(
+                    i64::from(run.row),
+                    visual,
+                    vertical.row(f32::from(run.row)),
+                    |columns, y, h| {
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(
+                                    bounds.origin.x + layout.cell_width * columns.start as f32,
+                                    bounds.origin.y + layout.line_height * y,
+                                ),
+                                size(
+                                    layout.cell_width * columns.len() as f32,
+                                    layout.line_height * h,
+                                ),
+                            ),
+                            selection_fill,
+                        ));
+                    },
+                );
             }
         }
         self.paint_reading_highlight(bounds, layout, viewport_top_abs, window, cx);
@@ -637,17 +651,22 @@ impl Element for TerminalElement {
                 theme.resolve_styled(glyph.fg, &overrides, glyph.bold, glyph.dim)
             };
             let span = if glyph.wide { 2.0 } else { 1.0 };
+            let (glyph_row, glyph_height) = art.cell(
+                usize::from(glyph.row),
+                usize::from(glyph.col),
+                vertical.row(f32::from(glyph.row)),
+            );
             let Some(prims) = boxdraw::primitives(
                 glyph.ch,
                 layout.cell_width.as_f32() * span,
-                layout.line_height.as_f32(),
+                layout.line_height.as_f32() * glyph_height,
                 scale,
             ) else {
                 continue;
             };
             let origin = point(
                 snap_to_device(bounds.origin.x + layout.cell_width * visual_col as f32, scale),
-                snap_to_device(bounds.origin.y + layout.line_height * glyph.row as f32, scale),
+                snap_to_device(bounds.origin.y + layout.line_height * glyph_row, scale),
             );
             paint_box_glyph(window, &prims, origin, fg);
             if let Some(cursor) = &cursor_paint {
@@ -700,13 +719,24 @@ impl Element for TerminalElement {
                     underline,
                     strikethrough,
                 };
+                let (text_row, text_height) = art.cell(
+                    usize::from(seg.row),
+                    usize::from(cell.col),
+                    vertical.row(f32::from(seg.row)),
+                );
+                let text_line_height = layout.line_height * text_height;
                 let origin = point(
                     bounds.origin.x + layout.cell_width * visual_col as f32,
-                    bounds.origin.y + layout.line_height * seg.row as f32,
+                    bounds.origin.y + layout.line_height * text_row,
                 );
-                let count = if ligatures && !seg.wide && !dashed_link {
+                let count = if ligatures && !seg.wide && !dashed_link && text_height == 1.0 {
                     super::ligatures::span_len(remaining, |next, offset| {
                         !math_frame.covers(seg.row as usize, next.col as usize)
+                            && art.same_region(
+                                seg.row as usize,
+                                cell.col as usize,
+                                next.col as usize,
+                            )
                             && math_frame.project_cell(
                                 seg.row as usize,
                                 next.col as usize,
@@ -731,7 +761,7 @@ impl Element for TerminalElement {
                     );
                     let _ = shaped.paint(
                         origin,
-                        layout.line_height,
+                        text_line_height,
                         gpui::TextAlign::Left,
                         None,
                         window,
@@ -742,7 +772,7 @@ impl Element for TerminalElement {
                             &shaped,
                             run,
                             origin,
-                            layout.line_height,
+                            text_line_height,
                             window,
                             cx,
                         );
@@ -758,7 +788,7 @@ impl Element for TerminalElement {
                     );
                     let _ = shaped.paint(
                         origin,
-                        layout.line_height,
+                        text_line_height,
                         gpui::TextAlign::Left,
                         None,
                         window,
@@ -769,13 +799,32 @@ impl Element for TerminalElement {
                             &shaped,
                             run,
                             origin,
-                            layout.line_height,
+                            text_line_height,
                             window,
                             cx,
                         );
                     }
                 }
             }
+        }
+
+        if let Some((offset, source)) = &art_source {
+            super::character_art::paint_overflow(
+                &art,
+                source,
+                *offset,
+                snap.rows,
+                bounds.origin,
+                (layout.cell_width, layout.line_height),
+                &theme,
+                &overrides,
+                selection_fill,
+                selection_foreground,
+                font_size,
+                &pick_font,
+                window,
+                cx,
+            );
         }
 
         // Link decoration follows grid columns, including wide-character spacer
@@ -794,14 +843,16 @@ impl Element for TerminalElement {
             } else {
                 theme.resolve_styled(cell.fg, &overrides, cell.bold, cell.dim)
             };
-            super::link_underline::paint(
-                window,
-                cell_rect(row as usize, visual_col, 1),
-                bounds.origin.x,
-                color.into(),
+            let (y, h) = art.cell(row as usize, col as usize, vertical.row(f32::from(row)));
+            let rect = Bounds::new(
+                point(
+                    bounds.origin.x + layout.cell_width * visual_col as f32,
+                    bounds.origin.y + layout.line_height * y,
+                ),
+                size(layout.cell_width, layout.line_height * h),
             );
+            super::link_underline::paint(window, rect, bounds.origin.x, color.into());
             if let Some(cursor) = &cursor_paint {
-                let rect = cell_rect(row as usize, visual_col, 1);
                 if let Some(color) = cursor.inverted_color(rect) {
                     window.with_content_mask(Some(ContentMask { bounds: cursor.rect }), |window| {
                         super::link_underline::paint(window, rect, bounds.origin.x, color);
@@ -819,6 +870,7 @@ impl Element for TerminalElement {
                 (layout.cell_width.as_f32(), layout.line_height.as_f32()),
                 math_pixels_per_point,
                 Rgba { a: 1.0, ..selection_fill },
+                &|y| row_y(y / layout.line_height.as_f32()).as_f32(),
                 window,
                 cx,
             );
@@ -835,45 +887,17 @@ impl Element for TerminalElement {
             cx,
         );
 
-        // Terminal images are ordinary scrollback content: the PTY reader
-        // reserved rows when it saw the protocol sequence, while this pass
-        // paints only images intersecting the current viewport. GPUI caches
-        // each RenderImage texture by ID, so steady-state scrolling is one
-        // clipped textured quad rather than a repeated decode/upload.
-        let inline_images =
-            self.view.update(cx, |view, _| view.inline_images.frame_images(scrollback_floor));
-        if !inline_images.is_empty() {
-            let device_scale = window.scale_factor().max(0.1);
-            let viewport_top = bounds.origin.y.as_f32();
-            let viewport_bottom = viewport_top + bounds.size.height.as_f32();
-            for inline in inline_images {
-                let y = bounds.origin.y
-                    + layout.line_height * (inline.abs_line as i64 - viewport_top_abs) as f32;
-                let mut width = inline.display_width / device_scale;
-                let mut height = inline.display_height / device_scale;
-                let fit = (bounds.size.width.as_f32() / width.max(1.0)).min(1.0);
-                width *= fit;
-                height *= fit;
-                let image_top = y.as_f32();
-                if image_top + height <= viewport_top || image_top >= viewport_bottom {
-                    continue;
-                }
-                let target = Bounds::new(
-                    point(bounds.origin.x, y),
-                    size(px(width.max(1.0)), px(height.max(1.0))),
-                );
-                window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                    let _ = window.paint_image(
-                        target,
-                        target,
-                        Corners::all(px(0.0)),
-                        inline.image,
-                        0,
-                        false,
-                    );
-                });
-            }
-        }
+        let inline_images = self.view.update(cx, |view, _| view.inline_images.frame_images());
+        let image_runs = math_frame.project_image_runs(&snap.image_runs, layout.cols);
+        super::inline_image::paint(
+            &inline_images,
+            &image_runs,
+            bounds,
+            layout.cell_width,
+            layout.line_height,
+            &row_y,
+            window,
+        );
 
         if snap.cursor.is_none() {
             super::effects::paint(
@@ -918,7 +942,7 @@ impl Element for TerminalElement {
                             colors.ghost,
                             point(
                                 bounds.origin.x + layout.cell_width * cursor_visual_col as f32,
-                                bounds.origin.y + layout.line_height * cursor.row as f32,
+                                bounds.origin.y + row_y(cursor.row as f32),
                             ),
                             layout.cell_width,
                             layout.line_height,
@@ -955,7 +979,7 @@ impl Element for TerminalElement {
                     popup_selected,
                     popup_offset,
                     popup_hovered,
-                    cursor.row as usize,
+                    vertical.row(cursor.row as f32).max(0.0) as usize,
                     cursor_visual_col,
                     layout,
                     &bounds,
@@ -1038,7 +1062,7 @@ impl Element for TerminalElement {
                 window,
                 cx,
                 &hover.preview,
-                hover.anchor_row as usize,
+                vertical.row(hover.anchor_row as f32).max(0.0) as usize,
                 anchor_col,
                 layout,
                 &bounds,
@@ -1054,7 +1078,7 @@ impl Element for TerminalElement {
 /// logical units, but a pane origin can still be fractional after a split or
 /// DPI-scaled layout. Rounding the absolute origin keeps box-drawing fills and
 /// polygon edges on the same physical pixels as their neighbouring cells.
-fn snap_to_device(value: Pixels, scale: f32) -> Pixels {
+pub(super) fn snap_to_device(value: Pixels, scale: f32) -> Pixels {
     let scale = scale.max(0.5);
     px((value.as_f32() * scale).round() / scale)
 }

@@ -84,6 +84,7 @@ fn pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url(cx: &mut gpui:
     for (text, expected, host) in [
         ("http://127.0.0.1:8080", ManualProxyProtocol::Http, "127.0.0.1:8080"),
         ("socks5://127.0.0.1:1080", ManualProxyProtocol::Socks5, "127.0.0.1:1080"),
+        ("socks5h://127.0.0.1:1080", ManualProxyProtocol::Socks5h, "127.0.0.1:1080"),
     ] {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -392,7 +393,7 @@ fn ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch(
 }
 
 #[test]
-fn settings_nav_visibility_hides_providers_and_keeps_stable_routes() {
+fn settings_nav_hides_providers_and_keeps_agents_and_stable_routes() {
     let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();
     assert_eq!(
         visibility,

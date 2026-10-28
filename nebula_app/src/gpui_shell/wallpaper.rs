@@ -27,6 +27,8 @@ use image::{Frame, RgbaImage};
 mod animated;
 mod budgets;
 mod image_loader;
+mod tab_bar;
+pub(crate) use tab_bar::{tab_bar_material_is_custom, tab_bar_surface_opacity};
 pub(crate) mod preview;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
@@ -39,6 +41,7 @@ use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit, wallp
 pub struct VisualEffects {
     pub opacity: f32,
     pub blur: BlurModeName,
+    tab_bar_material: nebula_settings::TabBarMaterial,
     wallpaper: Option<Wallpaper>,
     generation: Arc<AtomicU64>,
     loading: bool,
@@ -92,7 +95,6 @@ pub fn refresh(cx: &mut App) {
         .map(|settings| (settings.visual_opacity, settings.visual_blur))
         .unwrap_or_else(|| effective_material(&rt));
     update_wallpaper(&rt, opacity, blur, cx);
-    apply_window_effects(cx);
     refresh_surface_opacity(cx);
 }
 
@@ -106,6 +108,7 @@ fn update_wallpaper(
         cx.set_global(VisualEffects {
             opacity,
             blur,
+            tab_bar_material: rt.tab_bar_material,
             wallpaper: None,
             generation: Arc::new(AtomicU64::new(0)),
             loading: false,
@@ -127,6 +130,7 @@ fn update_wallpaper(
     let effects = cx.global_mut::<VisualEffects>();
     effects.opacity = opacity;
     effects.blur = blur;
+    effects.tab_bar_material = rt.tab_bar_material;
     effects.kind = rt.background_media_kind;
     let retired = if source_changed {
         let retired = effects.wallpaper.take().and_then(|wp| wp.image);
@@ -210,11 +214,41 @@ fn start_load(cx: &mut App) {
 }
 
 fn refresh_surface_opacity(cx: &mut App) {
+    apply_window_effects(cx);
     if cx.has_global::<gpui_component::Theme>()
         && cx.has_global::<crate::gpui_shell::config::Settings>()
     {
         crate::gpui_shell::theme::reapply_prepared_surface_opacity(cx);
     }
+    sync_root_background(cx);
+}
+
+/// Whether a native wallpaper layer is composited below the GPUI scene.
+pub fn native_underlay_active(cx: &App) -> bool {
+    animated::underlay_ready(cx)
+}
+
+/// Workspace paints each shell/card surface once. Keep Root transparent after
+/// every background refresh, including when no native wallpaper is active;
+/// restoring its default fill would add a second full-window surface.
+fn sync_root_background(cx: &mut App) {
+    cx.defer(move |cx| {
+        for handle in cx.windows() {
+            if let Err(error) = handle.update(cx, |_, window, cx| {
+                let Some(Some(root)) = window.root::<gpui_component::Root>() else { return };
+                root.update(cx, |root, cx| {
+                    let background = Some(gpui::Fill::from(gpui::transparent_black()));
+                    let style = gpui::Styled::style(root);
+                    if style.background != background {
+                        style.background = background;
+                        cx.notify();
+                    }
+                });
+            }) {
+                log::warn!("failed to update window root background: {error}");
+            }
+        }
+    });
 }
 
 fn retire_image(image: Option<Arc<RenderImage>>, cx: &mut App) {
@@ -257,12 +291,17 @@ pub fn window_opacity(cx: &App) -> f32 {
 
 /// 拖不透明度滑块的快路径：只把新值写进视效全局。
 ///
-/// 不读设置文件、不重建壁纸纹理、不碰窗口级模糊——透明度只影响我们自己绘制的
-/// 像素 alpha 与壳色 token，那些都是纯浪费。调用方负责紧接着调
+/// 不读设置文件、不重建壁纸纹理。只有独立 Tab 材质在内容区跨过不透明边界时
+/// 才重新选择原生模糊，其余情况只改像素 alpha 与壳色 token。调用方紧接着调
 /// [`crate::gpui_shell::theme::reapply_shell_opacity`] 与 `cx.notify()`。
 pub fn set_opacity_live(opacity: f32, cx: &mut App) {
+    let previous = tab_bar::native_blur(cx);
     if cx.has_global::<VisualEffects>() {
         cx.global_mut::<VisualEffects>().opacity = opacity.clamp(0.0, 1.0);
+    }
+    // Only crossing the opaque-content boundary can change a tab-only backdrop.
+    if previous != tab_bar::native_blur(cx) {
+        apply_window_effects(cx);
     }
 }
 
@@ -273,10 +312,49 @@ pub fn chrome_surface_opacity(cx: &App) -> f32 {
     let Some(effects) = cx.try_global::<VisualEffects>() else {
         return 1.0;
     };
+    let opacity = base_surface_opacity(effects, cx);
+    if effects.layout.cover_chrome && animated::underlay_ready(cx) {
+        return underlay_composition(opacity, effects.layout.opacity).0;
+    }
+    opacity
+}
+
+/// Card surface alpha. Equal to [`chrome_surface_opacity`] unless a native
+/// video sits below only the card.
+pub fn card_surface_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    if !effects.layout.cover_chrome && animated::underlay_ready(cx) {
+        return underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).0;
+    }
+    chrome_surface_opacity(cx)
+}
+
+fn base_surface_opacity(effects: &VisualEffects, cx: &App) -> f32 {
     if effects.layout.cover_chrome && background_ready(effects, cx) {
         return effects.opacity.clamp(0.0, 1.0).min(0.78);
     }
     effects.opacity.clamp(0.0, 1.0)
+}
+
+fn underlay_layer_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).1
+}
+
+/// A wallpaper painted above a surface of alpha `a` with opacity `w` shows
+/// `w·V + a·(1-w)·B`. A layer *below* that surface matches it exactly when the
+/// surface alpha becomes `a·(1-w)` and the layer opacity `w / (1 - a·(1-w))`.
+/// Returns `(surface alpha, layer opacity)`.
+fn underlay_composition(surface: f32, wallpaper: f32) -> (f32, f32) {
+    let surface = surface.clamp(0.0, 1.0);
+    let wallpaper = wallpaper.clamp(0.0, 1.0);
+    let surface_alpha = surface * (1.0 - wallpaper);
+    let layer = if surface_alpha >= 1.0 { 0.0 } else { wallpaper / (1.0 - surface_alpha) };
+    (surface_alpha, layer.min(1.0))
 }
 
 /// 开窗参数用。GPUI 通用层在窗口创建时就会把这个值下发到平台层
@@ -284,7 +362,10 @@ pub fn chrome_surface_opacity(cx: &App) -> f32 {
 /// Mica / Mica Alt 因此从首帧就走平台原生 backdrop，不再先挂一层普通透明背景。
 pub fn initial_background_appearance() -> WindowBackgroundAppearance {
     let runtime = nebula_settings::RuntimeSettings::load();
-    background_appearance(effective_material(&runtime).1)
+    let (opacity, blur) = effective_material(&runtime);
+    background_appearance(
+        tab_bar::resolve_blur(blur, runtime.tab_bar_material.blur, opacity >= 1.0).0,
+    )
 }
 
 fn effective_material(runtime: &nebula_settings::RuntimeSettings) -> (f32, BlurModeName) {
@@ -298,6 +379,7 @@ fn effective_material(runtime: &nebula_settings::RuntimeSettings) -> (f32, BlurM
 /// 拖成幻灯片——2026-08-21 实测。档位没变时一次都不碰。
 struct AppliedBlur {
     blur: BlurModeName,
+    tab_bar_conflict: Option<BlurModeName>,
     windows: HashSet<gpui::WindowId>,
 }
 
@@ -334,9 +416,18 @@ impl gpui::Global for AppliedBlur {}
 fn apply_window_effects(cx: &mut App) {
     // 全局缺失时按"关"处理而不是缺省档：这条路径只在极早期或异常态走到，
     // 宁可少一层材质，也不要凭空给窗口开上模糊再被 refresh 纠正一次。
-    let blur = cx.try_global::<VisualEffects>().map(|v| v.blur).unwrap_or(BlurModeName::None);
+    let (blur, tab_bar_conflict) = tab_bar::native_blur(cx);
     let appearance = background_appearance(blur);
     cx.defer(move |cx| {
+        if tab_bar_conflict.is_some()
+            && cx.try_global::<AppliedBlur>().and_then(|applied| applied.tab_bar_conflict)
+                != tab_bar_conflict
+        {
+            log::warn!(
+                "tab_bar_blur differs from blur while non-tab surfaces are translucent; \
+                 retaining the window material. Independent tab blur requires opaque content"
+            );
+        }
         // 必须在 defer 后枚举：触发设置变更的窗口此时才重新放回 App 窗口表。
         let handles = cx.windows();
         let window_ids = handles.iter().map(|handle| handle.window_id()).collect::<HashSet<_>>();
@@ -363,7 +454,7 @@ fn apply_window_effects(cx: &mut App) {
                 applied.insert(handle.window_id());
             }
         }
-        cx.set_global(AppliedBlur { blur, windows: applied });
+        cx.set_global(AppliedBlur { blur, tab_bar_conflict, windows: applied });
     });
 }
 
@@ -573,6 +664,7 @@ pub(crate) fn test_install_visual_effects(cx: &mut App, opacity: f32, blur: Blur
     cx.set_global(VisualEffects {
         opacity,
         blur,
+        tab_bar_material: nebula_settings::TabBarMaterial::default(),
         wallpaper: None,
         generation: Arc::new(AtomicU64::new(0)),
         loading: false,

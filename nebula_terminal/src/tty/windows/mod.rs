@@ -442,6 +442,8 @@ $global:NebulaPromptTemplate = {
         $ErrorActionPreference = 'SilentlyContinue'
         if ($outermost) {
             [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_shell=$global:PebrelShellToken$([char]7)")
+            $clipboardReady = Get-PebrelClipboardCapability
+            [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_clipboard_ready=$clipboardReady$([char]7)")
             if ($global:PebrelCompletionInputReady) { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_ready=$global:PebrelEditorReady$([char]7)") }
             $global:NebulaPromptCount = [int]$global:NebulaPromptCount + 1
             $global:NebulaLastCommandSucceeded = $originalDollarQuestion
@@ -508,9 +510,8 @@ $global:NebulaPromptTemplate = {
         $boundary = if ($outermost) { "$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)" } else { '' }
         $leadingNewline = ''
         try {
-            # PowerShell cursor Y is zero-based. Like Oh My Posh's cancelNewline,
-            # do not add a leading spacer for the first prompt or when at top.
-            if ($global:NebulaPromptCount -gt 1 -and $Host.UI.RawUI.CursorPosition.Y -gt 0) {
+            # 输出已经换行时不再垫一行；仅补齐无换行输出，避免提示符粘在结果末尾。
+            if ($global:NebulaPromptCount -gt 1 -and $Host.UI.RawUI.CursorPosition.X -gt 0) {
                 $leadingNewline = "`n"
             }
         } catch {
@@ -822,7 +823,8 @@ if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) {
 Clear-Host
 "#,
     include_str!("../connection.ps1"),
-    include_str!("../completion.ps1")
+    include_str!("../completion.ps1"),
+    include_str!("../clipboard.ps1")
 );
 
 /// Write `contents` to `path` only when it differs from what's already there.

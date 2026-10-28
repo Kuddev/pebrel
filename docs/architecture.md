@@ -31,6 +31,7 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_app/src/ai_hook` | Normalized provider facts, bounded ordering, one shared pane lifecycle and owned installation policy; native Windows/Unix transports | Screen keyword rules or a separate state machine per UI shell |
 | `nebula_app/src/platform/ssh_agent.rs` | Native agent endpoints, transport connection and bounded identity discovery | Host authentication policy or private key selection |
 | `nebula_app/src/ssh_session/agent.rs` | SSH agent identity selection, signing outcomes and total discovery budget; fresh scope per host | A second authentication plan, credential store or agent forwarding service |
+| `nebula_app/src/serial_session.rs` | Native serial port transport for non-PTY panes and the `serial:` destination syntax | SSH authentication, remote files or a settings form |
 | `nebula_app/src/ssh_session/integration.rs` | Authenticated exec/PTY orchestration for remote hook installation and shell startup | Provider policy or a second Agent state machine |
 | `nebula_app/src/ai_agents` | Agent identity and structurally constrained screen observations | Authority to overwrite hook results or infer remote completion from silence |
 | `nebula_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |
@@ -44,6 +45,14 @@ The map records current responsibilities; it does not assert that every legacy
 file has already reached the target shape. Eleven oversized legacy files remain
 under [ratcheted budgets](project-constraints.md). Move their independent rules
 when working on the relevant capability; do not mix a whole-app rewrite into a fix.
+
+OSC 7501 program records belong to each `Term`, with bounded validation and
+prompt/process/reset lifetime shared by local PTYs and SSH. The GPUI product
+projects those records into existing status badges, progress and Runtime API
+states, before Hooks and screen/process inference. Pane/transport failure still
+takes precedence. Reports do not create Hook ownership, session ids or additional
+desktop notifications. See
+the [protocol boundary](../architecture/notes/nebula_terminal/program_status/2026-10-21-osc7501-record-lifecycle.md).
 
 ## Rust module names are not file locations
 

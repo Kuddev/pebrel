@@ -15,3 +15,17 @@ internal fun HostProfile.attachCommand(): String? {
         SshSessionMode.HERDR -> if (sessionName.isEmpty()) "exec herdr" else "exec herdr session attach '$sessionName'"
     }
 }
+
+/** A retry never creates a replacement multiplexer session when the old target is gone. */
+internal fun HostProfile.reconnectCommand(): String? = when (sessionMode) {
+    SshSessionMode.TMUX -> {
+        require(validRemoteSessionName(sessionMode, sessionName))
+        RemoteSessions.posixWithPath("if tmux has-session -t '=${sessionName.ifEmpty { "pebrel" }}' 2>/dev/null; then " +
+            "tmux attach-session -t '=${sessionName.ifEmpty { "pebrel" }}'; fi; exec \"${'$'}{SHELL:-/bin/sh}\" -l")
+    }
+    SshSessionMode.HERDR -> {
+        require(sessionName.isNotEmpty() && validRemoteSessionName(sessionMode, sessionName))
+        "exec herdr session attach '$sessionName'"
+    }
+    SshSessionMode.SHELL -> null
+}

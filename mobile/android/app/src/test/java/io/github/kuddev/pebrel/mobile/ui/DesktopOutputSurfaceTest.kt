@@ -4,6 +4,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.HapticFeedbackConstants
 import android.view.inputmethod.EditorInfo
+import androidx.test.core.app.ApplicationProvider
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
@@ -19,6 +21,14 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import io.github.kuddev.pebrel.terminal.TerminalInputTarget
 import io.github.kuddev.pebrel.terminal.TerminalSnapshotView
+import io.github.kuddev.pebrel.mobile.PebrelApplication
+import io.github.kuddev.pebrel.mobile.R
+import io.github.kuddev.pebrel.mobile.connection.DesktopPane
+import io.github.kuddev.pebrel.mobile.connection.HostProfile
+import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
+import io.github.kuddev.pebrel.mobile.session.DisplayPreferences
+import io.github.kuddev.pebrel.mobile.session.SessionRepository
+import kotlin.math.roundToInt
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -96,6 +106,42 @@ class DesktopOutputSurfaceTest {
             findInputView(view.getChildAt(i))?.let { return it }
         }
         return null
+    }
+
+    @Test fun desktopWrapAndNativePinchSurviveLeavingAndRecreatingTheScreen() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        var repository by mutableStateOf(SessionRepository(context))
+        var visible by mutableStateOf(true)
+        lateinit var root: View
+        compose.setContent {
+            root = LocalView.current
+            MaterialTheme { Column(Modifier.size(300.dp, 500.dp).testTag("output")) {
+                if (visible) DesktopTerminalScreen(
+                    DesktopWorkspace("pc", HostProfile("host", "PC", "192.0.2.1", 22, "user")),
+                    DesktopPane(1, 1, "shell", "", "", "idle", 0), repository, {}, {})
+            } }
+        }
+        compose.onNodeWithContentDescription(context.getString(R.string.more_actions)).performClick()
+        compose.onNodeWithText(context.getString(R.string.terminal_wrap_lines)).performClick()
+        compose.runOnIdle { assertTrue(checkNotNull(findInputView(root)).wrapLines) }
+        zoom(120f)
+        val saved = compose.runOnIdle { DisplayPreferences(context).state.value }
+        assertTrue(saved.desktopWrapLines)
+        assertTrue("the actual native pinch must reach persistent preferences", saved.desktopZoom > 1f)
+        assertEquals("desktop scaling must not replace the base font size", 16, saved.fontSize)
+
+        compose.runOnIdle { visible = false }
+        compose.waitForIdle()
+        compose.runOnIdle { repository = SessionRepository(context); visible = true }
+        compose.waitForIdle()
+        val restored = compose.runOnIdle { checkNotNull(findInputView(root)) }
+        assertTrue(restored.wrapLines)
+        val feedback = mutableListOf<Int>()
+        compose.runOnIdle { restored.onZoomChanged = { size, _ -> feedback += size } }
+        zoom(120f)
+        assertEquals("the new view starts at the previously saved exact ratio",
+            (saved.fontSize * saved.desktopZoom).roundToInt(), feedback.first())
+        assertTrue(DisplayPreferences(context).state.value.desktopZoom > saved.desktopZoom)
     }
 
     @Test fun legacyZoomScalesLinePitchWithGlyphWidth() {

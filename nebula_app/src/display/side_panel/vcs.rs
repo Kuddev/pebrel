@@ -899,7 +899,7 @@ pub(crate) fn collect_git_info(run: impl Fn(&[&str]) -> Option<String>) -> Optio
         "--date-order",
         "--decorate=full",
         "--max-count=128",
-        "--format=%x1e%H%x1f%h%x1f%D%x1f%s%x1f%an%x1f%ct%x1f%P",
+        "--format=%x1e%H%x1f%h%x1f%D%x1f%s%x1f%an%x1f%ae%x1f%ct%x1f%P",
     ])
     .map(|output| parse_git_history(&output))
     .unwrap_or_default();
@@ -921,6 +921,7 @@ pub(crate) fn parse_git_history(output: &str) -> Vec<GitCommit> {
             let decorations = fields.next().unwrap_or_default().trim().to_owned();
             let subject = fields.next().unwrap_or_default().to_owned();
             let author = fields.next().unwrap_or_default().to_owned();
+            let author_email = fields.next().unwrap_or_default().to_owned();
             let timestamp = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
             let parent_hashes =
                 fields.next().unwrap_or_default().split_whitespace().map(str::to_owned).collect();
@@ -930,6 +931,7 @@ pub(crate) fn parse_git_history(output: &str) -> Vec<GitCommit> {
                 decorations,
                 subject,
                 author,
+                author_email,
                 timestamp,
                 parent_hashes,
             })

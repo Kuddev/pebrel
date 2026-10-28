@@ -1,4 +1,4 @@
-//! Coalesce repaint wakeups before enqueueing; retain every semantic event.
+//! Coalesce repaint/status invalidations; retain every hook and shell edge.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +12,7 @@ use nebula_terminal::event::Event;
 pub(super) struct EventSender {
     sender: mpsc::UnboundedSender<Event>,
     wake_pending: Arc<AtomicBool>,
+    status_pending: Arc<AtomicBool>,
     pub(super) native_prompt: NativePromptState,
 }
 
@@ -29,18 +30,21 @@ pub(super) struct NativePrompt {
 pub(super) struct EventReceiver {
     receiver: mpsc::UnboundedReceiver<Event>,
     wake_pending: Arc<AtomicBool>,
+    status_pending: Arc<AtomicBool>,
 }
 
 pub(super) fn channel() -> (EventSender, EventReceiver) {
     let (sender, receiver) = mpsc::unbounded();
     let wake_pending = Arc::new(AtomicBool::new(false));
+    let status_pending = Arc::new(AtomicBool::new(false));
     (
         EventSender {
             sender,
             wake_pending: wake_pending.clone(),
+            status_pending: status_pending.clone(),
             native_prompt: NativePromptState::default(),
         },
-        EventReceiver { receiver, wake_pending },
+        EventReceiver { receiver, wake_pending, status_pending },
     )
 }
 
@@ -66,6 +70,9 @@ pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
         match sequence[end] {
             b'A'..=b'D' | b'H' | b'F' if parameters.is_empty() => {},
             b'~' if matches!(parameters, b"1" | b"2" | b"3" | b"4" | b"5" | b"6") => {},
+            // Ctrl+Shift+F11 is the managed PSReadLine Paste edit. Its legacy
+            // VT encoding must preserve the prompt like its Win32 key record.
+            b'~' if parameters == b"23;6" => {},
             b'_' => {
                 let Ok(parameters) = std::str::from_utf8(parameters) else { return false };
                 let mut fields = parameters.split(';');
@@ -122,18 +129,27 @@ impl EventSender {
         {
             self.native_prompt.observe_prompt();
         }
-        let wake = matches!(event, Event::Wakeup);
-        if wake && self.wake_pending.swap(true, Ordering::AcqRel) {
+        let pending = match &event {
+            Event::Wakeup => Some(&self.wake_pending),
+            Event::ProgramStatusChanged => Some(&self.status_pending),
+            _ => None,
+        };
+        if pending.is_some_and(|flag| flag.swap(true, Ordering::AcqRel)) {
             return;
         }
-        if self.sender.unbounded_send(event).is_err() && wake {
-            self.wake_pending.store(false, Ordering::Release);
+        if self.sender.unbounded_send(event).is_err()
+            && let Some(flag) = pending
+        {
+            flag.store(false, Ordering::Release);
         }
     }
 }
 
 impl EventReceiver {
     fn acknowledge(&self, event: &Event) {
+        if matches!(event, Event::ProgramStatusChanged) {
+            self.status_pending.store(false, Ordering::Release);
+        }
         if matches!(event, Event::Wakeup) {
             // Clear before processing: output arriving during UI work must
             // still enqueue a subsequent repaint, even on an inactive tab.
@@ -162,6 +178,22 @@ impl Stream for EventReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_status_flood_coalesces_snapshots_without_losing_hook_edges() {
+        let (sender, mut receiver) = channel();
+        for _ in 0..10_000 {
+            sender.send(Event::ProgramStatusChanged);
+        }
+        sender.send(Event::CommandStart);
+        sender.send(Event::AiHookEnvelope(b"done".to_vec()));
+        assert!(matches!(receiver.try_recv().unwrap(), Event::ProgramStatusChanged));
+        assert!(matches!(receiver.try_recv().unwrap(), Event::CommandStart));
+        assert!(matches!(receiver.try_recv().unwrap(), Event::AiHookEnvelope(_)));
+        assert!(receiver.try_recv().is_err());
+        sender.send(Event::ProgramStatusChanged);
+        assert!(matches!(receiver.try_recv().unwrap(), Event::ProgramStatusChanged));
+    }
 
     #[test]
     fn line_editor_controls_keep_the_prompt_but_submissions_and_interrupts_end_it() {

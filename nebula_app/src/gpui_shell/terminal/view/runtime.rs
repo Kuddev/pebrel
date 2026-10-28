@@ -103,14 +103,16 @@ impl TerminalView {
         stage: crate::ssh_session::SshStage,
         cx: &mut Context<Self>,
     ) {
-        self.ssh_stage = Some(stage.clone());
+        let previous = self.ssh_stage.replace(stage.clone());
         super::super::ssh_connect_overlay::update_connection_state(
             &mut self.ssh_connect,
             self.ssh_destination.as_deref(),
+            previous.as_ref(),
             stage.clone(),
         );
         self.ssh_connect_last_step = std::time::Instant::now();
         if matches!(stage, crate::ssh_session::SshStage::Failed(_)) {
+            self.path_drop.invalidate();
             self.port_forward_task = None;
             self.port_forwards.clear();
             self.pending_runtime_submit = None;
@@ -119,6 +121,7 @@ impl TerminalView {
             self.command_started = None;
             self.confirmation.invalidate();
             self.answer_reader = None;
+            self.sync_program_progress(cx);
         }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
@@ -142,7 +145,7 @@ impl TerminalView {
         }
         self.ai_session_from_probe = false;
         self.agent_activity.command_finished();
-        if self.progress != crate::taskbar::TaskProgress::None {
+        if !self.program_status_seen && self.progress != crate::taskbar::TaskProgress::None {
             self.progress = crate::taskbar::TaskProgress::None;
             cx.emit(TerminalViewEvent::ProgressChanged(self.progress));
         }
@@ -156,6 +159,7 @@ impl TerminalView {
         self.pending_runtime_submit = None;
         self.suggest.pending_command_prompt = None;
         self.awaiting_input = false;
+        self.sync_program_progress(cx);
         title_changed
     }
 
@@ -184,9 +188,14 @@ impl TerminalView {
         use crate::ai_agents::AgentStatus;
         use crate::runtime_api::RuntimeTaskState;
         if self.error.is_some()
-            || self.exited.is_some()
             || matches!(self.ssh_stage.as_ref(), Some(crate::ssh_session::SshStage::Failed(_)))
         {
+            return RuntimeTaskState::Failed;
+        }
+        if let Some(status) = self.effective_program_status() {
+            return status.task_state();
+        }
+        if self.exited.is_some() {
             return RuntimeTaskState::Failed;
         }
         if self.agent_activity.status() == AgentStatus::Blocked {
@@ -225,6 +234,12 @@ impl TerminalView {
     }
 
     pub fn runtime_agent(&self) -> Option<crate::runtime_api::RuntimeAgent> {
+        if let Some(app) = self.effective_program_status().and_then(|status| status.app.as_deref())
+        {
+            // Explicit non-Agent identity must not inherit an old screen/session identity.
+            let kind = crate::ai_agents::AgentKind::parse(app)?;
+            return Some(self.runtime_agent_for_kind(kind));
+        }
         let raw = self
             .ai_session
             .as_ref()
@@ -249,17 +264,21 @@ impl TerminalView {
         &self,
         kind: crate::ai_agents::AgentKind,
     ) -> crate::runtime_api::RuntimeAgent {
-        let state_source = match self.agent_activity.source() {
-            crate::ai_agents::AgentStatusSource::Hook => {
-                crate::runtime_api::RuntimeAgentStateSource::Hook
-            },
-            crate::ai_agents::AgentStatusSource::Screen => {
-                crate::runtime_api::RuntimeAgentStateSource::Screen
-            },
-            crate::ai_agents::AgentStatusSource::Process
-            | crate::ai_agents::AgentStatusSource::Unknown => {
-                crate::runtime_api::RuntimeAgentStateSource::Process
-            },
+        let state_source = if self.effective_program_status().is_some() {
+            crate::runtime_api::RuntimeAgentStateSource::Osc7501
+        } else {
+            match self.agent_activity.source() {
+                crate::ai_agents::AgentStatusSource::Hook => {
+                    crate::runtime_api::RuntimeAgentStateSource::Hook
+                },
+                crate::ai_agents::AgentStatusSource::Screen => {
+                    crate::runtime_api::RuntimeAgentStateSource::Screen
+                },
+                crate::ai_agents::AgentStatusSource::Process
+                | crate::ai_agents::AgentStatusSource::Unknown => {
+                    crate::runtime_api::RuntimeAgentStateSource::Process
+                },
+            }
         };
         crate::runtime_api::RuntimeAgent {
             agent_id: None,
@@ -268,9 +287,19 @@ impl TerminalView {
             worktree: None,
             kind: kind.slug().to_owned(),
             display_name: kind.display_name().to_owned(),
-            session_id: self.ai_session.as_ref().map(|identity| identity.session_id.clone()),
+            session_id: self
+                .ai_session
+                .as_ref()
+                .filter(|identity| {
+                    crate::ai_agents::AgentKind::parse(&identity.source) == Some(kind)
+                })
+                .map(|identity| identity.session_id.clone()),
             state_source,
-            state_rule: self.agent_activity.rule().map(str::to_owned),
+            state_rule: if self.effective_program_status().is_some() {
+                None
+            } else {
+                self.agent_activity.rule().map(str::to_owned)
+            },
             hook_seen: self.agent_activity.hook_seen(),
         }
     }
@@ -280,10 +309,14 @@ impl TerminalView {
         // pane 级故障永远优先；普通 CLI 才允许 OSC 9;4 覆盖弱推断。这里只改变
         // badge，不改变 RuntimeTaskState，避免进度协议干扰 agent.wait/自动回传。
         if state == crate::runtime_api::RuntimeTaskState::Failed {
+            if self.effective_program_status().is_some() {
+                return SidebarActivity::CommandFailed;
+            }
             return SidebarActivity::Failed;
         }
-        if let Some(activity) =
-            progress_sidebar_activity(self.progress, self.agent_activity.status())
+        if self.effective_program_status().is_none()
+            && let Some(activity) =
+                progress_sidebar_activity(self.progress, self.agent_activity.status())
         {
             return activity;
         }
@@ -291,6 +324,7 @@ impl TerminalView {
         // 非 0 是一个你可能要处理的结果。真在跑就不画（`mark_command_running`
         // 起跑时已经清了旗子），pane 级故障走下面的 `Failed`，更严重。
         if self.last_command_failed
+            && self.effective_program_status().is_none()
             && matches!(
                 state,
                 crate::runtime_api::RuntimeTaskState::Idle
@@ -910,6 +944,70 @@ impl TerminalView {
         }
     }
 
+    /// OSC 7 到达且弱推断「运行中」时的完成证据探测：清运行态必须先证明
+    /// 「回到提示符」——pane 进程树里只剩交互 shell（根进程或嵌套 shell），
+    /// 没有任何命令子进程。与 `probe_restored_prompt` 共用节流与在途去重
+    /// （同一容器、同一目的：读 pane 进程树）。
+    pub(super) fn probe_osc7_prompt_evidence(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_process_probe.is_some()
+            || self
+                .last_prompt_process_probe
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1))
+        {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let pid = session.shell_pid;
+        let started = self.command_started;
+        self.last_prompt_process_probe = Some(std::time::Instant::now());
+        let work =
+            cx.background_executor().spawn(async move { crate::process_tree::descendants(pid) });
+        self.prompt_process_probe = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |view, cx| {
+                view.prompt_process_probe = None;
+                view.apply_osc7_prompt_evidence(started, result, cx);
+            });
+        }));
+    }
+
+    /// 应用 OSC 7 完成证据：`started` 代际不符（期间又有提交）、已由更强
+    /// 证据清掉、或进程树里存在非 shell 进程（命令仍在跑，OSC 7 是命令
+    /// 自己发的）时一律不动状态；只剩交互 shell 才清弱推断的运行态。
+    pub(super) fn apply_osc7_prompt_evidence(
+        &mut self,
+        started: Option<std::time::Instant>,
+        result: Result<Vec<crate::process_tree::ProcessEntry>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command_started != started
+            || !self.command_running
+            || self.command_running_disproved
+            || self.agent_activity.hook_seen()
+            || self.exited.is_some()
+        {
+            return;
+        }
+        let Ok(processes) = result else { return };
+        // 根进程就是会话 shell 本身（bash/zsh/ssh wrapper），无条件算 shell；
+        // 其余进程必须是交互 shell——存在任何一个命令子进程即否决。
+        let only_shells = processes.iter().all(|p| {
+            p.depth == 0
+                || crate::process_tree::is_interactive_shell_command(
+                    &crate::process_tree::display_name(&p.executable),
+                )
+        });
+        if !only_shells {
+            return;
+        }
+        self.command_running = false;
+        self.command_started = None;
+        self.last_process_probe = None;
+        self.prompt_process_probe = None;
+        self.last_prompt_process_probe = None;
+        cx.notify();
+    }
+
     pub(super) fn probe_restored_prompt(&mut self, cx: &mut Context<Self>) {
         if self.prompt_process_probe.is_some()
             || self
@@ -1041,12 +1139,21 @@ impl TerminalView {
     /// 身份的第一来源是命令行首 token（`TermEvent::CommandStart` 那条路），
     /// 那是脆弱推断：会话恢复、shell 别名、`npx codex` 这类间接启动都会让它
     /// 落空。进程树是客观事实，只是慢一拍——而慢一拍在 1 Hz 看门狗里无所谓。
+    ///
+    /// 探测本身在后台线程跑（缓存未命中时 `cached_activity_evidence` 会同步
+    /// spawn `ps`，阻塞轮询最长 1s——看门狗此前在主线程直调它，是可感知的
+    /// 周期性卡顿，Fleet 2026-10-12 采样实测），多 pane 探测经 250ms 共享
+    /// 快照收敛。同一时刻至多一条在途探测，结果按命令身份丢弃陈旧批次
+    /// （见 [`Self::apply_activity_evidence`]）。
     pub(super) fn reconcile_shell_activity(&mut self, cx: &mut Context<Self>) {
         if !self.suggest.suggest_env.is_this_machine() {
             return;
         }
         if !self.command_running && !self.agent_activity.hook_seen() {
             self.command_running_disproved = false;
+            return;
+        }
+        if self.activity_probe_pending {
             return;
         }
         let Some(shell_pid) =
@@ -1066,13 +1173,50 @@ impl TerminalView {
             return;
         }
         self.last_process_probe = Some(std::time::Instant::now());
+        self.activity_probe_pending = true;
 
-        let Ok(evidence) =
-            crate::process_tree::activity_evidence(shell_pid, self.agent_activity.primary_pid())
-        else {
+        let primary_pid = self.agent_activity.primary_pid();
+        let observed_started = self.command_started;
+        let work = cx.background_executor().spawn(async move {
+            crate::process_tree::cached_activity_evidence(shell_pid, primary_pid)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |view, cx| {
+                view.activity_probe_pending = false;
+                view.apply_activity_evidence(observed_started, shell_pid, primary_pid, result, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 后台进程树探测结果的采纳与应用。证据解读与旧同步路径同一段；入口
+    /// 先按 [`activity_probe_still_current`] 丢弃陈旧批次——晚到的快照描述
+    /// 的是上一条命令（或上一个会话）的世界，采纳它会把新命令立刻判完。
+    pub(super) fn apply_activity_evidence(
+        &mut self,
+        observed_started: Option<std::time::Instant>,
+        observed_shell_pid: u32,
+        observed_primary_pid: Option<u32>,
+        evidence: Result<crate::process_tree::ActivityEvidence, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(evidence) = evidence else {
             // A failed or incomplete process snapshot is not an idle shell.
             return;
         };
+        let current_shell_pid =
+            self.session.as_ref().map(|session| session.shell_pid).filter(|pid| *pid != 0);
+        if observed_primary_pid != self.agent_activity.primary_pid()
+            || !activity_probe_still_current(
+                observed_started,
+                observed_shell_pid,
+                self.command_started,
+                current_shell_pid,
+            )
+        {
+            return;
+        }
         let known_agent =
             self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse).is_some();
         if known_agent
@@ -1144,6 +1288,19 @@ impl TerminalView {
     }
 }
 
+/// 进程树对账探测的采纳判定（纯函数）：命令起跑时刻与 shell pid 都没变
+/// 才采纳——`command_started` 在新命令开始时换新时刻（`mark_command_running`），
+/// 会话重建时 shell pid 换值，二者任一变化都说明结果描述的是旧世界。
+/// 晚到批次一旦被采纳，会把新命令立刻判完或认错身份。
+fn activity_probe_still_current(
+    observed_started: Option<std::time::Instant>,
+    observed_shell_pid: u32,
+    current_started: Option<std::time::Instant>,
+    current_shell_pid: Option<u32>,
+) -> bool {
+    observed_started == current_started && Some(observed_shell_pid) == current_shell_pid
+}
+
 fn probe_result_is_current(
     current_epoch: u64,
     result_epoch: u64,
@@ -1194,9 +1351,26 @@ fn runtime_chat_agent_kind(
 #[cfg(test)]
 mod tests {
     use super::{
-        InputOrigin, SidebarActivity, local_context_refusal, probe_result_is_current,
-        progress_sidebar_activity, runtime_chat_agent_kind,
+        InputOrigin, SidebarActivity, activity_probe_still_current, local_context_refusal,
+        probe_result_is_current, progress_sidebar_activity, runtime_chat_agent_kind,
     };
+
+    /// 看门狗探测改后台后的采纳判定：命令身份与 shell pid 都没变才采纳。
+    /// 晚到批次一旦被采纳，会把新命令立刻判完（Fleet 移植评估强调的回归
+    /// 教训之一）。
+    #[test]
+    fn activity_probe_results_are_dropped_once_the_command_or_session_moves_on() {
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        assert!(activity_probe_still_current(Some(started), 4242, Some(started), Some(4242)));
+        // 新命令：mark_command_running 换新起跑时刻。
+        let next = started + Duration::from_secs(9);
+        assert!(!activity_probe_still_current(Some(started), 4242, Some(next), Some(4242)));
+        // 会话重建（shell pid 变化或会话已不在）同样作废。
+        assert!(!activity_probe_still_current(Some(started), 4242, Some(started), Some(9001)));
+        assert!(!activity_probe_still_current(Some(started), 4242, Some(started), None));
+        assert!(!activity_probe_still_current(Some(started), 4242, None, Some(4242)));
+    }
 
     #[test]
     fn osc_progress_drives_cli_badges_but_never_overrides_agent_hooks() {
@@ -1268,3 +1442,6 @@ mod tests {
         assert!(refusal.contains("build@10.0.0.7"), "拒绝理由要指名远端主机：{refusal}");
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod activity_probe_tests;

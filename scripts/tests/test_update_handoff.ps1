@@ -14,19 +14,23 @@ $old = Join-Path $OutputRoot 'old.exe'
 $candidate = Join-Path $OutputRoot 'candidate.exe'
 $reinstall = Join-Path $OutputRoot 'reinstall.exe'
 $installer = Join-Path $OutputRoot 'installer.exe'
-& $compiler /nologo /target:exe "/out:$old" $fixture
+& $compiler /nologo /target:winexe "/out:$old" $fixture
 if ($LASTEXITCODE) { throw 'Could not build old process fixture' }
-& $compiler /nologo /target:exe /define:NEW_VERSION "/out:$candidate" $fixture
+& $compiler /nologo /target:winexe /define:NEW_VERSION "/out:$candidate" $fixture
 if ($LASTEXITCODE) { throw 'Could not build candidate fixture' }
-& $compiler /nologo /target:exe /define:SAME_VERSION "/out:$reinstall" $fixture
+& $compiler /nologo /target:winexe /define:SAME_VERSION "/out:$reinstall" $fixture
 if ($LASTEXITCODE) { throw 'Could not build same-version candidate fixture' }
-& $compiler /nologo /target:exe /define:INSTALLER "/out:$installer" $fixture
+& $compiler /nologo /target:winexe /define:INSTALLER "/out:$installer" $fixture
 if ($LASTEXITCODE) { throw 'Could not build installer fixture' }
 
 function Assert([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
-function Wait-File([string]$Path, [int]$Seconds = 12) {
+function Wait-File([string]$Path, [int]$Seconds = 12, [string]$FailurePath = '') {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     while (-not (Test-Path -LiteralPath $Path)) {
+        if ($FailurePath -and (Test-Path -LiteralPath $FailurePath)) {
+            $failure = Get-Content -LiteralPath $FailurePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            throw ('Helper rejected preparation: ' + $failure.error)
+        }
         if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for $Path" }
         Start-Sleep -Milliseconds 50
     }
@@ -36,13 +40,67 @@ function Write-Json([string]$Path, $Value) {
 }
 
 $results = @()
-foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'installer-failure', 'other-process', 'late-process', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held')) {
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+    $elevated = [System.Security.Principal.WindowsPrincipal]::new($identity).IsInRole(
+        [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+} finally { $identity.Dispose() }
+# Load the actual production functions without starting an installation transaction.
+$parseTokens = $null
+$parseErrors = $null
+$helperAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    (Get-Content -LiteralPath $helper -Raw -Encoding UTF8), [ref]$parseTokens, [ref]$parseErrors)
+Assert (-not $parseErrors) 'Production helper contains syntax errors'
+$functions = $helperAst.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @('Same-Path', 'Check-UnpreparedProcesses')
+}, $false)
+Assert ($functions.Count -eq 2) 'Process-check functions are missing'
+foreach ($function in $functions) { . ([scriptblock]::Create($function.Extent.Text)) }
+$exe = $old
+$plan = @{ participants = @() }
+$exited = Start-Process -FilePath $old -ArgumentList '--version' -WindowStyle Hidden -PassThru
+try {
+    $null = $exited.Handle
+    Assert ($exited.WaitForExit(5000)) 'Short-lived fixture did not exit'
+    Check-UnpreparedProcesses @($exited)
+    $results += @{ scenario = 'enumerated-process-exited'; passed = $true }
+    Write-Output 'enumerated-process-exited : passed'
+} finally { $exited.Dispose() }
+
+Assert (-not (Same-Path $null $exe)) 'Missing module path cannot match the installation'
+Assert (-not (Same-Path $exe ' ')) 'Blank plan path cannot match the installation'
+foreach ($unreadable in @('missing-module', 'module-denied', 'exit-state-denied')) {
+    $active = [pscustomobject]@{ Id = 42; HasExited = $false; MainModule = $null }
+    $active | Add-Member ScriptMethod Dispose {}
+    $active | Add-Member ScriptMethod WaitForExit { param($Milliseconds) return $false }
+    if ($unreadable -eq 'module-denied') {
+        $active | Add-Member ScriptProperty MainModule { throw 'fixture module access denied' } -Force
+    }
+    if ($unreadable -eq 'exit-state-denied') {
+        $active | Add-Member ScriptProperty HasExited { throw 'fixture exit state access denied' } -Force
+    }
+    $rejected = $false
+    try { Check-UnpreparedProcesses @($active) } catch { $rejected = $true }
+    Assert $rejected 'An unverified live process must still block installation'
+    $results += @{ scenario = $unreadable; passed = $true }
+    Write-Output "$unreadable : passed"
+}
+$unloading = [pscustomobject]@{ Id = 43; HasExited = $false; MainModule = $null }
+$unloading | Add-Member ScriptMethod Dispose {}
+$unloading | Add-Member ScriptMethod WaitForExit { param($Milliseconds) return $true }
+Check-UnpreparedProcesses @($unloading)
+$results += @{ scenario = 'module-unloaded-before-exit-signal'; passed = $true }
+Write-Output 'module-unloaded-before-exit-signal : passed'
+
+foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'privilege-mismatch', 'installer-failure', 'other-process', 'late-process', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held')) {
     $directory = Join-Path $OutputRoot $scenario
     $installation = Join-Path $directory 'installed app'
     $transaction = Join-Path $directory 'transaction'
     $config = Join-Path $directory 'config'
     $null = New-Item -ItemType Directory -Path $installation, $transaction, $config -Force
-    $executable = Join-Path $installation 'pebrel.exe'
+    # Keep real user/admin Pebrel processes outside the fixture's image-name scan.
+    $executable = Join-Path $installation 'pebrel-handoff-fixture.exe'
     Copy-Item -LiteralPath $old -Destination $executable
     $payload = if ($scenario -eq 'reinstall') { $reinstall } elseif ($scenario -eq 'repair-identical') { $old } else { $candidate }
     Copy-Item -LiteralPath $payload -Destination (Join-Path $directory 'candidate.exe')
@@ -50,7 +108,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
     $env:PEBREL_HANDOFF_FIXTURE = $directory
     $env:PEBREL_HANDOFF_FAIL_INSTALL = if ($scenario -eq 'installer-failure') { '1' } else { '0' }
     $env:PEBREL_HANDOFF_NOOP_INSTALL = if ($scenario -eq 'upgrade-noop') { '1' } else { '0' }
-    $parent = Start-Process -FilePath $executable -ArgumentList 'wait' -PassThru
+    $parent = Start-Process -FilePath $executable -ArgumentList 'wait' -WindowStyle Hidden -PassThru
     $null = $parent.Handle
     $runner = $null
     $other = $null
@@ -65,6 +123,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
         }
         $plan = @{
             schema = 1; transaction = $scenario; executable = $executable; installation = $installation
+            elevated = $elevated
             config_directory = $config; installer = $installer
             bytes = (Get-Item -LiteralPath $installer).Length
             sha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
@@ -72,23 +131,24 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
             participants = @(@{ pid = $parent.Id; created = $parent.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() })
         }
         if ($scenario -eq 'checksum') { $plan.sha256 = '0' * 64 }
+        if ($scenario -eq 'privilege-mismatch') { $plan.elevated = -not $elevated }
         if ($scenario -in @('reinstall', 'repair-identical')) { $plan.version = '1.8.0' }
         if ($scenario -eq 'creation-time') { $plan.participants[0].created = '1' }
         if ($scenario -eq 'other-process') {
-            $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru
+            $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -WindowStyle Hidden -PassThru
         }
         $planPath = Join-Path $transaction 'plan.json'
         Write-Json $planPath $plan
         $runner = Start-Process -FilePath $powershell -ArgumentList @(
             '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-            ('"' + $helper + '"'), '-PlanPath', ('"' + $planPath + '"')) -PassThru
+            ('"' + $helper + '"'), '-PlanPath', ('"' + $planPath + '"')) -WindowStyle Hidden -PassThru
         $resultPath = Join-Path $transaction 'result.json'
-        if ($scenario -in @('checksum', 'creation-time', 'other-process')) {
+        if ($scenario -in @('checksum', 'creation-time', 'privilege-mismatch', 'other-process')) {
             Wait-File $resultPath
             Assert (-not $parent.HasExited) 'Rejected plan must leave the original process open'
             Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Rejected plan started setup'
         } else {
-            Wait-File (Join-Path $transaction 'ready.json')
+            Wait-File (Join-Path $transaction 'ready.json') -FailurePath $resultPath
             Assert (-not $parent.HasExited) 'Readiness must not stop the original process'
             Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Setup ran before commit'
             $locked = $false
@@ -99,7 +159,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
             } catch [System.IO.IOException] { $locked = $true }
             Assert $locked 'Ready helper did not own the installation lock'
             if ($scenario -eq 'late-process') {
-                $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru
+                $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -WindowStyle Hidden -PassThru
             }
             if ($scenario -eq 'cancel') {
                 Write-Json (Join-Path $transaction 'cancel.json') @{}
