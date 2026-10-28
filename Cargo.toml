@@ -13,6 +13,12 @@ members = [
 ]
 resolver = "2"
 
+# 保留 XIM 输入法，同时复用固定的属性原子名称，避免长期运行扩大 X11 原子表。
+# 基于原依赖 16f35a2c881b815a2b6cdfd6687988e84f8447d8 的薄修补。
+# 原因、兼容范围与撤销条件见 architecture/notes/packaging/2026-10-16-bounded-xim-atoms.md。
+[patch."https://github.com/zed-industries/xim-rs.git"]
+zed-xim = { git = "https://github.com/MeshedPoto/xim-rs", rev = "422473ff3be2ce58ea70f3fad35cecafcf7ae6a9" }
+
 [workspace.package]
 edition = "2024"
 rust-version = "1.97.1"
