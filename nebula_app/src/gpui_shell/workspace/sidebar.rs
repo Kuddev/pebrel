@@ -908,6 +908,7 @@ impl NebulaWorkspace {
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
+        let broadcast_button = self.render_toolbar_broadcast(cx);
         h_flex()
             .size_full()
             .items_center()
@@ -949,9 +950,10 @@ impl NebulaWorkspace {
                             })),
                     ),
             )
-            .child(self.render_collapsed_tab_title(cx))
+            .child(self.render_active_pane_title(cx))
             .child(
                 window_titlebar::title_bar_right_controls()
+                    .when_some(broadcast_button, |controls, button| controls.child(button))
                     .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
@@ -971,96 +973,6 @@ impl NebulaWorkspace {
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()
-    }
-
-    /// 折叠态的活动 tab 名（旧壳 `chrome.rs` ~2129：侧栏收起后顶栏居中画活动
-    /// tab 名，"没有侧栏也知道自己在哪"）。
-    ///
-    /// 弹性容器 + `absolute` 覆盖层的组合是刻意的：容器用 `flex_1` 抢下两侧
-    /// 工具之间的空档，文字走覆盖层不参与布局——既不会把左右按钮挤歪，也不
-    /// 吃鼠标事件，标题栏本身的拖窗和双击最大化照旧。
-    fn render_collapsed_tab_title(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let slot = div().relative().flex_1().min_w_0().h_full();
-        if self.settings_open {
-            return slot.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(cx.theme().foreground)
-                    .child(crate::gpui_shell::config::ui_language(cx).pick("设置", "Settings")),
-            );
-        }
-        if !self.sidebar_collapsed || self.tabs.is_empty() {
-            return slot;
-        }
-        let theme = cx.theme();
-        let (ink, dim) = (theme.foreground, theme.muted_foreground);
-        let dark = theme.is_dark();
-        let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
-        let chrome_family = theme.font_family.clone();
-        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
-        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
-        let TabPresentation {
-            title,
-            logo_image,
-            logo_pending,
-            program_glyph,
-            pane_count,
-            local_administrator,
-            ..
-        } = self.tab_presentation(self.active, cx, dark);
-        slot.child(
-            h_flex()
-                .absolute()
-                .inset_0()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                // 两侧工具靠 flex 天然让位，这点内缩只是别让长标题贴到按钮上。
-                .px_4()
-                .when(local_administrator, |row| {
-                    row.child(tab_presentation::administrator_badge(
-                        "collapsed-title-admin".into(),
-                        cx,
-                    ))
-                })
-                .when_some(logo_image, |row, image| {
-                    row.child(
-                        img(image)
-                            .size(px(TAB_LABEL_ICON_SIZE))
-                            .flex_shrink_0()
-                            .object_fit(ObjectFit::Contain),
-                    )
-                })
-                .when_some(program_glyph, |row, glyph| {
-                    row.child(
-                        div()
-                            .when(logo_pending, |slot| slot.w(px(TAB_LABEL_ICON_SIZE)))
-                            .flex_shrink_0()
-                            .font_family(symbol_family)
-                            .text_size(px(label_px))
-                            .text_color(dim)
-                            .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
-                    )
-                })
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(chrome_family)
-                        .text_size(px(label_px))
-                        .font_weight(FontWeight::NORMAL)
-                        .text_color(ink)
-                        .child(title),
-                )
-                // 折叠态在标题旁显示相同的分屏布局缩略图。
-                .when(pane_count > 1, |row| {
-                    row.child(pane_header::split_layout_icon(&self.tabs[self.active], label_px, dim))
-                }),
-        )
     }
 }
 

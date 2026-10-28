@@ -47,6 +47,7 @@ pub(super) struct TabContextMenu {
     /// 菜单里每条命令捕获的都是下标。标签集合在菜单挂着的时候变了（远端
     /// 或 AI 侧自动关标签），这一份就不该再画。
     ix: usize,
+    pub(super) pane: Option<u64>,
     _subscription: Subscription,
 }
 
@@ -147,18 +148,40 @@ impl NebulaWorkspace {
                 language,
             )
         });
-        menu.focus_handle(cx).focus(window, cx);
+        self.show_context_menu(menu, ix, None, position, window, cx);
+    }
+
+    /// Pane menus share the window's single popup host with tab menus, so a
+    /// hover-only grip can disappear without taking its open menu with it.
+    pub(super) fn show_context_menu(
+        &mut self,
+        menu: Entity<PopupMenu>,
+        ix: usize,
+        pane: Option<u64>,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Activating the target tab/pane defers terminal focus. Queue the menu
+        // after it, otherwise opening an inactive pane steals keyboard navigation.
+        let focus = menu.focus_handle(cx);
+        window.defer(cx, move |window, cx| focus.focus(window, cx));
         let subscription = cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, _, cx| {
             this.tab_menu = None;
             cx.notify();
         });
-        self.tab_menu = Some(TabContextMenu { menu, position, ix, _subscription: subscription });
+        self.tab_menu =
+            Some(TabContextMenu { menu, position, ix, pane, _subscription: subscription });
         cx.notify();
     }
 
     pub(super) fn render_tab_context_menu(&self) -> Option<AnyElement> {
         let state = self.tab_menu.as_ref()?;
-        if state.ix >= self.tabs.len() {
+        if state.ix >= self.tabs.len()
+            || state
+                .pane
+                .is_some_and(|id| self.active != state.ix || self.tab_of_pane(id) != Some(state.ix))
+        {
             return None;
         }
         Some(

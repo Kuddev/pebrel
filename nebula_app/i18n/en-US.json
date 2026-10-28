@@ -1572,6 +1572,7 @@
   },
   "workspace": {
     "pane": {
+      "drag_hint": "Drag to move · Double-click to rename · Right-click for pane actions",
       "rename_hint": "Double-click to rename; Enter or click outside to save, Esc to cancel. Clear for an automatic title. Reopen to undo a saved name.",
       "stop_broadcast_input": "Stop broadcasting input",
       "broadcast_input_tooltip": "Broadcast input to every pane in this tab",

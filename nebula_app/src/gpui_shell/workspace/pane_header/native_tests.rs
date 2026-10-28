@@ -6,6 +6,23 @@ use gpui_component::Root;
 
 #[gpui::test]
 fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppContext) {
+    exercise_drag(cx, nebula_settings::TabsPositionName::Top);
+}
+
+#[gpui::test]
+fn sidebar_grip_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppContext) {
+    exercise_drag(cx, nebula_settings::TabsPositionName::Sidebar);
+}
+
+fn hover(window: &mut gpui::VisualTestContext, position: gpui::Point<gpui::Pixels>) {
+    window.simulate_mouse_move(position, None, Modifiers::default());
+    window.update(|window, cx| {
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+}
+
+fn exercise_drag(cx: &mut TestAppContext, mode: nebula_settings::TabsPositionName) {
     let directory = tempfile::tempdir().unwrap();
     let program = directory.path().join("missing-test-shell");
     let hub = crate::runtime_api::RuntimeHub::new();
@@ -32,6 +49,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
             )
         });
         let ids = workspace.update(cx, |workspace, cx| {
+            workspace.tabs_position = mode;
             let mut panes = (0..4)
                 .map(|_| {
                     workspace.new_pane(
@@ -91,17 +109,33 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
     let (workspace, ids) = fixture.unwrap();
     window.update(|window, _| window.activate_window());
     window.run_until_parked();
+    workspace.update(&mut window, |workspace, cx| {
+        workspace.tabs_position = mode;
+        workspace.sync_settings_layout(true);
+        cx.notify();
+    });
     window.update(|window, cx| {
+        window.refresh();
         let _ = window.draw(cx);
     });
     let source_selector = &*Box::leak(format!("pane-header-grip-{}", ids[0]).into_boxed_str());
-    let target_selector = &*Box::leak(format!("pane-header-grip-{}", ids[2]).into_boxed_str());
-    let source = window.debug_bounds(source_selector).unwrap().center();
-    let target = window.debug_bounds(target_selector).unwrap().center();
+    let source = workspace.read_with(&window, |workspace, _| {
+        let bounds = *workspace.pane_bounds.borrow().get(&ids[0]).unwrap();
+        gpui::point(bounds.center().x, bounds.top() + px(14.0))
+    });
+    hover(&mut window, source);
+    let source = window
+        .debug_bounds(source_selector)
+        .unwrap_or_else(|| panic!("grip missing after hover at {source:?}; mode={mode:?}"))
+        .center();
+    let target = workspace.read_with(&window, |workspace, _| {
+        workspace.pane_bounds.borrow().get(&ids[2]).unwrap().center()
+    });
     let views = workspace.read_with(&window, |workspace, _| {
         let WorkspaceTab::Terminal { panes, .. } = &workspace.tabs[0] else { panic!() };
         panes.iter().map(|pane| pane.view.clone()).collect::<Vec<_>>()
     });
+    hover(&mut window, source);
     window.simulate_mouse_down(source, MouseButton::Left, Modifiers::default());
     workspace.read_with(&window, |workspace, _| {
         let WorkspaceTab::Terminal { focused, .. } = &workspace.tabs[0] else { panic!() };
@@ -127,6 +161,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
         let WorkspaceTab::Terminal { tree, .. } = &workspace.tabs[0] else { panic!() };
         assert_eq!(tree.leaves(), ids, "returning to the source tab must not revive the drag");
     });
+    hover(&mut window, source);
     window.simulate_mouse_down(source, MouseButton::Left, Modifiers::default());
     window.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
     window.simulate_keystrokes("escape");
@@ -136,6 +171,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
         assert_eq!(tree.leaves(), ids);
         assert!(workspace.pane_drag.is_none());
     });
+    hover(&mut window, source);
     window.simulate_mouse_down(source, MouseButton::Left, Modifiers::default());
     window.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
     window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
@@ -155,9 +191,13 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
     });
     window.run_until_parked();
     window.update(|window, cx| {
+        window.refresh();
         let _ = window.draw(cx);
     });
-    let grip = window.debug_bounds(source_selector).unwrap().center();
+    let grip = workspace.read_with(&window, |workspace, _| {
+        let bounds = *workspace.pane_bounds.borrow().get(&ids[0]).unwrap();
+        gpui::point(bounds.center().x, bounds.top() + px(14.0))
+    });
     let body = workspace.read_with(&window, |workspace, _| {
         workspace.pane_bounds.borrow().get(&ids[0]).unwrap().center()
     });
@@ -169,6 +209,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
     );
     workspace.read_with(&window, |workspace, _| assert!(workspace.pane_drag.is_none()));
     window.simulate_mouse_up(body, MouseButton::Left, Modifiers::default());
+    hover(&mut window, grip);
     window.simulate_mouse_down(grip, MouseButton::Left, Modifiers::default());
     window.simulate_mouse_move(source, Some(MouseButton::Left), Modifiers::default());
     window.update(|window, cx| {

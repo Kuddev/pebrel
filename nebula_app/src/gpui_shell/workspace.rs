@@ -2149,47 +2149,24 @@ impl NebulaWorkspace {
             return div().into_any_element();
         };
         if *zoomed || tree.is_leaf() {
-            let pane = self.tabs[tab_ix].primary_terminal_pane();
-            let view = pane.map(terminal_activity::terminal_surface);
-            let probe = pane.map(|pane| {
-                let pane_id = pane.id;
-                let store = self.pane_bounds.clone();
-                // 普通单 Pane 也必须记录窗口坐标；dock 命中与旧壳一样依赖
-                // 当前终端区域，不能只在进入分屏递归后才得到边界。
-                gpui::canvas(
-                    move |bounds, _, _| {
-                        store.borrow_mut().insert(pane_id, bounds);
-                    },
-                    |_, _, _, _| (),
-                )
-                .absolute()
-                .inset_0()
-            });
-            // 缩放态也要画标题条：否则进了独占就没有退出按钮，只剩快捷键。
-            // 满卡时标题条两个上角都贴着卡片圆角。
-            let header = pane.filter(|_| pane_header::header_visible(panes.len())).map(|pane| {
-                let ordinal = pane_header::pane_order(tree)
-                    .iter()
-                    .position(|id| *id == pane.id)
-                    .map_or(1, |at| at + 1);
-                self.render_pane_header(
-                    tab_ix,
-                    pane.id,
-                    ordinal,
-                    &pane.view,
-                    pane.custom_name.as_deref(),
-                    true,
-                    *zoomed,
-                    *broadcast,
-                    pane_header::HeaderCorners { top_left: true, top_right: true },
-                    cx,
-                )
-            });
-            return v_flex()
-                .size_full()
-                .children(header)
-                .child(div().flex_1().min_h_0().relative().children(probe).children(view))
-                .into_any_element();
+            let Some(pane) = self.tabs[tab_ix].primary_terminal_pane() else {
+                return div().into_any_element();
+            };
+            let ordinal = pane_header::pane_order(tree)
+                .iter()
+                .position(|id| *id == pane.id)
+                .map_or(1, |at| at + 1);
+            return self.render_terminal_pane(
+                tab_ix,
+                pane,
+                ordinal,
+                pane_header::header_visible(panes.len()),
+                true,
+                *zoomed,
+                *broadcast,
+                pane_header::HeaderCorners { top_left: true, top_right: true },
+                cx,
+            );
         }
         let mut path = Vec::new();
         let order = pane_header::pane_order(tree);
@@ -2233,65 +2210,21 @@ impl NebulaWorkspace {
     ) -> gpui::AnyElement {
         match node {
             SplitTree::Leaf(id) => {
-                let id = *id;
-                let pane = panes.iter().find(|pane| pane.id == id);
-                let view = pane.map(terminal_activity::terminal_surface);
-                let store = self.pane_bounds.clone();
-                let is_focused = id == focused;
-                let dim = gpui::black().opacity(crate::display::NEBULA_UNFOCUSED_SPLIT_DIM);
-                let veil = div().absolute().inset_0().bg(dim);
-                let ordinal = order.iter().position(|other| *other == id).map_or(1, |at| at + 1);
-                let header = pane.map(|pane| {
-                    self.render_pane_header(
-                        tab_ix,
-                        id,
-                        ordinal,
-                        &pane.view,
-                        pane.custom_name.as_deref(),
-                        is_focused,
-                        false,
-                        broadcast,
-                        corners,
-                        cx,
-                    )
-                });
-                // 布局：标题条固定高 + 终端吃剩余。canvas 探针仍量**整个叶子**
-                // ——方向导航与 dock 命中读的是 pane 矩形，不是终端矩形。
-                v_flex()
-                    .size_full()
-                    .relative()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(
-                        gpui::canvas(
-                            move |bounds, _, _| {
-                                store.borrow_mut().insert(id, bounds);
-                            },
-                            |_, _, _, _| (),
-                        )
-                        .absolute()
-                        .inset_0(),
-                    )
-                    .children(header)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .relative()
-                            .children(view)
-                            // 与旧壳一致：不用焦点描边，仅给非活动 pane 覆 30%
-                            // 黑色 veil。veil 只盖终端区——压暗标题条会把四个
-                            // pane 的标题一起糊成灰。
-                            .when(
-                                !is_focused
-                                    && cx
-                                        .try_global::<crate::gpui_shell::config::Settings>()
-                                        .is_none_or(|settings| settings.dim_inactive_panes),
-                                |pane| pane.child(veil),
-                            ),
-                    )
-                    .into_any_element()
+                let Some(pane) = panes.iter().find(|pane| pane.id == *id) else {
+                    return div().into_any_element();
+                };
+                let ordinal = order.iter().position(|other| other == id).map_or(1, |at| at + 1);
+                self.render_terminal_pane(
+                    tab_ix,
+                    pane,
+                    ordinal,
+                    true,
+                    *id == focused,
+                    false,
+                    broadcast,
+                    corners,
+                    cx,
+                )
             },
             SplitTree::Split { direction, ratio, dragging, first, second, .. } => {
                 let direction = *direction;

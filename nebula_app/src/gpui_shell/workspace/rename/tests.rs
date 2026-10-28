@@ -5,10 +5,12 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext};
 fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
+        window.refresh();
         let _ = window.draw(cx);
     });
     cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.update(|window, cx| {
+        window.refresh();
         let _ = window.draw(cx);
     });
     cx.run_until_parked();
@@ -49,6 +51,7 @@ impl RenameFixture {
                 )
             });
             let ids = workspace.update(cx, |workspace, cx| {
+                workspace.tabs_position = nebula_settings::TabsPositionName::Sidebar;
                 let panes = (0..2)
                     .map(|_| {
                         workspace.new_pane(
@@ -94,10 +97,51 @@ impl RenameFixture {
         let mut window = window.clone();
         window.update(|window, _| window.activate_window());
         settle(&mut window);
+        // Startup settings are asynchronous; choose the test layout afterwards.
+        workspace.update(&mut window, |workspace, cx| {
+            workspace.tabs_position = nebula_settings::TabsPositionName::Sidebar;
+            workspace.sync_settings_layout(true);
+            cx.notify();
+        });
+        settle(&mut window);
         (Self { workspace, ids, headers, _directory: directory }, window)
     }
 
+    fn open_menu(&self, index: usize, cx: &mut VisualTestContext) {
+        let position = self.workspace.read_with(cx, |workspace, _| {
+            let pane = *workspace.pane_bounds.borrow().get(&self.ids[index]).unwrap();
+            gpui::point(pane.center().x, pane.top() + px(14.0))
+        });
+        cx.simulate_mouse_move(position, None, Modifiers::default());
+        settle(cx);
+        cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::default());
+        settle(cx);
+        self.workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.tab_menu.as_ref().and_then(|menu| menu.pane),
+                Some(self.ids[index]),
+                "right click must open the addressed pane menu"
+            );
+        });
+        // The menu stays open after leaving the pane's hover area.
+        cx.simulate_mouse_move(gpui::point(px(1.0), px(1.0)), None, Modifiers::default());
+        settle(cx);
+        cx.update(|window, _| {
+            assert!(
+                window.context_stack().iter().any(|context| context.contains("PopupMenu")),
+                "deferred terminal focus must not steal focus from the menu"
+            );
+        });
+    }
+
     fn edit(&self, index: usize, cx: &mut VisualTestContext) {
+        let position = self.workspace.read_with(cx, |workspace, _| {
+            let bounds = *workspace.pane_bounds.borrow().get(&self.ids[index]).unwrap();
+            gpui::point(bounds.center().x, bounds.top() + px(14.0))
+        });
+        cx.simulate_mouse_move(position, None, Modifiers::default());
+        settle(cx);
         let position =
             cx.debug_bounds(self.headers[index]).expect("pane title is visible").center();
         cx.simulate_click(position, Modifiers::default());
@@ -255,4 +299,143 @@ fn custom_pane_names_survive_snapshot_json_and_workspace_restore(cx: &mut TestAp
         let again = w.snapshot_session(cx);
         assert_eq!(again.tabs[1].layout, restored.tabs[0].layout);
     });
+}
+
+#[gpui::test]
+fn sidebar_panes_keep_their_full_surface_and_center_the_title(cx: &mut TestAppContext) {
+    let (fixture, mut window) = RenameFixture::open(cx);
+    window.simulate_resize(gpui::size(px(1100.0), px(720.0)));
+    settle(&mut window);
+    let body_selector = &*Box::leak(format!("pane-body-{}", fixture.ids[0]).into_boxed_str());
+    let before = window.debug_bounds(body_selector).unwrap();
+    fixture.workspace.read_with(&window, |workspace, _| {
+        let pane = *workspace.pane_bounds.borrow().get(&fixture.ids[0]).unwrap();
+        assert_eq!(before, pane, "sidebar chrome must not reserve a header row");
+    });
+    let hover = gpui::point(before.center().x, before.top() + px(14.0));
+    window.simulate_mouse_move(hover, None, Modifiers::default());
+    settle(&mut window);
+    let grip = window.debug_bounds(fixture.headers[0]).unwrap();
+    assert_eq!(grip.center().x, before.center().x);
+    assert!(grip.size.width >= px(32.0));
+    assert_eq!(window.debug_bounds(body_selector).unwrap(), before);
+    window.simulate_mouse_move(gpui::point(px(1.0), px(1.0)), None, Modifiers::default());
+    settle(&mut window);
+    assert_eq!(window.debug_bounds(body_selector).unwrap(), before);
+
+    for width in [1100.0, 620.0] {
+        window.simulate_resize(gpui::size(px(width), px(720.0)));
+        for collapsed in [false, true] {
+            fixture.workspace.update(&mut window, |workspace, cx| {
+                workspace.sidebar_collapsed = collapsed;
+                if let WorkspaceTab::Terminal { panes, .. } = &mut workspace.tabs[0] {
+                    panes[0].custom_name =
+                        Some("A very long window title with 中文 and a distant tail".repeat(4));
+                }
+                cx.notify();
+            });
+            settle(&mut window);
+            let title = window.debug_bounds("active-pane-title").unwrap();
+            let broadcast = window.debug_bounds("toolbar-broadcast").unwrap();
+            assert!((f32::from(title.center().x) - width / 2.0).abs() < 1.0);
+            assert!(title.right() <= broadcast.left());
+        }
+    }
+    // The retained top-tab layout still reserves the original 24px header.
+    fixture.workspace.update(&mut window, |workspace, cx| {
+        workspace.tabs_position = nebula_settings::TabsPositionName::Top;
+        cx.notify();
+    });
+    settle(&mut window);
+    let body = window.debug_bounds(body_selector).unwrap();
+    fixture.workspace.read_with(&window, |workspace, _| {
+        let pane = *workspace.pane_bounds.borrow().get(&fixture.ids[0]).unwrap();
+        assert_eq!(body.top() - pane.top(), px(super::super::pane_header::PANE_HEADER_H));
+    });
+    fixture.edit(0, &mut window);
+    window.simulate_input("Top-mode name");
+    window.simulate_keystrokes("enter");
+    settle(&mut window);
+    assert_eq!(fixture.name(0, &window).as_deref(), Some("Top-mode name"));
+}
+
+#[gpui::test]
+fn sidebar_broadcast_and_grip_menu_target_the_current_pane(cx: &mut TestAppContext) {
+    let (fixture, mut window) = RenameFixture::open(cx);
+    let broadcast = window.debug_bounds("toolbar-broadcast").unwrap().center();
+    window.simulate_click(broadcast, Modifiers::default());
+    fixture.workspace.read_with(&window, |workspace, _| {
+        let WorkspaceTab::Terminal { focused, broadcast, .. } = &workspace.tabs[0] else {
+            panic!()
+        };
+        assert!(*broadcast);
+        assert_eq!(*focused, fixture.ids[0]);
+    });
+    window.update(|window, cx| {
+        let view = fixture.workspace.read(cx).tabs[0].focused_view().unwrap();
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    // Open the second pane's real context menu, then use its keyboard navigation.
+    fixture.open_menu(1, &mut window);
+    window.simulate_keystrokes("down");
+    settle(&mut window);
+    window.simulate_keystrokes("enter");
+    settle(&mut window);
+    fixture.workspace.read_with(&window, |workspace, _| {
+        assert_eq!(
+            workspace.pane_rename.as_ref().expect("rename action opens the title editor").pane_id,
+            fixture.ids[1]
+        );
+    });
+    window.simulate_input("Second pane");
+    window.simulate_keystrokes("enter");
+    settle(&mut window);
+    assert_eq!(fixture.name(1, &window).as_deref(), Some("Second pane"));
+    assert_eq!(
+        fixture
+            .workspace
+            .read_with(&window, |workspace, _| workspace.meta(0).custom_name.clone())
+            .as_deref(),
+        Some("group-title")
+    );
+    for expected_zoom in [true, false] {
+        fixture.open_menu(1, &mut window);
+        window.simulate_keystrokes("down down enter");
+        settle(&mut window);
+        fixture.workspace.read_with(&window, |workspace, _| {
+            let WorkspaceTab::Terminal { zoomed, focused, .. } = &workspace.tabs[0] else {
+                panic!()
+            };
+            assert_eq!(*zoomed, expected_zoom);
+            assert_eq!(*focused, fixture.ids[1]);
+            assert!(workspace.tab_menu.is_none());
+        });
+        window.update(|window, cx| {
+            let view = fixture.workspace.read(cx).tabs[0].focused_view().unwrap();
+            assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        });
+    }
+    fixture.open_menu(1, &mut window);
+    window.simulate_keystrokes("escape");
+    settle(&mut window);
+    window.update(|window, cx| {
+        let workspace = fixture.workspace.read(cx);
+        assert!(workspace.tab_menu.is_none());
+        assert!(
+            workspace.tabs[0].focused_view().unwrap().read(cx).focus_handle(cx).is_focused(window)
+        );
+    });
+    fixture.open_menu(1, &mut window);
+    window.simulate_keystrokes("down down down enter");
+    settle(&mut window);
+    fixture.workspace.read_with(&window, |workspace, _| {
+        let WorkspaceTab::Terminal { panes, focused, broadcast, .. } = &workspace.tabs[0] else {
+            panic!()
+        };
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].id, fixture.ids[0]);
+        assert_eq!(*focused, fixture.ids[0]);
+        assert!(!broadcast, "closing to one pane disables broadcast");
+    });
+    assert!(window.debug_bounds("toolbar-broadcast").is_none());
 }
