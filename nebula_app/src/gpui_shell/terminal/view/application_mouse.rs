@@ -105,28 +105,35 @@ impl TerminalView {
             self.application_mouse = None;
             return;
         }
-        let report = !drag || term.mode().intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION);
-        let bytes = report
-            .then(|| {
-                mouse_protocol::report(
-                    term.mode(),
-                    point,
-                    mouse_protocol::BUTTON_LEFT
-                        + if drag { mouse_protocol::DRAG_OFFSET } else { 0 },
-                    drag,
-                    report_mods(modifiers),
-                )
-            })
-            .flatten();
+        if drag && !term.mode().intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) {
+            return;
+        }
+        let encode = |point| {
+            mouse_protocol::report(
+                term.mode(),
+                point,
+                mouse_protocol::BUTTON_LEFT + if drag { mouse_protocol::DRAG_OFFSET } else { 0 },
+                drag,
+                report_mods(modifiers),
+            )
+        };
+        let (point, bytes) = match encode(point) {
+            Some(bytes) => (point, bytes),
+            None if !drag => {
+                // Scrollback and legacy coordinate limits cannot encode this
+                // position. The app still needs a release for its valid press.
+                let Some(bytes) = encode(gesture.point) else { return };
+                (gesture.point, bytes)
+            },
+            None => return,
+        };
         drop(term);
         if let Some(gesture) = self.application_mouse.as_mut() {
             gesture.point = point;
             gesture.modifiers = modifiers;
         }
-        if let Some(bytes) = bytes {
-            self.last_report_point = Some(point);
-            self.write_bytes(bytes);
-        }
+        self.last_report_point = Some(point);
+        self.write_bytes(bytes);
     }
 
     pub(super) fn cancel_pointer_gesture(&mut self) {
