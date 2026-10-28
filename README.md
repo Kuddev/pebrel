@@ -74,6 +74,18 @@
 
 For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
+<p align="center">
+  <strong>Pebrel WeChat Community</strong>
+</p>
+
+<p align="center">
+  <a href="extra/community/wechat-group-2026-11-04.jpg"><img src="extra/community/wechat-group-2026-11-04.jpg" alt="QR code for the Pebrel WeChat group, valid before November 4, 2026" width="300" /></a>
+</p>
+
+<p align="center">
+  Scan with WeChat to join. Valid before November 4, 2026. Click the image to view full size.
+</p>
+
 ## One Workspace
 
 Pebrel (formerly Nebula) brings local shells, remote hosts, files, and AI command-line
