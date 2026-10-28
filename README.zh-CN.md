@@ -74,6 +74,18 @@
 
 商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
+<p align="center">
+  <strong>Pebrel 微信交流群</strong>
+</p>
+
+<p align="center">
+  <a href="extra/community/wechat-group-2026-11-04.jpg"><img src="extra/community/wechat-group-2026-11-04.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 4 日前有效" width="300" /></a>
+</p>
+
+<p align="center">
+  微信扫码加入，2026 年 11 月 4 日前有效。点击图片可查看原图。
+</p>
+
 ## 一个工作区
 
 Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行工具放进同一个原生桌面工作区。
