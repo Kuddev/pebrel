@@ -560,6 +560,11 @@ async fn pump_stream<H: SshEventHost>(
                     stream.resize(size);
                     event_proxy.send_event(TerminalEvent::Wakeup);
                 },
+                Some(Msg::CellMetrics(size)) => {
+                    // SSH has no local EventLoop either, but the stream still
+                    // needs the cell size to answer image-size queries.
+                    stream.apply_cell_metrics(size, event_proxy);
+                },
                 Some(Msg::Shutdown) | None => return Ok(()),
             },
             message = channel.next_message() => match message {

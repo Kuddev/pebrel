@@ -193,11 +193,27 @@ pub struct StreamProcessor {
     pending_images: Vec<Arc<crate::term::PendingImage>>,
     inline_content: crate::inline_content::Registry,
     command_capture: crate::inline_content::CommandCapture,
+    cell_size: crate::cell_size_query::CellSizeQueries,
 }
 
 impl StreamProcessor {
     pub fn resize(&mut self, window_size: WindowSize) {
         self.window_size = Some(window_size);
+    }
+
+    /// Record the pane's cell size without resizing the child, then answer any
+    /// pending `CSI 16 t` queries from it.
+    ///
+    /// A pane born at its target geometry never sends a resize, so without
+    /// this the stream would never learn how many device pixels a cell is and
+    /// pixel-drawing clients would never get their answer.
+    pub fn apply_cell_metrics<U: EventListener>(
+        &mut self,
+        window_size: WindowSize,
+        event_proxy: &U,
+    ) {
+        self.window_size = Some(window_size);
+        self.cell_size.answer(self.window_size, event_proxy);
     }
 
     pub fn set_remote_hook_token(&mut self, token: String) {
@@ -242,6 +258,11 @@ impl StreamProcessor {
         bytes: &[u8],
     ) -> usize {
         let osc_events = self.cwd_sniffer.feed(bytes);
+        // `CSI 16 t` has no VTE handler, so it never reaches the parser; a
+        // pixel-drawing client asks for the cell size this way before it can
+        // lay an image out, and an unanswered query makes it stretch the
+        // bitmap over the whole pane.
+        self.cell_size.scan(bytes);
         let mut advanced = 0;
         let mut parser_input_bytes = bytes.len();
         for (offset, event) in osc_events {
@@ -350,6 +371,7 @@ impl StreamProcessor {
             }
         }
         self.advance(terminal, &bytes[advanced..]);
+        self.cell_size.answer(self.window_size, event_proxy);
         self.pending_images.retain(|image| Arc::weak_count(image) != 0);
         parser_input_bytes
     }
@@ -384,6 +406,16 @@ pub enum Msg {
     /// CUP sequences produced at the old width are never parsed into the new
     /// grid. A UI thread reaching into `Term::resize` directly would skip that.
     ResizeGrid(WindowSize),
+
+    /// Report the pane's cell size without resizing the child.
+    ///
+    /// The cell size only reaches the stream through a resize, and a pane
+    /// whose born geometry already equals its target geometry never resizes.
+    /// Pixel-drawing clients ask for it explicitly (`CSI 16 t`) before they
+    /// can convert pixels to cells, so the view sends this once it has laid
+    /// the pane out. It carries metrics alone: no `ResizePseudoConsole`, no
+    /// reflow, nothing to debounce.
+    CellMetrics(WindowSize),
 }
 
 /// The main event loop.
@@ -467,6 +499,9 @@ where
                 Msg::ResizeGrid(window_size) => {
                     let notify_pty = resize.is_some_and(|pending| pending.notify_pty);
                     resize = Some(PendingResize { window_size, notify_pty });
+                },
+                Msg::CellMetrics(window_size) => {
+                    state.stream.apply_cell_metrics(window_size, &self.event_proxy);
                 },
                 Msg::Shutdown => return Err(()),
             }
@@ -903,6 +938,12 @@ impl Notifier {
     /// See [`Msg::ResizeGrid`] for why the two halves are split.
     pub fn on_resize_grid(&mut self, window_size: WindowSize) {
         let _ = self.0.send(Msg::ResizeGrid(window_size));
+    }
+
+    /// Report cell metrics without touching the child's PTY geometry.
+    /// See [`Msg::CellMetrics`].
+    pub fn on_cell_metrics(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::CellMetrics(window_size));
     }
 }
 

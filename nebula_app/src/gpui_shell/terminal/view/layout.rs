@@ -66,6 +66,12 @@ impl TerminalView {
                 self.commit_viewport(viewport);
             } else {
                 self.window_size = viewport.window_size();
+                // Born geometry already equals the target, so no resize will
+                // ever reach the stream. It still needs the cell size: image
+                // clients ask for it (`CSI 16 t`) before they can lay a
+                // preview out, and an unanswered query makes them stretch the
+                // bitmap over the whole pane.
+                self.announce_cell_metrics(self.window_size);
             }
             return;
         }
@@ -140,6 +146,13 @@ impl TerminalView {
         let Some(session) = &self.session else { return };
         let mut notifier = nebula_terminal::event_loop::Notifier(session.notifier.0.clone());
         notifier.on_resize_grid(viewport.window_size());
+    }
+
+    /// Tell the stream the cell size without committing any geometry.
+    fn announce_cell_metrics(&mut self, window_size: nebula_terminal::event::WindowSize) {
+        let Some(session) = &self.session else { return };
+        let mut notifier = nebula_terminal::event_loop::Notifier(session.notifier.0.clone());
+        notifier.on_cell_metrics(window_size);
     }
 
     /// Commit one viewport in grid-before-PTY order. Output produced after
