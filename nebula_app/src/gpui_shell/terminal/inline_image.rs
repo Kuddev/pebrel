@@ -342,8 +342,24 @@ pub(super) fn image_geometry(
             cell_height * (layout.height / layout.cell_height),
         ),
     );
+    // Only the requested slice of the bitmap belongs to this placement. The
+    // slice is anchored to the placement's own origin, not to the row being
+    // painted: a run covers one row of cells, so anchoring it per run would let
+    // every row show another 40 pixels of the picture below the slice.
+    let scale_x = image_bounds.size.width / layout.width;
+    let scale_y = image_bounds.size.height / layout.height;
+    let slice = Bounds::new(
+        point(
+            image_bounds.origin.x + scale_x * layout.source.x as f32,
+            image_bounds.origin.y + scale_y * layout.source.y as f32,
+        ),
+        size(
+            scale_x * layout.source.width as f32,
+            scale_y * layout.source.height as f32,
+        ),
+    );
     let clip = Bounds::new(tile_origin, size(cell_width * run.columns as f32, cell_height))
-        .intersect(&image_bounds);
+        .intersect(&slice);
     (image_bounds, clip)
 }
 
@@ -690,6 +706,38 @@ mod tests {
         let (shifted, _) =
             image_geometry(layout, &sliced, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
         assert_eq!(shifted.origin.x, px(3.0 - 2.0));
+
+        // A cell box taller than the slice stops at the slice: the rows below it
+        // belong to nothing this placement owns.
+        let shallow = ImageLayout { source: SourceRect { x: 0, y: 2, width: 8, height: 1 }, ..layout };
+        let tall = ImageRun { row: 0, columns: 8, ..run };
+        let (_, clipped) =
+            image_geometry(shallow, &tall, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
+        assert_eq!(clipped.size, size(px(8.0), px(1.0)));
+    }
+
+    /// The grid hands the painter one run per row of cells. A slice only owns
+    /// the rows it covers, so the second row of a two-row slice run must be
+    /// empty instead of showing the pixels that follow the slice.
+    #[test]
+    fn rows_below_a_slice_paint_nothing() {
+        let layout = ImageLayout {
+            width: 240.0,
+            height: 160.0,
+            cell_width: 12.0,
+            cell_height: 20.0,
+            columns: 20,
+            rows: 2,
+            source: SourceRect { x: 0, y: 0, width: 240, height: 20 },
+        };
+        let row_y = |row: f32| px(row * 20.0);
+        let first = ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 20 };
+        let second = ImageRun { row: 1, source_row: 1, ..first };
+        let origin = point(px(0.0), px(0.0));
+        let (_, clip) = image_geometry(layout, &first, origin, px(12.0), px(20.0), &row_y);
+        assert_eq!(clip.size, size(px(240.0), px(20.0)));
+        let (_, below) = image_geometry(layout, &second, origin, px(12.0), px(20.0), &row_y);
+        assert!(below.size.height <= px(0.0), "row 1 painted {:?}", below);
     }
 
     /// A pager scrolls a page by re-placing the same transfer with a new slice.
