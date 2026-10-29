@@ -1,4 +1,16 @@
 {
+  "prompt_suggestions": {
+    "title": "提示词预测",
+    "description": "为 Claude Code、Pi 和 OpenCode 的原生空输入框预测下一句话。新会话生效，语言跟随软件设置。",
+    "provider": "供应商",
+    "model": "预测模型",
+    "choose_provider": "选择供应商",
+    "no_providers": "请先添加已配置且 API 受支持的供应商。",
+    "invalid_model": "请输入不超过 256 个字符且不含空白的模型 ID。",
+    "save_failed": "无法保存预测设置：{error}",
+    "saved": "预测设置已保存。",
+    "predicting": "{model} 正在预测"
+  },
   "native_result": {
     "json_items": "{count} 项",
     "json_expand": "展开内容",

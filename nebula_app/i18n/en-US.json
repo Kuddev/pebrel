@@ -1,4 +1,16 @@
 {
+  "prompt_suggestions": {
+    "title": "Prompt prediction",
+    "description": "Predict the next message in empty native inputs in Claude Code, Pi and OpenCode. Applies to new sessions; language follows the app.",
+    "provider": "Provider",
+    "model": "Prediction model",
+    "choose_provider": "Choose a provider",
+    "no_providers": "Add a configured provider with a supported API to get started.",
+    "invalid_model": "Enter a model ID of up to 256 characters, without spaces.",
+    "save_failed": "Could not save prediction settings: {error}",
+    "saved": "Prediction settings saved.",
+    "predicting": "{model} is predicting"
+  },
   "native_result": {
     "json_items": "{count} items",
     "json_expand": "Expand value",

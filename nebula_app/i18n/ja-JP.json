@@ -1,4 +1,16 @@
 {
+  "prompt_suggestions": {
+    "title": "メッセージ予測",
+    "description": "Claude Code、Pi、OpenCode のネイティブ入力欄が空のときに次のメッセージを予測します。新しいセッションに適用され、アプリの言語設定に従います。",
+    "provider": "プロバイダー",
+    "model": "予測モデル",
+    "choose_provider": "プロバイダーを選択",
+    "no_providers": "対応する API を持つ設定済みプロバイダーを追加してください。",
+    "invalid_model": "空白を含まない256文字以内のモデル ID を入力してください。",
+    "save_failed": "予測設定を保存できませんでした：{error}",
+    "saved": "予測設定を保存しました。",
+    "predicting": "{model} が予測中"
+  },
   "tray": {
     "show": "Pebrel を表示",
     "quit": "終了"
