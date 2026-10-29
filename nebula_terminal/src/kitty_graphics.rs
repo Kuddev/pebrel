@@ -69,6 +69,13 @@ struct Published {
     source: SourceRect,
 }
 
+/// Placement an `a=T` header requested for its transfer.
+#[derive(Clone, Copy)]
+struct Display {
+    cells: Option<(usize, usize)>,
+    crop: Option<SourceRect>,
+}
+
 /// Cells covered by the placements of one image, in absolute cursor
 /// coordinates (`bottom`/`right` exclusive).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -119,10 +126,10 @@ pub struct KittyGraphics {
     boxes: HashMap<u32, GfxBox>,
     /// Visible slice of the bitmap, accumulated from every placement of the id.
     sources: HashMap<u32, SourceRect>,
-    /// Destination cell box requested by an `a=T` header, applied once the
-    /// transfer completes: the header carries the box, the last chunk the pixels.
-    /// `None` asks for the bitmap's natural size.
-    display: HashMap<u32, Option<(usize, usize)>>,
+    /// What an `a=T` header asked for, applied once the transfer completes: the
+    /// header carries the destination cell box and the crop, the last chunk the
+    /// pixels. A `None` crop is the whole bitmap, a `None` box its natural size.
+    display: HashMap<u32, Display>,
     /// What the frontend was last told about an image. A placement that moves
     /// only its crop must be republished; the box alone would look unchanged.
     published: HashMap<u32, Published>,
@@ -190,13 +197,17 @@ impl KittyGraphics {
                 } else if !self.sizes.contains_key(&id) {
                     self.declare(id, control);
                 }
-                // `a=T` carries the destination cell box on its header chunk but
-                // the pixels only arrive with the final one, so remember where the
-                // image goes and place it once the transfer completes.
+                // `a=T` carries the destination cell box and the crop on its
+                // header chunk but the pixels only arrive with the final one, so
+                // remember where the image goes and cut what it shows once the
+                // transfer completes.
                 if action == Some(b'T') {
                     let columns = control_value(control, b'c').and_then(parse_usize);
                     let rows = control_value(control, b'r').and_then(parse_usize);
-                    self.display.insert(id, cell_box(columns, rows));
+                    let crop = self.sizes.get(&id).and_then(|transfer| {
+                        source_rect(control, (transfer.width, transfer.height))
+                    });
+                    self.display.insert(id, Display { cells: cell_box(columns, rows), crop });
                 }
                 self.receive(id, payload, more);
                 if !more {
@@ -211,7 +222,8 @@ impl KittyGraphics {
                 // size, one image pixel per screen pixel, instead of vanishing.
                 let (columns, rows) =
                     cell_box(columns, rows).unwrap_or_else(|| self.natural_cells(id));
-                self.place(terminal, id, columns, rows, control);
+                let crop = self.crop_of(id, control);
+                self.place(terminal, id, columns, rows, crop);
             },
             Some(b'd') => {
                 let Some(id) = id else {
@@ -406,9 +418,16 @@ impl KittyGraphics {
 
     /// Apply a completed transfer's requested placement, if it asked for one.
     fn finish_transfer<U: EventListener>(&mut self, terminal: &mut Term<U>, id: u32) {
-        let Some(cells) = self.display.remove(&id) else { return };
+        let Some(Display { cells, crop }) = self.display.remove(&id) else { return };
         let (columns, rows) = cells.unwrap_or_else(|| self.natural_cells(id));
-        self.place(terminal, id, columns, rows, &[]);
+        self.place(terminal, id, columns, rows, crop);
+    }
+
+    /// Crop a command asked for, clamped to the bitmap. `None` is the whole
+    /// image, or no image yet.
+    fn crop_of(&self, id: u32, control: &[u8]) -> Option<SourceRect> {
+        let bitmap = self.images.get(&id)?;
+        source_rect(control, (bitmap.width, bitmap.height))
     }
 
     fn place<U: EventListener>(
@@ -417,14 +436,13 @@ impl KittyGraphics {
         id: u32,
         columns: usize,
         rows: usize,
-        control: &[u8],
+        requested: Option<SourceRect>,
     ) {
         // A placement without a completed transfer has nothing to paint; the
         // application will retransmit, so dropping it is safe.
         let Some(bitmap) = self.images.get(&id) else { return };
         let (image_width, image_height) = (bitmap.width, bitmap.height);
-        let slice = source_rect(control, (image_width, image_height))
-            .unwrap_or_else(|| SourceRect::full(image_width, image_height));
+        let slice = requested.unwrap_or_else(|| SourceRect::full(image_width, image_height));
         match self.sources.entry(id) {
             Entry::Occupied(mut entry) => {
                 // One-cell placements walk the bitmap tile by tile, so what is

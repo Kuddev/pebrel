@@ -1964,6 +1964,86 @@ mod tests {
         assert_eq!(unknown.len(), 1);
         assert_eq!((unknown[0].1, unknown[0].2), (1, 1));
     }
+
+    /// A PDF page arrives the way a real reader sends it: one `a=T` header that
+    /// carries only the crop and destination cells, then 131072-byte
+    /// continuation chunks with no id of their own.
+    #[test]
+    fn bookokrat_style_page_transfer_publishes_when_it_completes() {
+        use base64::Engine as _;
+        let (width, height, crop_height) = (1036usize, 1340usize, 1150usize);
+        let listener = Gfx::default();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(151, 40), listener.clone());
+        let mut stream = StreamProcessor::default();
+        let pixels = vec![9u8; width * height * 3];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels);
+
+        stream.feed(&mut terminal, &listener, b"\x1b[5;2H");
+        let mut rest = encoded.as_str();
+        let header = format!(
+            "a=T,t=d,f=24,s={width},v={height},i=1,p=1,C=1,q=1,x=0,y=0,w={width},h={crop_height},c=63,r=35,z=-1,m=1"
+        );
+        let (first, tail0) = rest.split_at(131072);
+        rest = tail0;
+        stream.feed(&mut terminal, &listener, &kitty_command(&header, first));
+        while rest.len() > 4096 {
+            let (piece, tail) = rest.split_at(4096);
+            rest = tail;
+            let data = kitty_command("m=1", piece);
+            stream.feed(&mut terminal, &listener, &data);
+        }
+        stream.feed(&mut terminal, &listener, &kitty_command("m=0", rest));
+
+        let images = kitty_images(&listener);
+        assert_eq!(images.len(), 1, "one publication for the page");
+        let (source, columns, rows, layout_width, layout_height) = images[0];
+        assert_eq!((columns, rows), (63, 35));
+        assert_eq!((layout_width, layout_height), (width as f32, height as f32));
+        assert_eq!(
+            source,
+            SourceRect { x: 0, y: 0, width: width as u32, height: crop_height as u32 }
+        );
+    }
+    /// Three transfers of different depths queued back to back, the shape a
+    /// reader produces while it probes what the terminal accepts. Every one of
+    /// them has to publish, whatever its byte count is modulo three.
+    #[test]
+    fn mixed_depth_transfers_all_publish() {
+        use base64::Engine as _;
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let rgba = encode(&vec![7u8; 128 * 128 * 4]);
+        let rgb = encode(&vec![7u8; 128 * 128 * 3]);
+        let crop = encode(&vec![7u8; 256 * 200 * 3]);
+
+        let listener = Gfx::default();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(120, 40), listener.clone());
+        let mut stream = StreamProcessor::default();
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&kitty_command("a=T,i=201,f=32,s=128,v=128", &rgba));
+        wire.extend_from_slice(&kitty_command("a=T,i=202,f=24,s=128,v=128", &rgb));
+        wire.extend_from_slice(&kitty_command(
+            "a=T,t=d,f=24,i=203,s=256,v=200,c=20,r=10,x=0,y=0,w=256,h=200,z=-1",
+            &crop,
+        ));
+        stream.feed(&mut terminal, &listener, &wire);
+
+        let events = listener.0.lock().unwrap();
+        let published = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::KittyImage { data, channels, placement } => {
+                    Some((placement.layout.width, placement.layout.height, *channels, data.len()))
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut published = published;
+        published.sort_by(|left, right| left.partial_cmp(right).expect("no NaN geometry"));
+        assert_eq!(
+            published,
+            vec![(128.0, 128.0, 3, 49152), (128.0, 128.0, 4, 65536), (256.0, 200.0, 3, 153600)]
+        );
+    }
 }
 
 #[cfg(all(test, unix))]

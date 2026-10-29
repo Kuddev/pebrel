@@ -792,6 +792,17 @@ impl TerminalView {
             // APC graphics: pixels arrive raw, already placed in the grid, so
             // decoding is the only work left — and it happens off the UI thread.
             TermEvent::KittyImage { data, channels, placement } => {
+                crate::logging::debug_log(format!(
+                    "gfx enqueue id={} bytes={} channels={} layout={}x{} cells={}x{} source={:?}",
+                    placement.id,
+                    data.len(),
+                    channels,
+                    placement.layout.width,
+                    placement.layout.height,
+                    placement.layout.columns,
+                    placement.layout.rows,
+                    placement.layout.source,
+                ));
                 match self.inline_images.enqueue_pixels(data, channels, placement) {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("APC image dropped: {error}"),

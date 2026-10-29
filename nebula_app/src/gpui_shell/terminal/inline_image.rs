@@ -287,9 +287,14 @@ pub(super) fn paint(
     row_y: &dyn Fn(f32) -> Pixels,
     window: &mut Window,
 ) {
+    let mut painted = 0usize;
+    let mut empty = 0usize;
+    let mut unmatched = 0usize;
+    let mut first_painted: Option<String> = None;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for run in runs {
             let Some(inline) = images.iter().find(|image| image.placement.id == run.id) else {
+                unmatched += 1;
                 continue;
             };
             let (image_bounds, clip) = image_geometry(
@@ -301,7 +306,30 @@ pub(super) fn paint(
                 row_y,
             );
             if clip.size.width <= px(0.0) || clip.size.height <= px(0.0) {
+                empty += 1;
                 continue;
+            }
+            painted += 1;
+            if first_painted.is_none() {
+                first_painted = Some(format!(
+                    "id={} row={} col={} src_row={} src_col={} texture={:?} cell=({},{}) layout=({}x{} cell {}x{}) img=({:?},{:?}) clip=({:?},{:?})",
+                    run.id,
+                    run.row,
+                    run.column,
+                    run.source_row,
+                    run.source_column,
+                    inline.image.size(0),
+                    cell_width,
+                    cell_height,
+                    inline.placement.layout.width,
+                    inline.placement.layout.height,
+                    inline.placement.layout.cell_width,
+                    inline.placement.layout.cell_height,
+                    image_bounds.origin,
+                    image_bounds.size,
+                    clip.origin,
+                    clip.size,
+                ));
             }
             // Keep full texture coordinates: GPUI rounds sub-image UVs to
             // source pixels, which loses rows when a tiny image is enlarged.
@@ -317,6 +345,43 @@ pub(super) fn paint(
             });
         }
     });
+    log_paint_summary(
+        runs.len(),
+        images.len(),
+        painted,
+        empty,
+        unmatched,
+        first_painted.as_deref(),
+    );
+}
+
+/// A frame with no image runs is the common case, so only a change in what the
+/// graphics path did is worth a line in the debug log.
+fn log_paint_summary(
+    runs: usize,
+    images: usize,
+    painted: usize,
+    empty: usize,
+    unmatched: usize,
+    first: Option<&str>,
+) {
+    use std::sync::{Mutex, OnceLock};
+
+    if runs == 0 && images == 0 {
+        return;
+    }
+    static LAST: OnceLock<Mutex<String>> = OnceLock::new();
+    let summary = format!(
+        "gfx paint runs={runs} images={images} painted={painted} empty={empty} unmatched={unmatched} first={}",
+        first.unwrap_or("-")
+    );
+    let seen = LAST.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut last) = seen.lock()
+        && *last != summary
+    {
+        *last = summary.clone();
+        crate::logging::debug_log(summary);
+    }
 }
 
 pub(super) fn image_geometry(
