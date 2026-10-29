@@ -1,4 +1,16 @@
 {
+  "prompt_suggestions": {
+    "title": "메시지 예측",
+    "description": "Claude Code, Pi, OpenCode의 기본 입력란이 비어 있을 때 다음 메시지를 예측합니다. 새 세션에 적용되며 앱 언어를 따릅니다.",
+    "provider": "공급자",
+    "model": "예측 모델",
+    "choose_provider": "공급자 선택",
+    "no_providers": "지원되는 API를 사용하는 공급자를 추가하고 설정하세요.",
+    "invalid_model": "공백 없이 256자 이하의 모델 ID를 입력하세요.",
+    "save_failed": "예측 설정을 저장하지 못했습니다: {error}",
+    "saved": "예측 설정이 저장되었습니다.",
+    "predicting": "{model} 예측 중"
+  },
   "language": {
     "system": "시스템 설정 따르기",
     "self_name": "한국어",

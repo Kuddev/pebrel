@@ -43,10 +43,11 @@ fn provider_icon(kind: ProviderKind) -> Icon {
 impl SettingsPane {
     pub(in crate::gpui_shell::settings_pane) fn section_providers(
         &mut self,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         self.prepare_provider_brands(window, cx);
+        self.prepare_prediction_settings(window, cx);
         let language = crate::gpui_shell::config::ui_language(cx);
         let available =
             (f32::from(window.viewport_size().width) - SETTINGS_NAV_WIDTH - 24.0).max(240.0);
@@ -341,6 +342,7 @@ impl SettingsPane {
                     .pt_6()
                     .pb_6()
                     .gap_4()
+                    .child(self.prediction_settings(cx))
                     .child(metrics)
                     .child(div().w_full().min_w_0().overflow_x_scrollbar().child(table)),
             )

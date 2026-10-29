@@ -1,4 +1,16 @@
 {
+  "prompt_suggestions": {
+    "title": "Predicción de mensajes",
+    "description": "Predice el siguiente mensaje en los campos nativos vacíos de Claude Code, Pi y OpenCode. Se aplica a sesiones nuevas y usa el idioma de la aplicación.",
+    "provider": "Proveedor",
+    "model": "Modelo de predicción",
+    "choose_provider": "Elegir proveedor",
+    "no_providers": "Añade un proveedor configurado con una API compatible.",
+    "invalid_model": "Introduce un ID de modelo de hasta 256 caracteres, sin espacios.",
+    "save_failed": "No se pudieron guardar los ajustes de predicción: {error}",
+    "saved": "Ajustes de predicción guardados.",
+    "predicting": "{model} está generando una predicción"
+  },
   "language": {
     "system": "Seguir el sistema",
     "self_name": "Español",

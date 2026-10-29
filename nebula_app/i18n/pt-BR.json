@@ -1,4 +1,16 @@
 {
+  "prompt_suggestions": {
+    "title": "Previsão de mensagens",
+    "description": "Prevê a próxima mensagem nos campos nativos vazios do Claude Code, Pi e OpenCode. Vale para novas sessões e usa o idioma do aplicativo.",
+    "provider": "Provedor",
+    "model": "Modelo de previsão",
+    "choose_provider": "Escolher provedor",
+    "no_providers": "Adicione um provedor configurado com uma API compatível.",
+    "invalid_model": "Informe um ID de modelo de até 256 caracteres, sem espaços.",
+    "save_failed": "Não foi possível salvar as configurações de previsão: {error}",
+    "saved": "Configurações de previsão salvas.",
+    "predicting": "{model} está gerando uma previsão"
+  },
   "language": {
     "system": "Seguir o sistema",
     "self_name": "Português (Brasil)",
