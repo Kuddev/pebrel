@@ -332,31 +332,34 @@ pub(super) fn image_geometry(
     // The bitmap is sampled one image pixel per screen pixel, so a placement
     // that shows a sub-region simply shifts the bitmap: the slice's top-left
     // sits where this tile's source position lands.
+    let bitmap_size = size(
+        cell_width * (layout.width / layout.cell_width),
+        cell_height * (layout.height / layout.cell_height),
+    );
+    // A scaled bitmap (a high-DPI pane paints it smaller than its pixel size)
+    // must shift by the scaled offset, or the slice lands outside the tile and
+    // only its last few pixels survive the clip.
+    let scale_x = bitmap_size.width / layout.width;
+    let scale_y = bitmap_size.height / layout.height;
     let image_bounds = Bounds::new(
         point(
-            tile_origin.x - (px(layout.source.x as f32) + cell_width * run.source_column as f32),
-            tile_origin.y - (px(layout.source.y as f32) + cell_height * run.source_row as f32),
+            tile_origin.x
+                - (scale_x * layout.source.x as f32 + cell_width * run.source_column as f32),
+            tile_origin.y
+                - (scale_y * layout.source.y as f32 + cell_height * run.source_row as f32),
         ),
-        size(
-            cell_width * (layout.width / layout.cell_width),
-            cell_height * (layout.height / layout.cell_height),
-        ),
+        bitmap_size,
     );
     // Only the requested slice of the bitmap belongs to this placement. The
     // slice is anchored to the placement's own origin, not to the row being
     // painted: a run covers one row of cells, so anchoring it per run would let
     // every row show another 40 pixels of the picture below the slice.
-    let scale_x = image_bounds.size.width / layout.width;
-    let scale_y = image_bounds.size.height / layout.height;
     let slice = Bounds::new(
         point(
             image_bounds.origin.x + scale_x * layout.source.x as f32,
             image_bounds.origin.y + scale_y * layout.source.y as f32,
         ),
-        size(
-            scale_x * layout.source.width as f32,
-            scale_y * layout.source.height as f32,
-        ),
+        size(scale_x * layout.source.width as f32, scale_y * layout.source.height as f32),
     );
     let clip = Bounds::new(tile_origin, size(cell_width * run.columns as f32, cell_height))
         .intersect(&slice);
@@ -709,7 +712,8 @@ mod tests {
 
         // A cell box taller than the slice stops at the slice: the rows below it
         // belong to nothing this placement owns.
-        let shallow = ImageLayout { source: SourceRect { x: 0, y: 2, width: 8, height: 1 }, ..layout };
+        let shallow =
+            ImageLayout { source: SourceRect { x: 0, y: 2, width: 8, height: 1 }, ..layout };
         let tall = ImageRun { row: 0, columns: 8, ..run };
         let (_, clipped) =
             image_geometry(shallow, &tall, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
@@ -731,13 +735,45 @@ mod tests {
             source: SourceRect { x: 0, y: 0, width: 240, height: 20 },
         };
         let row_y = |row: f32| px(row * 20.0);
-        let first = ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 20 };
+        let first =
+            ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 20 };
         let second = ImageRun { row: 1, source_row: 1, ..first };
         let origin = point(px(0.0), px(0.0));
         let (_, clip) = image_geometry(layout, &first, origin, px(12.0), px(20.0), &row_y);
         assert_eq!(clip.size, size(px(240.0), px(20.0)));
         let (_, below) = image_geometry(layout, &second, origin, px(12.0), px(20.0), &row_y);
         assert!(below.size.height <= px(0.0), "row 1 painted {:?}", below);
+    }
+
+    /// A high-DPI pane paints a bitmap smaller than its pixel size, so the slice
+    /// offset has to shrink with it. Shifting by the raw pixel offset put the
+    /// slice above the tile and left only its bottom few pixels visible.
+    #[test]
+    fn a_scaled_bitmap_still_puts_its_slice_at_the_tile() {
+        let layout = ImageLayout {
+            width: 240.0,
+            height: 160.0,
+            cell_width: 14.0,
+            cell_height: 36.0,
+            columns: 22,
+            rows: 8,
+            source: SourceRect { x: 0, y: 80, width: 240, height: 80 },
+        };
+        let row_y = |row: f32| px(row * 18.0);
+        let run =
+            ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 22 };
+        let origin = point(px(0.0), px(0.0));
+        let (image, first) = image_geometry(layout, &run, origin, px(7.0), px(18.0), &row_y);
+        // Two screen pixels per bitmap pixel up to the DPI ratio: half size here.
+        assert_eq!(image.size, size(px(120.0), px(80.0)));
+        assert_eq!(first.origin.y, px(0.0), "the slice starts at the tile top");
+        assert_eq!(first.size.height, px(18.0), "the whole first row belongs to it");
+        let third = ImageRun { row: 2, source_row: 2, ..run };
+        let (_, tail) = image_geometry(layout, &third, origin, px(7.0), px(18.0), &row_y);
+        assert_eq!(tail.size.height, px(4.0), "the 80 pixel slice ends mid third row");
+        let below = ImageRun { row: 3, source_row: 3, ..run };
+        let (_, none) = image_geometry(layout, &below, origin, px(7.0), px(18.0), &row_y);
+        assert!(none.size.height <= px(0.0), "row 3 painted {:?}", none);
     }
 
     /// A pager scrolls a page by re-placing the same transfer with a new slice.

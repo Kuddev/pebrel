@@ -1771,6 +1771,54 @@ mod tests {
             .collect()
     }
 
+    /// The box can be much taller than the slice it shows: a pager asks for a
+    /// short band inside a tall cell block while it scrolls. The slice keeps
+    /// the height the emitter asked for, not the height of the box.
+    #[test]
+    fn kitty_a_slice_stays_short_inside_a_tall_box() {
+        let listener = Gfx::default();
+        let size = TermSize::new(40, 20);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+        let pixels = vec![7u8; 8 * 8 * 4];
+
+        let mut wire = b"\x1b[2;3H".to_vec();
+        wire.extend_from_slice(&kitty_command("a=t,i=21,f=32,s=8,v=8,m=0", &encoded(&pixels)));
+        wire.extend_from_slice(&kitty_command("a=p,i=21,c=4,r=4,x=0,y=2,w=8,h=4", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+
+        let images = kitty_images(&listener);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].0, SourceRect { x: 0, y: 2, width: 8, height: 4 });
+        assert_eq!((images[0].1, images[0].2), (4, 4), "the box keeps its cells");
+        assert_eq!((images[0].3, images[0].4), (8.0, 8.0), "the bitmap stays whole");
+    }
+
+    /// A client that repaints by re-sending the same id has to get a new
+    /// publication: the screen was erased in between, so the frontend has
+    /// nothing left to reuse and would otherwise stay blank.
+    #[test]
+    fn kitty_retransfer_of_the_same_id_publishes_again() {
+        let listener = Gfx::default();
+        let size = TermSize::new(20, 8);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+        let pixels = [7u8; 2 * 1 * 3];
+
+        let mut wire = b"\x1b[2;2H".to_vec();
+        wire.extend_from_slice(&kitty_command("a=t,i=31,f=24,s=2,v=1,m=0", &encoded(&pixels)));
+        wire.extend_from_slice(&kitty_command("a=p,i=31,c=2,r=1", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+        assert_eq!(kitty_images(&listener).len(), 1);
+
+        let mut again = b"\x1b[2J\x1b[2;2H".to_vec();
+        again.extend_from_slice(&kitty_command("a=t,i=31,f=24,s=2,v=1,m=0", &encoded(&pixels)));
+        again.extend_from_slice(&kitty_command("a=p,i=31,c=2,r=1", ""));
+        stream.feed(&mut terminal, &listener, &again);
+
+        assert_eq!(kitty_images(&listener).len(), 2, "an erased picture must come back");
+    }
+
     /// A pager scrolls by re-placing the same transfer with a different `y`.
     /// The cell box does not change, so a publication that only watched the box
     /// would keep the previous crop on screen forever.
