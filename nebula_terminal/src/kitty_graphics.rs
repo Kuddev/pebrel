@@ -93,6 +93,9 @@ pub struct KittyGraphics {
     /// it, which is the frame the frontend samples the bitmap in.
     origins: HashMap<u32, (usize, usize)>,
     boxes: HashMap<u32, GfxBox>,
+    /// Destination cell box requested by an `a=T` header, applied once the
+    /// transfer completes: the header carries the box, the last chunk the pixels.
+    display: HashMap<u32, (usize, usize)>,
     /// Images whose placement already reached the frontend.
     published: HashSet<u32>,
     /// Unanswered `CSI 16 t` requests, coalesced: one answer serves them all.
@@ -122,6 +125,9 @@ impl KittyGraphics {
                 // completes the transfer.
                 let more = control_value(control, b'm') == Some(b"1");
                 self.receive(id, payload, more);
+                if !more {
+                    self.finish_transfer(terminal, id);
+                }
             },
             Some(b't' | b'T') => {
                 let Some(id) = id.or(self.current) else { return };
@@ -140,13 +146,19 @@ impl KittyGraphics {
                 } else if !self.sizes.contains_key(&id) {
                     self.declare(id, control);
                 }
-                self.receive(id, payload, more);
-                if !more && action == Some(b'T') {
+                // `a=T` carries the destination cell box on its header chunk but
+                // the pixels only arrive with the final one, so remember where the
+                // image goes and place it once the transfer completes.
+                if action == Some(b'T') {
                     let columns =
                         control_value(control, b'c').and_then(parse_usize).unwrap_or(1).max(1);
                     let rows =
                         control_value(control, b'r').and_then(parse_usize).unwrap_or(1).max(1);
-                    self.place(terminal, id, columns, rows);
+                    self.display.insert(id, (columns, rows));
+                }
+                self.receive(id, payload, more);
+                if !more {
+                    self.finish_transfer(terminal, id);
                 }
             },
             Some(b'p') => {
@@ -307,6 +319,12 @@ impl KittyGraphics {
         self.published.remove(&id);
     }
 
+    /// Apply a completed transfer's requested placement, if it asked for one.
+    fn finish_transfer<U: EventListener>(&mut self, terminal: &mut Term<U>, id: u32) {
+        let Some((columns, rows)) = self.display.remove(&id) else { return };
+        self.place(terminal, id, columns, rows);
+    }
+
     fn place<U: EventListener>(
         &mut self,
         terminal: &mut Term<U>,
@@ -340,6 +358,7 @@ impl KittyGraphics {
         }
         self.origins.remove(&id);
         self.boxes.remove(&id);
+        self.display.remove(&id);
         self.published.remove(&id);
         self.transfers.remove(&id);
         // The pixels are gone with the placement: keeping them would let the

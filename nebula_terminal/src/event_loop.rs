@@ -1588,6 +1588,37 @@ mod tests {
         assert_eq!((placement.layout.columns, placement.layout.rows), (2, 2));
     }
 
+    /// A chunked `a=T` carries its destination cell box on the header and its
+    /// pixels on the final chunk, so the placement has to wait for the transfer
+    /// to finish: clients that stream a page image this way never send `a=p`.
+    #[test]
+    fn kitty_chunked_display_is_placed_when_the_last_chunk_arrives() {
+        use base64::Engine as _;
+        let listener = Gfx::default();
+        let size = TermSize::new(20, 8);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+        let encoded = base64::engine::general_purpose::STANDARD.encode([7u8; 3 * 2 * 3]);
+        let (head, tail) = encoded.split_at(8);
+        stream.feed(&mut terminal, &listener, b"\x1b[3;4H");
+        stream.feed(
+            &mut terminal,
+            &listener,
+            &kitty_command("a=T,i=21,f=24,s=3,v=2,c=3,r=2,m=1", head),
+        );
+        assert!(listener.0.lock().unwrap().is_empty());
+        stream.feed(&mut terminal, &listener, &kitty_command("m=0", tail));
+
+        let events = listener.0.lock().unwrap();
+        let images: Vec<&Event> =
+            events.iter().filter(|event| matches!(event, Event::KittyImage { .. })).collect();
+        assert_eq!(images.len(), 1);
+        let Event::KittyImage { data, channels, placement } = images[0] else { unreachable!() };
+        assert_eq!((data.len(), *channels), (3 * 2 * 3, 3));
+        assert_eq!((placement.layout.columns, placement.layout.rows), (3, 2));
+        assert!(terminal.grid()[Line(2)][Column(3)].image().is_some());
+    }
+
     /// yazi reuses one protocol id for every preview and erases the previous image
     /// before drawing the next one. Without honouring that, each file browsed
     /// leaves a bitmap behind and the frontend keeps compositing all of them.
