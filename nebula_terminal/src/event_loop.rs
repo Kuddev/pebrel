@@ -1096,6 +1096,7 @@ mod tests {
     use super::*;
 
     use crate::event::VoidListener;
+    use crate::inline_image::SourceRect;
     use crate::term::Config;
     use crate::term::test::TermSize;
 
@@ -1745,6 +1746,175 @@ mod tests {
             })
             .collect();
         assert_eq!(replies, ["\x1b_Gi=5;OK\x1b\\", "\x1b_Gi=6;ENOTSUP\x1b\\"]);
+    }
+    fn encoded(pixels: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(pixels)
+    }
+
+    fn kitty_images(listener: &Gfx) -> Vec<(SourceRect, usize, usize, f32, f32)> {
+        listener
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                Event::KittyImage { placement, .. } => Some((
+                    placement.layout.source,
+                    placement.layout.columns,
+                    placement.layout.rows,
+                    placement.layout.width,
+                    placement.layout.height,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A pager scrolls by re-placing the same transfer with a different `y`.
+    /// The cell box does not change, so a publication that only watched the box
+    /// would keep the previous crop on screen forever.
+    #[test]
+    fn kitty_placement_publishes_its_crop_and_republishes_when_it_moves() {
+        let listener = Gfx::default();
+        let size = TermSize::new(20, 8);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+        let pixels = [9u8; 8 * 4 * 4];
+
+        let mut wire = b"\x1b[2;3H".to_vec();
+        wire.extend_from_slice(&kitty_command("a=t,i=3,f=32,s=8,v=4,m=0", &encoded(&pixels)));
+        wire.extend_from_slice(&kitty_command("a=p,i=3,c=2,r=1,x=0,y=0,w=8,h=2", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+
+        let mut next = b"\x1b[2;3H".to_vec();
+        next.extend_from_slice(&kitty_command("a=p,i=3,c=2,r=1,x=0,y=2,w=8,h=2", ""));
+        stream.feed(&mut terminal, &listener, &next);
+
+        let images = kitty_images(&listener);
+        assert_eq!(images.len(), 2, "a new crop of the same box must republish");
+        assert_eq!(images[0].0, SourceRect { x: 0, y: 0, width: 8, height: 2 });
+        assert_eq!(images[1].0, SourceRect { x: 0, y: 2, width: 8, height: 2 });
+        // The bitmap is still the whole picture: only the slice moved.
+        assert_eq!((images[1].3, images[1].4), (8.0, 4.0));
+        assert_eq!((images[1].1, images[1].2), (2, 1));
+    }
+
+    /// Single-cell placements are tiles of one picture, so what reaches the
+    /// screen is the union of their slices — not the last one to be placed.
+    #[test]
+    fn kitty_single_cell_placements_union_their_slices() {
+        let listener = Gfx::default();
+        let size = TermSize::new(20, 8);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+
+        let mut wire = b"\x1b[3;5H".to_vec();
+        wire.extend_from_slice(&kitty_command("a=t,i=7,f=32,s=2,v=1,m=0", &rgba2x1()));
+        wire.extend_from_slice(&kitty_command("a=p,i=7,c=1,r=1,x=0,y=0,w=1,h=1", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+
+        let mut next = b"\x1b[3;6H".to_vec();
+        next.extend_from_slice(&kitty_command("a=p,i=7,c=1,r=1,x=1,y=0,w=1,h=1", ""));
+        stream.feed(&mut terminal, &listener, &next);
+
+        let images = kitty_images(&listener);
+        assert_eq!(images.last().unwrap().0, SourceRect { x: 0, y: 0, width: 2, height: 1 });
+    }
+
+    /// `o=z` puts a zlib stream behind the base64, so the pixels arrive
+    /// compressed and have to be inflated to the declared size before decoding
+    /// would make sense.
+    #[test]
+    fn kitty_zlib_transfer_is_inflated_before_placing() {
+        use std::io::Write as _;
+        let listener = Gfx::default();
+        let size = TermSize::new(20, 8);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+        let pixels: Vec<u8> = (0..3 * 2 * 3u8).collect();
+
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&pixels).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut wire = b"\x1b[1;1H".to_vec();
+        wire.extend_from_slice(&kitty_command(
+            "a=t,i=12,f=24,s=3,v=2,o=z,m=0",
+            &encoded(&compressed),
+        ));
+        wire.extend_from_slice(&kitty_command("a=p,i=12,c=3,r=2", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+
+        let events = listener.0.lock().unwrap();
+        let images: Vec<&Event> =
+            events.iter().filter(|event| matches!(event, Event::KittyImage { .. })).collect();
+        assert_eq!(images.len(), 1);
+        let Event::KittyImage { data, channels, .. } = images[0] else { unreachable!() };
+        assert_eq!(&**data, pixels.as_slice());
+        assert_eq!(*channels, 3);
+    }
+
+    /// The first chunk of a streamed transfer sometimes omits `a=` and carries
+    /// only the header keys the parser needs to recognise it as a transfer.
+    #[test]
+    fn kitty_transfer_without_action_is_still_a_transfer() {
+        let listener = Gfx::default();
+        let size = TermSize::new(20, 8);
+        let mut terminal = Term::new(Config::default(), &size, listener.clone());
+        let mut stream = StreamProcessor::default();
+        let pixels = [5u8; 2 * 1 * 3];
+
+        let mut wire = b"\x1b[1;1H".to_vec();
+        wire.extend_from_slice(&kitty_command("i=14,f=24,s=2,v=1", &encoded(&pixels)));
+        wire.extend_from_slice(&kitty_command("a=p,i=14,c=2,r=1", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+
+        let events = listener.0.lock().unwrap();
+        let images: Vec<&Event> =
+            events.iter().filter(|event| matches!(event, Event::KittyImage { .. })).collect();
+        assert_eq!(images.len(), 1);
+        let Event::KittyImage { data, channels, .. } = images[0] else { unreachable!() };
+        assert_eq!(&**data, pixels.as_slice());
+        assert_eq!(*channels, 3);
+    }
+
+    /// A placement that names no cell box asks for the bitmap's natural size,
+    /// one image pixel per screen pixel. Dropping it leaves a blank rectangle
+    /// where the application believes it painted.
+    #[test]
+    fn kitty_placement_without_cell_box_uses_the_natural_size() {
+        let pixels = [1u8; 20 * 10 * 4];
+
+        let listener = Gfx::default();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(20, 8), listener.clone());
+        let mut stream = StreamProcessor::default();
+        stream.resize(WindowSize { num_cols: 20, num_lines: 8, cell_width: 10, cell_height: 10 });
+        stream.feed(&mut terminal, &listener, b"");
+        let mut wire = b"\x1b[1;1H".to_vec();
+        wire.extend_from_slice(&kitty_command("a=t,i=15,f=32,s=20,v=10,m=0", &encoded(&pixels)));
+        wire.extend_from_slice(&kitty_command("a=p,i=15", ""));
+        stream.feed(&mut terminal, &listener, &wire);
+        let known = kitty_images(&listener);
+        assert_eq!(known.len(), 1);
+        assert_eq!((known[0].1, known[0].2), (2, 1));
+
+        // Before the pane reports its geometry there is no natural size to
+        // compute, so one cell is the best answer — still visible, still there.
+        let listener = Gfx::default();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(20, 8), listener.clone());
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut terminal, &listener, b"\x1b[1;1H");
+        stream.feed(
+            &mut terminal,
+            &listener,
+            &kitty_command("a=t,i=16,f=32,s=20,v=10,m=0", &encoded(&pixels)),
+        );
+        stream.feed(&mut terminal, &listener, &kitty_command("a=p,i=16", ""));
+        let unknown = kitty_images(&listener);
+        assert_eq!(unknown.len(), 1);
+        assert_eq!((unknown[0].1, unknown[0].2), (1, 1));
     }
 }
 

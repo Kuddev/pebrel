@@ -10,6 +10,12 @@
 //! image box. Nothing is derived from the application's pixel numbers, which is
 //! what used to overflow the pane.
 //!
+//! A `w`/`h` crop is what makes a pager cheap: bookokrat re-places the same
+//! transfer at every scroll offset, so a placement must be republished when its
+//! slice moves even though its cell box did not grow. Unioning slices is only
+//! right for the one-cell dialect above; a block placement restates its whole
+//! rectangle, so the newest one wins.
+//!
 //! Transfers are the expensive half: a 2.2 MiB bitmap arrives as ~730 APC
 //! chunks. Nothing here may touch the disk, publish an event per chunk or per
 //! placement, or re-encode the bitmap. A parsed placement is published once,
@@ -21,13 +27,14 @@
 //! Erasing once per id — blanking the cells that carry that identity — keeps a
 //! scrolling file manager from accumulating dead bitmaps.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, hash_map::Entry};
+use std::io::Read as _;
 use std::sync::Arc;
 
 use base64::Engine as _;
 
 use crate::event::{Event, EventListener, WindowSize};
-use crate::inline_image::{ImageIdentity, ImageLayout, ImagePlacement};
+use crate::inline_image::{ImageIdentity, ImageLayout, ImagePlacement, SourceRect};
 use crate::term::Term;
 
 /// Pixels one transfer may allocate (16 MiB at four bytes per pixel).
@@ -43,6 +50,23 @@ struct Bitmap {
     width: u32,
     height: u32,
     channels: u8,
+}
+
+/// Geometry a transfer header declared for its payload.
+#[derive(Clone, Copy)]
+struct Transfer {
+    width: u32,
+    height: u32,
+    channels: u8,
+    /// `o=z`: the base64 payload is a zlib stream of the raw pixels.
+    compressed: bool,
+}
+
+/// Cached placements: what the frontend was last told about one image.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Published {
+    cells: GfxBox,
+    source: SourceRect,
 }
 
 /// Cells covered by the placements of one image, in absolute cursor
@@ -83,8 +107,8 @@ pub struct KittyGraphics {
     current: Option<u32>,
     /// Partial base64 of a chunked transfer.
     transfers: HashMap<u32, Vec<u8>>,
-    /// Pixel geometry declared by the transfer header: width, height, channels.
-    sizes: HashMap<u32, (u32, u32, u8)>,
+    /// Pixel geometry declared by the transfer header.
+    sizes: HashMap<u32, Transfer>,
     images: HashMap<u32, Bitmap>,
     /// Grid-owned identity per protocol id: every placement of one image shares it,
     /// so erasing the image is a property of the grid, not of this state.
@@ -93,11 +117,18 @@ pub struct KittyGraphics {
     /// it, which is the frame the frontend samples the bitmap in.
     origins: HashMap<u32, (usize, usize)>,
     boxes: HashMap<u32, GfxBox>,
+    /// Visible slice of the bitmap, accumulated from every placement of the id.
+    sources: HashMap<u32, SourceRect>,
     /// Destination cell box requested by an `a=T` header, applied once the
     /// transfer completes: the header carries the box, the last chunk the pixels.
-    display: HashMap<u32, (usize, usize)>,
-    /// Images whose placement already reached the frontend.
-    published: HashSet<u32>,
+    /// `None` asks for the bitmap's natural size.
+    display: HashMap<u32, Option<(usize, usize)>>,
+    /// What the frontend was last told about an image. A placement that moves
+    /// only its crop must be republished; the box alone would look unchanged.
+    published: HashMap<u32, Published>,
+    /// Last cell size the pane reported, so a placement that omits `c`/`r` can
+    /// still be sized against the bitmap instead of being dropped.
+    cell_size: Option<(u16, u16)>,
     /// Unanswered `CSI 16 t` requests, coalesced: one answer serves them all.
     cell_size_queries: u32,
     /// Trailing bytes that may be the start of a query split across reads.
@@ -114,8 +145,21 @@ impl KittyGraphics {
         control: &[u8],
         payload: &[u8],
     ) {
-        let action = control_value(control, b'a').and_then(|value| value.first().copied());
         let id = control_value(control, b'i').and_then(parse_u32);
+        let action = match control_value(control, b'a').and_then(|value| value.first().copied()) {
+            Some(action) => Some(action),
+            // `a=t` is the default action of the protocol, and clients such as
+            // termpdf.py rely on it: their first chunk carries the transfer keys
+            // and no action at all.
+            None if id.is_some()
+                && (control_value(control, b's').is_some()
+                    || control_value(control, b'v').is_some()
+                    || control_value(control, b't').is_some()) =>
+            {
+                Some(b't')
+            },
+            None => None,
+        };
         match action {
             // A continuation chunk carries only `m`; the id is the one the
             // transfer started with.
@@ -150,11 +194,9 @@ impl KittyGraphics {
                 // the pixels only arrive with the final one, so remember where the
                 // image goes and place it once the transfer completes.
                 if action == Some(b'T') {
-                    let columns =
-                        control_value(control, b'c').and_then(parse_usize).unwrap_or(1).max(1);
-                    let rows =
-                        control_value(control, b'r').and_then(parse_usize).unwrap_or(1).max(1);
-                    self.display.insert(id, (columns, rows));
+                    let columns = control_value(control, b'c').and_then(parse_usize);
+                    let rows = control_value(control, b'r').and_then(parse_usize);
+                    self.display.insert(id, cell_box(columns, rows));
                 }
                 self.receive(id, payload, more);
                 if !more {
@@ -163,10 +205,13 @@ impl KittyGraphics {
             },
             Some(b'p') => {
                 let Some(id) = id else { return };
-                let columns =
-                    control_value(control, b'c').and_then(parse_usize).unwrap_or(1).max(1);
-                let rows = control_value(control, b'r').and_then(parse_usize).unwrap_or(1).max(1);
-                self.place(terminal, id, columns, rows);
+                let columns = control_value(control, b'c').and_then(parse_usize);
+                let rows = control_value(control, b'r').and_then(parse_usize);
+                // Without `c`/`r` the placement asks for the bitmap's natural
+                // size, one image pixel per screen pixel, instead of vanishing.
+                let (columns, rows) =
+                    cell_box(columns, rows).unwrap_or_else(|| self.natural_cells(id));
+                self.place(terminal, id, columns, rows, control);
             },
             Some(b'd') => {
                 let Some(id) = id else {
@@ -184,19 +229,28 @@ impl KittyGraphics {
     /// Publish placements that reached the grid since the previous flush. One
     /// event per image: the frontend decodes once and paints the cells.
     pub fn flush<U: EventListener>(&mut self, event_proxy: &U, window_size: Option<WindowSize>) {
-        let pending: Vec<u32> = self
-            .boxes
-            .keys()
-            .copied()
-            .filter(|id| !self.published.contains(id) && self.images.contains_key(id))
-            .collect();
+        if let Some(size) = window_size {
+            self.cell_size = Some((size.cell_width.max(1), size.cell_height.max(1)));
+        }
+        let pending: Vec<u32> = self.boxes.keys().copied().collect();
         for id in pending {
             let (Some(cells), Some(bitmap), Some(identity)) =
                 (self.boxes.get(&id).copied(), self.images.get(&id), self.identities.get(&id))
             else {
                 continue;
             };
+            let source = self
+                .sources
+                .get(&id)
+                .copied()
+                .unwrap_or_else(|| SourceRect::full(bitmap.width, bitmap.height));
             if cells.columns() == 0 || cells.rows() == 0 {
+                continue;
+            }
+            // A scrolled page moves only its slice: republishing the same crop
+            // would blank the box until the next frame anyway, so compare both.
+            let published = Published { cells, source };
+            if self.published.get(&id) == Some(&published) {
                 continue;
             }
             let (cell_width, cell_height) = match window_size {
@@ -206,8 +260,8 @@ impl KittyGraphics {
                 // Until the pane reports its geometry, size the bitmap against
                 // its own box: the application already chose that many cells.
                 None => (
-                    bitmap.width as f32 / cells.columns() as f32,
-                    bitmap.height as f32 / cells.rows() as f32,
+                    source.width as f32 / cells.columns() as f32,
+                    source.height as f32 / cells.rows() as f32,
                 ),
             };
             let layout = ImageLayout {
@@ -217,10 +271,11 @@ impl KittyGraphics {
                 cell_height,
                 columns: cells.columns(),
                 rows: cells.rows(),
+                source,
             };
             let placement =
                 ImagePlacement { id: identity.id, lifetime: Arc::downgrade(identity), layout };
-            self.published.insert(id);
+            self.published.insert(id, published);
             event_proxy.send_event(Event::KittyImage {
                 data: bitmap.pixels.clone(),
                 channels: bitmap.channels,
@@ -260,6 +315,7 @@ impl KittyGraphics {
         event_proxy: &U,
     ) {
         let Some(size) = window_size else { return };
+        self.cell_size = Some((size.cell_width.max(1), size.cell_height.max(1)));
         if self.cell_size_queries == 0 {
             return;
         }
@@ -284,7 +340,10 @@ impl KittyGraphics {
         };
         match (width, height, channels) {
             (Some(width), Some(height), Some(channels)) => {
-                self.sizes.insert(id, (width, height, channels));
+                // `o=z` compresses the raw pixels with zlib; anything else is
+                // transferred as it is drawn.
+                let compressed = control_value(control, b'o') == Some(b"z");
+                self.sizes.insert(id, Transfer { width, height, channels, compressed });
             },
             _ => {
                 self.sizes.remove(&id);
@@ -304,25 +363,52 @@ impl KittyGraphics {
         }
         let mut joined = self.transfers.remove(&id).unwrap_or_default();
         joined.extend_from_slice(payload);
-        let Ok(pixels) = base64::engine::general_purpose::STANDARD.decode(&joined) else {
+        let Ok(payload) = base64::engine::general_purpose::STANDARD.decode(&joined) else {
             return;
         };
-        let Some(&(width, height, channels)) = self.sizes.get(&id) else { return };
+        let Some(&transfer) = self.sizes.get(&id) else { return };
+        let Transfer { width, height, channels, compressed } = transfer;
         if width == 0 || height == 0 {
             return;
         }
         let needed = width as usize * height as usize * usize::from(channels);
-        if needed > MAX_PIXELS * 4 || pixels.len() < needed {
+        if needed > MAX_PIXELS * 4 {
             return;
         }
+        let pixels = if compressed {
+            // Bounded by the declared geometry: a stream that inflates past it
+            // is refused instead of being allowed to grow the buffer.
+            let Some(pixels) = inflate(&payload, needed) else { return };
+            pixels
+        } else {
+            if payload.len() < needed {
+                return;
+            }
+            payload
+        };
         self.images.insert(id, Bitmap { pixels: Arc::new(pixels), width, height, channels });
         self.published.remove(&id);
     }
 
+    /// Cell box a placement without `c`/`r` asks for: the bitmap at its natural
+    /// size, one image pixel per screen pixel. Without a reported cell size the
+    /// best available answer is one cell, which still paints something.
+    fn natural_cells(&self, id: u32) -> (usize, usize) {
+        let (Some(bitmap), Some((cell_width, cell_height))) =
+            (self.images.get(&id), self.cell_size)
+        else {
+            return (1, 1);
+        };
+        let columns = (bitmap.width as usize).div_ceil(usize::from(cell_width)).max(1);
+        let rows = (bitmap.height as usize).div_ceil(usize::from(cell_height)).max(1);
+        (columns, rows)
+    }
+
     /// Apply a completed transfer's requested placement, if it asked for one.
     fn finish_transfer<U: EventListener>(&mut self, terminal: &mut Term<U>, id: u32) {
-        let Some((columns, rows)) = self.display.remove(&id) else { return };
-        self.place(terminal, id, columns, rows);
+        let Some(cells) = self.display.remove(&id) else { return };
+        let (columns, rows) = cells.unwrap_or_else(|| self.natural_cells(id));
+        self.place(terminal, id, columns, rows, &[]);
     }
 
     fn place<U: EventListener>(
@@ -331,11 +417,29 @@ impl KittyGraphics {
         id: u32,
         columns: usize,
         rows: usize,
+        control: &[u8],
     ) {
         // A placement without a completed transfer has nothing to paint; the
         // application will retransmit, so dropping it is safe.
-        if !self.images.contains_key(&id) {
-            return;
+        let Some(bitmap) = self.images.get(&id) else { return };
+        let (image_width, image_height) = (bitmap.width, bitmap.height);
+        let slice = source_rect(control, (image_width, image_height))
+            .unwrap_or_else(|| SourceRect::full(image_width, image_height));
+        match self.sources.entry(id) {
+            Entry::Occupied(mut entry) => {
+                // One-cell placements walk the bitmap tile by tile, so what is
+                // on screen is their union. A block placement restates its whole
+                // rectangle — a pager re-places the same box at a new offset —
+                // and the newest slice replaces the old one.
+                if columns == 1 && rows == 1 {
+                    entry.get_mut().union(slice);
+                } else {
+                    *entry.get_mut() = slice;
+                }
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(slice);
+            },
         }
         let line = terminal.nebula_cursor_abs_line();
         let column = terminal.grid().cursor.point.column.0;
@@ -358,6 +462,7 @@ impl KittyGraphics {
         }
         self.origins.remove(&id);
         self.boxes.remove(&id);
+        self.sources.remove(&id);
         self.display.remove(&id);
         self.published.remove(&id);
         self.transfers.remove(&id);
@@ -376,6 +481,8 @@ impl KittyGraphics {
             self.delete(terminal, id);
         }
         self.images.clear();
+        self.sources.clear();
+        self.published.clear();
     }
 
     fn reply<U: EventListener>(
@@ -400,6 +507,45 @@ impl KittyGraphics {
 /// the only kind implemented, shared memory is not.
 fn surface_supported(control: &[u8]) -> bool {
     control_value(control, b't') != Some(b"s")
+}
+
+/// Cell box a placement asked for. `None` means it asked for none, which the
+/// protocol defines as the bitmap's natural size.
+fn cell_box(columns: Option<usize>, rows: Option<usize>) -> Option<(usize, usize)> {
+    match (columns, rows) {
+        (None, None) => None,
+        (columns, rows) => Some((columns.unwrap_or(1).max(1), rows.unwrap_or(1).max(1))),
+    }
+}
+
+/// `x`/`y`/`w`/`h` slice of the bitmap a placement asked for, clamped to the
+/// bitmap. A rectangle that starts outside it shows nothing, so it is ignored.
+fn source_rect(control: &[u8], image: (u32, u32)) -> Option<SourceRect> {
+    let x = control_value(control, b'x').and_then(parse_u32);
+    let y = control_value(control, b'y').and_then(parse_u32);
+    let width = control_value(control, b'w').and_then(parse_u32);
+    let height = control_value(control, b'h').and_then(parse_u32);
+    if x.is_none() && y.is_none() && width.is_none() && height.is_none() {
+        return None;
+    }
+    let (image_width, image_height) = image;
+    let x = x.unwrap_or(0).min(image_width);
+    let y = y.unwrap_or(0).min(image_height);
+    if x >= image_width || y >= image_height {
+        return None;
+    }
+    let width = width.unwrap_or(image_width - x).clamp(1, image_width - x);
+    let height = height.unwrap_or(image_height - y).clamp(1, image_height - y);
+    Some(SourceRect { x, y, width, height })
+}
+
+/// Inflate an `o=z` payload, accepting only the declared pixel count: a stream
+/// that stops early or grows past it is a transfer error, not an image.
+fn inflate(payload: &[u8], needed: usize) -> Option<Vec<u8>> {
+    let limit = u64::try_from(needed).ok()?.checked_add(1)?;
+    let mut pixels = Vec::with_capacity(needed);
+    flate2::read::ZlibDecoder::new(payload).take(limit).read_to_end(&mut pixels).ok()?;
+    (pixels.len() == needed).then_some(pixels)
 }
 
 /// Value of a single-letter key in a Kitty protocol control block.

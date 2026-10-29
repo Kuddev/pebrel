@@ -5,7 +5,9 @@ use nebula_terminal::event::EventListener;
 use nebula_terminal::event_loop::StreamProcessor;
 use nebula_terminal::grid::{Dimensions, Grid};
 use nebula_terminal::index::{Column, Line};
-use nebula_terminal::inline_image::{ImageCell, ImageIdentity, ImageLayout, ImagePlacement};
+use nebula_terminal::inline_image::{
+    ImageCell, ImageIdentity, ImageLayout, ImagePlacement, SourceRect,
+};
 use nebula_terminal::render::{RenderSnapshot, SnapshotConfig};
 use nebula_terminal::term::Config;
 use nebula_terminal::term::cell::Cell;
@@ -61,6 +63,7 @@ fn insert(term: &mut Term<Listener>, columns: usize, rows: usize) -> ImagePlacem
         cell_height: 20.0,
         columns,
         rows,
+        source: SourceRect::full(columns as u32 * 10, rows as u32 * 20),
     })
 }
 

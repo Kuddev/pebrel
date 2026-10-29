@@ -124,7 +124,15 @@ impl ImageOptions {
         } else {
             (box_width, box_height)
         };
-        Some(ImageLayout { width, height, cell_width, cell_height, columns, rows })
+        Some(ImageLayout {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            columns,
+            rows,
+            source: SourceRect { x: 0, y: 0, width: width as u32, height: height as u32 },
+        })
     }
 }
 
@@ -136,6 +144,36 @@ pub struct ImageLayout {
     pub cell_height: f32,
     pub columns: usize,
     pub rows: usize,
+    /// Slice of the bitmap this placement shows. Clients hand out sub-regions
+    /// so that scrolling through a page costs a placement, not a retransfer.
+    /// A bitmap is painted one image pixel per screen pixel, so the slice is
+    /// also the offset the frontend shifts the bitmap by.
+    pub source: SourceRect,
+}
+
+/// Sub-rectangle of a bitmap, in image pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl SourceRect {
+    pub fn full(width: u32, height: u32) -> Self {
+        Self { x: 0, y: 0, width, height }
+    }
+
+    /// Bounding box of two slices, used while a tile-by-tile client walks an
+    /// image one cell at a time.
+    pub fn union(&mut self, other: Self) {
+        let left = self.x.min(other.x);
+        let top = self.y.min(other.y);
+        let right = (self.x + self.width).max(other.x + other.width);
+        let bottom = (self.y + self.height).max(other.y + other.height);
+        *self = Self { x: left, y: top, width: right - left, height: bottom - top };
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

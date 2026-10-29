@@ -4,12 +4,12 @@
 //! background executor. This prevents a burst of compressed image bombs from
 //! expanding concurrently on the UI thread or exhausting process memory.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Weak};
 
 use gpui::{Bounds, ContentMask, Corners, Pixels, RenderImage, Window, point, px, size};
 use image::{Frame, ImageFormat};
-use nebula_terminal::inline_image::{ImageLayout, ImagePlacement, ImageRun};
+use nebula_terminal::inline_image::{ImageIdentity, ImageLayout, ImagePlacement, ImageRun};
 
 const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_IMAGE_ENCODED_BYTES: usize = 12 * 1024 * 1024;
@@ -44,6 +44,10 @@ pub(super) struct InlineImageStore {
     next_sequence: u64,
     images: VecDeque<(u64, InlineImage)>,
     decoded_bytes: usize,
+    /// Pixel buffer behind the placement of each live image. A placement that
+    /// only moved its crop carries the same buffer, so the decoded texture is
+    /// reused instead of decoded again on every scroll step.
+    sources: HashMap<u64, (Weak<ImageIdentity>, Arc<Vec<u8>>)>,
 }
 
 impl InlineImageStore {
@@ -116,6 +120,28 @@ impl InlineImageStore {
         if !placement.is_alive() {
             return Ok(());
         }
+        // Re-placing a transfer the store already holds — a pager scrolling
+        // through a page sends a new crop of the same bitmap — must not decode
+        // the pixels a second time. Sharing the buffer is what identifies it:
+        // the terminal hands out the same allocation every time it republishes
+        // one bitmap, and a fresh one for a retransfer.
+        let reuse =
+            self.sources.get(&placement.id).map_or(false, |(_, source)| Arc::ptr_eq(source, &data));
+        if reuse {
+            if let Some(pending) =
+                self.queued.iter_mut().find(|pending| pending.placement.id == placement.id)
+            {
+                pending.placement = placement;
+                return Ok(());
+            }
+            if let Some((_, image)) =
+                self.images.iter_mut().find(|(_, image)| image.placement.id == placement.id)
+            {
+                image.placement = placement;
+                return Ok(());
+            }
+        }
+        self.sources.insert(placement.id, (placement.lifetime.clone(), data.clone()));
         if self.queued.len() >= MAX_QUEUED_IMAGES {
             return Err("too many terminal images are waiting to decode");
         }
@@ -177,6 +203,7 @@ impl InlineImageStore {
     /// Grid erasure invalidates both queued jobs and decoded cache entries.
     pub fn frame_images(&mut self) -> Vec<InlineImage> {
         self.images.retain(|(_, image)| image.placement.is_alive());
+        self.sources.retain(|_, (lifetime, _)| lifetime.strong_count() != 0);
         self.decoded_bytes = self.images.iter().map(|(_, image)| image.decoded_bytes).sum();
         self.images.iter().map(|(_, image)| image.clone()).collect()
     }
@@ -302,10 +329,13 @@ pub(super) fn image_geometry(
 ) -> (Bounds<Pixels>, Bounds<Pixels>) {
     let tile_origin =
         point(origin.x + cell_width * run.column as f32, origin.y + row_y(run.row as f32));
+    // The bitmap is sampled one image pixel per screen pixel, so a placement
+    // that shows a sub-region simply shifts the bitmap: the slice's top-left
+    // sits where this tile's source position lands.
     let image_bounds = Bounds::new(
         point(
-            tile_origin.x - cell_width * run.source_column as f32,
-            tile_origin.y - cell_height * run.source_row as f32,
+            tile_origin.x - (px(layout.source.x as f32) + cell_width * run.source_column as f32),
+            tile_origin.y - (px(layout.source.y as f32) + cell_height * run.source_row as f32),
         ),
         size(
             cell_width * (layout.width / layout.cell_width),
@@ -403,7 +433,7 @@ fn decode_rgba(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nebula_terminal::inline_image::{ImageIdentity, ImageLayout};
+    use nebula_terminal::inline_image::{ImageIdentity, ImageLayout, SourceRect};
 
     fn placement(image: &Arc<ImageIdentity>) -> ImagePlacement {
         ImagePlacement {
@@ -416,6 +446,7 @@ mod tests {
                 cell_height: 1.0,
                 columns: 2,
                 rows: 1,
+                source: SourceRect::full(2, 1),
             },
         }
     }
@@ -624,5 +655,64 @@ mod tests {
         drop(owner);
         assert!(store.start_next().is_none());
         assert_eq!(store.queued_bytes, 0);
+    }
+
+    /// A placement that shows a sub-region keeps the bitmap at its full size and
+    /// only moves it, so the slice's top-left lands where the tile starts. The
+    /// clip is still the tile the grid allocated: the page cannot paint outside
+    /// the cells it owns.
+    #[test]
+    fn cropped_placement_moves_the_bitmap_under_its_tile() {
+        let layout = ImageLayout {
+            width: 8.0,
+            height: 4.0,
+            cell_width: 1.0,
+            cell_height: 1.0,
+            columns: 2,
+            rows: 2,
+            source: SourceRect { x: 0, y: 2, width: 8, height: 2 },
+        };
+        let run =
+            ImageRun { id: 0, row: 1, column: 3, source_row: 0, source_column: 0, columns: 2 };
+        let row_y = |row: f32| px(row);
+        let (image, clip) =
+            image_geometry(layout, &run, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
+        // The full bitmap is painted, shifted up by the slice offset and placed
+        // at the run's row, so image row 2 lands on the first cell of the run.
+        assert_eq!(image.origin, point(px(3.0), px(1.0 - 2.0)));
+        assert_eq!(image.size, size(px(8.0), px(4.0)));
+        assert_eq!(clip.origin, point(px(3.0), px(1.0)));
+        assert_eq!(clip.size, size(px(2.0), px(1.0)));
+
+        // A run that is itself a slice of the image (a wide row chunked into
+        // runs) offsets along x by the cells it skipped.
+        let sliced = ImageRun { source_column: 2, ..run };
+        let (shifted, _) =
+            image_geometry(layout, &sliced, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
+        assert_eq!(shifted.origin.x, px(3.0 - 2.0));
+    }
+
+    /// A pager scrolls a page by re-placing the same transfer with a new slice.
+    /// The pixels are the same allocation, so the store must retarget the queued
+    /// job instead of decoding the bitmap again — a page scrolls many times per
+    /// second and every decode blocks the frame.
+    #[test]
+    fn replaying_a_crop_reuses_the_queued_transfer() {
+        let mut store = InlineImageStore::default();
+        let owner = ImageIdentity::new();
+        let data = Arc::new(vec![1u8, 2, 3, 4, 5, 6]);
+        let first = placement(&owner);
+        store.enqueue_pixels(data.clone(), 3, first.clone()).unwrap();
+
+        let mut moved = first.clone();
+        moved.layout.source = SourceRect { x: 1, y: 0, width: 1, height: 1 };
+        store.enqueue_pixels(data, 3, moved.clone()).unwrap();
+        assert_eq!(store.queued.len(), 1);
+        assert_eq!(store.queued[0].placement.layout.source, moved.layout.source);
+
+        // A retransfer hands out a new buffer, and that one has to be decoded.
+        let replaced = ImageIdentity::new();
+        store.enqueue_pixels(Arc::new(vec![7u8; 6]), 3, placement(&replaced)).unwrap();
+        assert_eq!(store.queued.len(), 2);
     }
 }

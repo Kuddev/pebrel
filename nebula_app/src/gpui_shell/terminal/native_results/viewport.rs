@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn image_fragments_follow_native_result_height_without_changing_texture_bounds() {
         use gpui::{point, px};
-        use nebula_terminal::inline_image::{ImageLayout, ImageRun};
+        use nebula_terminal::inline_image::{ImageLayout, ImageRun, SourceRect};
         for height in [1.0, 5.5] {
             let mut projection = Projection {
                 slots: vec![Slot { id: 1, start: 1, rows: 3, height, hide_source: true }],
@@ -371,6 +371,7 @@ mod tests {
                 cell_height: 20.0,
                 columns: 5,
                 rows: 3,
+                source: SourceRect::full(50, 60),
             };
             let mut original = None;
             for source_row in 0..3usize {

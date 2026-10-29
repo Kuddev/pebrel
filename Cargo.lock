@@ -5440,6 +5440,7 @@ version = "2.3.1"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.0",
+ "flate2",
  "home",
  "libc",
  "log",

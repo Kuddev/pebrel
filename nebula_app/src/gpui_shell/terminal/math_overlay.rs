@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn adjacent_image_rows_are_solid_formula_clip_boundaries() {
-        use nebula_terminal::inline_image::ImageLayout;
+        use nebula_terminal::inline_image::{ImageLayout, SourceRect};
         for prefixed in [false, true] {
             let prefix = if prefixed { format!("$x{}$ ", " ".repeat(60)) } else { String::new() };
             let text = format!("{prefix}{}", r"$\frac{1}{\frac{x}{y}}$");
@@ -715,6 +715,7 @@ mod tests {
                     cell_height: 16.0,
                     columns: 9,
                     rows: 1,
+                    source: SourceRect::full(72, 16),
                 });
             }
             term.grid_mut().cursor.point = Point::new(Line(5), Column(0));
@@ -1240,7 +1241,7 @@ mod tests {
     #[test]
     fn image_projection_splits_an_older_snapshot_around_new_formula_cells() {
         use nebula_terminal::event_loop::StreamProcessor;
-        use nebula_terminal::inline_image::ImageLayout;
+        use nebula_terminal::inline_image::{ImageLayout, SourceRect};
         use nebula_terminal::render::{RenderSnapshot, SnapshotConfig};
         let mut term = Term::new(Config::default(), &TestSize { cols: 20, rows: 4 }, VoidListener);
         term.grid_mut().cursor.point = Point::new(Line(0), Column(2));
@@ -1251,6 +1252,7 @@ mod tests {
             cell_height: 18.0,
             columns: 8,
             rows: 1,
+            source: SourceRect::full(64, 18),
         });
         let old = RenderSnapshot::capture(&term, &SnapshotConfig { rows: 4, cols: 20 });
         assert_eq!((old.image_runs[0].column, old.image_runs[0].columns), (2, 8));
