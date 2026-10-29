@@ -641,9 +641,7 @@ mod generated_hook_tests {
         assert_eq!(install_into(&mut root, HELPER), Some(true));
         root["hooks"]["UserPromptSubmit"][0]["hooks"][0]["async"] = json!(true);
         assert_eq!(install_into(&mut root, HELPER), Some(true));
-        assert!(root["hooks"]["UserPromptSubmit"][0]["hooks"][0]
-            .get("async")
-            .is_none());
+        assert!(root["hooks"]["UserPromptSubmit"][0]["hooks"][0].get("async").is_none());
         assert_eq!(install_into(&mut root, HELPER), Some(false));
     }
 
