@@ -82,6 +82,9 @@ pub(crate) fn settings_button(button: Button, outlined: bool, cx: &App) -> Butto
                 .hover(cx.theme().foreground.opacity(0.045))
                 .active(cx.theme().foreground.opacity(0.08)),
         )
+        // 最小触控宽度 48px：短文案（如两字按钮）在不同平台的字体回退
+        // 测量下可能更窄，宽度下限保证命中区不随字体环境缩水。
+        .min_w(px(48.0))
         .when(outlined, |button| button.border_1().border_color(cx.theme().border))
         .h(settings_control_height(cx))
         .px(px(12.0))

@@ -27,7 +27,6 @@ use super::cursor_painter::{CursorPaint, paint_box_glyph};
 use super::view::TerminalView;
 use super::view::cursor::CursorGeometry;
 
-mod cell_fit;
 #[cfg(test)]
 #[path = "element/color_tests.rs"]
 mod color_tests;
@@ -39,6 +38,11 @@ pub(in crate::gpui_shell) mod snapshot_probe;
 #[path = "element/app_colors.rs"]
 mod app_colors;
 use app_colors::{resolve_app_colors_into, resolve_text_foreground};
+
+/// 单格文本的塑形与落笔（含 emoji/全宽 fallback 的超宽缩进），网格主路径、
+/// ghost 与补全弹窗共用。
+mod cell_text;
+use cell_text::{grid_text, shape_cell_text};
 
 pub struct TerminalElement {
     view: gpui::Entity<TerminalView>,
@@ -779,12 +783,14 @@ impl Element for TerminalElement {
                     }
                     cells = &remaining[count..];
                 } else {
-                    let shaped = cell_fit::shape_cell(
-                        window.text_system(),
+                    let shaped = shape_cell_text(
+                        window,
                         &cell.text,
                         font_size,
                         &run,
-                        layout.cell_width,
+                        // 宽字符首格占两列；其余格逐列。
+                        layout.cell_width * if seg.wide { 2.0 } else { 1.0 },
+                        seg.wide,
                     );
                     let _ = shaped.paint(
                         origin,
@@ -1025,12 +1031,12 @@ impl Element for TerminalElement {
             }
         }
 
-        // Overlay 滚动条：可见性由用户策略和拖拽状态共同决定。
+        // Overlay 滚动条：贴着底部时拇指为 None 不画，滚进历史才浮在网格右缘。
         // 几何来自 view 的单一真值源——命中测试拿的是同一个矩形（旧壳
         // `draw_scrollbar` / `scrollbar_grab` 共用 `scrollbar_geometry` 同构）。
         let (dragging, thumb) = {
             let view = self.view.read(cx);
-            (view.scrollbar_highlighted(), view.scrollbar_thumb(snap.display_offset, history))
+            (view.scrollbar_dragging(), view.scrollbar_thumb(snap.display_offset, history))
         };
         if let Some(thumb) = thumb {
             let color = if dragging {
@@ -1133,76 +1139,6 @@ fn paint_link_preview(
         window,
         cx,
     );
-}
-
-/// 单格文本落笔原语：单 cell 文本塑形后从调用方给定的整数 cell
-/// 原点起笔，不传 `force_width`（首字形天然在 x=0，位置只由列号决定）。
-/// 网格的单格回退、ghost 和弹窗经由此处；ASCII 连字由 `ligatures`
-/// 显式映射字形簇到列号。两条路径都不依赖自然 advance 定位后续格。
-fn paint_cell_text(
-    window: &mut Window,
-    cx: &mut App,
-    text: SharedString,
-    run: TextRun,
-    font_size: Pixels,
-    origin: gpui::Point<Pixels>,
-    line_height: Pixels,
-) {
-    let shaped = window.text_system().shape_line(text, font_size, &[run], None);
-    let _ = shaped.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
-}
-
-/// 网格对齐的浮层文本（ghost/弹窗共用），与网格文字同一定位合同：每个可见
-/// 字符单独塑形、从 `起始格 + 已用格数` 的整数 cell 原点起笔，超出
-/// `max_cells` 截断。绝不批量 `force_width`——其 1px 容差会沿字符累积并在
-/// 重塑形时翻转吸附，删除 `bypassPermission` 一类提示时就会逐字向左挤。
-/// 单字符行命中 GPUI 行缓存，逐字塑形没有额外热路径成本。
-#[allow(clippy::too_many_arguments)]
-fn grid_text(
-    window: &mut Window,
-    cx: &mut App,
-    text: &str,
-    font: &gpui::Font,
-    font_size: Pixels,
-    color: Hsla,
-    origin: gpui::Point<Pixels>,
-    cell_width: Pixels,
-    line_height: Pixels,
-    max_cells: usize,
-) -> usize {
-    use unicode_width::UnicodeWidthChar as _;
-
-    let mut used = 0usize;
-    for character in text.chars() {
-        // 与旧壳 draw_string 一致：零宽字符不单占格，宽字符占两格。
-        let width = character.width().unwrap_or(0);
-        if width == 0 {
-            continue;
-        }
-        if used + width > max_cells {
-            break;
-        }
-        let text = character.to_string();
-        let run = TextRun {
-            len: text.len(),
-            font: font.clone(),
-            color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        paint_cell_text(
-            window,
-            cx,
-            SharedString::from(text),
-            run,
-            font_size,
-            point(origin.x + cell_width * used as f32, origin.y),
-            line_height,
-        );
-        used += width;
-    }
-    used
 }
 
 const COMPLETION_PANEL_WIDTH: f32 = 520.0;
