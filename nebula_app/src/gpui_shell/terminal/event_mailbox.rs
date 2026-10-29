@@ -161,10 +161,7 @@ impl EventSender {
         if pending.is_some_and(|flag| flag.swap(true, Ordering::AcqRel)) {
             return;
         }
-        if self
-            .sender
-            .unbounded_send(QueuedEvent { event, received_sequence })
-            .is_err()
+        if self.sender.unbounded_send(QueuedEvent { event, received_sequence }).is_err()
             && let Some(flag) = pending
         {
             flag.store(false, Ordering::Release);
@@ -283,9 +280,7 @@ mod tests {
             assert!(matches!(receiver.try_recv().unwrap(), Event::Wakeup));
             for edge in ["working", "attention", "done"] {
                 let queued = receiver.try_recv_queued().unwrap();
-                let Event::AiHookEnvelope(bytes) = queued.event else {
-                    panic!("lost agent edge")
-                };
+                let Event::AiHookEnvelope(bytes) = queued.event else { panic!("lost agent edge") };
                 assert_eq!(bytes, format!("{edge}:{id}").into_bytes());
                 assert!(queued.received_sequence.is_some());
             }
