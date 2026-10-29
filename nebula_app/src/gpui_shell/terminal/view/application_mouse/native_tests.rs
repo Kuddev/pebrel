@@ -41,6 +41,7 @@ fn native_application_mouse_editor() {
     gpui_platform::application().with_assets(crate::gpui_shell::assets::NebulaAssets).run(move |cx| {
         crate::gpui_shell::register_bundled_fonts(cx);
         gpui_component::init(cx);
+        crate::gpui_shell::terminal::init(cx);
         crate::gpui_shell::scientific_render::init(cx);
         cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
         crate::gpui_shell::theme::apply_chrome_theme(cx);
