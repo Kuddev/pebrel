@@ -5,6 +5,10 @@
 Implemented core; native adapters and application configuration are in progress.
 The core alone does not enable predictions in a CLI.
 
+Prompt policy is superseded by the
+[upstream prompt boundary](2026-10-29-upstream-prompt-boundary.md), which also
+clarifies differences between this client and native upstream generation.
+
 ## Context
 
 The requested feature predicts a user's next message in an AI CLI's empty native

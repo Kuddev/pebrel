@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn prediction_prompt_preserves_the_pinned_codex_source_verbatim() {
+    use sha2::{Digest, Sha256};
+
+    let source = include_bytes!("../../res/prompts/codex_prompt_suggestion.txt");
+    let hash: String = Sha256::digest(source).iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(hash, "3728870393e8d9776f983db00b1b4bea094b541d56478807d204f7e650232f4e");
+    assert!(INSTRUCTIONS.starts_with(std::str::from_utf8(source).unwrap()));
+    assert_eq!(
+        &INSTRUCTIONS[source.len()..],
+        "\n\nReturn only JSON matching this schema: {\"type\":\"object\",\"properties\":{\"suggestion\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"suggestion\"],\"additionalProperties\":false}."
+    );
+}
+
 fn identity() -> Identity {
     Identity {
         agent: "codex".into(),
