@@ -71,11 +71,16 @@ fn exercise_drag(cx: &mut TestAppContext, mode: nebula_settings::TabsPositionNam
             let other = panes.pop().unwrap();
             let other_id = other.id;
             let ids = [panes[0].id, panes[1].id, panes[2].id];
-            let tree = SplitTree::leaf(ids[0]).joined(
+            let mut tree = SplitTree::leaf(ids[0]).joined(
                 SplitTree::leaf(ids[1])
                     .joined(SplitTree::leaf(ids[2]), nebula_split::SplitNav::Right),
                 nebula_split::SplitNav::Right,
             );
+            // The middle column's centre is left of the full workspace centre,
+            // exposing stale geometry when the left pane is zoomed.
+            if let SplitTree::Split { ratio, .. } = &mut tree {
+                *ratio = 0.25;
+            }
             workspace.insert_tab_at(
                 0,
                 WorkspaceTab::Terminal {
@@ -188,6 +193,74 @@ fn exercise_drag(cx: &mut TestAppContext, mode: nebula_settings::TabsPositionNam
     });
     window.update(|window, cx| {
         assert!(views[0].read(cx).focus_handle(cx).is_focused(window));
+    });
+    for (keys, leaves) in [
+        ("ctrl-alt-shift-left", [ids[2], ids[0], ids[1]]),
+        ("ctrl-alt-shift-up", [ids[2], ids[0], ids[1]]),
+        ("ctrl-alt-shift-right", [ids[2], ids[1], ids[0]]),
+    ] {
+        window.run_until_parked();
+        window.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        window.simulate_keystrokes(keys);
+        workspace.read_with(&window, |workspace, _| {
+            let WorkspaceTab::Terminal { tree, panes, focused, .. } = &workspace.tabs[0] else {
+                panic!()
+            };
+            assert_eq!(tree.leaves(), leaves, "{keys}");
+            assert_eq!(*focused, ids[0], "the moved pane keeps focus");
+            assert_eq!(panes.iter().map(|pane| pane.view.clone()).collect::<Vec<_>>(), views);
+        });
+    }
+    window.update(|window, cx| {
+        assert!(views[0].read(cx).focus_handle(cx).is_focused(window));
+    });
+    // Paint the left pane while zoomed before resolving Right. Its cached
+    // rectangle now spans the workspace; the middle pane is still the neighbour.
+    window.run_until_parked();
+    window.update(|window, cx| {
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+    let split_width = workspace.read_with(&window, |workspace, _| {
+        workspace.pane_bounds.borrow().get(&ids[2]).unwrap().size.width
+    });
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| workspace.focus_pane(0, ids[2], window, cx));
+    });
+    window.simulate_keystrokes("ctrl-shift-enter");
+    window.run_until_parked();
+    window.update(|window, cx| {
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+    workspace.read_with(&window, |workspace, _| {
+        let WorkspaceTab::Terminal { zoomed, .. } = &workspace.tabs[0] else { panic!() };
+        assert!(*zoomed);
+        assert!(workspace.pane_bounds.borrow().get(&ids[2]).unwrap().size.width > split_width);
+        let bounds = workspace.pane_bounds.borrow();
+        assert!(
+            bounds.get(&ids[1]).unwrap().center().x < bounds.get(&ids[2]).unwrap().center().x,
+            "the painted middle pane must be behind the zoomed centre: {bounds:?}"
+        );
+    });
+    window.simulate_keystrokes("ctrl-alt-shift-right");
+    workspace.read_with(&window, |workspace, _| {
+        let WorkspaceTab::Terminal { tree, panes, focused, zoomed, .. } = &workspace.tabs[0] else {
+            panic!()
+        };
+        assert_eq!(tree.leaves(), [ids[1], ids[2], ids[0]], "zoom must not change the neighbour");
+        assert_eq!(*focused, ids[2]);
+        assert!(!*zoomed);
+        assert_eq!(panes.iter().map(|pane| pane.view.clone()).collect::<Vec<_>>(), views);
+    });
+    window.update(|window, cx| {
+        assert!(views[2].read(cx).focus_handle(cx).is_focused(window));
+    });
+    window.simulate_keystrokes("ctrl-alt-shift-left");
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| workspace.focus_pane(0, ids[0], window, cx));
     });
     window.run_until_parked();
     window.update(|window, cx| {
