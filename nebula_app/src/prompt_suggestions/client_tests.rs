@@ -129,7 +129,16 @@ fn live_empty_prompt_voice_evaluation() {
     let config: Value =
         serde_json::from_slice(&std::fs::read(root.join("model-config.json")).unwrap()).unwrap();
     let key = Zeroizing::new(std::fs::read_to_string(root.join("api-key")).unwrap());
-    let cases: Value = serde_json::from_str(include_str!("evaluation.json")).unwrap();
+    // Private fixtures permit multi-turn voice evaluations without rebuilding
+    // the product or checking synthetic role-play scenarios into the app.
+    let cases = match std::fs::read_to_string(root.join("evaluation.json")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            include_str!("evaluation.json").to_owned()
+        },
+        Err(error) => panic!("cannot read evaluation fixtures: {error}"),
+    };
+    let cases: Value = serde_json::from_str(&cases).unwrap();
     let mut target = provider("responses");
     target.base_url = config["base_url"].as_str().unwrap().into();
     target.model = config["model"].as_str().unwrap().into();
