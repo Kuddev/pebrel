@@ -1,0 +1,6 @@
+{
+  "name": "pebrel-prompt-suggestions",
+  "version": "0.1.0",
+  "author": { "name": "Pebrel contributors" },
+  "description": "Native empty-composer predictions through the Pebrel session bridge"
+}
