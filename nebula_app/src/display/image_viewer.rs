@@ -109,6 +109,17 @@ impl ImageView {
         self.dimensions
     }
 
+    /// The GPUI decoder supplies metadata on hosts without the legacy loader.
+    /// Keep zoom/pan owned by this view; metadata arrival is not a new view.
+    pub(crate) fn set_decoded_dimensions(&mut self, dimensions: (u32, u32)) {
+        self.dimensions = (dimensions.0 != 0 && dimensions.1 != 0).then_some(dimensions);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn geometry_snapshot_for_test(&self) -> (Option<(u32, u32)>, f32, (f32, f32)) {
+        (self.dimensions, self.zoom, self.pan)
+    }
+
     #[cfg(feature = "legacy-shell")]
     pub fn draw(
         &self,

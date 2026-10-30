@@ -38,6 +38,10 @@ use super::limits::{MIN_SEGMENTED_DOWNLOAD, TRANSFER_CHUNK, plan_segments};
 type TransferError = Box<dyn std::error::Error + Send + Sync>;
 type TransferResult<T> = Result<T, TransferError>;
 
+// Batch local disk work independently of the interoperable SFTP packet size.
+// With the default 64 download workers this retains at most 16 MiB of payload.
+const LOCAL_IO_BUFFER: usize = 256 * 1024;
+
 /// 传输过程中引擎需要向外汇报和向外询问的东西。
 ///
 /// 抽成 trait 而不是直接依赖某个 UI 类型：引擎跑在网络 runtime 上，它不该
@@ -218,15 +222,16 @@ pub(crate) struct DownloadOutcome {
 /// 上传一个本地文件到远端路径。
 ///
 /// 写方向的并发由会话参数（`max_concurrent_writes`）承担，这里只要把分块
-/// 喂给它并在块边界检查取消。缓冲区固定一个分块：更大的缓冲不会提高在途
-/// 请求数，只会让取消的响应变钝。
+/// 喂给它并在每个网络分块边界检查取消。本地读取预取多个分块，减少阻塞
+/// 文件 I/O 与异步运行时之间的切换；网络请求大小与在途窗口保持独立。
 pub(crate) async fn upload_stream(
     sftp: &SftpSession,
     local: &Path,
     remote: &str,
     observer: &dyn TransferObserver,
 ) -> TransferResult<()> {
-    let mut source = tokio::fs::File::open(local).await?;
+    let mut source =
+        tokio::io::BufReader::with_capacity(LOCAL_IO_BUFFER, tokio::fs::File::open(local).await?);
     let mut target = sftp
         .open_with_flags(
             remote.to_owned(),
@@ -251,9 +256,8 @@ pub(crate) async fn upload_stream(
 
 /// 下载一个远端文件到本地路径，按需分段并发。
 ///
-/// `total` 是远端报告的文件长度，只用来切分段计划：真正写入多少字节由每段
-/// 实际读到的数据决定，所以远端长度不准（稀疏文件、传输中被追写）时结果
-/// 仍然是"我们确实读到的那些字节"，不会凭长度补零。
+/// `total` 是远端报告的文件长度，也是本次下载的完整性边界。任一段提前
+/// 结束都报错，不能把中途截短的文件或并发段之间的空洞当完整下载发布。
 ///
 /// `window` 是这个文件可用的在途请求数。由调用方给而不是在这里取常量：
 /// 单文件传输独占整个窗口，目录传输要把窗口摊给并发的多个文件，判据在
@@ -337,7 +341,9 @@ async fn download_range(
         target.seek(io::SeekFrom::Start(offset)).await?;
     }
 
-    let mut buffer = vec![0u8; TRANSFER_CHUNK];
+    let capacity = usize::try_from(length).unwrap_or(LOCAL_IO_BUFFER).min(LOCAL_IO_BUFFER);
+    let mut buffer = vec![0u8; capacity];
+    let mut buffered = 0;
     let mut remaining = length;
     let mut written = 0u64;
     while remaining > 0 {
@@ -345,20 +351,31 @@ async fn download_range(
         // 只读到段边界为止：段末尾那次读必须缩短，否则会读进下一段的地盘，
         // 两个工作者写同一片区域。
         let want = usize::try_from(remaining).unwrap_or(TRANSFER_CHUNK).min(TRANSFER_CHUNK);
-        let count = source.read(&mut buffer[..want]).await?;
+        let count = source.read(&mut buffer[buffered..buffered + want]).await?;
         if count == 0 {
-            // 远端报的长度比实际内容长（稀疏或被截短）。不是错误，这一段
-            // 就到这里。
-            break;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "remote file ended before the requested range",
+            )
+            .into());
         }
-        target.write_all(&buffer[..count]).await?;
-        observer.advance(count as u64);
-        written += count as u64;
+        buffered += count;
         remaining -= count as u64;
+        if buffer.len() - buffered < TRANSFER_CHUNK || remaining == 0 {
+            target.write_all(&buffer[..buffered]).await?;
+            // Report only completed local writes, never data held in our buffer.
+            target.flush().await?;
+            observer.advance(buffered as u64);
+            written += buffered as u64;
+            buffered = 0;
+        }
     }
-    target.flush().await?;
     Ok(written)
 }
+
+#[cfg(test)]
+#[path = "transfer_io_tests.rs"]
+mod io_tests;
 
 #[cfg(test)]
 mod tests {

@@ -5,7 +5,10 @@ impl SettingsPane {
         let runtime = RuntimeSettings::load();
         let language = crate::gpui_shell::config::ui_language(cx);
         let mut selects: Vec<(&'static str, SharedSelect, &'static [&'static str])> = Vec::new();
-        let mut subscriptions = Vec::new();
+        let mut subscriptions =
+            vec![cx.observe_global::<crate::gpui_shell::completion_history::ClearState>(
+                |_, cx| cx.notify(),
+            )];
 
         let mut add_select = |key: &'static str,
                               values: &'static [&'static str],
@@ -370,7 +373,13 @@ impl SettingsPane {
             .unwrap_or(0);
         let proxy_protocol_select = cx.new(|cx| {
             SelectState::new(
-                vec![SharedString::from("SOCKS5"), SharedString::from("HTTP")],
+                crate::display::MANUAL_PROXY_PROTOCOL_OPTIONS
+                    .iter()
+                    .copied()
+                    .map(|protocol| {
+                        SharedString::from(crate::display::manual_proxy_protocol_label(protocol))
+                    })
+                    .collect::<Vec<_>>(),
                 Some(IndexPath::default().row(proxy_protocol_ix)),
                 window,
                 cx,
@@ -423,7 +432,7 @@ impl SettingsPane {
             active_provider.model,
         ];
         let provider_placeholders = provider_input_placeholders(language);
-        let provider_inputs = provider_values
+        let provider_inputs: Vec<Entity<InputState>> = provider_values
             .into_iter()
             .zip(provider_placeholders)
             .map(|(value, placeholder)| {
@@ -432,6 +441,9 @@ impl SettingsPane {
                 })
             })
             .collect();
+
+        let provider_ui = super::providers::ProviderUi::new(window, cx);
+        subscriptions.extend(provider_ui.subscribe(&provider_inputs, window, cx));
 
         // 远端备份的非密文槽位输入（容量按最多槽位的协议 S3 = 4）；值在
         // 构造体内按当前协议回填。
@@ -533,10 +545,9 @@ impl SettingsPane {
 
         let font_family_cjk_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(
-                runtime
-                    .font_family_cjk
-                    .clone()
-                    .unwrap_or_else(|| crate::font_install::REQUIRED_FONT_FAMILY.to_owned()),
+                runtime.font_family_cjk.clone().unwrap_or_else(|| {
+                    cx.global::<crate::gpui_shell::config::Settings>().font_family.clone()
+                }),
             )
         });
         subscriptions.push(cx.subscribe_in(
@@ -544,6 +555,36 @@ impl SettingsPane {
             window,
             |this: &mut Self, _, event: &InputEvent, window, cx| {
                 this.on_cjk_font_family_input_event(event, window, cx);
+            },
+        ));
+
+        let ui_font_family_input =
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(localized_input_placeholder("font_family", language))
+                    .default_value(runtime.ui_font_family.clone().unwrap_or_else(|| {
+                        crate::gpui_shell::typography::UI_FONT_FAMILY.to_owned()
+                    }))
+            });
+        subscriptions.push(cx.subscribe_in(
+            &ui_font_family_input,
+            window,
+            |this: &mut Self, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    let default = crate::gpui_shell::typography::UI_FONT_FAMILY;
+                    let entered = input.read(cx).value().trim().to_owned();
+                    // 默认字体显示真实名称，但不把占位默认值变成用户覆盖设置。
+                    let value =
+                        if entered.eq_ignore_ascii_case(default) { String::new() } else { entered };
+                    if value != this.runtime.ui_font_family.as_deref().unwrap_or_default() {
+                        this.persist(&[("ui_font_family", value)], cx);
+                    }
+                    let displayed =
+                        this.runtime.ui_font_family.as_deref().unwrap_or(default).to_owned();
+                    if input.read(cx).value().as_ref() != displayed {
+                        input.update(cx, |state, cx| state.set_value(displayed, window, cx));
+                    }
+                }
             },
         ));
 
@@ -680,6 +721,7 @@ impl SettingsPane {
             proxy_test_seq: 0,
             proxy_test_status: crate::display::ProxyTestStatus::Idle,
             provider_store,
+            provider_ui,
             provider_inputs,
             provider_status: None,
             provider_test_seq: 0,
@@ -720,6 +762,7 @@ impl SettingsPane {
             font_imported: Vec::new(),
             font_family_input,
             font_family_cjk_input,
+            ui_font_family_input,
             font_size_input,
             font_size_editing: None,
             font_picker_trigger_bounds: None,

@@ -55,12 +55,40 @@ impl NebulaWorkspace {
         rx: std::sync::mpsc::Receiver<GpuiShellEvent>,
         cx: &mut Context<Self>,
     ) {
+        use futures::StreamExt as _;
+        use futures::future::{Either, select};
+
+        // Runtime 请求在这里排队等 UI 线程处理。只按固定节拍取件时，手机和 CLI
+        // 的每个串行请求都要等满一拍（约 120 ms）；转发线程收到事件就唤醒，
+        // 空闲时仍按原节拍 dispatch，运行时快照照旧周期发布。
+        let (forward, mut queued) = futures::channel::mpsc::unbounded();
+        std::thread::Builder::new()
+            .name("pebrel-shell-events".into())
+            .spawn(move || {
+                while let Ok(event) = rx.recv() {
+                    if forward.unbounded_send(event).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn shell event forwarder");
         let executor = cx.background_executor().clone();
         cx.spawn(async move |_this, cx| {
+            let mut open = true;
             loop {
-                executor.timer(Duration::from_millis(120)).await;
+                let tick = executor.timer(Duration::from_millis(120));
                 let mut events = Vec::new();
-                while let Ok(event) = rx.try_recv() {
+                if open {
+                    match select(tick, queued.next()).await {
+                        Either::Left(_) => {},
+                        Either::Right((Some(event), _)) => events.push(event),
+                        // 所有发送端都已释放：退回纯节拍，避免已关闭的通道空转。
+                        Either::Right((None, _)) => open = false,
+                    }
+                } else {
+                    tick.await;
+                }
+                while let Ok(event) = queued.try_recv() {
                     events.push(event);
                 }
 
@@ -1067,6 +1095,7 @@ impl NebulaWorkspace {
             } else {
                 super::session_persistence::SaveReason::Checkpoint
             },
+            window,
             cx,
         ) {
             log::warn!("Could not checkpoint before hiding window: {error}");

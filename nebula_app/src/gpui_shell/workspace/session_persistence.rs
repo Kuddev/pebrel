@@ -28,8 +28,14 @@ impl Default for SessionPersistence {
 }
 
 impl SessionPersistence {
+    #[cfg(test)]
+    pub(super) fn ordinary_for_test() -> Self {
+        Self { isolated: false, ..Self::default() }
+    }
+
     pub(super) fn update_windows(&self) -> std::io::Result<Vec<Session>> {
-        self.saved
+        // 管理员只在显式更新事务中落盘；commit 会在授权安装前持久保存这份内存快照。
+        (if self.isolated { &self.latest } else { &self.saved })
             .clone()
             .ok_or_else(|| std::io::Error::other("No durable workspace snapshot"))?
             .into_update_windows()
@@ -53,11 +59,6 @@ impl SessionPersistence {
         reason: SaveReason,
         write: impl FnOnce(&Session) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
-        // An administrator window must not overwrite the ordinary workspace or
-        // cause its privileged shell command to be restored in a later session.
-        if self.isolated {
-            return Ok(());
-        }
         let retry_checkpoint = reason == SaveReason::Checkpoint
             && current.as_ref().is_none_or(|session| session.tabs.is_empty());
         let candidate = if self.quitting {
@@ -92,7 +93,15 @@ impl SessionPersistence {
         }
         // A failed final write is cancellable: windows stay live and subsequent
         // checkpoints must still be able to save newly confirmed identities.
-        write(&session)?;
+        if self.isolated {
+            // 未预约更新时只记忆当前会话，绝不写入普通会话文件或开启常规管理员恢复。
+            if !crate::update_download::handoff::checkpoint_scheduled(&session)? {
+                self.quitting |= reason == SaveReason::Quit;
+                return Ok(());
+            }
+        } else {
+            write(&session)?;
+        }
         self.saved = Some(session);
         self.quitting |= reason == SaveReason::Quit;
         Ok(())
@@ -116,14 +125,15 @@ mod tests {
                 panic!("privileged session reached shared storage")
             });
         }
-        assert!(state.latest.is_none());
+        assert!(state.saved.is_none(), "ordinary privileged launches do not persist a workspace");
+        assert_eq!(state.update_windows().unwrap()[0].tabs, sample_session().tabs);
     }
     use crate::session::{AgentSession, LayoutSession, TabSession};
 
     fn ordinary_window() -> SessionPersistence {
         // Hosted Windows runners can be elevated. These tests exercise ordinary
         // window persistence; privileged isolation has its own negative test.
-        SessionPersistence { isolated: false, ..SessionPersistence::default() }
+        SessionPersistence::ordinary_for_test()
     }
 
     fn sample_session() -> Session {

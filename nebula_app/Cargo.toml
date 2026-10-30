@@ -1,6 +1,7 @@
 [package]
 name = "nebula"
-version = "2.2.2"
+default-run = "pebrel"
+version = "2.3.1"
 license = "GPL-3.0-or-later"
 description = "Pebrel — a GPU-accelerated terminal emulator"
 readme = "README.md"
@@ -13,17 +14,23 @@ rust-version.workspace = true
 name = "pebrel"
 path = "src/main.rs"
 
+[[bin]]
+name = "pebrel-cli"
+path = "src/console_main.rs"
+test = false
+bench = false
+
 [dependencies.nebula_terminal]
 path = "../nebula_terminal"
-version = "2.2.2"
+version = "2.3.1"
 
 [dependencies.nebula_config_derive]
 path = "../nebula_config_derive"
-version = "2.2.2"
+version = "2.3.1"
 
 [dependencies.nebula_config]
 path = "../nebula_config"
-version = "2.2.2"
+version = "2.3.1"
 
 # 可选：GPUI UI 层（feature = "gpui-shell"，模块 src/gpui_shell/）。
 # GPUI/component 的版本和 Git 来源由根 Cargo.toml 统一精确固定。
@@ -72,13 +79,15 @@ optional = true
 
 [dependencies.pebrel-completions]
 path = "../nebula-completions"
-version = "2.2.2"
+version = "2.3.1"
 
 [dependencies]
 anyhow = { version = "=1.0.104", optional = true }
 ahash = { version = "0.8.6", features = ["no-rng"] }
 ab_glyph_rasterizer = "=0.1.10"
 base64 = "0.22.0"
+# 复用 GPUI 已锁定的 SVG 渲染器；AI 标志嵌入 SVGZ，按实际 DPI 栅格化。
+resvg = { version = "=0.46.0", default-features = false }
 # WebDAV 同步的内容加密（spec 003）。用户裁定（2026-07-28）：同步集含
 # SSH 地址簿与命令历史，属高危隐私必须加密；Argon2 只在同步动作的后台
 # 线程跑（~0.1s/19MiB 瞬时，终端热路径零涉及）——可以上，但克制：参数
@@ -156,7 +165,7 @@ naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "hlsl-out"
 gif = { version = "=0.14.2", optional = true }
 
 [build-dependencies]
-nebula-settings = { path = "../nebula_settings", version = "2.2.2" }
+nebula-settings = { path = "../nebula_settings", version = "2.3.1" }
 gl_generator = { version = "0.14.0", optional = true }
 serde = "1"
 serde_json = "1"
@@ -205,6 +214,27 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
     "NSView",
     "NSWindow",
 ] }
+# 视频背景：系统 AVPlayer 解码到 GPUI 视图下方的原生图层，仅随 video-background 启用。
+objc2-av-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "AVAnimation",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVPlayerLayer",
+    "AVPlayerLooper",
+    "objc2-core-foundation",
+    "objc2-quartz-core",
+] }
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CFCGTypes",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "=0.61.2"
@@ -243,6 +273,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
     # A single process snapshot includes creation times even for protected
     # processes, so reused parent PIDs cannot attach unrelated processes to a pane.
     "Wdk_System_SystemInformation",
@@ -264,6 +295,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_IO",
+    # 串口 DCB 与读写超时配置（serial_session）。
+    "Win32_Devices_Communication",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Credentials",
@@ -319,7 +352,20 @@ gpui-shell = [
 ]
 # 真实 GPUI hitbox / 鼠标路由测试显式启用；不能放进 dev-dependencies，
 # 否则不带 gpui-shell 的默认 `cargo test -p nebula` 也会编译整棵 GPUI。
-video-background = ["gpui-shell", "dep:anyhow", "dep:raw-window-handle", "windows/Win32_Media_MediaFoundation"]
+video-background = [
+    "gpui-shell",
+    "dep:anyhow",
+    "dep:raw-window-handle",
+    "windows/Win32_Media_MediaFoundation",
+    "dep:objc2-av-foundation",
+    "dep:objc2-quartz-core",
+    "dep:objc2-core-foundation",
+    "objc2-app-kit/NSGraphics",
+    "objc2-app-kit/objc2-quartz-core",
+    "objc2-foundation/NSGeometry",
+    "objc2-foundation/NSURL",
+    "objc2-foundation/NSArray",
+]
 gif-background = ["video-background", "dep:gif"]
 shader-background = ["gif-background", "dep:naga", "gpui/wgsl-postprocess", "windows/Win32_Graphics_Direct3D_Fxc"]
 gpui-test-support = ["gpui-shell", "gpui/test-support", "gpui-component/test-support"]

@@ -14,17 +14,18 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Result, SharedString};
 
-/// 小型 SVG 编译期嵌入，不引入额外资源加载依赖。
+/// SVG 编译期无损压缩嵌入，仍通过原有逻辑路径加载。
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
         &[$((
             concat!("icons/nebula-", $name, ".svg"),
-            include_bytes!(concat!("../../assets/icons/nebula-", $name, ".svg")).as_slice(),
+            include_bytes!(concat!("../../assets/icons/nebula-", $name, ".svgz")).as_slice(),
         )),*]
     };
 }
 
 const NEBULA_ICONS: &[(&str, &[u8])] = icons![
+    "terminal",
     "command-manager",
     "keymap",
     "layout-grid",
@@ -44,22 +45,48 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "shield",
     "trash-2",
     "refresh",
+    "spinner-arc",
+    "spinner-track",
     "phone",
     "vcs-changes",
     "vcs-history",
     "vcs-conflict",
+    "brain",
+    "waypoints",
+    "wallet",
+    "credit-card",
+    "clock",
+    "download",
+];
+
+const COMPRESSED_ICONS: &[(&str, &[u8])] = icons![
     "agent-cursor",
     "agent-copilot",
     "agent-openai",
     "agent-opencode",
     "agent-pi",
     "agent-grok",
+    "agent-qoder",
+    "agent-qwen",
+    "agent-codebuddy",
+    "agent-antigravity",
+    "agent-hermes",
+    "provider-gemini",
+    "provider-anthropic",
+    "provider-ollama",
+    "provider-openrouter",
+    "provider-qwen",
+    "provider-deepseek",
+    "provider-zhipu",
+    "provider-doubao",
+    "provider-xiaomimimo",
+    "provider-azure",
 ];
 
 const AGENT_ICONS: &[(&str, &[u8])] = &[
-    ("icons/agent-claude.svg", include_bytes!("../../../extra/logo/ai_claude.svg")),
-    ("icons/agent-kimi.svg", include_bytes!("../../../extra/logo/ai_kimi.svg")),
-    ("icons/agent-omp.svg", include_bytes!("../../../extra/logo/ai_omp.svg")),
+    ("icons/agent-claude.svg", include_bytes!("../../../extra/logo/ai_claude.svgz")),
+    ("icons/agent-kimi.svg", include_bytes!("../../../extra/logo/ai_kimi.svgz")),
+    ("icons/agent-omp.svg", include_bytes!("../../../extra/logo/ai_omp.svgz")),
 ];
 
 /// 先查本仓库，未命中再交给组件库。
@@ -67,10 +94,18 @@ pub struct NebulaAssets;
 
 impl AssetSource for NebulaAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) =
-            NEBULA_ICONS.iter().chain(AGENT_ICONS).find(|(name, _)| *name == path)
+        let path = if path == "icons/square-terminal.svg" { nav::TERMINAL } else { path };
+        if let Some((_, bytes)) = NEBULA_ICONS
+            .iter()
+            .chain(AGENT_ICONS)
+            .chain(COMPRESSED_ICONS)
+            .find(|(name, _)| *name == path)
         {
-            return Ok(Some(Cow::Borrowed(bytes)));
+            return if bytes.starts_with(&[0x1f, 0x8b]) {
+                Ok(Some(Cow::Owned(resvg::usvg::decompress_svgz(bytes)?)))
+            } else {
+                Ok(Some(Cow::Borrowed(bytes)))
+            };
         }
         gpui_component_assets::Assets.load(path)
     }
@@ -81,6 +116,7 @@ impl AssetSource for NebulaAssets {
             NEBULA_ICONS
                 .iter()
                 .chain(AGENT_ICONS)
+                .chain(COMPRESSED_ICONS)
                 .filter(|(name, _)| name.starts_with(path))
                 .map(|(name, _)| SharedString::from(*name)),
         );
@@ -90,6 +126,7 @@ impl AssetSource for NebulaAssets {
 
 /// 自带图标的路径。走路径而不是 `IconName`：扩展那个枚举等于改 fork。
 pub mod nav {
+    pub const TERMINAL: &str = "icons/nebula-terminal.svg";
     pub const AGENT_CLAUDE: &str = "icons/agent-claude.svg";
     pub const AGENT_KIMI: &str = "icons/agent-kimi.svg";
     pub const AGENT_OMP: &str = "icons/agent-omp.svg";
@@ -97,8 +134,13 @@ pub mod nav {
     pub const AGENT_OPENCODE: &str = "icons/nebula-agent-opencode.svg";
     pub const AGENT_PI: &str = "icons/nebula-agent-pi.svg";
     pub const AGENT_GROK: &str = "icons/nebula-agent-grok.svg";
+    pub const AGENT_HERMES: &str = "icons/nebula-agent-hermes.svg";
     pub const AGENT_CURSOR: &str = "icons/nebula-agent-cursor.svg";
     pub const AGENT_COPILOT: &str = "icons/nebula-agent-copilot.svg";
+    pub const AGENT_QODER: &str = "icons/nebula-agent-qoder.svg";
+    pub const AGENT_QWEN: &str = "icons/nebula-agent-qwen.svg";
+    pub const AGENT_CODEBUDDY: &str = "icons/nebula-agent-codebuddy.svg";
+    pub const AGENT_ANTIGRAVITY: &str = "icons/nebula-agent-antigravity.svg";
     pub const LAYOUT_GRID: &str = "icons/nebula-layout-grid.svg";
     pub const MOUSE_POINTER: &str = "icons/nebula-mouse-pointer.svg";
     pub const SLIDERS: &str = "icons/nebula-sliders.svg";
@@ -133,4 +175,23 @@ pub mod backup {
     pub const FOLDER: &str = "icons/nebula-backup-folder.svg";
     pub const LOCK: &str = "icons/nebula-backup-lock.svg";
     pub const CHECK: &str = "icons/nebula-backup-check.svg";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_icons_load_the_exact_editable_svg_sources() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        for (path, _) in NEBULA_ICONS {
+            let source = std::fs::read(directory.join(path)).unwrap();
+            let loaded = NebulaAssets.load(path).unwrap().unwrap();
+            assert_eq!(loaded.as_ref(), source, "compressed icon is stale: {path}");
+        }
+        assert_eq!(
+            NebulaAssets.load("icons/square-terminal.svg").unwrap(),
+            NebulaAssets.load(nav::TERMINAL).unwrap()
+        );
+    }
 }

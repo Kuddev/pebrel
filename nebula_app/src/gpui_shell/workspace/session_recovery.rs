@@ -1,12 +1,33 @@
 //! Workspace snapshot capture and cold restoration.
 
 use super::*;
+use crate::i18n::Message;
 
 impl NebulaWorkspace {
+    pub(super) fn save_clean_window_session(
+        &mut self,
+        window: &Window,
+        cx: &mut App,
+    ) -> std::io::Result<()> {
+        windowing::save_current_window_session(
+            self.runtime_window_id,
+            self.snapshot_session(cx),
+            session_persistence::SaveReason::WindowClose,
+            window,
+            cx,
+        )
+    }
+
     /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
     /// 同一合同，设置页「启动目录」优先，未设置或失效时才继承进程启动目录。
     pub(super) fn cold_start_cwd() -> Option<std::path::PathBuf> {
-        cold_start_cwd(Self::startup_directory(), std::env::current_dir().ok())
+        let wsl = crate::platform::launch_directory::is_wsl(
+            super::shell_launch::startup_shell(None).as_ref(),
+        );
+        cold_start_cwd(
+            Self::startup_directory(),
+            (!wsl).then(|| std::env::current_dir().ok()).flatten(),
+        )
     }
 
     pub(super) fn restore_update_session(
@@ -27,8 +48,8 @@ impl NebulaWorkspace {
         restored
     }
 
-    /// 启动恢复：断路器跳闸就隔离现场并走干净路径；恢复成功弹一条
-    /// 自动消失的提示（崩溃现场多一句来源说明）。返回是否恢复出了 tab。
+    /// 启动恢复：断路器跳闸就隔离现场并走干净路径；标签重建后提示
+    /// 会话仍在启动（崩溃现场多一句来源说明）。返回是否恢复出了 tab。
     pub(super) fn try_restore_session(
         &mut self,
         resume_ai: bool,
@@ -36,6 +57,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         use crate::display::ToastKind;
+        let language = crate::gpui_shell::config::ui_language(cx);
 
         let Some(mut session) = crate::session::load() else { return false };
         if !crate::session::should_restore(&session) {
@@ -47,7 +69,10 @@ impl NebulaWorkspace {
                         window,
                         cx,
                         ToastKind::Warning,
-                        format!("连续多次启动未完成恢复，已跳过；现场保存在 {}", path.display()),
+                        language.format(
+                            Message::WorkspaceRecoverySkipped,
+                            &[("path", &path.display().to_string())],
+                        ),
                     );
                 }
             }
@@ -66,12 +91,13 @@ impl NebulaWorkspace {
         }
         self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
         self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
+        let message = if crashed {
+            Message::SessionTabsReopenedAfterCrash
         } else {
-            format!("已恢复 {restored} 个标签")
+            Message::SessionTabsReopened
         };
-        crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
+        let text = language.format(message, &[("count", &restored.to_string())]);
+        crate::gpui_shell::toast::toast(window, cx, ToastKind::Info, text);
         cx.notify();
         true
     }
@@ -134,6 +160,7 @@ impl NebulaWorkspace {
                     crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
                         destination: host.clone(),
                         cwd: (!cwd.is_empty()).then(|| cwd.clone()),
+                        resume_target: None,
                     }
                 },
                 _ => Self::terminal_launch_from_session(&launch_session, local_cwd),

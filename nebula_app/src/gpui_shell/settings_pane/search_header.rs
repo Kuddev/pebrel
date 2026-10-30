@@ -101,7 +101,7 @@ impl SettingsPane {
                             .size(px(SETTINGS_NAV_ICON_SIZE))
                             .text_color(cx.theme().muted_foreground),
                     )
-                    .aria_label(language.pick("在全部设置中搜索", "Search all settings")),
+                    .aria_label(language.text(crate::i18n::Message::SettingsPaneSearchAllSettings)),
             )
             .child(
                 div()
@@ -262,6 +262,9 @@ mod tests {
         assert!(matching_sections("no such setting", en).is_empty());
         assert_eq!(matching_sections("", en), visible_nav_sections().collect::<Vec<_>>());
         assert!(!matching_sections("AI", en).contains(&3));
+        assert!(matching_sections("API Providers", en).is_empty());
+        assert!(matching_sections("供应商", zh).is_empty());
+        assert_eq!(matching_sections("Agents", en), vec![10]);
     }
 
     #[test]

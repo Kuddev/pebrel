@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use gpui::{App, ClipboardItem, Window};
 use nebula_terminal::event::EventListener;
+use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::Point;
 use nebula_terminal::term::cell::Flags;
 use nebula_terminal::term::{Term, point_to_viewport_from};
@@ -75,19 +76,45 @@ pub(super) fn dashed_cells<T: EventListener>(
     rows: usize,
     cols: usize,
 ) -> LinkCells {
+    dashed_cells_where(term, config, rows, cols, |_| true)
+}
+
+pub(super) fn dashed_cells_where<T: EventListener>(
+    term: &Term<T>,
+    config: &UiConfig,
+    rows: usize,
+    cols: usize,
+    include_row: impl Fn(usize) -> bool,
+) -> LinkCells {
     let matches = hint::visible_clickable_matches(term, config);
-    if matches.is_empty() {
+    let hyperlinks = config.hints.enabled.iter().any(|hint| {
+        hint.content.hyperlinks && hint.mouse.as_ref().is_some_and(|mouse| mouse.enabled)
+    });
+    if matches.is_empty() && !hyperlinks || rows == 0 || cols == 0 {
         return HashMap::new();
     }
     let origin = term.viewport_origin_for(rows);
     let mut cells = HashMap::new();
-    for indexed in term.grid().display_iter() {
-        if indexed.flags.intersects(Flags::HIDDEN | Flags::LEADING_WIDE_CHAR_SPACER)
-            || !matches.iter().any(|bounds| bounds.contains(&indexed.point))
+    let mut next_match = 0;
+    // 先跳过被富文本遮住的整行，避免 hover 重绘逐格过滤；链接匹配仍保留完整原文上下文。
+    let visible_rows = (0..rows)
+        .take_while(|&row| origin + row <= term.bottommost_line())
+        .filter(|&row| include_row(row));
+    for indexed in visible_rows.flat_map(|row| term.grid().display_iter_from(origin + row, 1, cols))
+    {
+        let Some(vp) = point_to_viewport_from(origin, indexed.point) else { continue };
+        if indexed.flags.intersects(Flags::HIDDEN | Flags::LEADING_WIDE_CHAR_SPACER) {
+            continue;
+        }
+        // 匹配范围已排序合并，单向推进，避免每个格子再遍历全部文件链接。
+        while matches.get(next_match).is_some_and(|bounds| *bounds.end() < indexed.point) {
+            next_match += 1;
+        }
+        if !(hyperlinks && indexed.hyperlink().is_some())
+            && !matches.get(next_match).is_some_and(|bounds| bounds.contains(&indexed.point))
         {
             continue;
         }
-        let Some(vp) = point_to_viewport_from(origin, indexed.point) else { continue };
         if vp.line < rows && vp.column.0 < cols {
             let (mut fg, mut bg) = (indexed.fg, indexed.bg);
             let (mut dim, mut bg_dim) = (indexed.flags.contains(Flags::DIM), false);

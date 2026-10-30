@@ -219,7 +219,7 @@ impl NebulaWorkspace {
         let selected_ring = theme.ring.opacity(0.16);
         // 文件树字位是内置 Nerd Font 图标；固定 Maple，不能让终端主字体
         // 改变折叠箭头和文件图标的 advance。
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let selected = self.side_panel.selected.as_ref() == Some(&row.path);
         let searching = !self.side_panel.search.trim().is_empty();
         let path_hint = searching.then(|| {

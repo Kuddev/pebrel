@@ -30,7 +30,38 @@ impl AiLogo {
         Self::Kimi,
     ];
 
-    /// One source catalog for both shells. Official color assets are embedded unchanged.
+    /// 每种标志只嵌入一个无损压缩的矢量源，两个壳按当前 DPI 共用它。
+    pub(crate) fn svg(self) -> &'static [u8] {
+        match self {
+            Self::Claude => include_bytes!("../../../extra/logo/ai_claude.svgz"),
+            Self::OpenAi => include_bytes!("../../assets/icons/nebula-agent-openai.svgz"),
+            Self::OpenCode => include_bytes!("../../assets/icons/nebula-agent-opencode.svgz"),
+            Self::Pi => include_bytes!("../../assets/icons/nebula-agent-pi.svgz"),
+            Self::Grok => include_bytes!("../../assets/icons/nebula-agent-grok.svgz"),
+            Self::Antigravity => include_bytes!("../../../extra/logo/ai_antigravity.svgz"),
+            Self::Trae => include_bytes!("../../../extra/logo/ai_trae.svgz"),
+            Self::OhMyPi => include_bytes!("../../../extra/logo/ai_omp.svgz"),
+            Self::CodeBuddy => include_bytes!("../../../extra/logo/ai_codebuddy.svgz"),
+            Self::Kimi => include_bytes!("../../../extra/logo/ai_kimi.svgz"),
+        }
+    }
+
+    pub(crate) fn render(self, ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let size = size.clamp(1, 512);
+        let source_ink = if matches!(self, Self::OpenCode) { [255; 3] } else { ink };
+        let mut pixels = rasterize_svg(self.svg(), source_ink, size * 4)?;
+        self.tint_pixels(&mut pixels, ink);
+        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
+    }
+
+    pub(crate) fn render_brand(svg: &[u8], ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let size = size.clamp(1, 512);
+        let pixels = rasterize_svg(svg, ink, size * 4)?;
+        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
+    }
+
+    /// 历史原图只留在测试中核对来源，产品不再嵌入 PNG。
+    #[cfg(test)]
     pub(crate) fn png(self, light_ink: bool) -> &'static [u8] {
         match self {
             Self::Claude => include_bytes!("../../../extra/logo/ai_claude.png"),
@@ -66,7 +97,10 @@ impl AiLogo {
 
     /// Reuse a prepared texture only when neither its source nor tint depends on theme.
     pub(crate) fn shares_theme_texture(self) -> bool {
-        self.tint_preserves_luma().is_none() && std::ptr::eq(self.png(false), self.png(true))
+        matches!(
+            self,
+            Self::Claude | Self::Antigravity | Self::Trae | Self::OhMyPi | Self::CodeBuddy
+        )
     }
 
     pub(crate) fn tint_pixels(self, pixels: &mut [u8], ink: [u8; 3]) {
@@ -78,6 +112,34 @@ impl AiLogo {
             }
         }
     }
+}
+
+/// 保留 SVG 的原色，currentColor 则由使用位置的主题文字色提供。
+fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32) -> Option<Vec<u8>> {
+    let options = resvg::usvg::Options {
+        default_size: resvg::usvg::Size::from_wh(24.0, 24.0)?,
+        style_sheet: Some(format!("svg {{ color: rgb({}, {}, {}); }}", ink[0], ink[1], ink[2])),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(svg, &options).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
+    let scale = size as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let mut pixels = pixmap.data().to_vec();
+    // tiny-skia 使用预乘 alpha，纹理接口要求 straight RGBA。
+    for pixel in pixels.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    Some(pixels)
 }
 
 pub(crate) fn prepare_ai_logo_texture(
@@ -186,6 +248,28 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn compressed_vectors_render_at_physical_sizes_on_both_themes() {
+        for logo in AiLogo::ALL {
+            let svg = resvg::usvg::decompress_svgz(logo.svg()).unwrap();
+            assert!(std::str::from_utf8(&svg).unwrap().contains("<svg"));
+            for ink in [[236, 239, 245], [35, 40, 50]] {
+                for size in [16, 18, 24, 27, 36, 48] {
+                    let (pixels, width, height) = logo.render(ink, size).unwrap();
+                    assert_eq!(
+                        (width, height, pixels.len()),
+                        (size, size, (size * size * 4) as usize)
+                    );
+                    assert!(pixels.chunks_exact(4).any(|p| p[3] > 128), "{logo:?} {size}");
+                    assert!(
+                        pixels.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255),
+                        "{logo:?} {size}"
+                    );
+                }
+            }
+        }
+    }
+
     fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
         let image = image::load_from_memory(bytes).unwrap().into_rgba8();
         (image.width(), image.height(), image.into_raw())
@@ -216,39 +300,40 @@ mod tests {
     }
 
     #[test]
-    fn official_png_logos_are_embedded_unchanged_and_decodable() {
+    fn official_png_logos_preserve_original_pixels_and_dimensions() {
         use sha2::{Digest, Sha256};
 
+        // RGBA hashes come from the original assets, before lossless recompression.
         let assets = [
             (
                 AiLogo::Grok.png(false),
                 [
-                    0x37, 0xdd, 0xbc, 0xb6, 0xe2, 0xa7, 0xf2, 0xe4, 0xb3, 0xbe, 0x78, 0xa7, 0xd4,
-                    0x12, 0x96, 0xa3, 0xbc, 0x7e, 0xdf, 0x69, 0x26, 0x36, 0x24, 0x34, 0xef, 0xc0,
-                    0x0d, 0xf5, 0xa5, 0x6a, 0x35, 0x86,
+                    0x24, 0x43, 0x83, 0x65, 0x70, 0x1b, 0x58, 0xb6, 0x7b, 0x8c, 0x76, 0x55, 0x8a,
+                    0x23, 0xc9, 0xf9, 0x53, 0x50, 0xe1, 0xea, 0x8e, 0x98, 0x23, 0xd9, 0x8e, 0xef,
+                    0xec, 0xb0, 0xd9, 0xa8, 0xf1, 0x1a,
                 ],
             ),
             (
                 AiLogo::Grok.png(true),
                 [
-                    0x35, 0x90, 0x56, 0xee, 0x89, 0x83, 0xcf, 0xa0, 0xba, 0x7e, 0x72, 0x79, 0x50,
-                    0x78, 0xc7, 0xc0, 0xdd, 0xf6, 0xc5, 0xd7, 0xa1, 0x87, 0x04, 0x01, 0xab, 0x96,
-                    0x0e, 0xd4, 0xf9, 0xdf, 0x9e, 0x53,
+                    0x7e, 0x98, 0xa2, 0x1c, 0xf5, 0x0f, 0x61, 0x57, 0x9d, 0x91, 0xe6, 0xd1, 0xde,
+                    0x7b, 0x1c, 0x4e, 0xf5, 0x13, 0x9b, 0xef, 0x8f, 0x0f, 0xda, 0xf3, 0x5b, 0x47,
+                    0x02, 0xd0, 0xf7, 0x57, 0x25, 0x76,
                 ],
             ),
             (
                 AiLogo::Kimi.png(false),
                 [
-                    0xfc, 0x3f, 0x90, 0x5a, 0xdc, 0x68, 0xdf, 0xe9, 0xe1, 0x4a, 0xd2, 0x3b, 0x12,
-                    0x3f, 0x55, 0xab, 0x71, 0xd3, 0x2b, 0xf0, 0xd8, 0x55, 0xa2, 0xcf, 0x65, 0x80,
-                    0xf6, 0xb5, 0xcf, 0xf0, 0xbe, 0x99,
+                    0x63, 0xcf, 0x88, 0x24, 0x8f, 0x3b, 0x30, 0x32, 0x1c, 0xb7, 0x19, 0x9e, 0xcf,
+                    0x8b, 0x30, 0x7c, 0x01, 0x08, 0x94, 0x21, 0xb6, 0x47, 0xc5, 0x42, 0x04, 0xe8,
+                    0x0b, 0xde, 0xb9, 0x6d, 0x92, 0x01,
                 ],
             ),
         ];
 
         for (png, expected_sha256) in assets {
-            assert_eq!(Sha256::digest(png).as_slice(), expected_sha256);
             let (width, height, rgba) = decode_png(png);
+            assert_eq!(Sha256::digest(&rgba).as_slice(), expected_sha256);
             assert_eq!((width, height), (1024, 1024));
             assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] != 0));
         }
@@ -301,20 +386,21 @@ mod tests {
     }
 
     #[test]
-    fn official_antigravity_logo_keeps_its_bytes_and_colors_on_both_themes() {
+    fn official_antigravity_logo_keeps_its_pixels_and_colors_on_both_themes() {
         use sha2::{Digest, Sha256};
 
         let png = AiLogo::Antigravity.png(false);
         assert_eq!(png, AiLogo::Antigravity.png(true));
+        let (width, height, source) = decode_png(png);
+        // Hash the original decoded RGBA, including colors beneath zero alpha.
         assert_eq!(
-            Sha256::digest(png).as_slice(),
+            Sha256::digest(&source).as_slice(),
             [
-                0xe0, 0xcd, 0x08, 0xcc, 0xd1, 0x0c, 0xd8, 0xd0, 0x8c, 0xcf, 0x0b, 0xa4, 0x49, 0x82,
-                0x3e, 0xe8, 0x84, 0x95, 0x82, 0x5c, 0x08, 0x41, 0x61, 0x96, 0x18, 0x10, 0x0d, 0x3a,
-                0xb0, 0x89, 0xf5, 0x1e,
+                0x9b, 0x57, 0x4d, 0x4a, 0xe9, 0x4a, 0x38, 0x65, 0xca, 0x94, 0x18, 0xfd, 0x6c, 0x7e,
+                0x1f, 0x5f, 0xc4, 0xb7, 0x6e, 0x81, 0xf3, 0x0d, 0x78, 0x6d, 0x10, 0x5e, 0x71, 0x1f,
+                0xa0, 0x4a, 0x25, 0x52
             ]
         );
-        let (width, height, source) = decode_png(png);
         assert_eq!((width, height), (540, 540));
         assert!(source.chunks_exact(4).any(|pixel| pixel[3] == 0));
         assert!(source.chunks_exact(4).any(|pixel| pixel[3] == 255));

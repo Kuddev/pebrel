@@ -29,7 +29,6 @@ pub(crate) use super::background_color_model::{BACKGROUND_SWATCHES, hsv_to_rgb, 
 use super::keymap;
 pub(crate) use super::network_proxy_model::{
     MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
-    manual_proxy_value,
 };
 use super::ui::theme::Skin;
 use super::ui::{icons, os_icons, surface, text_field, tokens, widgets};
@@ -137,7 +136,7 @@ pub enum SettingsDropdown {
     BackupProtocol,
     /// 代理：SSH 连接代理模式（关闭/系统/自定义）。
     SshProxyMode,
-    /// 网络→指定代理→手动填写：地址协议（SOCKS5/HTTP）。
+    /// 网络→指定代理→手动填写：地址协议（SOCKS5/SOCKS5H/HTTP）。
     SshProxyProtocol,
     /// 网络→指定代理→SSH 跳板：已保存主机的选择下拉。
     SshJumpHost,
@@ -207,10 +206,7 @@ fn manual_proxy_protocol_label(
     protocol: ManualProxyProtocol,
     _language: UiLanguage,
 ) -> &'static str {
-    match protocol {
-        ManualProxyProtocol::Socks5 => "SOCKS5",
-        ManualProxyProtocol::Http => "HTTP",
-    }
+    super::network_proxy_model::manual_proxy_protocol_label(protocol)
 }
 
 /// 设置页的悬停层使用当前主题的 accent，而不是固定的灰色或另一套绿色。
@@ -1013,31 +1009,16 @@ pub(super) fn nebula_settings_load(config: &UiConfig) -> NebulaRuntimeSettings {
                     settings.background_image_cover_chrome = parse_bool(v, false);
                 },
                 Some(("pinned_hosts", v)) => {
-                    settings.pinned_hosts = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                        .collect();
+                    settings.pinned_hosts = crate::ssh_profiles::host_lists::decode(v);
                 },
                 Some(("saved_hosts", v)) => {
-                    settings.saved_hosts = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                        .collect();
+                    settings.saved_hosts = crate::ssh_profiles::host_lists::decode(v);
                 },
                 Some(("follow_system_theme", v)) => {
                     settings.follow_system_theme = parse_bool(v, false)
                 },
                 Some(("hidden_hosts", v)) => {
-                    settings.hidden_hosts = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                        .collect();
+                    settings.hidden_hosts = crate::ssh_profiles::host_lists::decode(v);
                 },
                 Some(("keybind", v)) => {
                     // `keybind=<combo>:<action>`；解析验证归 keymap 模块，这里
@@ -1160,9 +1141,9 @@ pub(super) fn nebula_settings_write(settings: &NebulaRuntimeSettings) {
         .unwrap_or_default();
     let theme = settings.theme.prompt_name();
     let path = nebula_settings::settings_path();
-    let pinned_hosts = settings.pinned_hosts.join(",");
-    let saved_hosts = settings.saved_hosts.join(",");
-    let hidden_hosts = settings.hidden_hosts.join(",");
+    let pinned_hosts = crate::ssh_profiles::host_lists::encode(&settings.pinned_hosts);
+    let saved_hosts = crate::ssh_profiles::host_lists::encode(&settings.saved_hosts);
+    let hidden_hosts = crate::ssh_profiles::host_lists::encode(&settings.hidden_hosts);
     let font_size = settings.font_size.map(|size| format!("{size:.1}")).unwrap_or_default();
     let mut keybinds = String::new();
     for (combo, action) in &settings.keybinds {
@@ -3177,7 +3158,7 @@ fn ssh_proxy_manual_controls(
     let s = |v: f32| v * scale;
     let (x, y, w, h) = sync_input_rect(row, scale);
     let gap = s(8.0);
-    let protocol_w = s(112.0).min((w - gap) * 0.38);
+    let protocol_w = s(132.0).min((w - gap) * 0.38);
     let protocol = (x, y, protocol_w, h);
     let address = (x + protocol_w + gap, y, (w - protocol_w - gap).max(s(80.0)), h);
     (protocol, address)

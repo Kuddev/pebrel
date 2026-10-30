@@ -22,6 +22,37 @@ pub(crate) fn wsl_executable() -> Option<String> {
     }
 }
 
+/// Query running distributions without selecting or launching a guest.
+pub(crate) fn running_wsl_distros(
+    timeout: std::time::Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<Vec<String>> {
+    let program = wsl_executable().ok_or(std::io::ErrorKind::Unsupported)?;
+    let mut command = std::process::Command::new(program);
+    // WSL 管理命令默认输出 UTF-16；覆盖继承的 WSL_UTF8，旧 inbox 版本也沿用默认编码。
+    command.args(["--list", "--running", "--quiet"]).env("WSL_UTF8", "0");
+    let output = super::process_output::read_cancellable(command, timeout, 64 * 1024, cancelled)?;
+    wsl_running_names(&output)
+}
+
+fn wsl_running_names(bytes: &[u8]) -> std::io::Result<Vec<String>> {
+    let invalid =
+        || std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid WSL distribution list");
+    if bytes.len() % 2 != 0 {
+        return Err(invalid());
+    }
+    let units: Vec<_> = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    let text = String::from_utf16(&units).map_err(|_| invalid())?;
+    let mut names = Vec::new();
+    for name in text.trim_start_matches('\u{feff}').lines().filter(|line| !line.is_empty()) {
+        if names.len() >= 256 || name.len() > 256 || name.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
+}
+
 /// Stable id for the shell the PTY backend starts when no override is set.
 pub fn default_shell_id() -> String {
     #[cfg(windows)]
@@ -275,9 +306,59 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
     }
 }
 
+/// Windows bootstrap for the clipboard acceptance fixture; UI checks remain in the view.
+#[cfg(test)]
+pub(crate) fn native_clipboard_qa_shell(
+    program: String,
+    output: &std::path::Path,
+) -> nebula_terminal::tty::Shell {
+    #[cfg(windows)]
+    {
+        let shell = nebula_terminal::tty::powershell_with_nebula_integration(
+            program,
+            vec!["-NoLogo".into(), "-NoProfile".into()],
+        );
+        let mut args = shell.args().to_vec();
+        let result_file = output.join("execution.txt").to_string_lossy().replace('\'', "''");
+        args.last_mut().unwrap().push_str(&format!(r#";
+Set-PSReadLineOption -HistorySaveStyle SaveNothing
+if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) {{ Set-PSReadLineOption -PredictionSource None }}
+function global:PasteFixture {{ param($value); [IO.File]::AppendAllText('{result_file}', "$value`n") }}
+@{{ powershell=$PSVersionTable.PSVersion.ToString(); psreadline=(Get-Module PSReadLine).Version.ToString(); editor=$global:PebrelCompletionInputReady; clipboard=(Get-PebrelClipboardCapability) }} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:PEBREL_NATIVE_CLIPBOARD_QA_DIR 'shell.json')
+"#));
+        // PTY arguments are Windows command-line text. A BOM-marked file keeps
+        // quoting and Unicode intact for both Windows PowerShell and PowerShell 7.
+        let startup = args.pop().unwrap();
+        let startup_path = output.join("clipboard-startup.ps1");
+        std::fs::write(&startup_path, format!("\u{feff}{startup}\n")).unwrap();
+        *args.last_mut().unwrap() = "-File".into();
+        args.push(format!("\"{}\"", startup_path.display()));
+        nebula_terminal::tty::Shell::new(shell.program().into(), args)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (program, output);
+        panic!("native clipboard acceptance requires Windows");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_wsl_list_preserves_unicode_and_rejects_malformed_output() {
+        let encode =
+            |text: &str| text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+        assert_eq!(
+            wsl_running_names(&encode("\u{feff}Debian\r\n中文 测试\r\n")).unwrap(),
+            ["Debian", "中文 测试"]
+        );
+        assert!(wsl_running_names(&[]).unwrap().is_empty());
+        assert!(wsl_running_names(&[1]).is_err());
+        assert!(wsl_running_names(&[0, 0xd8]).is_err());
+        assert!(wsl_running_names(&encode("Debian\0\r\n")).is_err());
+    }
 
     #[cfg(windows)]
     #[test]

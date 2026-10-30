@@ -1,4 +1,4 @@
-//! 分屏 pane 的 24px 标题条，外加 tab 上的分屏数量胶囊。
+//! 分屏 pane 的 24px 标题条，外加 tab 上的布局缩略图。
 //!
 //! # 为什么只在分屏时出现
 //!
@@ -116,34 +116,45 @@ pub(super) fn split_glyph(size_px: f32, color: Hsla) -> impl IntoElement {
     v_flex().gap(px(gap)).child(row()).child(row())
 }
 
-/// 分屏数量胶囊，与同一标题栏的紧凑状态徽章保持一致。
-/// （`top-tabs/TopTabItems.tsx:998-1006`：`text-[10px] px-1.5 rounded-full
-/// min-w-[22px]`、前景 18% 描边、背景 60% 半透明底），但尺寸按 chrome 字号
-/// 等比推导而不是钉死 10px——侧栏字号跟随配置字号，钉死会在大字号下缩成
-/// 一粒米。
-pub(super) fn split_badge(count: usize, label_px: f32, ink: Hsla, fill: Hsla) -> impl IntoElement {
-    let height = (label_px * 1.18).max(15.0);
-    h_flex()
-        .flex_shrink_0()
-        .h(px(height))
-        .min_w(px(height * 1.25))
-        .px(px(5.0))
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .border(px(1.0))
-        .border_color(ink.opacity(0.18))
-        .bg(fill.opacity(0.6))
-        .text_size(px(label_px * 0.68))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(ink.opacity(0.75))
-        .child(SharedString::from(count.to_string()))
+/// A miniature of the committed split tree, with no surrounding badge or count.
+/// Reuse the split engine's geometry so all tab placements show the same layout.
+pub(super) fn split_layout_icon(tab: &WorkspaceTab, label_px: f32, ink: Hsla) -> impl IntoElement {
+    let width = (label_px * 1.2).max(16.0);
+    let height = width * 0.8;
+    let rectangles = match tab {
+        WorkspaceTab::Terminal { tree, .. } => split_icon_rects(tree, width, height),
+        _ => Vec::new(),
+    };
+    div().relative().flex_shrink_0().w(px(width)).h(px(height)).children(
+        rectangles.into_iter().map(|rect| {
+            div()
+                .absolute()
+                .left(px(rect.x))
+                .top(px(rect.y))
+                .w(px(rect.w))
+                .h(px(rect.h))
+                .rounded(px(1.5))
+                .border(px(1.0))
+                .border_color(ink)
+        }),
+    )
 }
 
-/// 胶囊在行内占的水平预算（含左侧 gap）：侧栏标题的列数换算要按同一份减法
-/// 扣掉它，否则省略号会压到胶囊上。
-pub(super) fn split_badge_slot_w(label_px: f32) -> f32 {
-    (label_px * 1.18).max(15.0) * 1.25 + 8.0
+fn split_icon_rects(tree: &SplitTree<u64>, width: f32, height: f32) -> Vec<nebula_split::Rect> {
+    // Lay out in a large logical viewport before scaling: a thumbnail must not
+    // impose the terminal's minimum cell size or change persisted proportions.
+    tree.layout(nebula_split::Rect::new(0.0, 0.0, 1000.0, 800.0), 1.0, 1.0, 0.0, false)
+        .panes
+        .into_iter()
+        .map(|(_, rect)| {
+            let x = rect.x * width / 1000.0;
+            let y = rect.y * height / 800.0;
+            let w = rect.w * width / 1000.0;
+            let h = rect.h * height / 800.0;
+            let gap = 2.0_f32.min(w * 0.3).min(h * 0.3);
+            nebula_split::Rect::new(x + gap * 0.5, y + gap * 0.5, w - gap, h - gap)
+        })
+        .collect()
 }
 
 /// 广播记号：中心点 + 左右各两段同心弧。fork 的 `IconName` 里没有
@@ -264,7 +275,7 @@ impl NebulaWorkspace {
             if focused { theme.sidebar_accent.opacity(0.55) } else { theme.muted.opacity(0.28) };
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let chrome_family = theme.mono_font_family.clone();
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let title_px = label_px * 0.78;
         let PaneTitle { logo, logo_pending, glyph, text } = self.pane_title(view, cx, dark);
@@ -576,7 +587,6 @@ impl NebulaWorkspace {
         }
         let (x, y) = (f32::from(position.x), f32::from(position.y));
         self.pane_drag = Some(PaneDrag {
-            tab: tab_ix,
             pane: pane_id,
             press_x: x,
             press_y: y,
@@ -584,6 +594,7 @@ impl NebulaWorkspace {
             y,
             active: false,
             detach: false,
+            target: None,
         });
         cx.notify();
     }
@@ -593,17 +604,19 @@ impl NebulaWorkspace {
         event: &gpui::MouseMoveEvent,
         cx: &mut Context<Self>,
     ) {
-        if self.pane_drag.is_none() {
-            return;
-        }
+        let Some(pane) = self.pane_drag.as_ref().map(|drag| drag.pane) else { return };
         if event.pressed_button != Some(MouseButton::Left) {
             self.pane_drag = None;
             cx.notify();
             return;
         }
         let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-        // 落点判定要读 `active_terminal_area`（借 self）；先算完再拿可变引用。
-        let outside = !self.active_terminal_area().is_some_and(|area| area.contains(x, y));
+        if self.tab_of_pane(pane) != Some(self.active) {
+            self.cancel_pane_drag(cx);
+            return;
+        }
+        let outside = self.active_terminal_area().is_some_and(|area| !area.contains(x, y));
+        let target = self.pane_at(x, y).filter(|id| *id != pane);
         let Some(drag) = self.pane_drag.as_mut() else { return };
         drag.x = x;
         drag.y = y;
@@ -612,33 +625,64 @@ impl NebulaWorkspace {
         }
         if drag.active {
             drag.detach = outside;
+            drag.target = target;
         }
         cx.notify();
     }
 
-    /// 待命态的 move 由 workspace 根节点转发（罩层还不存在）。已激活时罩层
-    /// 独占指针，这里就不再重复喂。
-    pub(super) fn continue_pending_pane_drag(
-        &mut self,
-        event: &gpui::MouseMoveEvent,
-        cx: &mut Context<Self>,
-    ) {
-        if self.pane_drag.as_ref().is_some_and(|drag| !drag.active) {
-            self.update_pane_drag(event, cx);
-        }
+    /// Header occlusion blocks the workspace hitbox, so capture the gesture at
+    /// the window before hitbox-filtered handlers or terminal selection consume it.
+    pub(super) fn pane_drag_capture(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let owner = cx.entity().downgrade();
+        canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                let view = owner.clone();
+                window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                    if phase.capture()
+                        && view
+                            .update(cx, |this, cx| {
+                                if this.pane_drag.is_none() {
+                                    return false;
+                                }
+                                this.update_pane_drag(event, cx);
+                                true
+                            })
+                            .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                });
+                let view = owner.clone();
+                window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
+                    if phase.capture()
+                        && event.button == MouseButton::Left
+                        && view
+                            .update(cx, |this, cx| {
+                                this.release_pane_drag(event.position, window, cx)
+                            })
+                            .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
     }
 
-    /// 根节点 capture 阶段的释放兜底。返回是否**吃掉**了这次释放：只有真拖拽
-    /// 需要吃（否则源标题条的 click 和终端选区都会再收到一次）；未过阈值的
-    /// 按压是普通点击，清掉状态就放行。
+    /// Consume release only after crossing the threshold; an ordinary header
+    /// press clears its pending state and passes through as a click.
     pub(super) fn release_pane_drag(
         &mut self,
+        position: gpui::Point<gpui::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         match self.pane_drag.as_ref().map(|drag| drag.active) {
             Some(true) => {
-                self.finish_pane_drag(window, cx);
+                self.finish_pane_drag(position, window, cx);
                 true
             },
             Some(false) => {
@@ -650,11 +694,38 @@ impl NebulaWorkspace {
         }
     }
 
-    /// 松手：越过阈值且落在终端区之外才摘出，其余情况一律恢复原状。
-    pub(super) fn finish_pane_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        let cancelled = self.pane_drag.take().is_some();
+        if cancelled {
+            cx.notify();
+        }
+        cancelled
+    }
+
+    /// Only the layout's leaf IDs change; the existing views and PTYs stay live.
+    pub(super) fn finish_pane_drag(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(drag) = self.pane_drag.take() else { return };
-        if drag.active && drag.detach {
-            self.detach_pane_to_new_tab(drag.tab, drag.pane, window, cx);
+        if !drag.active
+            || self.tab_of_pane(drag.pane) != Some(self.active)
+            || drag.target.is_some_and(|target| self.tab_of_pane(target) != Some(self.active))
+        {
+            cx.notify();
+            return;
+        }
+        let (x, y) = (f32::from(position.x), f32::from(position.y));
+        if self.active_terminal_area().is_some_and(|area| !area.contains(x, y)) {
+            self.detach_pane_to_new_tab(self.active, drag.pane, window, cx);
+        } else if let Some(target) = self.pane_at(x, y)
+            && let Some(WorkspaceTab::Terminal { tree, .. }) = self.tabs.get_mut(self.active)
+            && tree.swap_leaves(drag.pane, target)
+        {
+            self.mark_structural_resize(self.active, cx);
+            self.focus_active(window, cx);
         }
         cx.notify();
     }
@@ -724,27 +795,25 @@ impl NebulaWorkspace {
     /// 意图提示。提示必须有：这个手势在界面上没有静态痕迹，不告诉用户「现在
     /// 松手会怎样」，拖出去就是一次赌博。
     pub(super) fn pane_drag_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let drag = self.pane_drag.as_ref().filter(|drag| drag.active)?;
+        let drag = self
+            .pane_drag
+            .as_ref()
+            .filter(|drag| drag.active && self.tab_of_pane(drag.pane) == Some(self.active))?;
         let (x, y, detach) = (drag.x, drag.y, drag.detach);
         let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
-        let hint_bg = if detach { theme.primary } else { theme.muted };
-        let hint_fg = if detach { theme.primary_foreground } else { theme.muted_foreground };
+        let hint_bg = if detach || drag.target.is_some() { theme.primary } else { theme.muted };
+        let hint_fg = if detach || drag.target.is_some() {
+            theme.primary_foreground
+        } else {
+            theme.muted_foreground
+        };
         Some(
             div()
                 .absolute()
                 .inset_0()
                 .occlude()
                 .cursor_grab()
-                .on_mouse_move(cx.listener(|this, event, _, cx| {
-                    this.update_pane_drag(event, cx);
-                }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        this.finish_pane_drag(window, cx);
-                    }),
-                )
                 .child(
                     div()
                         .absolute()
@@ -758,6 +827,8 @@ impl NebulaWorkspace {
                         .text_color(hint_fg)
                         .child(if detach {
                             language.text(Message::WorkspacePaneExtractRelease)
+                        } else if drag.target.is_some() {
+                            language.text(Message::WorkspacePaneSwapRelease)
                         } else {
                             language.text(Message::WorkspacePaneExtractDragHint)
                         }),
@@ -767,15 +838,8 @@ impl NebulaWorkspace {
     }
 }
 
-/// 进行中的 pane 拖拽：按住标题条左区把这个 pane 从分屏树里拉出来。
-///
-/// 这是 dock（拖 tab 进终端区合成分屏）的逆操作，两者共用同一套「按压待命 →
-/// 越阈值激活 → 根罩层独占指针 → 松手提交」的形状（见 `tab_drag`）。落点判据
-/// 只有一条：松手时指针**离开了本 tab 的终端区**就摘出来，否则原样不动。用
-/// 「离开终端区」而不是「落在标签栏上」，是因为标签栏在两种布局下位置完全
-/// 不同（左侧 / 顶部），而「我把它拖到外面去了」这个意图两种布局共通。
+/// Header grip gesture: exchange pane positions inside the tab, or detach outside.
 pub(super) struct PaneDrag {
-    tab: usize,
     pane: u64,
     press_x: f32,
     press_y: f32,
@@ -785,6 +849,7 @@ pub(super) struct PaneDrag {
     active: bool,
     /// 此刻松手会不会摘出（提示气泡与提交共用同一份判定）。
     detach: bool,
+    target: Option<u64>,
 }
 
 /// 越过这个位移才算拖拽，之前都当点击（与 tab 拖拽同一个阈值）。
@@ -796,7 +861,7 @@ fn drag_crossed_threshold(dx: f32, dy: f32) -> bool {
 mod tests {
     use super::{
         HeaderCorners, broadcast_targets, drag_crossed_threshold, header_visible, pane_order,
-        split_badge_slot_w,
+        split_icon_rects,
     };
     use nebula_split::{SplitDirection, SplitTree};
 
@@ -837,10 +902,22 @@ mod tests {
     }
 
     #[test]
-    fn badge_slot_tracks_the_chrome_font_size() {
-        assert!(split_badge_slot_w(15.0) > split_badge_slot_w(11.0));
-        // 小字号下仍保留 15px 的胶囊最小高度，槽宽因此有下限。
-        assert_eq!(split_badge_slot_w(8.0), 15.0 * 1.25 + 8.0);
+    fn split_thumbnail_shows_direction_and_nested_layout_within_its_bounds() {
+        let mut tree = SplitTree::leaf(1);
+        tree.split_leaf(1, 2, SplitDirection::LeftRight, 0.5);
+        tree.split_leaf(2, 3, SplitDirection::TopBottom, 0.5);
+        for (width, height) in [(16.0, 12.8), (18.0, 14.4), (24.0, 19.2)] {
+            let rects = split_icon_rects(&tree, width, height);
+            assert_eq!(rects.len(), 3);
+            assert!(rects[0].x < rects[1].x);
+            assert_eq!(rects[1].x, rects[2].x);
+            assert!(rects[1].y < rects[2].y);
+            assert!(rects[0].h > rects[1].h);
+            for rect in rects {
+                assert!(rect.x >= 0.0 && rect.y >= 0.0 && rect.w > 0.0 && rect.h > 0.0);
+                assert!(rect.x + rect.w <= width && rect.y + rect.h <= height);
+            }
+        }
     }
 
     /// 收角资格必须**只**落在真正贴着卡角的那一枚上：多收一个角会在分屏缝
@@ -880,3 +957,6 @@ mod tests {
         assert!(drag_crossed_threshold(-12.0, 1.0));
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod native_tests;

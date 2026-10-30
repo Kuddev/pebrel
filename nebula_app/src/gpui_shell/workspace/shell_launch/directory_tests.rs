@@ -78,7 +78,18 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
         assert_eq!(cwd.as_deref(), Some(requested.path()));
         assert_eq!(
             shell.unwrap().args(),
-            &["-d", "Team Linux", "--user", "guest", "--exec", "zsh", "--cd", "/guest-option",]
+            &[
+                "--cd",
+                requested.path().to_str().unwrap(),
+                "-d",
+                "Team Linux",
+                "--user",
+                "guest",
+                "--exec",
+                "zsh",
+                "--cd",
+                "/guest-option",
+            ]
         );
     }
 }
@@ -87,4 +98,69 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
 fn directory_override_cannot_turn_an_invalid_shell_request_into_a_default_shell() {
     let requested = tempfile::tempdir().unwrap();
     assert!(resolve_shell_at("pebrel-missing-shell-id", Some(requested.path())).is_err());
+}
+
+#[test]
+fn explicit_relative_host_directory_is_absolute_before_wsl_receives_it() {
+    let launch =
+        LaunchSession::Shell { name: "WSL".into(), program: "wsl.exe".into(), args: Vec::new() };
+    let LaunchSession::Shell { args, .. } = at_explicit_directory(launch, Some(Path::new(".")))
+    else {
+        panic!("expected shell")
+    };
+    let directory = std::path::absolute(".").unwrap();
+    let value = directory.to_str().unwrap();
+    let encoded =
+        if value.contains([' ', '\t']) { format!("\"{value}\"") } else { value.to_owned() };
+    assert_eq!(args, vec!["--cd".to_owned(), encoded]);
+}
+
+#[test]
+fn explicit_guest_directory_survives_to_the_wsl_launch() {
+    let requested = Path::new("/home/pebrel-fixture/project space");
+    let launch = LaunchSession::Shell {
+        name: "WSL".into(),
+        program: "wsl.exe".into(),
+        args: vec!["-d".into(), "Ubuntu".into(), "--user".into(), "guest".into()],
+    };
+    let snapshot = at_explicit_directory(launch, Some(requested));
+    let TerminalLaunch::Local { cwd, shell, .. } =
+        NebulaWorkspace::terminal_launch_from_session(&snapshot, Some(requested.into()))
+    else {
+        panic!("expected local WSL launch")
+    };
+    let mut options =
+        nebula_terminal::tty::Options { shell, working_directory: cwd, ..Default::default() };
+    crate::platform::launch_directory::prepare_wsl(&mut options, Some("/different"));
+    assert_eq!(
+        options.shell.unwrap().args(),
+        &["--cd", "\"/home/pebrel-fixture/project space\"", "-d", "Ubuntu", "--user", "guest"]
+    );
+    assert!(options.working_directory.is_none());
+}
+
+#[test]
+fn profile_directory_precedes_guest_home_but_explicit_wsl_cd_keeps_precedence() {
+    let directory = tempfile::tempdir().unwrap();
+    for own_directory in [false, true] {
+        let profile = LaunchSession::Profile {
+            name: "Guest profile".into(),
+            command: "wsl.exe".into(),
+            args: if own_directory { vec!["--cd".into(), "/chosen".into()] } else { Vec::new() },
+            cwd: Some(directory.path().to_string_lossy().into_owned()),
+            shell_id: None,
+        };
+        let TerminalLaunch::Local { shell, cwd, .. } =
+            NebulaWorkspace::terminal_launch_from_session(&profile, None)
+        else {
+            panic!("expected local WSL launch")
+        };
+        let mut options =
+            nebula_terminal::tty::Options { shell, working_directory: cwd, ..Default::default() };
+        crate::platform::launch_directory::prepare_wsl(&mut options, None);
+        assert_eq!(
+            options.shell.unwrap().args(),
+            &["--cd", if own_directory { "/chosen" } else { directory.path().to_str().unwrap() }]
+        );
+    }
 }

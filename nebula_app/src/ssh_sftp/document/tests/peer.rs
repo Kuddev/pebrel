@@ -38,6 +38,7 @@ pub(super) struct Store {
     pub files: BTreeMap<String, Node>,
     pub aliases: BTreeMap<String, String>,
     pub fail_writes: bool,
+    pub cancel_after_write: Option<crate::ssh_sftp::TaskControl>,
     pub fail_publish_once: bool,
     pub edit_before_backup: Option<Vec<u8>>,
     pub create_after_backup: Option<Vec<u8>>,
@@ -157,6 +158,10 @@ impl russh_sftp::server::Handler for Peer {
         }
         node.data[start..end].copy_from_slice(&data);
         node.modified = 20;
+        if let Some(control) = store.cancel_after_write.take() {
+            control
+                .fetch_or(crate::ssh_sftp::CANCEL_REQUESTED, std::sync::atomic::Ordering::AcqRel);
+        }
         Ok(success(id))
     }
 
@@ -174,7 +179,7 @@ impl russh_sftp::server::Handler for Peer {
         let mut store = self.store.lock().unwrap();
         let node = store.files.get_mut(&path).ok_or(StatusCode::NoSuchFile)?;
         if let Some(value) = attrs.permissions {
-            node.permissions = value;
+            node.permissions = (node.permissions & 0o170000) | (value & 0o7777);
         }
         if let Some(value) = attrs.uid {
             node.uid = value;
@@ -211,6 +216,29 @@ impl russh_sftp::server::Handler for Peer {
                 operation.cancel();
             }
         }
+        Ok(success(id))
+    }
+
+    async fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        _: FileAttributes,
+    ) -> Result<Status, StatusCode> {
+        let mut store = self.store.lock().unwrap();
+        if store.files.contains_key(&path) {
+            return Err(StatusCode::Failure);
+        }
+        store.files.insert(path, Node { permissions: 0o40755, ..Node::new(&[]) });
+        Ok(success(id))
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, StatusCode> {
+        let mut store = self.store.lock().unwrap();
+        if store.files.keys().any(|key| key.starts_with(&format!("{path}/"))) {
+            return Err(StatusCode::Failure);
+        }
+        store.files.remove(&path).ok_or(StatusCode::NoSuchFile)?;
         Ok(success(id))
     }
 

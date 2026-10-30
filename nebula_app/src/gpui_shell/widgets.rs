@@ -48,6 +48,20 @@ pub fn shell_brand_image(
     Some(Arc::new(RenderImage::new([Frame::new(rgba)])))
 }
 
+/// The generic terminal uses one rounded vector in SSH cards, pickers and tabs.
+/// Other program and OS glyphs retain their existing font and layout.
+pub(crate) fn terminal_glyph(glyph: impl Into<SharedString>, size: f32) -> gpui::AnyElement {
+    let glyph = glyph.into();
+    if glyph.as_ref() == "\u{f489}" {
+        Icon::new(Icon::empty())
+            .path(super::assets::nav::TERMINAL)
+            .size(px(size))
+            .into_any_element()
+    } else {
+        glyph.into_any_element()
+    }
+}
+
 /// Desktop form controls keep their padding even with a small UI font.
 pub(crate) fn settings_control_height(cx: &App) -> gpui::Pixels {
     px(f32::from(cx.theme().font_size).max(16.0) * 2.0)
@@ -101,8 +115,18 @@ pub(crate) fn settings_select_frame(
 }
 
 /// Toolbar glyphs and their hover/hit surfaces have independent logical sizes.
-pub(crate) fn toolbar_button(id: impl Into<ElementId>, icon: impl Into<Icon>) -> Button {
-    Button::new(id).icon(Icon::new(icon).size(px(18.0))).ghost().size(px(32.0))
+/// Ghost buttons default to an arrow cursor, so only enabled ones get the pointer.
+pub(crate) fn toolbar_button(
+    id: impl Into<ElementId>,
+    icon: impl Into<Icon>,
+    disabled: bool,
+) -> Button {
+    Button::new(id)
+        .icon(Icon::new(icon).size(px(18.0)))
+        .ghost()
+        .size(px(32.0))
+        .disabled(disabled)
+        .when(!disabled, |button| button.cursor_pointer())
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
