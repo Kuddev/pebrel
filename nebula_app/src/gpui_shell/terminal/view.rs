@@ -891,6 +891,16 @@ impl TerminalView {
                 }
                 view.drive_inline_image_decode(cx);
                 cx.notify();
+                // The frame that first draws a texture that just finished
+                // decoding can be the frame the window had already queued, so
+                // the bitmap lands in the scene after that frame was built and
+                // the pane shows the untouched cells until the next input
+                // event. Nudge one more frame once the decode has settled.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(40)).await;
+                    this.update(cx, |_, cx| cx.notify()).ok();
+                })
+                .detach();
             });
         })
         .detach();

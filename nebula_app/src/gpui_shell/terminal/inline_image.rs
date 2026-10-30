@@ -295,7 +295,11 @@ pub(super) fn paint(
     let mut painted = 0usize;
     let mut empty = 0usize;
     let mut unmatched = 0usize;
+    let mut visible = 0usize;
+    let mut y_min = f32::INFINITY;
+    let mut y_max = f32::NEG_INFINITY;
     let mut first_painted: Option<String> = None;
+    let mut paint_error: Option<String> = None;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for run in runs {
             let Some(inline) = images.iter().find(|image| image.placement.id == run.id) else {
@@ -315,6 +319,14 @@ pub(super) fn paint(
                 continue;
             }
             painted += 1;
+            let clipped = clip.intersect(&bounds);
+            if clipped.size.width > px(0.0) && clipped.size.height > px(0.0) {
+                visible += 1;
+            }
+            let top = f32::from(clip.origin.y);
+            let bottom = top + f32::from(clip.size.height);
+            y_min = y_min.min(top);
+            y_max = y_max.max(bottom);
             if first_painted.is_none() {
                 first_painted = Some(format!(
                     "id={} row={} col={} src_row={} src_col={} texture={:?} cell=({},{}) layout=({}x{} cell {}x{}) img=({:?},{:?}) clip=({:?},{:?})",
@@ -339,14 +351,18 @@ pub(super) fn paint(
             // Keep full texture coordinates: GPUI rounds sub-image UVs to
             // source pixels, which loses rows when a tiny image is enlarged.
             window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                let _ = window.paint_image(
+                if let Err(error) = window.paint_image(
                     image_bounds,
                     image_bounds,
                     Corners::all(px(0.0)),
                     inline.image.clone(),
                     0,
                     false,
-                );
+                ) {
+                    if paint_error.is_none() {
+                        paint_error = Some(format!("{error}"));
+                    }
+                }
             });
         }
     });
@@ -356,7 +372,9 @@ pub(super) fn paint(
         painted,
         empty,
         unmatched,
+        (visible, y_min, y_max, bounds),
         first_painted.as_deref(),
+        paint_error.as_deref(),
     );
 }
 
@@ -368,7 +386,9 @@ fn log_paint_summary(
     painted: usize,
     empty: usize,
     unmatched: usize,
+    (visible, y_min, y_max, bounds): (usize, f32, f32, Bounds<Pixels>),
     first: Option<&str>,
+    paint_error: Option<&str>,
 ) {
     use std::sync::{Mutex, OnceLock};
 
@@ -377,9 +397,15 @@ fn log_paint_summary(
     }
     static LAST: OnceLock<Mutex<String>> = OnceLock::new();
     let summary = format!(
-        "gfx paint runs={runs} images={images} painted={painted} empty={empty} unmatched={unmatched} first={}",
+        "gfx paint runs={runs} images={images} painted={painted} empty={empty} unmatched={unmatched} visible={visible} y={y_min:.0}..{y_max:.0} bounds=({:.0}..{:.0}) first={}",
+        f32::from(bounds.origin.y),
+        f32::from(bounds.origin.y) + f32::from(bounds.size.height),
         first.unwrap_or("-")
     );
+    let summary = match paint_error {
+        Some(error) => format!("{summary} paint_error={error}"),
+        None => summary,
+    };
     let seen = LAST.get_or_init(|| Mutex::new(String::new()));
     if let Ok(mut last) = seen.lock()
         && *last != summary
