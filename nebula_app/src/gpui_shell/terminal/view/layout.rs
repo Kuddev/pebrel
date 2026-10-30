@@ -66,6 +66,10 @@ impl TerminalView {
                 self.commit_viewport(viewport);
             } else {
                 self.window_size = viewport.window_size();
+                // 出生几何就是目标几何时没有任何 resize 要下发，字节流因此永远
+                // 不知道 cell 尺寸：`CSI 16 t`（yazi 用它把像素换算成格子）无
+                // 从回答，客户端只好把预览图拉伸铺满整块 pane。这里只补度量。
+                self.announce_cell_metrics(self.window_size);
             }
             return;
         }
@@ -140,6 +144,13 @@ impl TerminalView {
         let Some(session) = &self.session else { return };
         let mut notifier = nebula_terminal::event_loop::Notifier(session.notifier.0.clone());
         notifier.on_resize_grid(viewport.window_size());
+    }
+
+    /// 只把 cell 像素尺寸告诉字节流，不动 conhost、不 reflow、不去抖。
+    fn announce_cell_metrics(&mut self, window_size: nebula_terminal::event::WindowSize) {
+        let Some(session) = &self.session else { return };
+        let mut notifier = nebula_terminal::event_loop::Notifier(session.notifier.0.clone());
+        notifier.on_cell_metrics(window_size);
     }
 
     /// Commit one viewport in grid-before-PTY order. Output produced after

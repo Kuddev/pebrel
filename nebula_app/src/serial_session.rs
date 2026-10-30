@@ -168,6 +168,9 @@ where
                 Ok(Msg::Resize(size) | Msg::ResizeGrid(size)) => {
                     resize(&terminal, &stream, &event_proxy, size);
                 },
+                // Serial ports have no pty to resize, but the stream still needs the
+                // cell metrics to answer size queries from image protocols.
+                Ok(Msg::CellMetrics(size)) => stream.lock().unwrap().resize(size),
                 Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {},
             }
