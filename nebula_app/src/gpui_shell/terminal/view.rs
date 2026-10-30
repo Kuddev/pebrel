@@ -791,6 +791,14 @@ impl TerminalView {
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }
             },
+            // APC graphics: pixels arrive raw, already placed in the grid, so
+            // decoding is the only work left — and it happens off the UI thread.
+            TermEvent::KittyImage { data, channels, placement } => {
+                match self.inline_images.enqueue_pixels(data, channels, placement) {
+                    Ok(()) => self.drive_inline_image_decode(cx),
+                    Err(error) => log::warn!("APC image dropped: {error}"),
+                }
+            },
             TermEvent::CommandStart => {
                 self.native_clipboard.clear();
                 self.on_command_start(cx);
