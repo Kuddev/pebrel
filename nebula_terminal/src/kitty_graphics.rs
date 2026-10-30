@@ -569,6 +569,23 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_hint_in_the_compression_field_does_not_reject_the_transfer() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // A page reader marks "nothing to undo" with z=-1 and then describes the
+        // crop inside the same header. Rejecting the key drops the whole page.
+        gfx.graphic(
+            &mut term,
+            b"a=T,t=d,f=24,s=2,v=1,i=1,p=1,C=1,q=1,x=0,y=0,w=2,h=1,z=-1",
+            b"AAAAAAAA",
+        );
+        assert!(gfx.current.is_none());
+        assert_eq!(gfx.images[&1].width, 2);
+        assert_eq!(gfx.images[&1].channels, 3);
+        assert!(gfx.has_placements(1));
+    }
+
+    #[test]
     fn chunked_transmit_and_place_preserves_the_first_headers_action() {
         let mut gfx = KittyGraphics::default();
         let mut term = terminal();

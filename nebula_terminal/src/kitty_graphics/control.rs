@@ -102,10 +102,13 @@ impl Control {
             || value(bytes, b'o').is_some()
             || value(bytes, b'I').is_some()
             || number(bytes, b'U')?.unwrap_or(0) != 0
-            || !matches!(value(bytes, b'z'), None | Some(b"0"))
         {
             return Err("ENOTSUP");
         }
+        // `z` only describes how the payload is packed when `o=z` is present, and
+        // readers commonly send `z=-1` to mean "nothing to undo" — a signed value
+        // the other numeric keys never are, so it is deliberately not parsed.
+        // The payload is checked against the declared size in `decode` anyway.
         let channels = match number(bytes, b'f')?.unwrap_or(32) {
             24 => 3,
             32 => 4,
