@@ -190,15 +190,16 @@ pub struct StreamProcessor {
     remote_hook_token: Option<String>,
     // The stream owns unreplayed payloads: disconnecting drops them even if
     // the pane retains its Term. The Term only holds weak replay entries.
-    pending_images: Vec<Arc<crate::term::PendingImage>>,
+    pending_images: VecDeque<Arc<crate::term::PendingImage>>,
     inline_content: crate::inline_content::Registry,
     command_capture: crate::inline_content::CommandCapture,
-    gfx: crate::kitty_graphics::KittyGraphics,
+    gfx: Arc<parking_lot::Mutex<crate::kitty_graphics::KittyGraphics>>,
 }
 
 impl StreamProcessor {
     pub fn resize(&mut self, window_size: WindowSize) {
         self.window_size = Some(window_size);
+        self.gfx.lock().resize(window_size);
     }
 
     pub fn set_remote_hook_token(&mut self, token: String) {
@@ -216,7 +217,14 @@ impl StreamProcessor {
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
         terminal.cancel_redraw_anchor();
         terminal.with_program_status_preserved(|terminal| self.parser.stop_sync(terminal));
-        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
+        self.release_replayed_images();
+        terminal.nebula_flush_kitty(&mut self.gfx.lock(), self.window_size);
+    }
+
+    fn release_replayed_images(&mut self) {
+        while self.pending_images.front().is_some_and(|image| Arc::weak_count(image) == 0) {
+            self.pending_images.pop_front();
+        }
     }
 
     fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
@@ -243,10 +251,6 @@ impl StreamProcessor {
         bytes: &[u8],
     ) -> usize {
         let osc_events = self.cwd_sniffer.feed(bytes);
-        // `CSI 16 t` never reaches the parser (vte has no handler for it), but
-        // clients that cannot read the cell size stretch previews across the
-        // whole pane, so the requests are answered from here.
-        self.gfx.scan_cell_size_queries(bytes);
         let mut advanced = 0;
         let mut parser_input_bytes = bytes.len();
         for (offset, event) in osc_events {
@@ -320,7 +324,16 @@ impl StreamProcessor {
                     }
                 },
                 OscEvent::ProgramStatus(report) => terminal.report_program_status(report),
-                OscEvent::ProgramStatusReset => terminal.reset_program_status(),
+                OscEvent::ProgramStatusReset => {
+                    terminal.reset_program_status();
+                    if let Some((marker, command)) =
+                        terminal.nebula_queue_kitty_reset(Arc::downgrade(&self.gfx))
+                    {
+                        self.pending_images.push_back(command);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
                 OscEvent::RemoteHook { token, envelope } => {
                     if self.remote_hook_token.as_deref() == Some(token.as_str()) {
                         event_proxy.send_event(Event::AiHookEnvelope(envelope));
@@ -337,8 +350,18 @@ impl StreamProcessor {
                     terminal.nebula_mark_prompt_input();
                 },
                 OscEvent::KittyGraphic { control, payload } => {
-                    self.gfx.graphic(terminal, event_proxy, &control, &payload);
+                    if self.gfx.lock().try_query(terminal, &control, &payload) {
+                        continue;
+                    }
+                    if let Some((marker, command)) =
+                        terminal.nebula_queue_kitty(Arc::downgrade(&self.gfx), control, payload)
+                    {
+                        self.pending_images.push_back(command);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
                 },
+                OscEvent::CellSizeQuery => self.gfx.lock().request_cell_size(),
                 OscEvent::InlineImage { data, width, height, options } => {
                     let viewport = self.window_size.unwrap_or(WindowSize {
                         num_cols: terminal.columns() as u16,
@@ -349,20 +372,20 @@ impl StreamProcessor {
                     if let Some((marker, image)) =
                         terminal.nebula_queue_inline_image(data, width, height, options, viewport)
                     {
-                        self.pending_images.push(image);
+                        self.pending_images.push_back(image);
                         self.advance(terminal, marker.as_bytes());
                         parser_input_bytes += marker.len();
-                        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
                     }
                 },
             }
         }
         self.advance(terminal, &bytes[advanced..]);
-        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
+        self.release_replayed_images();
         // Publish placements only once their cells are in the grid, and at most
         // once per image: a chunked transfer must not queue 700 decodes.
-        self.gfx.flush(event_proxy, self.window_size);
-        self.gfx.answer_cell_size_queries(self.window_size, event_proxy);
+        let mut gfx = self.gfx.lock();
+        gfx.flush(event_proxy, self.window_size);
+        gfx.answer_cell_size_queries(self.window_size, event_proxy);
         parser_input_bytes
     }
 }
@@ -495,7 +518,11 @@ where
                     // stream can now answer cell-size queries — including ones
                     // that arrived before the first layout.
                     state.stream.resize(window_size);
-                    state.stream.gfx.answer_cell_size_queries(Some(window_size), &self.event_proxy);
+                    state
+                        .stream
+                        .gfx
+                        .lock()
+                        .answer_cell_size_queries(Some(window_size), &self.event_proxy);
                 },
                 Msg::Shutdown => return Err(()),
             }
@@ -1494,229 +1521,12 @@ mod tests {
         stream.feed(&mut terminal, &listener, b"\x1b]133;D;0\x07");
         assert!(!terminal.nebula_prompt_active());
     }
-
-    #[derive(Clone, Default)]
-    struct Gfx(std::sync::Arc<std::sync::Mutex<Vec<Event>>>);
-
-    impl EventListener for Gfx {
-        fn send_event(&self, event: Event) {
-            if matches!(event, Event::KittyImage { .. } | Event::PtyWrite(_)) {
-                self.0.lock().unwrap().push(event);
-            }
-        }
-    }
-
-    fn kitty_command(control: &str, payload: &str) -> Vec<u8> {
-        if payload.is_empty() {
-            format!("\x1b_G{control}\x1b\\").into_bytes()
-        } else {
-            format!("\x1b_G{control};{payload}\x1b\\").into_bytes()
-        }
-    }
-
-    fn rgba2x1() -> String {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD.encode([7u8; 2 * 1 * 4])
-    }
-
-    /// yazi moves the cursor to each cell and places a 1×1 tile whose source
-    /// rectangle it computed from a cell size it guessed. Every one of those
-    /// placements belongs to one image, and the image is the union of the cells
-    /// the cursor visited — which is what keeps it inside the pane.
-    #[test]
-    fn kitty_cell_placements_publish_one_image_covering_visited_cells() {
-        let listener = Gfx::default();
-        let size = TermSize::new(20, 8);
-        let mut terminal = Term::new(Config::default(), &size, listener.clone());
-        let mut stream = StreamProcessor::default();
-        let mut wire = Vec::new();
-        wire.extend_from_slice(b"\x1b[3;5H");
-        wire.extend_from_slice(&kitty_command("a=t,i=7,f=32,s=2,v=1,m=0", &rgba2x1()));
-        wire.extend_from_slice(b"\x1b[3;5H");
-        wire.extend_from_slice(&kitty_command("a=p,i=7,p=1,x=0,y=0,w=1,h=1,c=1,r=1", ""));
-        wire.extend_from_slice(b"\x1b[3;6H");
-        wire.extend_from_slice(&kitty_command("a=p,i=7,p=2,x=1,y=0,w=1,h=1,c=1,r=1", ""));
-        stream.feed(&mut terminal, &listener, &wire);
-
-        let events = listener.0.lock().unwrap();
-        let images: Vec<&Event> =
-            events.iter().filter(|event| matches!(event, Event::KittyImage { .. })).collect();
-        // One publication per image, not one per placement: a preview arrives as
-        // thousands of placements.
-        assert_eq!(images.len(), 1);
-        let Event::KittyImage { data, channels, placement } = images[0] else { unreachable!() };
-        assert_eq!(data.len(), 8);
-        assert_eq!(*channels, 4);
-        assert_eq!(placement.layout.width, 2.0);
-        assert_eq!(placement.layout.height, 1.0);
-        assert_eq!((placement.layout.columns, placement.layout.rows), (2, 1));
-        // The cells the cursor visited carry the image, keyed to the tile the
-        // application sampled, so a later scroll re-samples the right pixels.
-        let cell = terminal.grid()[Line(2)][Column(4)].image().expect("placed at the cursor");
-        assert_eq!(cell.image.id, placement.id);
-        assert_eq!((cell.column, cell.row), (0, 0));
-        let next = terminal.grid()[Line(2)][Column(5)].image().expect("second cell");
-        assert_eq!((next.column, next.row), (1, 0));
-        // Placements do not move the text cursor (`C=1`), so the prompt
-        // stays where the shell left it.
-        assert_eq!(terminal.grid().cursor.point, crate::index::Point::new(Line(2), Column(5)));
-    }
-
-    /// A transfer arrives in 4096-byte chunks that carry no id; only the header
-    /// does. Publishing before the last chunk would paint half an image.
-    #[test]
-    fn kitty_chunked_transfer_waits_for_the_last_chunk() {
-        use base64::Engine as _;
-        let listener = Gfx::default();
-        let size = TermSize::new(20, 8);
-        let mut terminal = Term::new(Config::default(), &size, listener.clone());
-        let mut stream = StreamProcessor::default();
-        let encoded = base64::engine::general_purpose::STANDARD.encode([3u8; 2 * 2 * 3]);
-        let (head, tail) = encoded.split_at(8);
-        stream.feed(&mut terminal, &listener, b"\x1b[1;1H");
-        stream.feed(&mut terminal, &listener, &kitty_command("a=t,i=9,f=24,s=2,v=2,m=1", head));
-        assert!(listener.0.lock().unwrap().is_empty());
-        stream.feed(&mut terminal, &listener, &kitty_command("m=0", tail));
-        stream.feed(&mut terminal, &listener, &kitty_command("a=p,i=9,c=2,r=2", ""));
-
-        let events = listener.0.lock().unwrap();
-        let images: Vec<&Event> =
-            events.iter().filter(|event| matches!(event, Event::KittyImage { .. })).collect();
-        assert_eq!(images.len(), 1);
-        let Event::KittyImage { data, channels, placement } = images[0] else { unreachable!() };
-        assert_eq!((data.len(), *channels), (2 * 2 * 3, 3));
-        assert_eq!((placement.layout.columns, placement.layout.rows), (2, 2));
-    }
-
-    /// yazi reuses one protocol id for every preview and erases the previous image
-    /// before drawing the next one. Without honouring that, each file browsed
-    /// leaves a bitmap behind and the frontend keeps compositing all of them.
-    #[test]
-    fn kitty_delete_clears_cells_and_the_same_id_can_be_transferred_again() {
-        let listener = Gfx::default();
-        let size = TermSize::new(20, 8);
-        let mut terminal = Term::new(Config::default(), &size, listener.clone());
-        let mut stream = StreamProcessor::default();
-        stream.feed(&mut terminal, &listener, b"\x1b[2;3H");
-        stream.feed(
-            &mut terminal,
-            &listener,
-            &kitty_command("a=t,i=4,f=32,s=2,v=1,m=0", &rgba2x1()),
-        );
-        stream.feed(&mut terminal, &listener, &kitty_command("a=p,i=4,c=2,r=1", ""));
-        assert!(terminal.grid()[Line(1)][Column(2)].image().is_some());
-
-        stream.feed(&mut terminal, &listener, &kitty_command("a=d,d=I,i=4", ""));
-        assert!(terminal.grid()[Line(1)][Column(2)].image().is_none());
-        assert_eq!(listener.0.lock().unwrap().len(), 1);
-
-        stream.feed(&mut terminal, &listener, b"\x1b[5;3H");
-        stream.feed(
-            &mut terminal,
-            &listener,
-            &kitty_command("a=t,i=4,f=32,s=2,v=1,m=0", &rgba2x1()),
-        );
-        stream.feed(&mut terminal, &listener, &kitty_command("a=p,i=4,c=2,r=1", ""));
-        assert!(terminal.grid()[Line(4)][Column(2)].image().is_some());
-        // A second image under the same id must reach the frontend again.
-        assert_eq!(listener.0.lock().unwrap().len(), 2);
-    }
-
-    /// The query a client sends when it wants to convert pixels into cells.
-    /// vte drops it, so the answer comes from the raw byte scan.
-    #[test]
-    fn cell_size_query_is_answered_once_the_pane_reports_its_geometry() {
-        let listener = Gfx::default();
-        let size = TermSize::new(20, 8);
-        let mut terminal = Term::new(Config::default(), &size, listener.clone());
-        let mut stream = StreamProcessor::default();
-        stream.feed(&mut terminal, &listener, b"\x1b[16t");
-        assert!(listener.0.lock().unwrap().is_empty(), "no geometry yet");
-        stream.resize(WindowSize { num_cols: 20, num_lines: 8, cell_width: 14, cell_height: 36 });
-        stream.feed(&mut terminal, &listener, b"");
-        let events = listener.0.lock().unwrap();
-        match events.as_slice() {
-            [Event::PtyWrite(text)] => assert_eq!(text, "\x1b[6;36;14t"),
-            other => panic!("unexpected events: {other:?}"),
-        }
-    }
-
-    /// Shared memory transports are advertised, then refused, so the client
-    /// falls back to base64 instead of sending a handle this terminal cannot
-    /// read.
-    /// yazi keeps one image id for the whole process and sends the next preview
-    /// with the same one. If the erased picture's geometry survives, the next
-    /// payload decodes at the wrong stride and the preview shows diagonal
-    /// stripes instead of a picture.
-    #[test]
-    fn kitty_retransfer_after_delete_uses_the_new_pixel_geometry() {
-        use base64::Engine as _;
-        let listener = Gfx::default();
-        let size = TermSize::new(20, 8);
-        let mut terminal = Term::new(Config::default(), &size, listener.clone());
-        let mut stream = StreamProcessor::default();
-
-        let mut send = |stream: &mut StreamProcessor, wire: Vec<u8>| {
-            stream.feed(&mut terminal, &listener, &wire);
-        };
-        let encoded = |side: usize| {
-            base64::engine::general_purpose::STANDARD.encode(vec![7u8; side * side * 4])
-        };
-
-        let mut first = Vec::new();
-        first.extend_from_slice(&kitty_command("a=t,i=11,f=32,s=4,v=4,m=0", &encoded(4)));
-        first.extend_from_slice(b"\x1b[1;1H");
-        first.extend_from_slice(&kitty_command("a=p,i=11,c=2,r=2", ""));
-        send(&mut stream, first);
-
-        send(&mut stream, kitty_command("a=d,d=I,i=11", "").to_vec());
-
-        let mut second = Vec::new();
-        second.extend_from_slice(&kitty_command("a=t,i=11,f=32,s=9,v=9,m=0", &encoded(9)));
-        second.extend_from_slice(b"\x1b[1;1H");
-        second.extend_from_slice(&kitty_command("a=p,i=11,c=3,r=3", ""));
-        send(&mut stream, second);
-
-        let events = listener.0.lock().unwrap();
-        let published: Vec<(f32, f32, usize, usize)> = events
-            .iter()
-            .filter_map(|event| match event {
-                Event::KittyImage { placement, .. } => Some((
-                    placement.layout.width,
-                    placement.layout.height,
-                    placement.layout.columns,
-                    placement.layout.rows,
-                )),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(published, vec![(4.0, 4.0, 2, 2), (9.0, 9.0, 3, 3)]);
-    }
-
-    #[test]
-    fn kitty_probe_refuses_shared_memory_and_accepts_base64() {
-        let listener = Gfx::default();
-        let size = TermSize::new(20, 8);
-        let mut terminal = Term::new(Config::default(), &size, listener.clone());
-        let mut stream = StreamProcessor::default();
-        stream.feed(&mut terminal, &listener, &kitty_command("a=q,i=5,s=1,v=1,t=d,f=24", "AAAA"));
-        stream.feed(
-            &mut terminal,
-            &listener,
-            &kitty_command("a=q,i=6,s=1,v=1,t=s,f=24,S=3", "AAAA"),
-        );
-        let events = listener.0.lock().unwrap();
-        let replies: Vec<&str> = events
-            .iter()
-            .filter_map(|event| match event {
-                Event::PtyWrite(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(replies, ["\x1b_Gi=5;OK\x1b\\", "\x1b_Gi=6;ENOTSUP\x1b\\"]);
-    }
 }
 
 #[cfg(all(test, unix))]
 #[path = "event_loop/sync_tests.rs"]
 mod sync_tests;
+
+#[cfg(test)]
+#[path = "event_loop/kitty_tests.rs"]
+mod kitty_tests;

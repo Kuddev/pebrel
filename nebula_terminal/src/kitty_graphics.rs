@@ -1,399 +1,580 @@
-//! Kitty protocol (`ESC _ G … ESC \`).
-//!
-//! Two placement dialects reach terminals in the wild. A client that trusts the
-//! terminal to do the geometry sends one `c`×`r` block; a client that cannot
-//! read the cell size — yazi's `kgp_old` driver is the one that matters here —
-//! moves the cursor to every single cell and sends a one-cell placement whose
-//! `x`/`y`/`w`/`h` slice the bitmap. Both arrive as a run of `a=p` commands, so
-//! the state machine keeps only the cursor: each placement writes its tile into
-//! the cell the cursor currently occupies, and the union of those cells is the
-//! image box. Nothing is derived from the application's pixel numbers, which is
-//! what used to overflow the pane.
-//!
-//! Transfers are the expensive half: a 2.2 MiB bitmap arrives as ~730 APC
-//! chunks. Nothing here may touch the disk, publish an event per chunk or per
-//! placement, or re-encode the bitmap. A parsed placement is published once,
-//! after the grid already holds its cells, so the frontend decodes off the UI
-//! thread while the cells paint as ordinary grid content.
-//!
-//! Deletions matter for the same reason they are tedious: yazi reuses one
-//! protocol image id for every preview and erases the previous image cell by cell.
-//! Erasing once per id — blanking the cells that carry that identity — keeps a
-//! scrolling file manager from accumulating dead bitmaps.
-
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+//! Bounded RGB/RGBA graphics storage and grid-backed placements.
+//! The input stream owns this state; ordered markers apply mutations at VTE replay.
+//! Bitmaps are decoded once per image. Crop/scale/placement lifetime lives with cells.
 
 use base64::Engine as _;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Weak};
 
 use crate::event::{Event, EventListener, WindowSize};
-use crate::inline_image::{ImageIdentity, ImageLayout, ImagePlacement};
-use crate::term::Term;
+use crate::grid::Dimensions;
+use crate::inline_image::{
+    ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement, MAX_IMAGE_CELLS,
+};
+use crate::term::{Term, TermMode};
 
-/// Pixels one transfer may allocate (16 MiB at four bytes per pixel).
+mod control;
+use control::{Control, Reply, Result};
+
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
-/// Base64 text held while a chunked transfer is still incomplete.
 const MAX_ENCODED_BYTES: usize = 24 * 1024 * 1024;
-/// `CSI 16 t` — the cell-size query, which vte drops as unhandled.
-const CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
+const MAX_IMAGES: usize = 16;
+const MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+const ALT_KEY: u64 = 1 << 63;
+const ANONYMOUS_KEY: u64 = 1 << 32;
 
-/// One decoded transfer.
 struct Bitmap {
     pixels: Arc<Vec<u8>>,
     width: u32,
     height: u32,
     channels: u8,
+    cost: usize,
+    delete_when_unplaced: bool,
 }
 
-/// Cells covered by the placements of one image, in absolute cursor
-/// coordinates (`bottom`/`right` exclusive).
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct GfxBox {
-    top: usize,
-    left: usize,
-    bottom: usize,
-    right: usize,
+struct Transfer {
+    key: u64,
+    control: Control,
+    encoded: Vec<u8>,
 }
 
-impl GfxBox {
-    fn at(line: usize, column: usize, columns: usize, rows: usize) -> Self {
-        Self { top: line, left: column, bottom: line + rows, right: column + columns }
-    }
-
-    fn union(&mut self, other: Self) {
-        self.top = self.top.min(other.top);
-        self.left = self.left.min(other.left);
-        self.bottom = self.bottom.max(other.bottom);
-        self.right = self.right.max(other.right);
-    }
-
-    fn columns(self) -> usize {
-        self.right.saturating_sub(self.left)
-    }
-
-    fn rows(self) -> usize {
-        self.bottom.saturating_sub(self.top)
-    }
-}
-
-/// Kitty protocol state for one byte stream.
 #[derive(Default)]
 pub struct KittyGraphics {
-    /// Protocol id of the transfer currently receiving chunks.
-    current: Option<u32>,
-    /// Partial base64 of a chunked transfer.
-    transfers: HashMap<u32, Vec<u8>>,
-    /// Pixel geometry declared by the transfer header: width, height, channels.
-    sizes: HashMap<u32, (u32, u32, u8)>,
-    images: HashMap<u32, Bitmap>,
-    /// Grid-owned identity per protocol id: every placement of one image shares it,
-    /// so erasing the image is a property of the grid, not of this state.
-    identities: HashMap<u32, Arc<ImageIdentity>>,
-    /// Image origin in absolute cells. Tile coordinates are stored relative to
-    /// it, which is the frame the frontend samples the bitmap in.
-    origins: HashMap<u32, (usize, usize)>,
-    boxes: HashMap<u32, GfxBox>,
-    /// Images whose placement already reached the frontend.
-    published: HashSet<u32>,
-    /// Unanswered `CSI 16 t` requests, coalesced: one answer serves them all.
-    cell_size_queries: u32,
-    /// Trailing bytes that may be the start of a query split across reads.
-    query_tail: Vec<u8>,
+    current: Option<Transfer>,
+    images: HashMap<u64, Bitmap>,
+    identities: HashMap<u64, Weak<ImageIdentity>>,
+    placements: HashMap<(u64, u64), Weak<KittyPlacement>>,
+    image_order: VecDeque<u64>,
+    image_bytes: usize,
+    published: HashSet<u64>,
+    cell_size_queries: bool,
+    viewport: Option<WindowSize>,
+    anonymous: u64,
 }
 
 impl KittyGraphics {
-    /// Handle one Kitty protocol command. `control` is the raw `key=value`
-    /// block, `payload` the raw base64 chunk.
-    pub fn graphic<U: EventListener>(
-        &mut self,
-        terminal: &mut Term<U>,
-        event_proxy: &U,
-        control: &[u8],
-        payload: &[u8],
-    ) {
-        let action = control_value(control, b'a').and_then(|value| value.first().copied());
-        let id = control_value(control, b'i').and_then(parse_u32);
-        match action {
-            // A continuation chunk carries only `m`; the id is the one the
-            // transfer started with.
-            None => {
-                let Some(id) = self.current else { return };
-                // The continuation chunk carries its own `m`: only the last one
-                // completes the transfer.
-                let more = control_value(control, b'm') == Some(b"1");
-                self.receive(id, payload, more);
-            },
-            Some(b't' | b'T') => {
-                let Some(id) = id.or(self.current) else { return };
-                self.current = Some(id);
-                let more = control_value(control, b'm') == Some(b"1");
-                // Only the header chunk carries `s`/`v`; a client that reuses the
-                // id for the next picture relies on that to reset the transfer.
-                // Without this, the previous picture's geometry decodes the new
-                // pixels and the frame comes out as diagonal stripes.
-                let starts = control_value(control, b's').is_some()
-                    || control_value(control, b'v').is_some();
-                if starts {
-                    self.transfers.insert(id, Vec::new());
-                    self.published.remove(&id);
-                    self.declare(id, control);
-                } else if !self.sizes.contains_key(&id) {
-                    self.declare(id, control);
-                }
-                self.receive(id, payload, more);
-                if !more && action == Some(b'T') {
-                    let columns =
-                        control_value(control, b'c').and_then(parse_usize).unwrap_or(1).max(1);
-                    let rows =
-                        control_value(control, b'r').and_then(parse_usize).unwrap_or(1).max(1);
-                    self.place(terminal, id, columns, rows);
-                }
-            },
-            Some(b'p') => {
-                let Some(id) = id else { return };
-                let columns =
-                    control_value(control, b'c').and_then(parse_usize).unwrap_or(1).max(1);
-                let rows = control_value(control, b'r').and_then(parse_usize).unwrap_or(1).max(1);
-                self.place(terminal, id, columns, rows);
-            },
-            Some(b'd') => {
-                let Some(id) = id else {
-                    // `d=a` erases every image; ids are optional there.
-                    self.clear_all(terminal);
-                    return;
-                };
-                self.delete(terminal, id);
-            },
-            Some(b'q') => self.reply(event_proxy, control, id, surface_supported(control)),
-            _ => (),
+    fn screen<U: EventListener>(terminal: &Term<U>) -> u64 {
+        if terminal.mode().contains(TermMode::ALT_SCREEN) { ALT_KEY } else { 0 }
+    }
+
+    pub(crate) fn resize(&mut self, size: WindowSize) {
+        self.viewport = Some(size);
+    }
+
+    pub(crate) fn reset(&mut self) {
+        for identity in self.identities.values().filter_map(Weak::upgrade) {
+            identity.invalidate();
+        }
+        let viewport = self.viewport;
+        *self = Self { viewport, ..Self::default() };
+    }
+
+    fn send<U: EventListener>(terminal: &Term<U>, reply: Reply, result: Result<()>) {
+        if let Some(message) = reply.message(result) {
+            terminal.nebula_kitty_reply(message);
         }
     }
 
-    /// Publish placements that reached the grid since the previous flush. One
-    /// event per image: the frontend decodes once and paints the cells.
-    pub fn flush<U: EventListener>(&mut self, event_proxy: &U, window_size: Option<WindowSize>) {
-        let pending: Vec<u32> = self
-            .boxes
-            .keys()
-            .copied()
-            .filter(|id| !self.published.contains(id) && self.images.contains_key(id))
+    pub(crate) fn rejected<U: EventListener>(terminal: &Term<U>, control: &[u8]) {
+        Self::send(terminal, Reply::read(control), Err("ENOSPC"));
+    }
+
+    /// Capability queries have no grid/storage side effects and need not wait for DEC 2026.
+    pub(crate) fn try_query<U: EventListener>(
+        &self,
+        terminal: &Term<U>,
+        bytes: &[u8],
+        data: &[u8],
+    ) -> bool {
+        if !control::single_query(bytes) {
+            return false;
+        }
+        let reply = Reply::read(bytes);
+        let result =
+            Control::parse(bytes).and_then(|control| Self::decode(&control, data).map(|_| ()));
+        Self::send(terminal, reply, result);
+        true
+    }
+
+    pub fn graphic<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8], data: &[u8]) {
+        if self.try_query(terminal, bytes, data) {
+            return;
+        }
+        let control = match Control::parse(bytes) {
+            Ok(control) => control,
+            Err(error) => {
+                if control::is_delete(bytes) {
+                    self.current = None;
+                }
+                Self::send(terminal, Reply::read(bytes), Err(error));
+                return;
+            },
+        };
+        self.prune_dead();
+        let screen = Self::screen(terminal);
+        let continuation = self.current.as_ref().is_some_and(|transfer| {
+            matches!(control.action, None | Some(b't' | b'T'))
+                && control.width.is_none()
+                && control.height.is_none()
+                && control.reply.id.is_none_or(|id| transfer.control.reply.id == Some(id))
+                && transfer.key & ALT_KEY == screen
+        });
+        if continuation {
+            let mut transfer = self.current.take().unwrap();
+            if let Some(quiet) = control.quiet {
+                transfer.control.reply.quiet = quiet;
+            }
+            transfer.control.more = control.more;
+            self.receive(terminal, transfer, data);
+            return;
+        }
+        match control.action.unwrap_or(b't') {
+            b't' | b'T' | b'q' => {
+                // 新头终止旧半包，但旧的完整图片保留到新数据校验成功，避免加载中闪白。
+                self.current = None;
+                let reply = control.reply;
+                if let Err(error) = control.dimensions() {
+                    Self::send(terminal, reply, Err(error));
+                    return;
+                }
+                let id = match reply.id {
+                    Some(id) => u64::from(id),
+                    None => {
+                        self.anonymous = self.anonymous.wrapping_add(1) & (ANONYMOUS_KEY - 1);
+                        ANONYMOUS_KEY | self.anonymous
+                    },
+                };
+                self.receive(
+                    terminal,
+                    Transfer { key: screen | id, control, encoded: Vec::new() },
+                    data,
+                );
+            },
+            b'p' => {
+                let result = control
+                    .reply
+                    .id
+                    .ok_or("EINVAL")
+                    .and_then(|id| self.place(terminal, screen | u64::from(id), &control));
+                Self::send(terminal, control.reply, result);
+            },
+            b'd' => {
+                self.current = None;
+                self.delete(terminal, &control);
+            },
+            _ => {},
+        }
+    }
+
+    fn decode(control: &Control, encoded: &[u8]) -> Result<Vec<u8>> {
+        let (_, _, pixels) = control.dimensions()?;
+        let needed = pixels * usize::from(control.channels);
+        let maximum = needed.div_ceil(3).saturating_mul(4).min(MAX_ENCODED_BYTES);
+        if encoded.len() > maximum {
+            return Err("E2BIG");
+        }
+        let pixels =
+            base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "EINVAL")?;
+        if pixels.len() != needed {
+            return Err("EINVAL");
+        }
+        Ok(pixels)
+    }
+
+    fn receive<U: EventListener>(
+        &mut self,
+        terminal: &mut Term<U>,
+        mut transfer: Transfer,
+        data: &[u8],
+    ) {
+        let control = &transfer.control;
+        let (width, height, pixels) = control.dimensions().unwrap();
+        let maximum = (pixels * usize::from(control.channels))
+            .div_ceil(3)
+            .saturating_mul(4)
+            .min(MAX_ENCODED_BYTES);
+        if data.len() > maximum.saturating_sub(transfer.encoded.len()) {
+            Self::send(terminal, control.reply, Err("E2BIG"));
+            return;
+        }
+        let size = transfer.encoded.len() + data.len();
+        if transfer.encoded.capacity() < size {
+            let capacity = transfer.encoded.capacity().saturating_mul(2).max(size).min(maximum);
+            transfer.encoded.reserve_exact(capacity - transfer.encoded.len());
+        }
+        transfer.encoded.extend_from_slice(data);
+        if control.more {
+            self.current = Some(transfer);
+            return;
+        }
+        let decoded = match Self::decode(control, &transfer.encoded) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                Self::send(terminal, control.reply, Err(error));
+                return;
+            },
+        };
+        if control.action == Some(b'q') {
+            Self::send(terminal, control.reply, Ok(()));
+            return;
+        }
+        self.forget(transfer.key);
+        // 用最终 BGRA 成本约束原始仓库；RGB 不应在前端扩张后突破同一图片预算。
+        let cost = pixels * 4;
+        while self.images.len() >= MAX_IMAGES || self.image_bytes + cost > MAX_IMAGE_BYTES {
+            let candidate = self
+                .image_order
+                .iter()
+                .copied()
+                .find(|key| !self.has_placements(*key))
+                .or_else(|| self.image_order.front().copied());
+            let Some(oldest) = candidate else { break };
+            self.forget(oldest);
+        }
+        self.image_bytes += cost;
+        self.image_order.push_back(transfer.key);
+        self.images.insert(
+            transfer.key,
+            Bitmap {
+                pixels: Arc::new(decoded),
+                width,
+                height,
+                channels: control.channels,
+                cost,
+                delete_when_unplaced: false,
+            },
+        );
+        terminal.nebula_images_changed();
+        let result = if control.action == Some(b'T') {
+            self.place(terminal, transfer.key, control)
+        } else {
+            Ok(())
+        };
+        Self::send(terminal, control.reply, result);
+    }
+
+    fn place<U: EventListener>(
+        &mut self,
+        terminal: &mut Term<U>,
+        key: u64,
+        control: &Control,
+    ) -> Result<()> {
+        if self.placements.len() >= MAX_IMAGE_CELLS {
+            self.placements
+                .retain(|_, placement| placement.upgrade().is_some_and(|p| p.is_alive()));
+        }
+        let bitmap = self.images.get(&key).ok_or("ENOENT")?;
+        let viewport = self.viewport.unwrap_or(WindowSize {
+            num_cols: terminal.columns() as u16,
+            num_lines: terminal.screen_lines() as u16,
+            cell_width: 9,
+            cell_height: 20,
+        });
+        let resource = self
+            .identities
+            .get(&key)
+            .and_then(Weak::upgrade)
+            .filter(|id| id.is_alive())
+            .unwrap_or_else(ImageIdentity::new);
+        let identity = ImageIdentity::new();
+        let placement = control.placement(
+            bitmap.width,
+            bitmap.height,
+            viewport,
+            resource.clone(),
+            &identity,
+        )?;
+        let slot = control.reply.placement.map(u64::from).unwrap_or(ALT_KEY | identity.id);
+        if !self.placements.contains_key(&(key, slot)) && self.placements.len() >= MAX_IMAGE_CELLS {
+            return Err("ENOSPC");
+        }
+        if let Some(previous) = self
+            .placements
+            .insert((key, slot), Arc::downgrade(&placement))
+            .and_then(|previous| previous.upgrade())
+        {
+            previous.invalidate();
+        }
+        self.identities.insert(key, Arc::downgrade(&resource));
+        terminal.nebula_insert_kitty_block(&identity, placement, control.keep_cursor);
+        // 再次放置允许重试已被前端预算淘汰的纹理；前端按 resource id 合并在途/已缓存解码。
+        self.published.remove(&key);
+        Ok(())
+    }
+
+    fn has_placements(&self, key: u64) -> bool {
+        self.placements.iter().any(|((image, _), placement)| {
+            *image == key && placement.upgrade().is_some_and(|placement| placement.is_alive())
+        })
+    }
+
+    fn delete<U: EventListener>(&mut self, terminal: &mut Term<U>, control: &Control) {
+        let screen = Self::screen(terminal);
+        let selected = match control.selector.to_ascii_lowercase() {
+            b'a' => None,
+            b'i' => match control.reply.id {
+                Some(id) => Some(screen | u64::from(id)),
+                None => return,
+            },
+            _ => {
+                Self::send(terminal, control.reply, Err("ENOTSUP"));
+                return;
+            },
+        };
+        let visible = (selected.is_none()).then(|| terminal.nebula_visible_kitty_placements());
+        let free = control.selector.is_ascii_uppercase();
+        let mut affected = HashSet::new();
+        self.placements.retain(|(key, slot), weak| {
+            let Some(placement) = weak.upgrade() else { return false };
+            let matches = *key & ALT_KEY == screen
+                && selected.is_none_or(|selected| *key == selected)
+                && control.reply.placement.is_none_or(|id| *slot == u64::from(id))
+                && visible.as_ref().is_none_or(|visible| visible.contains(&placement.id));
+            if matches {
+                placement.invalidate();
+                affected.insert(*key);
+            }
+            !matches && placement.is_alive()
+        });
+        if let Some(key) = selected {
+            affected.insert(key);
+        }
+        for key in affected {
+            if free {
+                if !self.has_placements(key) {
+                    self.forget(key);
+                } else if let Some(bitmap) = self.images.get_mut(&key) {
+                    bitmap.delete_when_unplaced = true;
+                }
+            }
+        }
+        terminal.nebula_images_changed();
+    }
+
+    fn forget(&mut self, key: u64) {
+        if let Some(identity) = self.identities.remove(&key).and_then(|id| id.upgrade()) {
+            identity.invalidate();
+        }
+        self.placements.retain(|(image, _), placement| {
+            if *image != key {
+                return true;
+            }
+            if let Some(placement) = placement.upgrade() {
+                placement.invalidate();
+            }
+            false
+        });
+        self.published.remove(&key);
+        if let Some(bitmap) = self.images.remove(&key) {
+            self.image_bytes -= bitmap.cost;
+        }
+        self.image_order.retain(|id| *id != key);
+    }
+
+    fn prune_dead(&mut self) {
+        let dead: Vec<_> = self
+            .identities
+            .iter()
+            .filter_map(|(key, identity)| {
+                identity.upgrade().is_none_or(|identity| !identity.is_alive()).then_some(*key)
+            })
             .collect();
-        for id in pending {
-            let (Some(cells), Some(bitmap), Some(identity)) =
-                (self.boxes.get(&id).copied(), self.images.get(&id), self.identities.get(&id))
-            else {
-                continue;
-            };
-            if cells.columns() == 0 || cells.rows() == 0 {
+        for key in dead {
+            self.identities.remove(&key);
+            self.published.remove(&key);
+        }
+        let retired: Vec<_> = self
+            .images
+            .iter()
+            .filter_map(|(key, bitmap)| {
+                (bitmap.delete_when_unplaced && !self.has_placements(*key)).then_some(*key)
+            })
+            .collect();
+        for key in retired {
+            self.forget(key);
+        }
+    }
+
+    pub fn flush<U: EventListener>(&mut self, event_proxy: &U, _window_size: Option<WindowSize>) {
+        self.prune_dead();
+        for (&key, identity) in &self.identities {
+            if self.published.contains(&key) {
                 continue;
             }
-            let (cell_width, cell_height) = match window_size {
-                Some(size) => {
-                    (f32::from(size.cell_width.max(1)), f32::from(size.cell_height.max(1)))
-                },
-                // Until the pane reports its geometry, size the bitmap against
-                // its own box: the application already chose that many cells.
-                None => (
-                    bitmap.width as f32 / cells.columns() as f32,
-                    bitmap.height as f32 / cells.rows() as f32,
-                ),
+            let (Some(identity), Some(bitmap)) = (identity.upgrade(), self.images.get(&key)) else {
+                continue;
+            };
+            let Some(placement) = self
+                .placements
+                .iter()
+                .filter(|((image, _), _)| *image == key)
+                .filter_map(|(_, weak)| weak.upgrade())
+                .find(|p| p.is_alive())
+            else {
+                continue;
             };
             let layout = ImageLayout {
                 width: bitmap.width as f32,
                 height: bitmap.height as f32,
-                cell_width,
-                cell_height,
-                columns: cells.columns(),
-                rows: cells.rows(),
+                cell_width: bitmap.width as f32 / placement.columns as f32,
+                cell_height: bitmap.height as f32 / placement.rows as f32,
+                columns: placement.columns,
+                rows: placement.rows,
             };
-            let placement =
-                ImagePlacement { id: identity.id, lifetime: Arc::downgrade(identity), layout };
-            self.published.insert(id);
+            self.published.insert(key);
             event_proxy.send_event(Event::KittyImage {
-                data: bitmap.pixels.clone(),
+                data: Arc::downgrade(&bitmap.pixels),
                 channels: bitmap.channels,
-                placement,
+                placement: ImagePlacement {
+                    id: identity.id,
+                    lifetime: Arc::downgrade(&identity),
+                    layout,
+                },
             });
         }
     }
 
-    /// Count `CSI 16 t` requests in the raw stream. The parser cannot see them
-    /// (vte 0.15 ignores the sequence), and a client that cannot read the cell
-    /// size falls back to stretching a preview across the whole pane.
-    pub fn scan_cell_size_queries(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        let mut probe = std::mem::take(&mut self.query_tail);
-        probe.extend_from_slice(bytes);
-        let len = CELL_SIZE_QUERY.len();
-        if probe.len() >= len {
-            let count = probe.windows(len).filter(|window| *window == CELL_SIZE_QUERY).count();
-            self.cell_size_queries =
-                self.cell_size_queries.saturating_add(u32::try_from(count).unwrap_or(u32::MAX));
-        }
-        // Retain the longest suffix that could still become a split query.
-        let keep = (len - 1).min(probe.len());
-        let tail = &probe[probe.len() - keep..];
-        if keep > 0 && CELL_SIZE_QUERY.starts_with(tail) {
-            self.query_tail = tail.to_vec();
-        }
+    pub fn request_cell_size(&mut self) {
+        self.cell_size_queries = true;
     }
 
-    /// Answer pending `CSI 16 t` requests with the real cell size. The reply is
-    /// `CSI 6 ; height ; width t` — height first, as xterm defines it.
     pub fn answer_cell_size_queries<U: EventListener>(
         &mut self,
-        window_size: Option<WindowSize>,
+        size: Option<WindowSize>,
         event_proxy: &U,
     ) {
-        let Some(size) = window_size else { return };
-        if self.cell_size_queries == 0 {
+        let Some(size) = size else { return };
+        if !self.cell_size_queries {
             return;
         }
-        self.cell_size_queries = 0;
+        self.cell_size_queries = false;
         event_proxy.send_event(Event::PtyWrite(format!(
             "\x1b[6;{};{}t",
             size.cell_height.max(1),
             size.cell_width.max(1)
         )));
     }
-
-    /// Record the pixel geometry declared by a transfer header.
-    fn declare(&mut self, id: u32, control: &[u8]) {
-        let width = control_value(control, b's').and_then(parse_u32);
-        let height = control_value(control, b'v').and_then(parse_u32);
-        let channels = match control_value(control, b'f').and_then(parse_u32) {
-            // 24 = RGB, 32 = RGBA. Palette and PNG payloads would need the
-            // frontend's image decoder, so they are refused, not guessed.
-            Some(24) => Some(3),
-            Some(32) => Some(4),
-            _ => None,
-        };
-        match (width, height, channels) {
-            (Some(width), Some(height), Some(channels)) => {
-                self.sizes.insert(id, (width, height, channels));
-            },
-            _ => {
-                self.sizes.remove(&id);
-            },
-        }
-    }
-
-    fn receive(&mut self, id: u32, payload: &[u8], more: bool) {
-        if more {
-            let encoded = self.transfers.entry(id).or_default();
-            if encoded.len() + payload.len() > MAX_ENCODED_BYTES {
-                encoded.clear();
-                return;
-            }
-            encoded.extend_from_slice(payload);
-            return;
-        }
-        let mut joined = self.transfers.remove(&id).unwrap_or_default();
-        joined.extend_from_slice(payload);
-        let Ok(pixels) = base64::engine::general_purpose::STANDARD.decode(&joined) else {
-            return;
-        };
-        let Some(&(width, height, channels)) = self.sizes.get(&id) else { return };
-        if width == 0 || height == 0 {
-            return;
-        }
-        let needed = width as usize * height as usize * usize::from(channels);
-        if needed > MAX_PIXELS * 4 || pixels.len() < needed {
-            return;
-        }
-        self.images.insert(id, Bitmap { pixels: Arc::new(pixels), width, height, channels });
-        self.published.remove(&id);
-    }
-
-    fn place<U: EventListener>(
-        &mut self,
-        terminal: &mut Term<U>,
-        id: u32,
-        columns: usize,
-        rows: usize,
-    ) {
-        // A placement without a completed transfer has nothing to paint; the
-        // application will retransmit, so dropping it is safe.
-        if !self.images.contains_key(&id) {
-            return;
-        }
-        let line = terminal.nebula_cursor_abs_line();
-        let column = terminal.grid().cursor.point.column.0;
-        let (origin_line, origin_column) = *self.origins.entry(id).or_insert((line, column));
-        let identity = self.identities.entry(id).or_insert_with(ImageIdentity::new).clone();
-        terminal.nebula_insert_kitty_block(
-            &identity,
-            column.saturating_sub(origin_column),
-            line.saturating_sub(origin_line),
-            columns,
-            rows,
-        );
-        let cells = GfxBox::at(line, column, columns, rows);
-        self.boxes.entry(id).and_modify(|existing| existing.union(cells)).or_insert(cells);
-    }
-
-    fn delete<U: EventListener>(&mut self, terminal: &mut Term<U>, id: u32) {
-        if let Some(identity) = self.identities.remove(&id) {
-            terminal.nebula_clear_image_cells(identity.id);
-        }
-        self.origins.remove(&id);
-        self.boxes.remove(&id);
-        self.published.remove(&id);
-        self.transfers.remove(&id);
-        // The pixels are gone with the placement: keeping them would let the
-        // next transfer with the same id inherit a stale geometry.
-        self.sizes.remove(&id);
-        self.images.remove(&id);
-        if self.current == Some(id) {
-            self.current = None;
-        }
-    }
-
-    fn clear_all<U: EventListener>(&mut self, terminal: &mut Term<U>) {
-        let ids: Vec<u32> = self.identities.keys().copied().collect();
-        for id in ids {
-            self.delete(terminal, id);
-        }
-        self.images.clear();
-    }
-
-    fn reply<U: EventListener>(
-        &self,
-        event_proxy: &U,
-        control: &[u8],
-        id: Option<u32>,
-        supported: bool,
-    ) {
-        // `q=2` asks for silence; every other query wants an answer so the
-        // client can pick its transport.
-        if control_value(control, b'q') == Some(b"2") {
-            return;
-        }
-        let Some(id) = id else { return };
-        let status = if supported { "OK" } else { "ENOTSUP" };
-        event_proxy.send_event(Event::PtyWrite(format!("\x1b_Gi={id};{status}\x1b\\")));
-    }
 }
 
-/// Whether the queried transport can serve this terminal: base64 transfers are
-/// the only kind implemented, shared memory is not.
-fn surface_supported(control: &[u8]) -> bool {
-    control_value(control, b't') != Some(b"s")
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::VoidListener;
+    use crate::term::{Config, test::TermSize};
 
-/// Value of a single-letter key in a Kitty protocol control block.
-fn control_value<'a>(control: &'a [u8], key: u8) -> Option<&'a [u8]> {
-    control.split(|&b| b == b',' || b == b';').find_map(|pair| {
-        (pair.first() == Some(&key) && pair.get(1) == Some(&b'=')).then(|| &pair[2..])
-    })
-}
+    fn terminal() -> Term<VoidListener> {
+        Term::new(Config::default(), &TermSize::new(20, 8), VoidListener)
+    }
 
-fn parse_u32(value: &[u8]) -> Option<u32> {
-    std::str::from_utf8(value).ok()?.trim().parse().ok()
-}
+    #[test]
+    fn raw_image_store_has_a_count_budget_even_without_placements() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        for id in 1..=MAX_IMAGES + 1 {
+            gfx.graphic(&mut term, format!("a=t,i={id},s=1,v=1,f=32").as_bytes(), b"AQIDBA==");
+        }
+        assert_eq!(gfx.images.len(), MAX_IMAGES);
+        assert_eq!(gfx.image_bytes, MAX_IMAGES * 4);
+        assert!(!gfx.images.contains_key(&1));
+        assert!(gfx.images.values().all(|image| image.width == 1 && image.height == 1));
+    }
 
-fn parse_usize(value: &[u8]) -> Option<usize> {
-    std::str::from_utf8(value).ok()?.trim().parse().ok()
+    #[test]
+    fn last_chunk_is_checked_before_joining_or_decoding_and_abort_releases_state() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=t,i=1,s=1,v=1,f=32,m=1", b"AQID");
+        // 1x1 RGBA 最多 8 个 base64 字节；用 12 字节验证边界，不分配大图。
+        gfx.graphic(&mut term, b"m=0", b"BA==AAAA");
+        assert!(gfx.current.is_none());
+        assert!(gfx.images.is_empty());
+        assert!(gfx.placements.is_empty());
+        assert!(gfx.current.is_none());
+        for id in 1..=32 {
+            gfx.graphic(&mut term, format!("a=t,i={id},s=1,v=1,m=1").as_bytes(), b"AQID");
+        }
+        assert_eq!(gfx.current.as_ref().unwrap().encoded.len(), 4);
+        assert_eq!(gfx.current.as_ref().unwrap().control.width, Some(1));
+        gfx.graphic(&mut term, b"a=d,d=A", b"");
+        assert!(gfx.current.is_none());
+        assert!(gfx.placements.is_empty());
+    }
+
+    #[test]
+    fn cleared_grid_releases_placement_but_keeps_bounded_data_for_replacement() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1", b"AQIDBA==");
+        let owner = gfx.identities[&7].clone();
+        let pixels = Arc::downgrade(&gfx.images[&7].pixels);
+        let mut parser: vte::ansi::Processor = Default::default();
+        parser.advance(&mut term, b"\x1b[2J\x1b[3J");
+        assert_eq!(owner.strong_count(), 0, "only grid cells may keep image identities alive");
+        gfx.flush(&VoidListener, None);
+        assert!(gfx.identities.is_empty());
+        assert!(!gfx.has_placements(7));
+        assert!(pixels.upgrade().is_some());
+        assert_eq!(gfx.image_bytes, 4);
+        gfx.graphic(&mut term, b"a=p,i=7,c=1,r=1", b"");
+        assert!(gfx.has_placements(7));
+        gfx.graphic(&mut term, b"a=d,d=I,i=7", b"");
+        assert!(pixels.upgrade().is_none());
+        assert_eq!(gfx.image_bytes, 0);
+    }
+
+    #[test]
+    fn headerless_new_ids_do_not_accumulate_partial_buffers() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        for id in 1..=MAX_IMAGES {
+            gfx.graphic(&mut term, format!("a=t,i={id},s=1,v=1,f=32").as_bytes(), b"AQIDBA==");
+        }
+        for id in 1..=MAX_IMAGES {
+            gfx.graphic(&mut term, format!("a=t,i={id},m=1").as_bytes(), b"AQID");
+        }
+        assert!(gfx.current.is_none());
+        assert!(gfx.current.is_none());
+        assert_eq!(gfx.image_bytes, MAX_IMAGES * 4);
+    }
+
+    #[test]
+    fn lowercase_delete_keeps_pixels_and_uppercase_delete_releases_them() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1", b"AQIDBA==");
+        let old_placement = gfx.placements.values().find_map(Weak::upgrade).unwrap();
+        gfx.graphic(&mut term, b"a=d,d=i,i=7", b"");
+        assert!(!old_placement.is_alive());
+        assert_eq!(gfx.image_bytes, 4);
+        gfx.graphic(&mut term, b"a=p,i=7,c=1,r=1", b"");
+        assert!(gfx.has_placements(7));
+        gfx.graphic(&mut term, b"a=d,d=A", b"");
+        assert!(gfx.images.is_empty());
+        assert!(gfx.identities.is_empty());
+        assert_eq!(gfx.image_bytes, 0);
+    }
+
+    #[test]
+    fn deleting_an_unrelated_id_also_aborts_the_partial_upload() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,m=1", b"AQID");
+        gfx.graphic(&mut term, b"a=d,d=i,i=9", b"");
+        assert!(gfx.current.is_none());
+        assert!(gfx.current.is_none());
+        assert!(gfx.placements.is_empty());
+        assert!(gfx.current.is_none());
+        gfx.graphic(&mut term, b"m=0", b"BA==");
+        assert!(gfx.images.is_empty());
+    }
+
+    #[test]
+    fn chunked_transmit_and_place_preserves_the_first_headers_action() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,m=1", b"AQID");
+        gfx.graphic(&mut term, b"m=0", b"BA==");
+        assert_eq!(gfx.identities[&7].strong_count(), 1);
+        assert!(gfx.current.is_none());
+    }
 }

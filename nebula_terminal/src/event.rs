@@ -41,7 +41,11 @@ pub enum Event {
     /// a compressor between the PTY reader and the frontend. `placement.layout`
     /// carries the bitmap's pixel size, so neither side divides by a cell size
     /// it may not know.
-    KittyImage { data: Arc<Vec<u8>>, channels: u8, placement: crate::inline_image::ImagePlacement },
+    KittyImage {
+        data: std::sync::Weak<Vec<u8>>,
+        channels: u8,
+        placement: crate::inline_image::ImagePlacement,
+    },
 
     /// OSC 133;C — a command started executing in this pane.
     CommandStart,
@@ -125,7 +129,7 @@ impl Debug for Event {
             Event::KittyImage { data, channels, placement } => write!(
                 f,
                 "KittyImage({} bytes, {channels} channels, {}x{} cells, id={})",
-                data.len(),
+                data.upgrade().map_or(0, |data| data.len()),
                 placement.layout.columns,
                 placement.layout.rows,
                 placement.id

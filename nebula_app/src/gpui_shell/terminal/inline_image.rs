@@ -5,7 +5,7 @@
 //! expanding concurrently on the UI thread or exhausting process memory.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use gpui::{Bounds, ContentMask, Corners, Pixels, RenderImage, Window, point, px, size};
 use image::{Frame, ImageFormat};
@@ -19,14 +19,30 @@ const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_QUEUED_IMAGES: usize = 16;
 const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
 
+enum ImageData {
+    Encoded(Arc<Vec<u8>>),
+    Pixels { data: Weak<Vec<u8>>, channels: u8 },
+}
+
+impl ImageData {
+    fn encoded_bytes(&self) -> usize {
+        match self {
+            Self::Encoded(data) => data.len(),
+            Self::Pixels { .. } => 0,
+        }
+    }
+    fn available(&self) -> bool {
+        match self {
+            Self::Encoded(_) => true,
+            Self::Pixels { data, .. } => data.strong_count() != 0,
+        }
+    }
+}
+
 pub(super) struct PendingInlineImage {
     sequence: u64,
-    data: Arc<Vec<u8>>,
+    data: ImageData,
     placement: ImagePlacement,
-    /// Raw pixel channels when the transfer carried pixels rather than an
-    /// encoded container: 3 = RGB, 4 = RGBA. Kitty protocol sends raw pixels,
-    /// so re-guessing a container format there would reject every image.
-    channels: Option<u8>,
 }
 
 #[derive(Clone)]
@@ -40,13 +56,27 @@ pub(super) struct InlineImage {
 pub(super) struct InlineImageStore {
     queued: VecDeque<PendingInlineImage>,
     queued_bytes: usize,
-    decoding: bool,
+    decoding: Option<u64>,
     next_sequence: u64,
     images: VecDeque<(u64, InlineImage)>,
     decoded_bytes: usize,
 }
 
 impl InlineImageStore {
+    fn prune_queued(&mut self) {
+        self.queued.retain(|pending| pending.placement.is_alive() && pending.data.available());
+        self.queued_bytes = self.queued.iter().map(|pending| pending.data.encoded_bytes()).sum();
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        self.decoding == Some(id)
+            || self.queued.iter().any(|pending| pending.placement.id == id)
+            || self
+                .images
+                .iter()
+                .any(|(_, image)| image.placement.id == id && image.placement.is_alive())
+    }
+
     pub fn enqueue(
         &mut self,
         data: Arc<Vec<u8>>,
@@ -65,58 +95,14 @@ impl InlineImageStore {
         if !placement.is_alive() {
             return Ok(());
         }
-        if self.queued.len() >= MAX_QUEUED_IMAGES {
-            return Err("too many terminal images are waiting to decode");
-        }
-        let next_bytes = self
-            .queued_bytes
-            .checked_add(data.len())
-            .ok_or("terminal image queue size overflow")?;
-        if next_bytes > MAX_QUEUED_BYTES {
-            return Err("terminal image decode queue exceeds 32 MiB");
-        }
-
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
-        self.queued.push_back(PendingInlineImage { sequence, data, placement, channels: None });
-        self.queued_bytes = next_bytes;
-        Ok(())
-    }
-
-    /// Queue a Kitty protocol transfer, whose payload is raw pixels rather than
-    /// an encoded container. `channels` is the byte count per pixel (3 = RGB,
-    /// 4 = RGBA); the pixel geometry rides along in `placement.layout`.
-    pub fn enqueue_pixels(
-        &mut self,
-        data: Arc<Vec<u8>>,
-        channels: u8,
-        placement: ImagePlacement,
-    ) -> Result<(), &'static str> {
-        if !matches!(channels, 3 | 4) {
-            return Err("image transfer has an unsupported channel count");
-        }
-
-        if data.len() > MAX_IMAGE_DECODED_BYTES {
-            return Err("image transfer exceeds the decoded image budget");
-        }
-        if !placement.layout.width.is_finite()
-            || !placement.layout.height.is_finite()
-            || placement.layout.width <= 0.0
-            || placement.layout.height <= 0.0
+        self.prune_queued();
+        if self
+            .queued
+            .iter()
+            .filter(|pending| matches!(pending.data, ImageData::Encoded(_)))
+            .count()
+            >= MAX_QUEUED_IMAGES
         {
-            return Err("image transfer has an invalid display size");
-        }
-        let pixels = placement.layout.width as u64 * placement.layout.height as u64;
-        if pixels > MAX_IMAGE_PIXELS {
-            return Err("image transfer exceeds the pixel budget");
-        }
-        if (pixels * u64::from(channels)) > data.len() as u64 {
-            return Err("image transfer is shorter than its declared size");
-        }
-        if !placement.is_alive() {
-            return Ok(());
-        }
-        if self.queued.len() >= MAX_QUEUED_IMAGES {
             return Err("too many terminal images are waiting to decode");
         }
         let next_bytes = self
@@ -131,22 +117,80 @@ impl InlineImageStore {
         self.next_sequence = self.next_sequence.wrapping_add(1);
         self.queued.push_back(PendingInlineImage {
             sequence,
-            data,
+            data: ImageData::Encoded(data),
             placement,
-            channels: Some(channels),
         });
         self.queued_bytes = next_bytes;
         Ok(())
     }
 
+    /// Queue a Kitty protocol transfer, whose payload is raw pixels rather than
+    /// an encoded container. `channels` is the byte count per pixel (3 = RGB,
+    /// 4 = RGBA); the pixel geometry rides along in `placement.layout`.
+    pub fn enqueue_pixels(
+        &mut self,
+        data: Weak<Vec<u8>>,
+        channels: u8,
+        placement: ImagePlacement,
+    ) -> Result<(), &'static str> {
+        if !matches!(channels, 3 | 4) {
+            return Err("image transfer has an unsupported channel count");
+        }
+
+        let Some(pixels_owner) = data.upgrade() else { return Ok(()) };
+        if pixels_owner.len() > MAX_IMAGE_DECODED_BYTES {
+            return Err("image transfer exceeds the decoded image budget");
+        }
+        if !placement.layout.width.is_finite()
+            || !placement.layout.height.is_finite()
+            || placement.layout.width <= 0.0
+            || placement.layout.height <= 0.0
+        {
+            return Err("image transfer has an invalid display size");
+        }
+        let pixels = placement.layout.width as u64 * placement.layout.height as u64;
+        if pixels > MAX_IMAGE_PIXELS {
+            return Err("image transfer exceeds the pixel budget");
+        }
+        if (pixels * u64::from(channels)) != pixels_owner.len() as u64 {
+            return Err("image transfer is shorter than its declared size");
+        }
+        if !placement.is_alive() {
+            return Ok(());
+        }
+        self.prune_queued();
+        if self.contains(placement.id) {
+            return Ok(());
+        }
+        // 原始像素仍归核心的 16 张有界仓库；队列只留弱引用，不与 OSC 编码数据争 32 MiB。
+        if self
+            .queued
+            .iter()
+            .filter(|pending| matches!(pending.data, ImageData::Pixels { .. }))
+            .count()
+            >= MAX_CACHED_IMAGES
+        {
+            return Err("too many terminal images are waiting to decode");
+        }
+
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+        self.queued.push_back(PendingInlineImage {
+            sequence,
+            data: ImageData::Pixels { data, channels },
+            placement,
+        });
+        Ok(())
+    }
+
     pub fn start_next(&mut self) -> Option<PendingInlineImage> {
-        if self.decoding {
+        if self.decoding.is_some() {
             return None;
         }
         while let Some(pending) = self.queued.pop_front() {
-            self.queued_bytes = self.queued_bytes.saturating_sub(pending.data.len());
-            if pending.placement.is_alive() {
-                self.decoding = true;
+            self.queued_bytes = self.queued_bytes.saturating_sub(pending.data.encoded_bytes());
+            if pending.placement.is_alive() && pending.data.available() {
+                self.decoding = Some(pending.placement.id);
                 return Some(pending);
             }
         }
@@ -154,7 +198,7 @@ impl InlineImageStore {
     }
 
     pub fn finish(&mut self, result: Result<(u64, InlineImage), String>) -> Result<(), String> {
-        self.decoding = false;
+        self.decoding = None;
         let (sequence, image) = result?;
         if !image.placement.is_alive() {
             return Ok(());
@@ -163,6 +207,8 @@ impl InlineImageStore {
             return Err("decoded terminal image exceeds 64 MiB".to_owned());
         }
 
+        self.images.retain(|(_, image)| image.placement.is_alive());
+        self.decoded_bytes = self.images.iter().map(|(_, image)| image.decoded_bytes).sum();
         while self.images.len() >= MAX_CACHED_IMAGES
             || self.decoded_bytes.saturating_add(image.decoded_bytes) > MAX_CACHE_BYTES
         {
@@ -183,9 +229,12 @@ impl InlineImageStore {
 }
 
 pub(super) fn decode(pending: PendingInlineImage) -> Result<(u64, InlineImage), String> {
-    let (render_image, decoded_bytes) = match pending.channels {
-        Some(channels) => decode_pixels(&pending.data, channels, pending.placement.layout)?,
-        None => decode_bytes(pending.data.as_slice())?,
+    let (render_image, decoded_bytes) = match pending.data {
+        ImageData::Pixels { data, channels } => {
+            let data = data.upgrade().ok_or("image transfer expired")?;
+            decode_pixels(&data, channels, pending.placement.layout)?
+        },
+        ImageData::Encoded(data) => decode_bytes(data.as_slice())?,
     };
     Ok((
         pending.sequence,
@@ -302,6 +351,23 @@ pub(super) fn image_geometry(
 ) -> (Bounds<Pixels>, Bounds<Pixels>) {
     let tile_origin =
         point(origin.x + cell_width * run.column as f32, origin.y + row_y(run.row as f32));
+    if let Some(placement) = &run.placement {
+        let crop_origin = point(
+            tile_origin.x + cell_width * (placement.offset_x_cells - run.source_column as f32),
+            tile_origin.y + cell_height * (placement.offset_y_cells - run.source_row as f32),
+        );
+        let crop_size =
+            size(cell_width * placement.width_cells, cell_height * placement.height_cells);
+        let sx = crop_size.width / placement.source_width;
+        let sy = crop_size.height / placement.source_height;
+        let image_bounds = Bounds::new(
+            point(crop_origin.x - sx * placement.source_x, crop_origin.y - sy * placement.source_y),
+            size(sx * layout.width, sy * layout.height),
+        );
+        let clip = Bounds::new(tile_origin, size(cell_width * run.columns as f32, cell_height))
+            .intersect(&Bounds::new(crop_origin, crop_size));
+        return (image_bounds, clip);
+    }
     let image_bounds = Bounds::new(
         point(
             tile_origin.x - cell_width * run.source_column as f32,
@@ -423,18 +489,8 @@ mod tests {
     fn pending(data: Vec<u8>) -> PendingInlineImage {
         PendingInlineImage {
             sequence: 7,
-            data: Arc::new(data),
+            data: ImageData::Encoded(Arc::new(data)),
             placement: placement(&ImageIdentity::new()),
-            channels: None,
-        }
-    }
-
-    fn pending_pixels(data: Vec<u8>, channels: u8) -> PendingInlineImage {
-        PendingInlineImage {
-            sequence: 8,
-            data: Arc::new(data),
-            placement: placement(&ImageIdentity::new()),
-            channels: Some(channels),
         }
     }
 
@@ -461,7 +517,8 @@ mod tests {
         let mut store = InlineImageStore::default();
         let image = ImageIdentity::new();
         let placement = placement(&image);
-        store.enqueue_pixels(Arc::new(vec![1, 2, 3, 4, 5, 6]), 3, placement).unwrap();
+        let pixels = Arc::new(vec![1, 2, 3, 4, 5, 6]);
+        store.enqueue_pixels(Arc::downgrade(&pixels), 3, placement).unwrap();
         let pending = store.start_next().expect("queued transfer should start");
         let (_, decoded) = decode(pending).unwrap();
         assert_eq!(decoded.decoded_bytes, 8);
@@ -472,8 +529,99 @@ mod tests {
     fn raw_transfer_with_an_unknown_channel_count_is_dropped() {
         let mut store = InlineImageStore::default();
         let image = ImageIdentity::new();
-        let error = store.enqueue_pixels(Arc::new(vec![0; 8]), 2, placement(&image)).unwrap_err();
+        let pixels = Arc::new(vec![0; 8]);
+        let error =
+            store.enqueue_pixels(Arc::downgrade(&pixels), 2, placement(&image)).unwrap_err();
         assert!(error.contains("channel"), "{error}");
+    }
+
+    #[test]
+    fn kitty_queue_has_reserved_weak_slots_and_deduplicates_resource_decodes() {
+        let mut store = InlineImageStore::default();
+        let encoded_ids: Vec<_> = (0..MAX_QUEUED_IMAGES).map(|_| ImageIdentity::new()).collect();
+        let encoded = Arc::new(encoded_png());
+        for id in &encoded_ids {
+            store.enqueue(encoded.clone(), placement(id)).unwrap();
+        }
+        let encoded_bytes = store.queued_bytes;
+        let raw_ids: Vec<_> = (0..MAX_CACHED_IMAGES).map(|_| ImageIdentity::new()).collect();
+        let raw: Vec<_> = (0..MAX_CACHED_IMAGES).map(|_| Arc::new(vec![1u8; 8])).collect();
+        for (id, data) in raw_ids.iter().zip(&raw) {
+            store.enqueue_pixels(Arc::downgrade(data), 4, placement(id)).unwrap();
+            store.enqueue_pixels(Arc::downgrade(data), 4, placement(id)).unwrap();
+            assert_eq!(Arc::strong_count(data), 1, "queue must not retain raw pixel storage");
+        }
+        assert_eq!(store.queued.len(), MAX_QUEUED_IMAGES + MAX_CACHED_IMAGES);
+        assert_eq!(store.queued_bytes, encoded_bytes);
+        while let Some(pending) = store.start_next() {
+            store.finish(decode(pending)).unwrap();
+        }
+        let id = raw_ids.last().unwrap();
+        store.enqueue_pixels(Arc::downgrade(raw.last().unwrap()), 4, placement(id)).unwrap();
+        assert!(store.queued.is_empty(), "new placements reuse the cached bitmap");
+        assert!(store.decoded_bytes <= MAX_CACHE_BYTES);
+    }
+
+    #[test]
+    fn kitty_expired_raw_storage_is_skipped_without_leaving_the_decoder_busy() {
+        let mut store = InlineImageStore::default();
+        let id = ImageIdentity::new();
+        let raw = Arc::new(vec![1u8; 8]);
+        let weak = Arc::downgrade(&raw);
+        store.enqueue_pixels(weak.clone(), 4, placement(&id)).unwrap();
+        drop(raw);
+        assert!(weak.upgrade().is_none());
+        assert!(store.start_next().is_none());
+        assert!(store.decoding.is_none());
+    }
+
+    #[test]
+    fn kitty_crop_uses_full_texture_coordinates_without_shrinking_at_the_viewport_edge() {
+        use nebula_terminal::inline_image::KittyPlacement;
+        let resource = ImageIdentity::new();
+        let lease = ImageIdentity::new();
+        let placement = Arc::new(KittyPlacement {
+            id: lease.id,
+            identity: Arc::downgrade(&lease),
+            resource: resource.clone(),
+            source_x: 2.0,
+            source_y: 0.0,
+            source_width: 2.0,
+            source_height: 2.0,
+            width_cells: 2.0,
+            height_cells: 1.0,
+            offset_x_cells: 0.0,
+            offset_y_cells: 0.0,
+            columns: 2,
+            rows: 1,
+        });
+        let run = ImageRun {
+            id: resource.id,
+            row: 0,
+            column: 5,
+            source_row: 0,
+            source_column: 0,
+            columns: 2,
+            placement: Some(placement),
+        };
+        let layout = ImageLayout {
+            width: 4.0,
+            height: 2.0,
+            cell_width: 10.0,
+            cell_height: 20.0,
+            columns: 2,
+            rows: 1,
+        };
+        let (image, clip) =
+            image_geometry(layout, &run, point(px(0.0), px(0.0)), px(10.0), px(20.0), &|row| {
+                px(20.0) * row
+            });
+        assert_eq!(image.origin.x, px(30.0));
+        assert_eq!(image.size, size(px(40.0), px(20.0)));
+        assert_eq!(clip.origin.x, px(50.0));
+        assert_eq!(clip.size.width, px(20.0));
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(55.0), px(100.0)));
+        assert_eq!(clip.intersect(&viewport).size.width, px(5.0));
     }
 
     fn encoded_png() -> Vec<u8> {
@@ -613,7 +761,7 @@ mod tests {
         store.finish(decode(pending)).unwrap();
         assert!(store.frame_images().is_empty());
         assert_eq!(store.decoded_bytes, 0);
-        assert!(!store.decoding);
+        assert!(store.decoding.is_none());
     }
 
     #[test]
