@@ -1728,9 +1728,33 @@ fn image_projection_preserves_erased_tiles_row_offsets_and_clipping() {
         }],
     };
     let runs = [
-        ImageRun { id: 1, row: 0, column: 6, source_row: 0, source_column: 0, columns: 1 },
-        ImageRun { id: 1, row: 0, column: 8, source_row: 0, source_column: 2, columns: 2 },
-        ImageRun { id: 1, row: 1, column: 6, source_row: 1, source_column: 0, columns: 4 },
+        ImageRun {
+            id: 1,
+            row: 0,
+            column: 6,
+            source_row: 0,
+            source_column: 0,
+            columns: 1,
+            placement: None,
+        },
+        ImageRun {
+            id: 1,
+            row: 0,
+            column: 8,
+            source_row: 0,
+            source_column: 2,
+            columns: 2,
+            placement: None,
+        },
+        ImageRun {
+            id: 1,
+            row: 1,
+            column: 6,
+            source_row: 1,
+            source_column: 0,
+            columns: 4,
+            placement: None,
+        },
     ];
     let projected = projection.project_image_runs(&runs, 9);
     let geometry: Vec<_> = projected
@@ -1766,7 +1790,15 @@ fn expanded_formula_clips_image_without_changing_texture_origin() {
             shift_after: 3,
         }],
     };
-    let runs = [ImageRun { id: 1, row: 0, column: 4, source_row: 2, source_column: 2, columns: 4 }];
+    let runs = [ImageRun {
+        id: 1,
+        row: 0,
+        column: 4,
+        source_row: 2,
+        source_column: 2,
+        columns: 4,
+        placement: None,
+    }];
     let projected = projection.project_image_runs(&runs, 9);
     assert_eq!(projected.len(), 1);
     let r = &projected[0];
