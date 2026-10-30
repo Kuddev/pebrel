@@ -14,8 +14,13 @@ use nebula_terminal::inline_image::{ImageIdentity, ImageLayout, ImagePlacement, 
 const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_IMAGE_ENCODED_BYTES: usize = 12 * 1024 * 1024;
 const MAX_IMAGE_DECODED_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CACHED_IMAGES: usize = 16;
-const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
+// A scanned page decodes to a few tens of megabytes of BGRA, and a reader
+// keeps several pages in flight (a pager uploads the pages around the cursor
+// up front). Keeping only ten pages' worth evicted the page that was on screen
+// as soon as the reader paged ahead, which showed up as a page that never came
+// back until the reader changed what it placed.
+const MAX_CACHED_IMAGES: usize = 32;
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_QUEUED_IMAGES: usize = 16;
 const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
 
@@ -394,20 +399,21 @@ pub(super) fn image_geometry(
 ) -> (Bounds<Pixels>, Bounds<Pixels>) {
     let tile_origin =
         point(origin.x + cell_width * run.column as f32, origin.y + row_y(run.row as f32));
-    // The bitmap is sampled one image pixel per screen pixel, so a placement
-    // that shows a sub-region simply shifts the bitmap: the slice's top-left
-    // sits where this tile's source position lands.
-    // A placement owns exactly the cells it declared (`c`/`r`): the bitmap is
-    // scaled into that box. Sizing it by its own pixels instead lets a sender
-    // that multiplies differently from us (a reader computing 23px cells while
-    // the pane reports 14) paint a page several cells wider than the block it
-    // asked for, which pushes most of it outside the viewport.
-    let bitmap_size = size(cell_width * layout.columns as f32, cell_height * layout.rows as f32);
+    // A placement owns exactly the cells it declared (`c`/`r`), and the source
+    // region it asked for fills that box: scaling the bitmap by its own pixels
+    // instead lets a sender with different cell metrics (a reader computing
+    // 23px cells while the pane reports 14) paint a page several cells wider
+    // than the block it asked for, and a sender that crops to the part of a
+    // page it wants visible (a pager, one `y`/`h` per scroll step) ends up with
+    // a slice occupying a fraction of the box — which shows as a blank page.
+    let box_size = size(cell_width * layout.columns as f32, cell_height * layout.rows as f32);
+    let source_width = layout.source.width.max(1) as f32;
+    let source_height = layout.source.height.max(1) as f32;
     // A scaled bitmap (a high-DPI pane paints it smaller than its pixel size)
     // must shift by the scaled offset, or the slice lands outside the tile and
     // only its last few pixels survive the clip.
-    let scale_x = bitmap_size.width / layout.width;
-    let scale_y = bitmap_size.height / layout.height;
+    let scale_x = box_size.width / source_width;
+    let scale_y = box_size.height / source_height;
     let image_bounds = Bounds::new(
         point(
             tile_origin.x
@@ -415,18 +421,17 @@ pub(super) fn image_geometry(
             tile_origin.y
                 - (scale_y * layout.source.y as f32 + cell_height * run.source_row as f32),
         ),
-        bitmap_size,
+        size(layout.width * scale_x, layout.height * scale_y),
     );
-    // Only the requested slice of the bitmap belongs to this placement. The
-    // slice is anchored to the placement's own origin, not to the row being
+    // The slice is anchored to the placement's own origin, not to the row being
     // painted: a run covers one row of cells, so anchoring it per run would let
-    // every row show another 40 pixels of the picture below the slice.
+    // every row show another row's worth of the picture below the slice.
     let slice = Bounds::new(
         point(
             image_bounds.origin.x + scale_x * layout.source.x as f32,
             image_bounds.origin.y + scale_y * layout.source.y as f32,
         ),
-        size(scale_x * layout.source.width as f32, scale_y * layout.source.height as f32),
+        box_size,
     );
     let clip = Bounds::new(tile_origin, size(cell_width * run.columns as f32, cell_height))
         .intersect(&slice);
@@ -743,10 +748,10 @@ mod tests {
         assert_eq!(store.queued_bytes, 0);
     }
 
-    /// A placement that shows a sub-region keeps the bitmap at its full size and
-    /// only moves it, so the slice's top-left lands where the tile starts. The
-    /// clip is still the tile the grid allocated: the page cannot paint outside
-    /// the cells it owns.
+    /// A placement shows a sub-region of the bitmap by scaling that region into
+    /// the cells it declared, so the slice's top-left lands where the tile
+    /// starts. The clip is still the tile the grid allocated: the page cannot
+    /// paint outside the cells it owns.
     #[test]
     fn cropped_placement_moves_the_bitmap_under_its_tile() {
         let layout = ImageLayout {
@@ -763,10 +768,10 @@ mod tests {
         let row_y = |row: f32| px(row);
         let (image, clip) =
             image_geometry(layout, &run, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
-        // The bitmap is scaled into the two cells it declared, and shifted up by
-        // the scaled slice offset, so bitmap row 2 lands on the run's first cell.
-        assert_eq!(image.origin, point(px(3.0), px(0.0)));
-        assert_eq!(image.size, size(px(2.0), px(2.0)));
+        // The two-row slice fills the two-row box, so the bitmap is drawn at two
+        // points per bitmap row and shifted up by the slice offset.
+        assert_eq!(image.origin, point(px(3.0), px(-1.0)));
+        assert_eq!(image.size, size(px(2.0), px(4.0)));
         assert_eq!(clip.origin, point(px(3.0), px(1.0)));
         assert_eq!(clip.size, size(px(2.0), px(1.0)));
 
@@ -777,21 +782,22 @@ mod tests {
             image_geometry(layout, &sliced, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
         assert_eq!(shifted.origin.x, px(3.0 - 2.0));
 
-        // A cell box taller than the slice stops at the slice: the rows below it
-        // belong to nothing this placement owns.
+        // A one-row slice fills the box on its own: the row below it is part of
+        // the declared cells, so it shows the slice too rather than nothing.
         let shallow =
             ImageLayout { source: SourceRect { x: 0, y: 2, width: 8, height: 1 }, ..layout };
         let tall = ImageRun { row: 0, columns: 8, ..run };
         let (_, clipped) =
             image_geometry(shallow, &tall, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
-        assert_eq!(clipped.size, size(px(2.0), px(0.5)));
+        assert_eq!(clipped.size, size(px(2.0), px(1.0)));
     }
 
-    /// The grid hands the painter one run per row of cells. A slice only owns
-    /// the rows it covers, so the second row of a two-row slice run must be
-    /// empty instead of showing the pixels that follow the slice.
+    /// A reader that crops to the part of the page it wants visible (one `y`/`h`
+    /// per scroll step) expects that crop to cover the block it placed, not a
+    /// fraction of it. Scaling by the whole bitmap instead left the slice a few
+    /// rows tall inside a tall box, which is what a user saw as a blank page.
     #[test]
-    fn rows_below_a_slice_paint_nothing() {
+    fn a_crop_fills_every_row_of_its_cell_box() {
         let layout = ImageLayout {
             width: 240.0,
             height: 160.0,
@@ -804,12 +810,15 @@ mod tests {
         let row_y = |row: f32| px(row * 20.0);
         let first =
             ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 20 };
-        let second = ImageRun { row: 1, source_row: 1, ..first };
         let origin = point(px(0.0), px(0.0));
-        let (_, clip) = image_geometry(layout, &first, origin, px(12.0), px(20.0), &row_y);
-        assert_eq!(clip.size, size(px(240.0), px(20.0)));
-        let (_, below) = image_geometry(layout, &second, origin, px(12.0), px(20.0), &row_y);
-        assert!(below.size.height <= px(0.0), "row 1 painted {:?}", below);
+        let (image, top) = image_geometry(layout, &first, origin, px(12.0), px(20.0), &row_y);
+        assert_eq!(top.size, size(px(240.0), px(20.0)));
+        // Twenty bitmap rows stretched over eight cell rows of 20px, so the
+        // whole 160-row bitmap is drawn 1280 points tall and clipped to the box.
+        assert_eq!(image.size, size(px(240.0), px(1280.0)));
+        let last = ImageRun { row: 7, source_row: 7, ..first };
+        let (_, bottom) = image_geometry(layout, &last, origin, px(12.0), px(20.0), &row_y);
+        assert_eq!(bottom.size, size(px(240.0), px(20.0)));
     }
 
     /// A placement is scaled into the cells it declared, so a slice of the
@@ -832,16 +841,16 @@ mod tests {
             ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 22 };
         let origin = point(px(0.0), px(0.0));
         let (image, first) = image_geometry(layout, &run, origin, px(7.0), px(18.0), &row_y);
-        // 22 cells of 7px and 8 rows of 18px: the bitmap is drawn into that box.
-        assert_eq!(image.size, size(px(154.0), px(144.0)));
+        // 22 cells of 7px wide, 8 rows of 18px tall: the 240x80 slice fills it.
+        assert_eq!(image.size, size(px(154.0), px(288.0)));
         assert_eq!(first.origin.y, px(0.0), "the slice starts at the tile top");
         assert_eq!(first.size.height, px(18.0), "the whole first row belongs to it");
         let fourth = ImageRun { row: 3, source_row: 3, ..run };
         let (_, tail) = image_geometry(layout, &fourth, origin, px(7.0), px(18.0), &row_y);
-        assert_eq!(tail.size.height, px(18.0), "the 80 pixel slice fills four rows");
-        let below = ImageRun { row: 4, source_row: 4, ..run };
-        let (_, none) = image_geometry(layout, &below, origin, px(7.0), px(18.0), &row_y);
-        assert!(none.size.height <= px(0.0), "row 4 painted {:?}", none);
+        assert_eq!(tail.size.height, px(18.0), "row 3 is inside the slice");
+        let last = ImageRun { row: 7, source_row: 7, ..run };
+        let (_, bottom) = image_geometry(layout, &last, origin, px(7.0), px(18.0), &row_y);
+        assert_eq!(bottom.size.height, px(18.0), "the slice fills the last row too");
     }
 
     /// A pager scrolls a page by re-placing the same transfer with a new slice.
