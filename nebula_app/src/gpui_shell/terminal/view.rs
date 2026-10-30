@@ -52,6 +52,7 @@ use nebula_terminal::event::{Event as TermEvent, Notify as _, OnResize as _, Win
 use nebula_terminal::event_loop::Msg;
 use nebula_terminal::grid::{Dimensions as _, Scroll};
 use nebula_terminal::index::{Column, Line, Point as TermPoint, Side};
+use nebula_terminal::inline_image::ImageFormat;
 use nebula_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
 use nebula_terminal::selection::{Selection, SelectionType};
 use nebula_terminal::term::TermMode;
@@ -802,10 +803,17 @@ impl TerminalView {
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }
             },
-            // APC graphics: pixels arrive raw, already placed in the grid, so
+            // APC graphics: raw pixels arrive already placed in the grid, so
             // decoding is the only work left — and it happens off the UI thread.
+            // A container (PNG) is inflated on that same thread.
             TermEvent::KittyImage { data, channels, placement } => {
-                match self.inline_images.enqueue_pixels(data, channels, placement) {
+                let queued = match placement.format {
+                    ImageFormat::Png => self.inline_images.enqueue_container(data, placement),
+                    ImageFormat::Raw => {
+                        self.inline_images.enqueue_pixels(data, channels, placement)
+                    },
+                };
+                match queued {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("APC image dropped: {error}"),
                 }

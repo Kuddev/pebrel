@@ -1,7 +1,7 @@
 //! Graphics controls, protocol replies and placement geometry; no I/O or retained pixels.
 
 use crate::event::WindowSize;
-use crate::inline_image::{ImageIdentity, KittyPlacement, MAX_IMAGE_CELLS};
+use crate::inline_image::{ImageFormat, ImageIdentity, KittyPlacement, MAX_IMAGE_CELLS};
 use std::sync::Arc;
 
 pub(super) type Result<T> = std::result::Result<T, &'static str>;
@@ -44,14 +44,15 @@ impl Reply {
         }
     }
 
-    pub fn message(self, result: Result<()>) -> Option<String> {
+    pub fn message(self, features: Option<&str>, result: Result<()>) -> Option<String> {
         let id = self.id?;
         if self.quiet >= 2 || self.quiet == 1 && result.is_ok() {
             return None;
         }
         let placement = self.placement.map(|id| format!(",p={id}")).unwrap_or_default();
+        let features = features.map(|features| format!(",{features}")).unwrap_or_default();
         let status = result.err().unwrap_or("OK");
-        Some(format!("\x1b_Gi={id}{placement};{status}\x1b\\"))
+        Some(format!("\x1b_Gi={id}{placement}{features};{status}\x1b\\"))
     }
 }
 
@@ -63,7 +64,9 @@ pub(super) struct Control {
     pub more: bool,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// Byte count per pixel for raw payloads; zero when `format` is [`ImageFormat::Png`].
     pub channels: u8,
+    pub format: ImageFormat,
     pub selector: u8,
     pub columns: Option<u32>,
     pub rows: Option<u32>,
@@ -74,6 +77,12 @@ pub(super) struct Control {
     pub offset_x: u32,
     pub offset_y: u32,
     pub keep_cursor: bool,
+    /// `e=<action>` of a feature query, kept so the reply can echo its keys.
+    pub feature: Option<u8>,
+    /// Number of newest images a `d=n` delete asks for (`I`).
+    pub count: u32,
+    /// Verbatim control string, needed to echo unsupported-by-default query keys.
+    query: Vec<u8>,
 }
 
 impl Control {
@@ -88,7 +97,7 @@ impl Control {
                 return Err("EINVAL");
             }
             seen[key] = true;
-            if !b"aipqmsvfcdrxywhXYCtoUzI".contains(&(key as u8)) {
+            if !b"aipqmsvfcdrxywhXYCtoUzIe".contains(&(key as u8)) {
                 return Err("ENOTSUP");
             }
         }
@@ -98,10 +107,23 @@ impl Control {
         if !matches!(action, None | Some(b't' | b'T' | b'p' | b'q' | b'd')) {
             return Err("ENOTSUP");
         }
-        if !matches!(value(bytes, b't'), None | Some(b"d"))
-            || value(bytes, b'o').is_some()
-            || value(bytes, b'I').is_some()
-            || number(bytes, b'U')?.unwrap_or(0) != 0
+        // `e` names the action a feature query asks about, so it is only allowed
+        // on a query action, where it never carries or applies image data.
+        let feature = match value(bytes, b'e') {
+            None => None,
+            Some([feature]) => Some(*feature),
+            Some(_) => return Err("EINVAL"),
+        };
+        if feature.is_some() && action != Some(b'q') {
+            return Err("EINVAL");
+        }
+        // A feature query never acts, so the keys it names are answered by the
+        // reply rather than narrowed to the subset this terminal accepts.
+        let probing = feature.is_some();
+        if !probing
+            && (!matches!(value(bytes, b't'), None | Some(b"d"))
+                || value(bytes, b'o').is_some()
+                || number(bytes, b'U')?.unwrap_or(0) != 0)
         {
             return Err("ENOTSUP");
         }
@@ -109,9 +131,13 @@ impl Control {
         // readers commonly send `z=-1` to mean "nothing to undo" — a signed value
         // the other numeric keys never are, so it is deliberately not parsed.
         // The payload is checked against the declared size in `decode` anyway.
-        let channels = match number(bytes, b'f')?.unwrap_or(32) {
-            24 => 3,
-            32 => 4,
+        let (channels, format) = match number(bytes, b'f')?.unwrap_or(32) {
+            24 => (3, ImageFormat::Raw),
+            32 => (4, ImageFormat::Raw),
+            // PNG carries its own geometry, so the pixel budget is checked after
+            // the container header is decoded.
+            100 => (0, ImageFormat::Png),
+            _ if probing => (4, ImageFormat::Raw),
             _ => return Err("ENOTSUP"),
         };
         let quiet = number(bytes, b'q')?;
@@ -141,6 +167,7 @@ impl Control {
             width: number(bytes, b's')?,
             height: number(bytes, b'v')?,
             channels,
+            format,
             selector,
             columns: number(bytes, b'c')?.filter(|n| *n != 0),
             rows: number(bytes, b'r')?.filter(|n| *n != 0),
@@ -151,7 +178,52 @@ impl Control {
             offset_x: number(bytes, b'X')?.unwrap_or(0),
             offset_y: number(bytes, b'Y')?.unwrap_or(0),
             keep_cursor: cursor == 1,
+            feature,
+            count: number(bytes, b'I')?.unwrap_or(0),
+            query: if feature.is_some() { bytes.to_vec() } else { Vec::new() },
         })
+    }
+
+    /// The action a feature query asks about; `None` means this terminal does not
+    /// implement it, and the reply must then omit `e` entirely.
+    pub fn queried_action(&self) -> Option<u8> {
+        let feature = self.feature?;
+        matches!(feature, b't' | b'T' | b'p' | b'd').then_some(feature)
+    }
+
+    /// Echoes the query keys this terminal honours for the queried action, in the
+    /// `key=value` form the reply expects; unsupported keys stay absent.
+    pub fn features(&self, action: u8) -> String {
+        let mut reply = format!("e={}", char::from(action));
+        for key in [b'C', b'U', b'X', b'Y', b'c', b'r', b'x', b'y', b'w', b'h', b't', b'f', b'd'] {
+            let Some(value) = value(&self.query, key) else { continue };
+            let supported = match key {
+                b'C' => matches!(value, b"0" | b"1"),
+                b'U' => value == b"0",
+                b't' => value == b"d",
+                b'f' => matches!(value, b"24" | b"32" | b"100"),
+                b'd' => Self::selector_supported(value),
+                _ => std::str::from_utf8(value).is_ok_and(|text| text.parse::<u32>().is_ok()),
+            };
+            if !supported {
+                continue;
+            }
+            reply.push(',');
+            reply.push(char::from(key));
+            reply.push('=');
+            reply.push_str(&String::from_utf8_lossy(value));
+        }
+        reply
+    }
+
+    fn selector_supported(value: &[u8]) -> bool {
+        match value {
+            [selector] => matches!(
+                selector.to_ascii_lowercase(),
+                b'a' | b'i' | b'p' | b'c' | b'x' | b'y' | b'r' | b'n'
+            ),
+            _ => false,
+        }
     }
 
     pub fn dimensions(&self) -> Result<(u32, u32, usize)> {
@@ -173,6 +245,7 @@ impl Control {
         viewport: WindowSize,
         resource: Arc<ImageIdentity>,
         identity: &Arc<ImageIdentity>,
+        origin: (usize, usize),
     ) -> Result<Arc<KittyPlacement>> {
         if self.x >= width || self.y >= height {
             return Err("EINVAL");
@@ -224,6 +297,8 @@ impl Control {
             offset_y_cells,
             columns,
             rows,
+            column: origin.0,
+            row: origin.1,
         }))
     }
 }
