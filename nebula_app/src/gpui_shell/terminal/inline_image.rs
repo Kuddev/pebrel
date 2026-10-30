@@ -397,10 +397,12 @@ pub(super) fn image_geometry(
     // The bitmap is sampled one image pixel per screen pixel, so a placement
     // that shows a sub-region simply shifts the bitmap: the slice's top-left
     // sits where this tile's source position lands.
-    let bitmap_size = size(
-        cell_width * (layout.width / layout.cell_width),
-        cell_height * (layout.height / layout.cell_height),
-    );
+    // A placement owns exactly the cells it declared (`c`/`r`): the bitmap is
+    // scaled into that box. Sizing it by its own pixels instead lets a sender
+    // that multiplies differently from us (a reader computing 23px cells while
+    // the pane reports 14) paint a page several cells wider than the block it
+    // asked for, which pushes most of it outside the viewport.
+    let bitmap_size = size(cell_width * layout.columns as f32, cell_height * layout.rows as f32);
     // A scaled bitmap (a high-DPI pane paints it smaller than its pixel size)
     // must shift by the scaled offset, or the slice lands outside the tile and
     // only its last few pixels survive the clip.
@@ -761,10 +763,10 @@ mod tests {
         let row_y = |row: f32| px(row);
         let (image, clip) =
             image_geometry(layout, &run, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
-        // The full bitmap is painted, shifted up by the slice offset and placed
-        // at the run's row, so image row 2 lands on the first cell of the run.
-        assert_eq!(image.origin, point(px(3.0), px(1.0 - 2.0)));
-        assert_eq!(image.size, size(px(8.0), px(4.0)));
+        // The bitmap is scaled into the two cells it declared, and shifted up by
+        // the scaled slice offset, so bitmap row 2 lands on the run's first cell.
+        assert_eq!(image.origin, point(px(3.0), px(0.0)));
+        assert_eq!(image.size, size(px(2.0), px(2.0)));
         assert_eq!(clip.origin, point(px(3.0), px(1.0)));
         assert_eq!(clip.size, size(px(2.0), px(1.0)));
 
@@ -782,7 +784,7 @@ mod tests {
         let tall = ImageRun { row: 0, columns: 8, ..run };
         let (_, clipped) =
             image_geometry(shallow, &tall, point(px(0.0), px(0.0)), px(1.0), px(1.0), &row_y);
-        assert_eq!(clipped.size, size(px(8.0), px(1.0)));
+        assert_eq!(clipped.size, size(px(2.0), px(0.5)));
     }
 
     /// The grid hands the painter one run per row of cells. A slice only owns
@@ -796,7 +798,7 @@ mod tests {
             cell_width: 12.0,
             cell_height: 20.0,
             columns: 20,
-            rows: 2,
+            rows: 8,
             source: SourceRect { x: 0, y: 0, width: 240, height: 20 },
         };
         let row_y = |row: f32| px(row * 20.0);
@@ -810,11 +812,12 @@ mod tests {
         assert!(below.size.height <= px(0.0), "row 1 painted {:?}", below);
     }
 
-    /// A high-DPI pane paints a bitmap smaller than its pixel size, so the slice
-    /// offset has to shrink with it. Shifting by the raw pixel offset put the
-    /// slice above the tile and left only its bottom few pixels visible.
+    /// A placement is scaled into the cells it declared, so a slice of the
+    /// bitmap has to be shifted by the scaled offset. Shifting by the raw pixel
+    /// offset put the slice above the tile and left only its last pixels
+    /// visible.
     #[test]
-    fn a_scaled_bitmap_still_puts_its_slice_at_the_tile() {
+    fn a_slice_lands_inside_the_cells_its_placement_owns() {
         let layout = ImageLayout {
             width: 240.0,
             height: 160.0,
@@ -829,16 +832,16 @@ mod tests {
             ImageRun { id: 0, row: 0, column: 0, source_row: 0, source_column: 0, columns: 22 };
         let origin = point(px(0.0), px(0.0));
         let (image, first) = image_geometry(layout, &run, origin, px(7.0), px(18.0), &row_y);
-        // Two screen pixels per bitmap pixel up to the DPI ratio: half size here.
-        assert_eq!(image.size, size(px(120.0), px(80.0)));
+        // 22 cells of 7px and 8 rows of 18px: the bitmap is drawn into that box.
+        assert_eq!(image.size, size(px(154.0), px(144.0)));
         assert_eq!(first.origin.y, px(0.0), "the slice starts at the tile top");
         assert_eq!(first.size.height, px(18.0), "the whole first row belongs to it");
-        let third = ImageRun { row: 2, source_row: 2, ..run };
-        let (_, tail) = image_geometry(layout, &third, origin, px(7.0), px(18.0), &row_y);
-        assert_eq!(tail.size.height, px(4.0), "the 80 pixel slice ends mid third row");
-        let below = ImageRun { row: 3, source_row: 3, ..run };
+        let fourth = ImageRun { row: 3, source_row: 3, ..run };
+        let (_, tail) = image_geometry(layout, &fourth, origin, px(7.0), px(18.0), &row_y);
+        assert_eq!(tail.size.height, px(18.0), "the 80 pixel slice fills four rows");
+        let below = ImageRun { row: 4, source_row: 4, ..run };
         let (_, none) = image_geometry(layout, &below, origin, px(7.0), px(18.0), &row_y);
-        assert!(none.size.height <= px(0.0), "row 3 painted {:?}", none);
+        assert!(none.size.height <= px(0.0), "row 4 painted {:?}", none);
     }
 
     /// A pager scrolls a page by re-placing the same transfer with a new slice.

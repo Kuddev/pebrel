@@ -731,7 +731,21 @@ impl TerminalView {
                 }
             },
             TermEvent::TextAreaSizeRequest(formatter) => {
-                self.write_bytes(formatter(self.window_size).into_bytes());
+                // 网格可能已经跟着视口 reflow 过，而子进程那一半还在去抖
+                // （`resize_grid_only` 只重排 `Term`，不碰 `window_size`）。
+                // 此时按 `window_size` 回答 `CSI 14 t` 就是在报旧几何：读页面
+                // 尺寸的客户端会把文本区算得比屏幕大，把整页摆到可见区右缘
+                // 之外。行/列一律取 `Term` 当刻的长度，像素尺寸只借 cell 度量。
+                let mut size = self.window_size;
+                let grid = self.session.as_ref().map(|session| {
+                    let term = session.term.lock();
+                    (term.screen_lines(), term.columns())
+                });
+                if let Some((lines, cols)) = grid {
+                    size.num_lines = lines.min(usize::from(u16::MAX)) as u16;
+                    size.num_cols = cols.min(usize::from(u16::MAX)) as u16;
+                }
+                self.write_bytes(formatter(size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
                 self.retain_failed_session |= !code.success() && self.local_startup_unconfirmed();
