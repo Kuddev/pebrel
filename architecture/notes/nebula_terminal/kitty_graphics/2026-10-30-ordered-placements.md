@@ -54,6 +54,12 @@ so they do not consume the OSC 32-MiB encoded-data budget. Queued, active and ca
 resource IDs suppress duplicate decodes; a later placement can retry a texture
 evicted by the unchanged 16-image/128-MiB frontend cache.
 
+Independent one-cell placements can produce many render fragments. The paint path
+streams adjacent clips into one submission only when the texture, full source
+transform and vertical extent match. It preserves erased gaps and different
+mappings, and does not allocate a per-frame batch vector. The 46-by-20 tile case
+therefore uses 20 paint submissions instead of 920 without changing grid ownership.
+
 ## Rejected alternatives
 
 - End synchronization for every APC chunk: breaks atomic frames and causes excess
@@ -86,6 +92,8 @@ screen identity, selective deletion and default cursor movement. Existing OSC an
 grid image suites protect ordering, reflow, attributes and lifetime.
 Frontend cases cover shared weak queue admission, decode deduplication/expiry and
 crop geometry at a viewport edge. Real-client screenshots are separate evidence.
+The paint-batch regression also checks the 920-to-20 case, an erased tile and a
+same-texture/different-transform case; these are submission counts, not GPU timings.
 
 ## Supersedes
 

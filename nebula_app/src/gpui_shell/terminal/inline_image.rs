@@ -310,35 +310,79 @@ pub(super) fn paint(
     window: &mut Window,
 ) {
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        for run in runs {
-            let Some(inline) = images.iter().find(|image| image.placement.id == run.id) else {
-                continue;
-            };
-            let (image_bounds, clip) = image_geometry(
-                inline.placement.layout,
-                run,
-                bounds.origin,
-                cell_width,
-                cell_height,
-                row_y,
-            );
-            if clip.size.width <= px(0.0) || clip.size.height <= px(0.0) {
-                continue;
-            }
-            // Keep full texture coordinates: GPUI rounds sub-image UVs to
-            // source pixels, which loses rows when a tiny image is enlarged.
-            window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                let _ = window.paint_image(
-                    image_bounds,
-                    image_bounds,
-                    Corners::all(px(0.0)),
-                    inline.image.clone(),
-                    0,
-                    false,
-                );
-            });
-        }
+        for_each_paint_batch(
+            images,
+            runs,
+            bounds,
+            cell_width,
+            cell_height,
+            row_y,
+            |inline, image_bounds, clip| {
+                // Keep full texture coordinates: GPUI rounds sub-image UVs to
+                // source pixels, which loses rows when a tiny image is enlarged.
+                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                    let _ = window.paint_image(
+                        image_bounds,
+                        image_bounds,
+                        Corners::all(px(0.0)),
+                        inline.image.clone(),
+                        0,
+                        false,
+                    );
+                });
+            },
+        );
     });
+}
+
+/// 仅合并相邻且映射相同的片段；不跨擦除空洞，也不为每帧分配新的批次数组。
+fn for_each_paint_batch(
+    images: &[InlineImage],
+    runs: &[ImageRun],
+    bounds: Bounds<Pixels>,
+    cell_width: Pixels,
+    cell_height: Pixels,
+    row_y: &dyn Fn(f32) -> Pixels,
+    mut emit: impl FnMut(&InlineImage, Bounds<Pixels>, Bounds<Pixels>),
+) -> usize {
+    let mut pending: Option<(&InlineImage, Bounds<Pixels>, Bounds<Pixels>)> = None;
+    let mut emitted = 0;
+    for run in runs {
+        let Some(inline) = images.iter().find(|image| image.placement.id == run.id) else {
+            continue;
+        };
+        let (image_bounds, clip) = image_geometry(
+            inline.placement.layout,
+            run,
+            bounds.origin,
+            cell_width,
+            cell_height,
+            row_y,
+        );
+        if clip.size.width <= px(0.0) || clip.size.height <= px(0.0) {
+            continue;
+        }
+        if let Some((previous, previous_bounds, previous_clip)) = pending.as_mut()
+            && Arc::ptr_eq(&previous.image, &inline.image)
+            && *previous_bounds == image_bounds
+            && previous_clip.origin.y == clip.origin.y
+            && previous_clip.size.height == clip.size.height
+            && previous_clip.origin.x + previous_clip.size.width == clip.origin.x
+        {
+            previous_clip.size.width += clip.size.width;
+            continue;
+        }
+        if let Some((image, image_bounds, clip)) = pending.take() {
+            emit(image, image_bounds, clip);
+            emitted += 1;
+        }
+        pending = Some((inline, image_bounds, clip));
+    }
+    if let Some((image, image_bounds, clip)) = pending {
+        emit(image, image_bounds, clip);
+        emitted += 1;
+    }
+    emitted
 }
 
 pub(super) fn image_geometry(
@@ -622,6 +666,102 @@ mod tests {
         assert_eq!(clip.size.width, px(20.0));
         let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(55.0), px(100.0)));
         assert_eq!(clip.intersect(&viewport).size.width, px(5.0));
+    }
+
+    #[test]
+    fn tiled_paint_batches_preserve_holes_and_different_source_transforms() {
+        use nebula_terminal::inline_image::KittyPlacement;
+        let resource = ImageIdentity::new();
+        let layout = ImageLayout {
+            width: 460.0,
+            height: 400.0,
+            cell_width: 10.0,
+            cell_height: 20.0,
+            columns: 46,
+            rows: 20,
+        };
+        let (texture, decoded_bytes) = decode_pixels(&vec![127; 460 * 400 * 4], 4, layout).unwrap();
+        let images = [InlineImage {
+            image: texture,
+            decoded_bytes,
+            placement: ImagePlacement {
+                id: resource.id,
+                lifetime: Arc::downgrade(&resource),
+                layout,
+            },
+        }];
+        let mut leases = Vec::new();
+        let mut runs = Vec::new();
+        for row in 0..20u16 {
+            for column in 0..46u16 {
+                let lease = ImageIdentity::new();
+                let placement = Arc::new(KittyPlacement {
+                    id: lease.id,
+                    identity: Arc::downgrade(&lease),
+                    resource: resource.clone(),
+                    source_x: f32::from(column) * 10.0,
+                    source_y: f32::from(row) * 20.0,
+                    source_width: 10.0,
+                    source_height: 20.0,
+                    width_cells: 1.0,
+                    height_cells: 1.0,
+                    offset_x_cells: 0.0,
+                    offset_y_cells: 0.0,
+                    columns: 1,
+                    rows: 1,
+                });
+                leases.push(lease);
+                runs.push(ImageRun {
+                    id: resource.id,
+                    row: row + 1,
+                    column: column + 1,
+                    source_row: 0,
+                    source_column: 0,
+                    columns: 1,
+                    placement: Some(placement),
+                });
+            }
+        }
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(1200.0), px(800.0)));
+        let draw = |runs: &[ImageRun]| {
+            let mut output = Vec::new();
+            let count = for_each_paint_batch(
+                &images,
+                runs,
+                viewport,
+                px(10.0),
+                px(20.0),
+                &|row| px(20.0) * row,
+                |_, image, clip| output.push((image, clip)),
+            );
+            assert_eq!(count, output.len());
+            output
+        };
+        assert_eq!(runs.len(), 920);
+        let full = draw(&runs);
+        assert_eq!(full.len(), 20, "one paint submission per contiguous row, not per cell");
+        for (row, (image, clip)) in full.iter().enumerate() {
+            assert_eq!(*image, Bounds::new(point(px(10.0), px(20.0)), size(px(460.0), px(400.0))));
+            assert_eq!(
+                *clip,
+                Bounds::new(
+                    point(px(10.0), px(20.0) * (row + 1) as f32),
+                    size(px(460.0), px(20.0))
+                )
+            );
+        }
+        runs.retain(|run| run.row != 1 || run.column != 21);
+        let erased = draw(&runs);
+        assert_eq!(erased.len(), 21);
+        assert_eq!(erased[0].1.size.width, px(200.0));
+        assert_eq!(erased[1].1.origin.x, px(220.0));
+        assert_eq!(erased[1].1.size.width, px(250.0));
+        Arc::get_mut(runs[1].placement.as_mut().unwrap()).unwrap().source_x = 0.0;
+        assert_eq!(
+            draw(&runs).len(),
+            23,
+            "same texture alone does not permit merging different mappings"
+        );
     }
 
     fn encoded_png() -> Vec<u8> {
