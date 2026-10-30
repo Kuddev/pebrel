@@ -216,13 +216,6 @@ pub(super) struct SelectTab {
 #[action(namespace = nebula_workspace, no_json)]
 pub(super) struct QuitApp;
 
-/// 最小化当前窗口，macOS 上绑 ⌘M（`Action::Minimize` 的 GPUI 侧落点）。
-/// 与 QuitApp 同式：动作与其绑定适配臂同处维护；新动作不再进根文件的
-/// actions! 列表，workspace.rs 的行数棘轮得以保持基线。
-#[derive(Clone, Debug, PartialEq, gpui::Action)]
-#[action(namespace = nebula_workspace, no_json)]
-pub(super) struct MinimizeWindow;
-
 impl SelectTab {
     fn from_config(action: &crate::config::Action) -> Option<Self> {
         use crate::config::Action;
@@ -299,8 +292,6 @@ fn workspace_binding_in_context(
             scope.or(Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
-        // ⌘M 最小化当前窗口：视图处理器调 gpui 的 minimize_window。
-        Action::Minimize => Some(KeyBinding::new(&combo, MinimizeWindow, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
         // macOS 的退出键走与托盘退出同一条路径：先落盘会话与草稿，再停 PTY。
         Action::Quit => Some(KeyBinding::new(&combo, QuitApp, scope)),

@@ -50,11 +50,6 @@ mod macos_command_keys {
         let quit = workspace_binding_in_context("cmd+q", &crate::config::Action::Quit, None)
             .expect("⌘Q 必须有绑定");
         assert!(quit.action().as_any().is::<QuitApp>(), "⌘Q 必须绑定 QuitApp");
-        // ⌘M 最小化：必须落到窗口动作，而不是掉进 `_ => None` 变成表外影子绑定。
-        let minimize =
-            workspace_binding_in_context("cmd+m", &crate::config::Action::Minimize, None)
-                .expect("⌘M 必须有绑定");
-        assert!(minimize.action().as_any().is::<MinimizeWindow>(), "⌘M 必须绑定 MinimizeWindow");
     }
 
     #[test]
@@ -79,15 +74,6 @@ mod macos_command_keys {
                     assert!(action.as_any().is::<CloseActiveTerminal>());
                 }
             }
-        }
-        // ⌘M 在终端上下文也必须派发最小化，不得被编码进 PTY。
-        for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
-            let contexts = [KeyContext::parse(context).unwrap()];
-            let input = [Keystroke::parse("cmd-m").unwrap()];
-            let (bindings, pending) = keymap.bindings_for_input(&input, &contexts);
-            assert!(!pending);
-            let action = bindings.first().expect("⌘M 必须有明确动作").action();
-            assert!(action.as_any().is::<MinimizeWindow>(), "{context}");
         }
     }
 
