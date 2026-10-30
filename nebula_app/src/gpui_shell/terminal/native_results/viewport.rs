@@ -381,6 +381,7 @@ mod tests {
                     columns: 2,
                     source_column: 2,
                     source_row,
+                    placement: None,
                 };
                 let (image, clip) = super::super::super::inline_image::image_geometry(
                     layout,
@@ -400,8 +401,15 @@ mod tests {
             }
             let original = original.unwrap();
             projection.top += 1.0;
-            let run =
-                ImageRun { id: 1, row: 5, column: 6, columns: 2, source_column: 2, source_row: 1 };
+            let run = ImageRun {
+                id: 1,
+                row: 5,
+                column: 6,
+                columns: 2,
+                source_column: 2,
+                source_row: 1,
+                placement: None,
+            };
             let (scrolled, _) = super::super::super::inline_image::image_geometry(
                 layout,
                 &run,
