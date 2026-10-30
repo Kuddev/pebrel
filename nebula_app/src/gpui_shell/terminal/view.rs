@@ -731,7 +731,20 @@ impl TerminalView {
                 }
             },
             TermEvent::TextAreaSizeRequest(formatter) => {
-                self.write_bytes(formatter(self.window_size).into_bytes());
+                // The geometry captured at spawn can lag the live grid by a whole
+                // resize: a reader that divides this answer by its cell size then
+                // lays pages out for a pane that no longer exists. Answer from the
+                // grid the session is actually rendering.
+                let mut size = self.window_size;
+                let grid = self.session.as_ref().map(|session| {
+                    let term = session.term.lock();
+                    (term.screen_lines(), term.columns())
+                });
+                if let Some((lines, columns)) = grid {
+                    size.num_lines = lines.min(usize::from(u16::MAX)) as u16;
+                    size.num_cols = columns.min(usize::from(u16::MAX)) as u16;
+                }
+                self.write_bytes(formatter(size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
                 self.retain_failed_session |= !code.success() && self.local_startup_unconfirmed();
@@ -867,6 +880,15 @@ impl TerminalView {
                 view.drive_inline_image_decode(cx);
                 cx.notify();
             });
+            // A decode that finishes between frames can leave the freshly inserted
+            // texture unpresented until the next input event. Ask for one more frame
+            // shortly after, so a page that arrives while the user is idle still
+            // appears without a click.
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(40)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
         })
         .detach();
     }

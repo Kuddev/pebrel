@@ -14,8 +14,12 @@ use nebula_terminal::inline_image::{ImageLayout, ImagePlacement, ImageRun};
 const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_IMAGE_ENCODED_BYTES: usize = 12 * 1024 * 1024;
 const MAX_IMAGE_DECODED_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CACHED_IMAGES: usize = 16;
-const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
+// A full-page reader uploads the pages around the cursor before the user gets
+// there, and a decoded page costs several MB. Keep enough of them that the page
+// on screen is not evicted while it is visible: the terminal de-dupes an
+// identical re-place, so an evicted page would not come back on its own.
+const MAX_CACHED_IMAGES: usize = 32;
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_QUEUED_IMAGES: usize = 16;
 const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
 
