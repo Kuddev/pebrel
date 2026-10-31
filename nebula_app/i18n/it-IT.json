@@ -205,5 +205,8 @@
     "move_left": "Sposta a sinistra",
     "move_right": "Sposta a destra",
     "tab_color": "Colore della scheda"
+  },
+  "startup": {
+    "handover_unconfirmed": "L’istanza di Pebrel in esecuzione non ha confermato la richiesta di apertura. La scheda o la finestra potrebbe essere già stata aperta. Controlla la finestra esistente prima di riprovare; questo avvio non ripeterà la richiesta."
   }
 }

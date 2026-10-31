@@ -10,6 +10,7 @@ mod cli;
 mod command;
 pub(crate) mod conversation;
 pub(crate) mod git;
+mod handover;
 pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
