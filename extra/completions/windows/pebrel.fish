@@ -27,7 +27,7 @@ end
 complete -c pebrel -n "__fish_pebrel_needs_command" -l embed -d 'X11 window ID to embed Pebrel within (decimal or hexadecimal with "0x" prefix)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -l config-file -d 'Specify an alternative configuration file.' -r -F
 complete -c pebrel -n "__fish_pebrel_needs_command" -l working-directory -d 'Start the shell in the specified working directory' -r -F
-complete -c pebrel -n "__fish_pebrel_needs_command" -l shell -d 'Start this shell instead of the configured default one, by the same id the `shell` setting uses (`pwsh`, `cmd`, `wsl:Ubuntu`, or a profile\'s settings id)' -r
+complete -c pebrel -n "__fish_pebrel_needs_command" -l shell -d 'Start a detected shell or an imported terminal profile by its settings id' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -s e -l command -d 'Command and args to execute (must be last argument)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -s T -l title -d 'Defines the window title [default: Pebrel]' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -l class -d 'Defines window class/app_id on X11/Wayland [default: Pebrel]' -r
