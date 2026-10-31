@@ -42,6 +42,7 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "ctrl-c",
     "ctrl-v",
     "ctrl-shift-v",
+    "shift-insert",
     "alt-enter",
     "ctrl-shift-o",
 ];
@@ -128,6 +129,20 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-enter", ToggleFullscreen, None),
         KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
     ];
+    // Shift+Insert 是 Windows/Linux 终端的粘贴惯例（旧壳 winit 表
+    // `Insert+SHIFT → PasteSelection` 的 GPUI 对应物）。不绑的话按键会被
+    // 编成 `\x1b[2;2~` 发进 PTY，agent 输入框（Claude Code 等）收不到
+    // 粘贴；同一惯例也补进输入框上下文（重命名/对话框），与 ctrl-v 同
+    // 待遇。macOS 维持透传（旧壳默认即 Esc 序列，Mac 键盘也没有 Insert），
+    // 运行时判定不占平台 cfg 预算。
+    if std::env::consts::OS != "macos" {
+        bindings.push(KeyBinding::new(
+            "shift-insert",
+            PasteClipboard,
+            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+        ));
+        bindings.push(KeyBinding::new("shift-insert", gpui_component::input::Paste, Some("Input")));
+    }
     // Tab selection and rename use the same defaults displayed by Settings.
     bindings.extend(crate::display::keymap::GPUI.default_shortcuts().into_iter().filter_map(
         |(combo, action)| {
@@ -196,6 +211,13 @@ pub(super) struct SelectTab {
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = nebula_workspace, no_json)]
 pub(super) struct QuitApp;
+
+/// 最小化当前窗口，macOS 上绑 ⌘M（`Action::Minimize` 的 GPUI 侧落点）。
+/// 与 QuitApp 同式：动作与其绑定适配臂同处维护；新动作不再进根文件的
+/// actions! 列表，workspace.rs 的行数棘轮得以保持基线。
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = nebula_workspace, no_json)]
+pub(super) struct MinimizeWindow;
 
 impl SelectTab {
     fn from_config(action: &crate::config::Action) -> Option<Self> {
@@ -273,6 +295,8 @@ fn workspace_binding_in_context(
             scope.or(Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
+        // ⌘M 最小化当前窗口：视图处理器调 gpui 的 minimize_window。
+        Action::Minimize => Some(KeyBinding::new(&combo, MinimizeWindow, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
         // macOS 的退出键走与托盘退出同一条路径：先落盘会话与草稿，再停 PTY。
         Action::Quit => Some(KeyBinding::new(&combo, QuitApp, scope)),
