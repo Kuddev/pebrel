@@ -157,6 +157,36 @@ fn split_icon_rects(tree: &SplitTree<u64>, width: f32, height: f32) -> Vec<nebul
         .collect()
 }
 
+/// 分屏数量胶囊，与同一标题栏的紧凑状态徽章保持一致。
+/// （`top-tabs/TopTabItems.tsx:998-1006`：`text-[10px] px-1.5 rounded-full
+/// min-w-[22px]`、前景 18% 描边、背景 60% 半透明底），但尺寸按 chrome 字号
+/// 等比推导而不是钉死 10px——侧栏字号跟随配置字号，钉死会在大字号下缩成
+/// 一粒米。
+pub(super) fn split_badge(count: usize, label_px: f32, ink: Hsla, fill: Hsla) -> impl IntoElement {
+    let height = (label_px * 1.18).max(15.0);
+    h_flex()
+        .flex_shrink_0()
+        .h(px(height))
+        .min_w(px(height * 1.25))
+        .px(px(5.0))
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border(px(1.0))
+        .border_color(ink.opacity(0.18))
+        .bg(fill.opacity(0.6))
+        .text_size(px(label_px * 0.68))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(ink.opacity(0.75))
+        .child(SharedString::from(count.to_string()))
+}
+
+/// 胶囊在行内占的水平预算（含左侧 gap）：侧栏标题的列数换算要按同一份减法
+/// 扣掉它，否则省略号会压到胶囊上。
+pub(super) fn split_badge_slot_w(label_px: f32) -> f32 {
+    (label_px * 1.18).max(15.0) * 1.25 + 8.0
+}
+
 /// 广播记号：中心点 + 左右各两段同心弧。fork 的 `IconName` 里没有
 /// radio/broadcast（已核对 `crates/ui/src/icon.rs`），与其硬凑一个语义不对的
 /// 现成图标，不如自绘——弧沿用 `sidebar.rs::spinner` 那套"沿弧铺圆点"的画法，

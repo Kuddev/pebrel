@@ -130,6 +130,27 @@
     "show": "Show Pebrel",
     "quit": "Quit"
   },
+  "sidebar": {
+    "current_tasks": "Current tasks",
+    "recent_tasks": "Recent tasks",
+    "group_workspace": "Workspace",
+    "ssh_host": "SSH [{host}]",
+    "ssh_section": "SSH hosts",
+    "new_session": "New session",
+    "collapse_group": "Collapse group",
+    "expand_group": "Expand group",
+    "recent_empty": "No recent sessions",
+    "recent_scanning": "Scanning sessions…",
+    "recent_others": "Others",
+    "resume_session": "Resume session",
+    "status_running": "Running",
+    "status_paused": "Paused",
+    "status_ready": "Ready",
+    "status_waiting_input": "Waiting",
+    "status_ask": "Ask",
+    "status_failed": "Failed",
+    "status_stopped": "Stopped"
+  },
   "notification": {
     "bell": "Terminal bell",
     "turn_failed_reason": "Request failed: {error}",
@@ -309,6 +330,8 @@
       }
     },
     "appearance": {
+      "ai_agent_sidebar": "AI Agent sidebar",
+      "ai_agent_sidebar_description": "Group sidebar tasks by project with SSH host groups and a recent AI sessions section, and show status badges for AI sessions only. Turned off, the sidebar keeps the classic flat tab list.",
       "background_color_description": "Overrides the terminal background supplied by the theme. This also changes the color reported to applications by OSC 11, which TUIs use to choose light or dark mode.",
       "background_cover_title": "Extend the background image beneath window controls?",
       "background_cover_description": "The image will extend beneath the title bar, window buttons, tabs, and SSH sidebar. Low-contrast images may make controls harder to see; the interface retains a minimum-opacity safeguard.",
@@ -1156,6 +1179,7 @@
     "push": "Push",
     "push_ahead": "Push ↑{count}",
     "follow_directory": "Follow terminal directory",
+    "remote_runs_over_ssh": "Remote repository · actions run over SSH",
     "not_repository": "The current directory is not in a Git/SVN repository",
     "refresh_status": "Refresh {vcs} status",
     "close_status": "Close {vcs} status",

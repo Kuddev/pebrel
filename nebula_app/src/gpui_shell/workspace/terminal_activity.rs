@@ -26,6 +26,8 @@ impl NebulaWorkspace {
     ) {
         match event {
             TerminalViewEvent::SessionIdentityChanged => {
+                // hook 上报了新会话身份：最近任务分区置脏，下一 tick 提前重扫。
+                self.dirty_recent_sessions();
                 if let Err(error) = windowing::save_current_window_session(
                     self.runtime_window_id,
                     self.snapshot_session(cx),
@@ -47,6 +49,13 @@ impl NebulaWorkspace {
                 if is_active_pane {
                     self.sync_side_panel_to_active(false, cx);
                 }
+                // 分组键解析挂事件路径：cwd 首次出现时做一次向上的 .git 探测
+                // （纯 stat），render 路径只查 `project_group_cache` 内存。
+                self.resolve_project_group(view, cx);
+                // SSH pane 的远端项目身份探测挂在同一条事件沿上：集成上报的
+                // 根失守（fish 等无集成嵌套 shell 里 cwd 移出）才发一次
+                // `rev-parse`，分组/分支 chip/Git 面板根共用其结果。
+                self.refresh_remote_project(view, cx);
                 cx.notify();
             },
             TerminalViewEvent::Exited => {
@@ -290,7 +299,7 @@ mod tests {
         cx: &mut VisualTestContext,
     ) {
         let before: Vec<_> = terminals.iter().map(|terminal| painted(terminal, cx).count).collect();
-        let phase = workspace.read_with(cx, |workspace, _| {
+        let phase = workspace.read_with(cx, |workspace, cx| {
             assert!(workspace.spinner_visible.get(), "a real running badge must be painted");
             workspace.spinner_phase
         });

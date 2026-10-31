@@ -37,6 +37,24 @@ pub struct AiSession {
 }
 
 impl AiSession {
+    /// 带项目串与时间戳的测试构造器（侧栏最近任务的分组/排序单测用）。
+    #[cfg(test)]
+    pub(crate) fn test_session_at(
+        source: AiSessionSource,
+        id: &str,
+        title: &str,
+        project: &str,
+        modified: SystemTime,
+    ) -> Self {
+        Self {
+            source,
+            id: id.to_owned(),
+            title: title.to_owned(),
+            project: project.to_owned(),
+            modified,
+            path: None,
+        }
+    }
     #[cfg(test)]
     pub(crate) fn test_session(source: AiSessionSource, id: &str, title: &str) -> Self {
         Self {

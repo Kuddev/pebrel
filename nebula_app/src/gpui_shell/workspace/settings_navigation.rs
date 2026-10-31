@@ -172,6 +172,9 @@ impl NebulaWorkspace {
             title: crate::gpui_shell::config::ui_language(cx)
                 .text(crate::i18n::Message::CommonSettings)
                 .into(),
+            headline: crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::CommonSettings)
+                .into(),
             tooltip: None,
             is_settings: true,
             activity: SidebarActivity::Idle,
@@ -183,6 +186,7 @@ impl NebulaWorkspace {
             renaming: None,
             pane_count: 0,
             local_administrator: false,
+            is_agent_session: false,
         }
     }
 

@@ -352,16 +352,59 @@ fn copy_keymap_keeps_component_inputs_and_terminals_in_separate_contexts() {
             .first()
             .is_some_and(|stroke| stroke.inner() == &Keystroke::parse("ctrl-c").unwrap())
     });
-    if cfg!(target_os = "macos") {
+    if std::env::consts::OS == "macos" {
         assert!(binding.is_none());
-        assert!(!STATIC_DEFAULT_COMBOS.contains(&"ctrl-c"));
+        assert!(!keyboard_bindings::static_default_combos().any(|c| c == "ctrl-c"));
         return;
     }
     let Some(binding) = binding else {
         panic!("ctrl-c 缺省必须绑到 CopySelection");
     };
     assert!(binding.action().name().ends_with("CopySelection"), "ctrl-c 应映射到 CopySelection");
-    assert!(STATIC_DEFAULT_COMBOS.contains(&"ctrl-c"), "静态默认键清单也要同步增 ctrl-c");
+    assert!(
+        keyboard_bindings::static_default_combos().any(|c| c == "ctrl-c"),
+        "静态默认键清单也要同步增 ctrl-c"
+    );
+}
+
+/// Shift+Insert 在 Windows/Linux 终端惯例里是粘贴：必须命中终端上下文的
+/// PasteClipboard，而不是被编成 `\x1b[2;2~` 发进 PTY（agent 输入框因此收不到
+/// 粘贴）。作用域只给终端——输入框上下文不命中，避免抢组件自己的按键。
+#[test]
+fn shift_insert_pastes_into_the_terminal_context_only() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
+    let bindings = default_workspace_bindings();
+    let binding = bindings.iter().find(|binding| {
+        binding
+            .keystrokes()
+            .first()
+            .is_some_and(|stroke| stroke.inner() == &Keystroke::parse("shift-insert").unwrap())
+    });
+    if std::env::consts::OS == "macos" {
+        assert!(binding.is_none(), "macOS 维持 Insert 透传，不注册粘贴");
+        assert!(!keyboard_bindings::static_default_combos().any(|c| c == "shift-insert"));
+        return;
+    }
+    let binding = binding.expect("非 macOS 缺省必须注册 shift-insert 粘贴");
+    assert!(binding.action().as_any().is::<PasteClipboard>());
+
+    let input = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let key = [Keystroke::parse("shift-insert").unwrap()];
+    let (hits, pending) = Keymap::new(vec![binding.clone()]).bindings_for_input(&key, &input);
+    assert!(!pending && hits.is_empty(), "输入框上下文不得被终端粘贴键截获");
+
+    let terminal = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let (hits, pending) = Keymap::new(vec![binding.clone()]).bindings_for_input(&key, &terminal);
+    assert!(!pending && hits.len() == 1);
+    assert!(hits[0].action().as_any().is::<PasteClipboard>());
+    assert!(
+        keyboard_bindings::static_default_combos().any(|c| c == "shift-insert"),
+        "静态默认键清单要同步 shift-insert"
+    );
 }
 
 #[test]
@@ -556,16 +599,6 @@ fn copying_cwd_accepts_reported_guest_paths_without_host_filesystem_access() {
 
 /// 新建终端弹窗：默认 shell 必须占首行，因为「开弹窗 → 回车」是旧壳
 /// 点 "+" 后最常走的一条路，它必须等于「开一个默认终端」。
-fn palette_ssh_hosts(hosts: &[(&str, &str)]) -> crate::gpui_shell::ssh_hosts::SshHostLists {
-    let mut lists = crate::gpui_shell::ssh_hosts::SshHostLists::default();
-    for (host, label) in hosts {
-        let mut profile = lists.profiles.for_destination(host);
-        profile.label = Some((*label).to_owned());
-        lists.profiles.upsert(profile);
-    }
-    lists
-}
-
 #[test]
 fn shell_palette_puts_the_default_shell_first() {
     let shells = ["pwsh", "powershell", "cmd", "nu"]
@@ -583,7 +616,7 @@ fn shell_palette_puts_the_default_shell_first() {
     let rows = shell_palette_rows(
         shells.clone(),
         Vec::new(),
-        &palette_ssh_hosts(&[("box.example", "")]),
+        [("box.example".to_owned(), String::new())],
         "nu",
         language,
         1.0,
@@ -610,8 +643,14 @@ fn shell_palette_puts_the_default_shell_first() {
     assert_eq!(rows[4].group, "SSH 主机");
 
     // 默认 id 没在检测结果里（WSL 发行版被卸载等）：不置顶也不 panic。
-    let rows =
-        shell_palette_rows(shells, Vec::new(), &Default::default(), "wsl:Ghost", language, 1.0);
+    let rows = shell_palette_rows(
+        shells,
+        Vec::new(),
+        None::<(String, String)>,
+        "wsl:Ghost",
+        language,
+        1.0,
+    );
     assert!(matches!(
         &rows[0].action,
         WorkspacePaletteAction::LaunchShell(shell) if shell.id == "pwsh"
@@ -626,7 +665,10 @@ fn shell_palette_ssh_rows_show_the_configured_host_name() {
     let rows = shell_palette_rows(
         Vec::new(),
         Vec::new(),
-        &palette_ssh_hosts(&[("root@box.example", "生产机"), ("plain.example", "")]),
+        [
+            ("root@box.example".to_owned(), "生产机".to_owned()),
+            ("plain.example".to_owned(), String::new()),
+        ],
         "cmd",
         crate::display::UiLanguage::ZhCn,
         1.0,
@@ -669,7 +711,7 @@ fn shell_palette_falls_back_to_an_id_glyph_when_brand_art_is_absent() {
     let rows = shell_palette_rows(
         shells,
         Vec::new(),
-        &Default::default(),
+        None::<(String, String)>,
         "zsh",
         crate::display::UiLanguage::ZhCn,
         1.0,
@@ -710,7 +752,7 @@ fn shell_palette_includes_imported_terminal_profiles() {
     let rows = shell_palette_rows(
         Vec::new(),
         vec![profile],
-        &Default::default(),
+        None::<(String, String)>,
         &id,
         crate::display::UiLanguage::ZhCn,
         1.0,
@@ -965,6 +1007,423 @@ mod boot_breaker_tests {
                 };
                 assert_eq!(agent.as_ref(), Some(&saved), "恢复目标本身仍随快照落盘，下次照旧接续");
             })
+        });
+    }
+}
+
+/// SSH pane 的侧栏两级分组：主机头 + 项目子组（不缩进）+ 条目；远端 cwd
+/// 上报后按目录并组、git 根优先。走 `sidebar_list_rows` 的完整行模型（分区
+/// 头 → 主机头 → 子组头 → 条目），不是分组纯函数的复述。
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod ssh_sidebar_group_tests {
+    use super::super::task_groups::{SidebarRow, WORKSPACE_GROUP_KEY};
+    use super::super::*;
+    use crate::gpui_shell::terminal::view::TerminalLaunch;
+    use gpui::TestAppContext;
+    use nebula_split::SplitTree;
+
+    /// 走真实 `TerminalLaunch::Ssh` 构造（ssh_destination/suggest_env/初始
+    /// cwd 都是启动路径置位）；远端连接在后台对 example.test 必然失败，不
+    /// 影响纯内存的行模型。
+    fn ssh_pane(
+        workspace: &mut NebulaWorkspace,
+        remote_cwd: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<NebulaWorkspace>,
+    ) -> TerminalPane {
+        workspace.new_pane(
+            (80, 24),
+            TerminalLaunch::Ssh {
+                destination: "build@example.test".into(),
+                cwd: remote_cwd.map(str::to_owned),
+                resume_target: None,
+            },
+            None,
+            window,
+            cx,
+        )
+    }
+
+    fn push_terminal_tab(workspace: &mut NebulaWorkspace, panes: Vec<TerminalPane>) {
+        let focused = panes[0].id;
+        workspace.tabs.push(WorkspaceTab::Terminal {
+            panes,
+            tree: SplitTree::leaf(focused),
+            focused,
+            zoomed: false,
+            broadcast: false,
+        });
+    }
+
+    #[gpui::test]
+    fn ssh_panes_nest_under_the_host_with_project_subgroups(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::init(cx, None);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let entity = cx.new(|cx| {
+                let mut workspace = NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                );
+                // tab 0/1 在同一远端仓库根（UserVar 上报），tab 2 在另一目录。
+                // 侧栏按 tab 分组（聚焦 pane），每个 SSH 任务一个 tab。
+                let pebrel_a = ssh_pane(&mut workspace, None, window, cx);
+                pebrel_a.view.update(cx, |view, _| {
+                    view.git_root = "/srv/work/pebrel".into();
+                    view.cwd = "/srv/work/pebrel/src".into();
+                });
+                push_terminal_tab(&mut workspace, vec![pebrel_a]);
+                let pebrel_b = ssh_pane(&mut workspace, None, window, cx);
+                pebrel_b.view.update(cx, |view, _| {
+                    view.git_root = "/srv/work/pebrel".into();
+                    view.cwd = "/srv/work/pebrel".into();
+                });
+                push_terminal_tab(&mut workspace, vec![pebrel_b]);
+                let other = ssh_pane(&mut workspace, None, window, cx);
+                other.view.update(cx, |view, _| view.cwd = "/home/user/other".into());
+                push_terminal_tab(&mut workspace, vec![other]);
+                workspace
+            });
+            workspace = Some(entity.clone());
+            gpui_component::Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        window.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            {
+                let rows = workspace.sidebar_list_rows(cx);
+                let summary: Vec<String> = rows
+                    .iter()
+                    .filter(|row| !matches!(row, SidebarRow::TabsSectionHeader { .. }))
+                    .map(|row| match row {
+                        SidebarRow::SshSectionHeader { count, .. } => {
+                            format!("ssh-section {count}")
+                        },
+                        SidebarRow::SectionDivider => "divider".to_owned(),
+                        SidebarRow::HostHeader { key, tabs, .. } => format!("host {key} {tabs}"),
+                        SidebarRow::GroupHeader { key, tabs, .. } => {
+                            format!("group {key} {tabs}")
+                        },
+                        SidebarRow::Tab { ix } => format!("tab {ix}"),
+                        other => format!("{other:?}"),
+                    })
+                    .collect();
+                assert_eq!(
+                    summary,
+                    vec![
+                        // 纯 SSH 场景：无分隔行（本地段空），子分区头仍在。
+                        "ssh-section 3".to_owned(),
+                        "host ssh:build@example.test 3".to_owned(),
+                        // 同一仓库根的两个 pane 并组；另一目录自组。
+                        "group ssh:build@example.test|/srv/work/pebrel 2".to_owned(),
+                        "tab 0".to_owned(),
+                        "tab 1".to_owned(),
+                        "group ssh:build@example.test|/home/user/other 1".to_owned(),
+                        "tab 2".to_owned(),
+                    ]
+                );
+            }
+        });
+    }
+
+    /// 新建 SSH 任务即出现主机分组：cwd/git 根尚未上报时条目落主机兜底
+    /// 子组（「工作区」哨兵，渲染层翻译）。
+    #[gpui::test]
+    fn a_fresh_ssh_task_lands_in_the_host_fallback_subgroup(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::init(cx, None);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let entity = cx.new(|cx| {
+                let mut workspace = NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                );
+                let pane = ssh_pane(&mut workspace, None, window, cx);
+                pane.view.update(cx, |view, _| view.cwd.clear());
+                push_terminal_tab(&mut workspace, vec![pane]);
+                workspace
+            });
+            workspace = Some(entity.clone());
+            gpui_component::Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        window.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            {
+                let rows = workspace.sidebar_list_rows(cx);
+                // 纯 SSH 场景：分区头之后先出「SSH 主机」子分区头（无分隔行）。
+                assert!(matches!(rows[1], SidebarRow::SshSectionHeader { count: 1, .. }));
+                assert!(matches!(
+                    rows[2],
+                    SidebarRow::HostHeader { ref key, tabs: 1, .. }
+                        if key.as_ref() == "ssh:build@example.test"
+                ));
+                match &rows[3] {
+                    SidebarRow::GroupHeader { key, name, tabs, .. } => {
+                        assert_eq!(
+                            key.as_ref(),
+                            "ssh:build@example.test|workspace",
+                            "unknown remote cwd falls into the host fallback subgroup"
+                        );
+                        assert_eq!(
+                            name.as_ref(),
+                            WORKSPACE_GROUP_KEY,
+                            "the sentinel name is translated at render time"
+                        );
+                        assert_eq!(*tabs, 1);
+                    },
+                    other => panic!("expected a fallback subgroup header, got {other:?}"),
+                }
+                assert!(matches!(rows[4], SidebarRow::Tab { ix: 0 }));
+            }
+        });
+    }
+
+    /// SSH 聚焦任务的「新建终端」来源：同主机 + 当前远端任务目录（用户
+    /// 10-13 裁定）。`add_terminal` 的分支接线走 `add_ssh_terminal_at`（会
+    /// 写真实 `saved_hosts`，测试只核纯决策函数）；cwd 未上报时仍继承主机、
+    /// 目录回落远端默认。
+    #[gpui::test]
+    fn new_terminal_from_an_ssh_task_inherits_host_and_remote_cwd(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::init(cx, None);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let entity = cx.new(|cx| {
+                let mut workspace = NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                );
+                let pane = ssh_pane(&mut workspace, None, window, cx);
+                pane.view.update(cx, |view, _| view.cwd = "/srv/work/pebrel/src".into());
+                push_terminal_tab(&mut workspace, vec![pane]);
+                workspace
+            });
+            workspace = Some(entity.clone());
+            gpui_component::Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                // 远端 cwd 已上报：主机与任务目录一起继承。
+                assert_eq!(
+                    workspace.focused_ssh_origin(cx),
+                    Some((
+                        "build@example.test".to_owned(),
+                        Some("/srv/work/pebrel/src".to_owned())
+                    ))
+                );
+                // 远端 cwd 未上报（连接卡片阶段/无集成）：仍继承主机，目录
+                // 回落远端默认。
+                match &mut workspace.tabs[0] {
+                    WorkspaceTab::Terminal { panes, .. } => {
+                        panes[0].view.update(cx, |view, _| view.cwd.clear());
+                    },
+                    _ => panic!("expected a terminal tab"),
+                }
+                assert_eq!(
+                    workspace.focused_ssh_origin(cx),
+                    Some(("build@example.test".to_owned(), None))
+                );
+            });
+        });
+    }
+
+    /// 「当前任务」总折叠收起本地 + SSH 全部进行中任务（用户 10-19 裁定）：
+    /// 折叠后统一列表只剩分区头（最近任务默认收起钉底，不进列表）。
+    #[gpui::test]
+    fn tabs_section_collapse_hides_local_and_ssh_rows(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::init(cx, None);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let entity = cx.new(|cx| {
+                let mut workspace = NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                );
+                // shell 指向不存在的可执行文件：PTY 立即失败退出，reader
+                // 线程不产生后台活动（gpui 测试调度器要求确定性，与
+                // terminal_activity fixture 同款）；会话换成假 receiver，
+                // 分组断言只消费内存里的 cwd/git root。
+                let local = workspace.new_pane(
+                    (80, 24),
+                    TerminalLaunch::Local {
+                        cwd: Some(r"D:\src\pebrel".into()),
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell-executable".into(),
+                            vec![],
+                        )),
+                        shell_name: None,
+                    },
+                    None,
+                    window,
+                    cx,
+                );
+                local.view.update(cx, |view, _| view.install_completion_test_session());
+                push_terminal_tab(&mut workspace, vec![local]);
+                let remote = ssh_pane(&mut workspace, None, window, cx);
+                remote.view.update(cx, |view, _| view.cwd = "/srv/work/pebrel".into());
+                push_terminal_tab(&mut workspace, vec![remote]);
+                workspace
+            });
+            workspace = Some(entity.clone());
+            gpui_component::Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                // 展开态：本地组在上、分隔行 + SSH 子分区头、主机块在下。
+                let rows = workspace.sidebar_list_rows(cx);
+                let kinds: Vec<&str> = rows
+                    .iter()
+                    .map(|row| match row {
+                        SidebarRow::TabsSectionHeader { .. } => "current",
+                        SidebarRow::SectionDivider => "divider",
+                        SidebarRow::SshSectionHeader { .. } => "ssh-section",
+                        SidebarRow::GroupHeader { .. } => "group",
+                        SidebarRow::HostHeader { .. } => "host",
+                        SidebarRow::Tab { .. } => "tab",
+                        _ => "other",
+                    })
+                    .collect();
+                assert_eq!(
+                    kinds,
+                    vec![
+                        "current",
+                        "group",
+                        "tab",
+                        "divider",
+                        "ssh-section",
+                        "host",
+                        "group",
+                        "tab"
+                    ]
+                );
+                // 总折叠：本地 + SSH 全收起，只剩分区头。
+                workspace.tabs_section_collapsed = true;
+                let rows = workspace.sidebar_list_rows(cx);
+                assert_eq!(rows.len(), 1);
+                assert!(matches!(rows[0], SidebarRow::TabsSectionHeader { count: 2, .. }));
+                // SSH 段子分区头独立折叠：主机块收起，本地段不动。
+                workspace.tabs_section_collapsed = false;
+                workspace.ssh_section_collapsed = true;
+                let rows = workspace.sidebar_list_rows(cx);
+                let kinds: Vec<&str> = rows
+                    .iter()
+                    .map(|row| match row {
+                        SidebarRow::TabsSectionHeader { .. } => "current",
+                        SidebarRow::SectionDivider => "divider",
+                        SidebarRow::SshSectionHeader { .. } => "ssh-section",
+                        SidebarRow::GroupHeader { .. } => "group",
+                        SidebarRow::HostHeader { .. } => "host",
+                        SidebarRow::Tab { .. } => "tab",
+                        _ => "other",
+                    })
+                    .collect();
+                assert_eq!(kinds, vec!["current", "group", "tab", "divider", "ssh-section"]);
+            });
+        });
+    }
+
+    /// 点击沿（开抽屉/切到 Git 视图）请求远端 Git 面板强制刷新（用户 10-19
+    /// 报障）；开在 Files、关抽屉都不置位。网络侧由 `route_remote_git` 消费
+    /// （example.test 连接必然失败是本 harness 的既有约定，不影响纯状态断言）。
+    #[gpui::test]
+    fn git_drawer_click_edges_request_remote_refreshes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::init(cx, None);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let entity = cx.new(|cx| {
+                let mut workspace = NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                );
+                let remote = ssh_pane(&mut workspace, None, window, cx);
+                remote.view.update(cx, |view, _| view.cwd = "/srv/work/pebrel".into());
+                push_terminal_tab(&mut workspace, vec![remote]);
+                workspace
+            });
+            workspace = Some(entity.clone());
+            gpui_component::Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        use crate::display::side_panel::PanelView;
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                // 抽屉关 → 点 Git：打开并置位。
+                workspace.toggle_side_panel(PanelView::Git, cx);
+                assert!(workspace.side_panel.open, "the drawer opens on the Git view");
+                assert!(
+                    workspace.remote_git.refresh_requested,
+                    "opening the Git drawer requests a remote refresh"
+                );
+                // 关抽屉（同 view 再点）：不置位、请求位已清零。
+                workspace.remote_git.refresh_requested = false;
+                workspace.toggle_side_panel(PanelView::Git, cx);
+                assert!(!workspace.side_panel.open, "the same view toggles it closed");
+                assert!(
+                    !workspace.remote_git.refresh_requested,
+                    "closing the drawer does not request a refresh"
+                );
+                // 开在 Files：不置位。
+                workspace.toggle_side_panel(PanelView::Files, cx);
+                assert!(!workspace.remote_git.refresh_requested, "Files stays idle");
+                // Files → Git 切换：置位。
+                workspace.select_side_panel_view(PanelView::Git, cx);
+                assert!(
+                    workspace.remote_git.refresh_requested,
+                    "switching Files to Git requests a remote refresh"
+                );
+            });
         });
     }
 }

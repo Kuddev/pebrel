@@ -130,6 +130,27 @@
     "show": "显示 Pebrel",
     "quit": "退出"
   },
+  "sidebar": {
+    "current_tasks": "当前任务",
+    "recent_tasks": "最近任务",
+    "group_workspace": "工作区",
+    "ssh_host": "SSH [{host}]",
+    "ssh_section": "SSH 主机",
+    "new_session": "新会话",
+    "collapse_group": "折叠分组",
+    "expand_group": "展开分组",
+    "recent_empty": "暂无最近会话",
+    "recent_scanning": "正在扫描会话…",
+    "recent_others": "其他",
+    "resume_session": "恢复会话",
+    "status_running": "运行中",
+    "status_paused": "已暂停",
+    "status_ready": "就绪",
+    "status_waiting_input": "等待输入",
+    "status_ask": "询问",
+    "status_failed": "失败",
+    "status_stopped": "已停止"
+  },
   "notification": {
     "bell": "终端响铃",
     "turn_failed_reason": "请求失败：{error}",
@@ -309,6 +330,8 @@
       }
     },
     "appearance": {
+      "ai_agent_sidebar": "AI Agent 侧边栏",
+      "ai_agent_sidebar_description": "侧栏任务按项目分组，附 SSH 主机分组与最近 AI 任务分区，状态徽章仅 AI 会话显示。关闭后恢复经典扁平标签列表。",
       "background_color_description": "覆盖主题自带的终端底色。改了它，OSC 11 上报给程序的背景色也跟着变——TUI 判断明暗模式靠的就是这个值。",
       "background_cover_title": "让背景图覆盖窗口控件区域？",
       "background_cover_description": "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。",
@@ -1156,6 +1179,7 @@
     "push": "推送",
     "push_ahead": "推送 ↑{count}",
     "follow_directory": "回到终端当前目录",
+    "remote_runs_over_ssh": "远端仓库 · 操作经 SSH 在远端执行",
     "not_repository": "当前目录不在 Git/SVN 仓库中",
     "refresh_status": "刷新 {vcs} 状态",
     "close_status": "关闭 {vcs} 状态",

@@ -269,6 +269,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Variant",
     "Win32_System_Threading",
+    # PROCESS_BASIC_INFORMATION（进程 cwd 兜底读 PEB 用）藏在这个 feature 下。
+    "Win32_System_Kernel",
     # pane.exec 隔离进程树；关闭 Job 时回收仍持有 stdout/stderr pipe 的后代。
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",

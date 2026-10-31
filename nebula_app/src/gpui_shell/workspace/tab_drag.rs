@@ -310,7 +310,15 @@ impl NebulaWorkspace {
         let drag = self.tab_drag.as_mut().expect("checked above");
         let dx = x - drag.press_x;
         let dy = y - drag.press_y;
-        if !drag.active && (dy.abs() >= TAB_DRAG_THRESHOLD || dx.abs() >= TAB_DRAG_THRESHOLD) {
+        // 分组侧栏没有组内重排语义（组由 cwd 派生，跨组拖拽没有落点），
+        // Vertical 待命永不激活；跨窗拖出走行上独立的 on_drag 路径。顶栏
+        // 的横向重排（Horizontal）不受影响。经典扁平列表（「AI Agent 侧边
+        // 栏」关）保留 main 的 Vertical 重排激活。
+        if !drag.active
+            && (drag.axis == TabDragAxis::Horizontal
+                || !crate::gpui_shell::config::ai_agent_sidebar(cx))
+            && (dy.abs() >= TAB_DRAG_THRESHOLD || dx.abs() >= TAB_DRAG_THRESHOLD)
+        {
             drag.active = true;
         }
         if drag.active {

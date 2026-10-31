@@ -82,6 +82,9 @@ pub struct Settings {
     pub scrollback_lines: usize,
     pub scroll_speed: f32,
     pub scrollbar_visibility: nebula_settings::ScrollbarVisibility,
+    /// AI Agent 侧边栏（任务分组/最近任务/仅 AI 会话状态）。侧栏与顶栏的
+    /// 渲染分派每帧读取；关 = 经典扁平标签列表（main 行为）。
+    pub ai_agent_sidebar: bool,
     /// Pointer handlers and split rendering only read these cached preferences.
     pub focus_follows_mouse: bool,
     pub dim_inactive_panes: bool,
@@ -298,6 +301,7 @@ impl Settings {
             scrollback_lines: runtime.scrollback_lines,
             scroll_speed: runtime.scroll_speed,
             scrollbar_visibility: runtime.scrollbar_visibility,
+            ai_agent_sidebar: runtime.ai_agent_sidebar,
             focus_follows_mouse: runtime
                 .focus_follows_mouse
                 .unwrap_or(raw.mouse.focus_follows_mouse),
@@ -1227,4 +1231,10 @@ mod tests {
         assert!((resolved.effective_opacity(&runtime) - 1.0).abs() < f32::EPSILON);
         assert_eq!(resolved.effective_blur(&runtime), BlurModeName::None);
     }
+}
+
+/// agent 侧栏模式判定。无全局（初始化前/测试）时回落 false = 经典列表，
+/// 与出厂默认一致，也保证旧渲染路径在设置装载前可用。
+pub(crate) fn ai_agent_sidebar(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.ai_agent_sidebar)
 }

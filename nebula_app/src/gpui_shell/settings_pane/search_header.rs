@@ -264,7 +264,9 @@ mod tests {
         assert!(!matching_sections("AI", en).contains(&3));
         assert!(matching_sections("API Providers", en).is_empty());
         assert!(matching_sections("供应商", zh).is_empty());
-        assert_eq!(matching_sections("Agents", en), vec![10]);
+        // appearance 行的 AI Agent 侧边栏关键词让 "Agents" 同时命中两节
+        //（侧边栏开关确实在 appearance），与「透度」命中 appearance 同理。
+        assert_eq!(matching_sections("Agents", en), vec![10, 1]);
     }
 
     #[test]
