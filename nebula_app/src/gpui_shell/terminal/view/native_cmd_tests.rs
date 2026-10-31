@@ -377,6 +377,11 @@ fn native_cmd_alternate_screen_prompt_is_not_shell_completion(cx: &mut TestAppCo
         view.mark_command_running();
         feed(view, b"\x1b[?1049hC:\\work>");
         view.refresh_agent_screen_state(cx);
+        assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Running);
+        // 全屏程序的 badge 不转圈（#805）；离开 alternate screen 后 spinner 回来，
+        // 说明屏上那行提示没有被当成命令结束。
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+        feed(view, b"\x1b[?1049l");
         assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
     });
 }
