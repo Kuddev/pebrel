@@ -10,6 +10,22 @@ fn ssh_label(destination: Option<&str>, directory: &std::path::Path) -> Option<S
     profiles.labels().remove(destination)
 }
 
+/// Name for an `ssh` typed into a local pane, following built-in SSH tabs:
+/// the saved host label, else `user@host[:port]`. `None` when the line is not
+/// one interactive login (`ssh host ls`, `-N` forwards, compound commands).
+fn manual_ssh_label(line: &str, directory: &std::path::Path) -> Option<String> {
+    let destination = crate::ssh::ssh_destination(line)?;
+    // The parser returns `ssh://` only for ports; profiles store `host:port`.
+    let (address, port) = crate::display::split_destination_port(
+        destination.strip_prefix("ssh://").unwrap_or(&destination),
+    );
+    let destination = crate::display::join_destination_port(&address, &port);
+    if destination.is_empty() || destination.chars().any(char::is_control) {
+        return None;
+    }
+    ssh_label(Some(&destination), directory).or(Some(destination))
+}
+
 impl TerminalView {
     pub(crate) fn inherits_windows_host_token(&self) -> bool {
         self.ssh_destination.is_none()
@@ -54,12 +70,31 @@ impl TerminalView {
             ssh_label(self.ssh_destination.as_deref(), &crate::display::nebula_data_dir());
     }
 
+    /// Called at command start. Only local panes follow a typed `ssh`; a
+    /// built-in SSH pane already names its own host.
+    pub(super) fn refresh_manual_ssh_label(&mut self) {
+        self.manual_ssh_label = (self.ssh_destination.is_none()
+            && self.running_program.as_deref() == Some("ssh"))
+        .then(|| manual_ssh_label(&self.suggest.last_committed, &crate::display::nebula_data_dir()))
+        .flatten();
+    }
+
     /// A remote directory or OSC title must never replace a saved host name.
-    /// Local tabs continue to use their working directory, not program titles.
+    /// Local tabs continue to use their working directory, not program titles,
+    /// except while a typed `ssh` holds the foreground.
     pub fn tab_label(&self) -> String {
         if let Some(destination) = &self.ssh_destination {
             return self.ssh_label.as_ref().unwrap_or(destination).clone();
         }
+        let local = self.local_tab_label();
+        if self.running_program.as_deref() != Some("ssh") {
+            return local;
+        }
+        // An unparsed ssh line still must not look like a plain local tab.
+        self.manual_ssh_label.clone().unwrap_or_else(|| format!("{local} · ssh"))
+    }
+
+    fn local_tab_label(&self) -> String {
         last_path_component(&self.cwd)
             .or_else(|| {
                 std::env::current_dir()
@@ -140,5 +175,29 @@ mod tests {
             ssh_label(Some("root@192.0.2.10:2222"), &directory.path().join("isolated")),
             None
         );
+    }
+
+    #[test]
+    fn typed_ssh_names_follow_saved_labels_and_destinations() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut profiles = crate::ssh_profiles::SshProfiles::default();
+        let mut host = profiles.for_destination("root@192.0.2.10:2222");
+        host.label = Some("SG-1 新加坡".into());
+        profiles.upsert(host);
+        profiles.save(&directory.path().join("ssh_profiles.json")).unwrap();
+        let label = |line| manual_ssh_label(line, directory.path());
+
+        for line in [
+            "ssh -p 2222 root@192.0.2.10",
+            "ssh -l root -p2222 192.0.2.10",
+            "/usr/bin/ssh ssh://root@192.0.2.10:2222",
+        ] {
+            assert_eq!(label(line).as_deref(), Some("SG-1 新加坡"), "{line}");
+        }
+        assert_eq!(label("ssh -p 22 deploy@example.com").as_deref(), Some("deploy@example.com"));
+        assert_eq!(label("ssh.exe -t build-box").as_deref(), Some("build-box"));
+        for line in ["ssh host uptime", "ssh -N -L 8080:localhost:80 host", "ssh host | tee log"] {
+            assert_eq!(label(line), None, "{line}");
+        }
     }
 }

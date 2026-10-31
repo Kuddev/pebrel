@@ -355,6 +355,7 @@ impl TerminalView {
             port_forwards: Vec::new(),
             port_forward_task: None,
             ssh_label: None,
+            manual_ssh_label: None,
             exec_context,
             ssh_stage: None,
             ssh_retry_pending: false,

@@ -855,6 +855,34 @@ fn ssh_tab_name_and_hover_preserve_host_identity_across_remote_titles(cx: &mut T
 }
 
 #[gpui::test]
+fn typed_ssh_names_a_local_tab_only_while_ssh_runs(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.process_event(Event::CwdReport("/home/test/project".into()), cx);
+        view.suggest.last_committed = "ssh -p 2201 deploy@192.0.2.44".into();
+        view.on_command_start(cx);
+        assert_eq!(view.tab_label(), "deploy@192.0.2.44:2201");
+        // A remote prompt's directory report must not rename the tab.
+        view.process_event(Event::CwdReport("/srv/remote".into()), cx);
+        assert_eq!(view.tab_label(), "deploy@192.0.2.44:2201");
+        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(Event::CwdReport("/home/test/project".into()), cx);
+        assert_eq!(view.tab_label(), "project");
+
+        view.suggest.last_committed = "ssh -N -L 8080:localhost:80 deploy@192.0.2.44".into();
+        view.on_command_start(cx);
+        assert_eq!(view.tab_label(), "project · ssh");
+        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+
+        // A built-in SSH pane keeps its own host name.
+        view.ssh_destination = Some("root@192.0.2.10".into());
+        view.suggest.last_committed = "ssh deploy@192.0.2.44".into();
+        view.on_command_start(cx);
+        assert_eq!(view.tab_label(), "root@192.0.2.10");
+    });
+}
+
+#[gpui::test]
 fn ai_tab_hover_shows_full_directory_and_reported_task_but_not_stale_task(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
