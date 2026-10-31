@@ -39,12 +39,13 @@ impl SettingsPane {
             .text(crate::i18n::Message::CommonConfirmationDialogShortcuts)
     }
 
-    fn confirmation_shortcuts_search_text() -> String {
+    fn confirmation_shortcuts_search_text(language: crate::display::UiLanguage) -> String {
         let message = crate::i18n::Message::CommonConfirmationDialogShortcuts;
         format!(
-            "{} {} Enter / Esc",
+            "{} {} {} Enter / Esc",
             crate::i18n::UiLanguage::ZhCn.text(message),
             crate::i18n::UiLanguage::EnUs.text(message),
+            language.text(message),
         )
         .to_lowercase()
     }
@@ -61,7 +62,11 @@ impl SettingsPane {
         }
     }
 
-    pub(super) fn keymap_matches_query(&self, query: &str) -> bool {
+    pub(super) fn keymap_matches_query(
+        &self,
+        query: &str,
+        language: crate::display::UiLanguage,
+    ) -> bool {
         use crate::display::keymap;
         let query = query.trim().to_lowercase();
         let matches = |text: String| query.split_whitespace().all(|word| text.contains(word));
@@ -70,18 +75,19 @@ impl SettingsPane {
                 crate::platform::CAPABILITIES.quick_terminal_hotkey
                     || *flat != keymap::QUICK_TERMINAL_ROW
             })
-            .any(|flat| matches(self.keymap_row_haystack(flat)))
+            .any(|flat| matches(self.keymap_row_haystack(flat, language)))
             || keymap::GPUI
                 .readonly_rows()
                 .iter()
-                .any(|(zh, en, combo)| matches(format!("{zh} {en} {combo}").to_lowercase()))
-            || matches(Self::confirmation_shortcuts_search_text())
+                .enumerate()
+                .any(|(index, _)| matches(Self::keymap_readonly_haystack(index, language)))
+            || matches(Self::confirmation_shortcuts_search_text(language))
     }
 
     // ---- 按键映射编辑器（模型层 `display::keymap`，两壳同读同写）----
 
-    /// 搜索口径与旧壳一致：动作名（中/英）+ 当前生效键文本。
-    fn keymap_row_haystack(&self, flat: usize) -> String {
+    /// Search the displayed action name, existing Chinese/English aliases and current keys.
+    fn keymap_row_haystack(&self, flat: usize, language: crate::display::UiLanguage) -> String {
         use crate::display::keymap;
         let custom = keymap::build_bindings(&self.keymap_binds);
         let combo = if flat == keymap::QUICK_TERMINAL_ROW {
@@ -93,24 +99,40 @@ impl SettingsPane {
                 .map(|(combo, _)| combo)
                 .unwrap_or_default()
         };
-        let (zh, en) = if flat == keymap::QUICK_TERMINAL_ROW {
-            ("快速终端", "Quick terminal")
+        let (zh, en, label) = if flat == keymap::QUICK_TERMINAL_ROW {
+            (
+                "快速终端",
+                "Quick terminal",
+                language.text(crate::i18n::Message::SettingsKeymapQuickTerminal),
+            )
         } else {
-            keymap::EDITABLE_ACTIONS.get(flat - 1).map(|(_, zh, en)| (*zh, *en)).unwrap_or(("", ""))
+            keymap::EDITABLE_ACTIONS
+                .get(flat - 1)
+                .map(|row| (row.1, row.2, keymap::action_label(row, language)))
+                .unwrap_or(("", "", ""))
         };
-        format!("{zh} {en} {combo}").to_lowercase()
+        format!("{zh} {en} {label} {combo}").to_lowercase()
+    }
+
+    fn keymap_readonly_haystack(index: usize, language: crate::display::UiLanguage) -> String {
+        use crate::display::keymap;
+        let (zh, en, combo) = keymap::GPUI.readonly_rows()[index];
+        let label = keymap::readonly_label(index, language);
+        format!("{zh} {en} {label} {combo}").to_lowercase()
     }
 
     /// 过滤后的可见行（flat 下标，升序）。空查询 = 全部。
     fn keymap_visible(&self, cx: &App) -> Vec<usize> {
         use crate::display::keymap;
         let query = self.keymap_query(cx);
+        let language = crate::gpui_shell::config::ui_language(cx);
         // 快速终端热键在没实现该功能的平台上不列出：改了也没有效果。
         let quick_terminal = crate::platform::CAPABILITIES.quick_terminal_hotkey;
         (0..keymap::editable_row_count())
             .filter(|flat| quick_terminal || *flat != keymap::QUICK_TERMINAL_ROW)
             .filter(|flat| {
-                query.split_whitespace().all(|word| self.keymap_row_haystack(*flat).contains(word))
+                let haystack = self.keymap_row_haystack(*flat, language);
+                query.split_whitespace().all(|word| haystack.contains(word))
             })
             .collect()
     }
@@ -466,15 +488,14 @@ impl SettingsPane {
             .readonly_rows()
             .iter()
             .enumerate()
-            .filter(|(_, (zh, en, combo))| {
-                query
-                    .split_whitespace()
-                    .all(|word| format!("{zh} {en} {combo}").to_lowercase().contains(word))
+            .filter(|(index, _)| {
+                let haystack = Self::keymap_readonly_haystack(*index, language);
+                query.split_whitespace().all(|word| haystack.contains(word))
             })
             .map(|(index, (.., combo))| (keymap::readonly_label(index, language), *combo))
             .collect();
         let dialog_label = Self::confirmation_shortcuts_label(cx);
-        let dialog_shortcuts = Self::confirmation_shortcuts_search_text();
+        let dialog_shortcuts = Self::confirmation_shortcuts_search_text(language);
         if query.split_whitespace().all(|word| dialog_shortcuts.contains(word)) {
             readonly.push((dialog_label, "Enter / Esc"));
         }
@@ -490,6 +511,7 @@ impl SettingsPane {
             for (label, combo) in readonly {
                 groups_block = groups_block.child(
                     h_flex()
+                        .debug_selector(move || format!("settings-keymap-readonly-{label}"))
                         .w_full()
                         .h(px(SETTINGS_ROW_HEIGHT))
                         .flex_shrink_0()
@@ -558,6 +580,55 @@ impl SettingsPane {
 #[cfg(test)]
 mod tests {
     use super::bare_printable_key_needs_guard;
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn localized_copy_search_preserves_aliases_and_custom_keys(cx: &mut gpui::TestAppContext) {
+        use super::*;
+        use crate::display::{UiLanguage, keymap};
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let mut settings = crate::gpui_shell::config::Settings::load(ThemeName::Nord);
+            settings.ui_language = UiLanguage::JaJp;
+            cx.set_global(settings);
+        });
+        let mut pane = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| SettingsPane::new(window, cx));
+            pane = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let pane = pane.unwrap();
+        let copy_row = keymap::EDITABLE_ACTIONS
+            .iter()
+            .position(|(action, ..)| *action == crate::config::Action::Copy)
+            .unwrap()
+            + 1;
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.keymap_binds = vec![("ctrl+alt+y".into(), "Copy".into())];
+                for query in ["コピー", "COPY", "复制", "コピー ctrl+alt+y"] {
+                    pane.settings_search_input
+                        .update(cx, |input, cx| input.set_value(query, window, cx));
+                    assert_eq!(pane.keymap_visible(cx), vec![copy_row], "{query}");
+                    assert!(pane.matching_settings_sections(cx).contains(&7), "{query}");
+                }
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.set_value("コピー ctrl+alt+z", window, cx));
+                assert!(pane.keymap_visible(cx).is_empty());
+                assert!(!pane.matching_settings_sections(cx).contains(&7));
+
+                // The same pane uses the current language without a cached search index.
+                cx.global_mut::<crate::gpui_shell::config::Settings>().ui_language =
+                    UiLanguage::FrFr;
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.set_value("Copier", window, cx));
+                assert_eq!(pane.keymap_visible(cx), vec![copy_row]);
+                assert!(pane.matching_settings_sections(cx).contains(&7));
+            });
+        });
+    }
 
     #[test]
     fn bare_printable_guard_catches_letters_enter_space_but_not_function_keys() {
