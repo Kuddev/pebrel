@@ -608,14 +608,18 @@ mod tests {
         cx.update(|window, cx| {
             pane.update(cx, |pane, cx| {
                 pane.keymap_binds = vec![("ctrl+alt+y".into(), "Copy".into())];
-                for query in ["コピー", "COPY", "复制", "コピー ctrl+alt+y"] {
+                let matching_combo =
+                    format!("コピー {}", keymap::display_stored_combo("ctrl+alt+y"));
+                for query in ["コピー", "COPY", "复制", &matching_combo] {
                     pane.settings_search_input
                         .update(cx, |input, cx| input.set_value(query, window, cx));
                     assert_eq!(pane.keymap_visible(cx), vec![copy_row], "{query}");
                     assert!(pane.matching_settings_sections(cx).contains(&7), "{query}");
                 }
+                let different_combo =
+                    format!("コピー {}", keymap::display_stored_combo("ctrl+alt+z"));
                 pane.settings_search_input
-                    .update(cx, |input, cx| input.set_value("コピー ctrl+alt+z", window, cx));
+                    .update(cx, |input, cx| input.set_value(different_combo, window, cx));
                 assert!(pane.keymap_visible(cx).is_empty());
                 assert!(!pane.matching_settings_sections(cx).contains(&7));
 
