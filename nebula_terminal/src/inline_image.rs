@@ -185,6 +185,9 @@ pub struct KittyPlacement {
     pub offset_y_cells: f32,
     pub columns: usize,
     pub rows: usize,
+    /// 网格左上角，用于按单元格/行/列删除。
+    pub column: usize,
+    pub row: usize,
 }
 
 impl PartialEq for KittyPlacement {
@@ -203,6 +206,20 @@ impl KittyPlacement {
             id.invalidate();
         }
     }
+
+    /// Whether the placement occupies `column` on the grid.
+    pub fn has_column(&self, column: usize) -> bool {
+        column >= self.column && column < self.column.saturating_add(self.columns)
+    }
+
+    /// Whether the placement occupies screen line `row`.
+    pub fn has_row(&self, row: usize) -> bool {
+        row >= self.row && row < self.row.saturating_add(self.rows)
+    }
+
+    pub fn contains_cell(&self, column: usize, row: usize) -> bool {
+        self.has_column(column) && self.has_row(row)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,11 +231,22 @@ pub struct ImageCell {
     pub placement: Option<Arc<KittyPlacement>>,
 }
 
+/// How the bytes an image placement points at are packed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageFormat {
+    /// Raw RGB or RGBA pixels, `channels` bytes each.
+    #[default]
+    Raw,
+    /// A PNG container; the frontend decodes it, so no channel count applies.
+    Png,
+}
+
 #[derive(Clone, Debug)]
 pub struct ImagePlacement {
     pub id: u64,
     pub lifetime: Weak<ImageIdentity>,
     pub layout: ImageLayout,
+    pub format: ImageFormat,
 }
 
 impl ImagePlacement {
