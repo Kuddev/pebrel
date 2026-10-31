@@ -498,6 +498,208 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn send_string_keybind_dispatches_exact_bytes_only_to_the_focused_terminal(
+        cx: &mut TestAppContext,
+    ) {
+        use nebula_terminal::event_loop::Msg;
+        use nebula_terminal::vte::ansi::{
+            Handler as _, KeyboardModes, KeyboardModesApplyBehavior, NamedPrivateMode, PrivateMode,
+        };
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        let (terminal, receiver) = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "string shortcut fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                let receiver =
+                    terminal.update(cx, |view, _| view.install_completion_test_session());
+                workspace.update_keybinds(
+                    vec![("shift+enter".into(), r#"SendString:"\u001b\r""#.into())],
+                    cx,
+                );
+                (terminal, receiver)
+            })
+        });
+        cx.run_until_parked();
+        let drain = || {
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<u8>>()
+        };
+        // Explicit strings bypass both paste framing and protocol key encoding.
+        for mode in [
+            None,
+            Some(PrivateMode::Named(NamedPrivateMode::BracketedPaste)),
+            Some(PrivateMode::Unknown(9001)),
+        ] {
+            terminal.update(&mut cx, |view, _| {
+                if let Some(mode) = mode {
+                    view.session.as_ref().unwrap().term.lock().set_private_mode(mode);
+                }
+            });
+            press("shift-enter", &mut cx);
+            press("shift-enter", &mut cx);
+            assert_eq!(drain(), b"\x1b\r\x1b\r");
+        }
+        terminal.update(&mut cx, |view, _| {
+            let mut term = view.session.as_ref().unwrap().term.lock();
+            term.set_options(nebula_terminal::term::Config {
+                kitty_keyboard: true,
+                ..Default::default()
+            });
+            term.set_keyboard_mode(
+                KeyboardModes::DISAMBIGUATE_ESC_CODES | KeyboardModes::REPORT_EVENT_TYPES,
+                KeyboardModesApplyBehavior::Replace,
+            );
+            assert!(term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+        });
+        press("shift-enter", &mut cx);
+        assert_eq!(drain(), b"\x1b\r", "no synthetic protocol key-up");
+
+        for text in ["", "\r\n\t\\\"中文"] {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(
+                    vec![(
+                        "shift+enter".into(),
+                        format!("SendString:{}", serde_json::to_string(text).unwrap()),
+                    )],
+                    cx,
+                );
+            });
+            press("shift-enter", &mut cx);
+            assert_eq!(drain(), text.as_bytes());
+        }
+        terminal.update(&mut cx, |view, _| view.marked_text = Some("composing".into()));
+        press("shift-enter", &mut cx);
+        assert!(drain().is_empty(), "IME composition must not inject the shortcut");
+        terminal.update(&mut cx, |view, _| view.marked_text = None);
+
+        // The launcher's real Input has focus inside the same workspace.
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.update_keybinds(
+                vec![("ctrl+alt+f9".into(), r#"SendString:"\u001b\r""#.into())],
+                cx,
+            );
+        });
+        press(if is_macos() { "cmd-k" } else { "ctrl-k" }, &mut cx);
+        assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        press("ctrl-alt-f9", &mut cx);
+        assert!(drain().is_empty(), "input fields must not write to the terminal");
+        press("escape", &mut cx);
+
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+        press("shift-enter", &mut cx);
+        assert_eq!(drain(), b"\x1b[13;2u", "removal restores negotiated keys");
+    }
+
+    #[gpui::test]
+    fn failed_source_does_not_broadcast_send_string_to_a_live_sibling(cx: &mut TestAppContext) {
+        use crate::gpui_shell::terminal::view::TerminalLaunch;
+        use nebula_terminal::event_loop::Msg;
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        let (source, target_receiver) = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            workspace.update(cx, |workspace, cx| {
+                let panes = (0..2)
+                    .map(|_| {
+                        workspace.new_pane(
+                            (80, 24),
+                            TerminalLaunch::Local {
+                                cwd: Some(directory.path().into()),
+                                shell: Some(nebula_terminal::tty::Shell::new(
+                                    directory
+                                        .path()
+                                        .join("missing-shell")
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                    vec![],
+                                )),
+                                shell_name: None,
+                            },
+                            None,
+                            window,
+                            cx,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let source = panes[0].view.clone();
+                let target_receiver =
+                    panes[1].view.update(cx, |view, _| view.install_completion_test_session());
+                let focused = panes[0].id;
+                let tree = nebula_split::SplitTree::leaf(focused).joined(
+                    nebula_split::SplitTree::leaf(panes[1].id),
+                    nebula_split::SplitNav::Right,
+                );
+                workspace.insert_tab_at(
+                    0,
+                    WorkspaceTab::Terminal { panes, tree, focused, zoomed: false, broadcast: true },
+                    TabMeta::default(),
+                );
+                workspace.update_keybinds(
+                    vec![("shift+enter".into(), r#"SendString:"literal payload""#.into())],
+                    cx,
+                );
+                workspace.focus_active(window, cx);
+                cx.notify();
+                (source, target_receiver)
+            })
+        });
+        cx.run_until_parked();
+        source.read_with(&cx, |view, _| {
+            assert!(view.session.is_none());
+            assert_eq!(
+                view.runtime_task_state(),
+                crate::runtime_api::RuntimeTaskState::Failed,
+                "retain the actual local launch failure"
+            );
+        });
+        let drain = |receiver: &std::sync::mpsc::Receiver<Msg>| {
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<u8>>()
+        };
+        press("shift-enter", &mut cx);
+        assert!(
+            drain(&target_receiver).is_empty(),
+            "failed panes must not inject input into siblings"
+        );
+
+        let source_receiver =
+            source.update(&mut cx, |view, _| view.install_completion_test_session());
+        press("shift-enter", &mut cx);
+        assert_eq!(drain(&source_receiver), b"literal payload");
+        assert_eq!(
+            drain(&target_receiver),
+            b"literal payload",
+            "healthy broadcasts still deliver once"
+        );
+    }
+
+    #[gpui::test]
     fn command_shortcut_registration_follows_runtime_platform(cx: &mut TestAppContext) {
         let (_directory, workspace, mut cx) = open_workspace(1, cx);
         press("cmd-k", &mut cx);

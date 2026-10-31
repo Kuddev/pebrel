@@ -352,6 +352,31 @@ completion only after all copies succeed, and can retry after an error. Once
 complete, later launches do not copy old data back over deliberately removed
 files. Existing newer files remain authoritative throughout the migration.
 
+## Sending a String With a Terminal Shortcut
+
+In the preferences file, `pebrel_settings.txt`, a `SendString` keybind assigns
+fixed text or an application's exact control sequence to a chosen shortcut.
+It writes the JSON string's UTF-8 bytes to the focused terminal. For example,
+an explicit Escape followed by carriage return can be configured as:
+
+```text
+keybind=shift+enter:SendString:"\u001b\r"
+```
+
+Restart Pebrel after editing the file. Keep each binding on one physical line.
+Use JSON escapes such as `\u001b`, `\r`, `\n`, `\t`, `\\` and `\"`; `\x1b`
+is not a JSON escape. An empty string consumes the shortcut without sending
+input. Malformed payloads are ignored, as with other invalid keybinds.
+
+The explicit string is sent without bracketed-paste wrapping, newline conversion
+or keyboard-protocol encoding. With input broadcasting enabled, it follows the
+existing literal-text broadcast path. A failed launch without an input session
+cannot broadcast the string to other panes. Input fields and the answer reader keep
+their own keyboard handling. Removing the binding restores the normal shortcut
+behavior. This action is configured in the file, not the settings action picker.
+It does not change `pebrel ctl send-key`, which continues to encode named keys
+using the pane's keyboard protocol.
+
 ## Transactional Reload
 
 In the legacy shell, configuration parsing and Luau execution run on one serial worker. Rapid file
