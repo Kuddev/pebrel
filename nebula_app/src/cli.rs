@@ -52,6 +52,14 @@ pub struct Options {
     #[clap(long = "launched-at-login", hide = true)]
     pub launched_at_login: bool,
 
+    /// Start a separate GPUI process with a fresh, unsaved workspace.
+    ///
+    /// Shares settings; leaves the resident instance and saved session untouched.
+    #[cfg(feature = "gpui-shell")]
+    #[clap(long, conflicts_with_all = ["daemon", "ref_test", "launched_at_login"])]
+    #[cfg_attr(feature = "legacy-shell", clap(conflicts_with = "legacy_shell"))]
+    pub new_instance: bool,
+
     /// Launch the legacy winit shell instead of GPUI.
     #[cfg(all(feature = "gpui-shell", feature = "legacy-shell"))]
     #[clap(long = "legacy-shell")]
@@ -1502,6 +1510,23 @@ mod tests {
         let terminal = &options.window_options.terminal_options;
         assert!(terminal.directory.is_none());
         assert!(terminal.command.is_empty());
+    }
+
+    #[cfg(feature = "gpui-shell")]
+    #[test]
+    fn new_instance_accepts_explicit_terminal_options() {
+        let options = Options::try_parse_from([
+            "pebrel",
+            "--new-instance",
+            "--working-directory",
+            ".",
+            "-e",
+            "sh",
+            "-l",
+        ])
+        .expect("a separate GUI process accepts the usual terminal launch options");
+        assert!(options.new_instance);
+        assert_eq!(options.window_options.terminal_options.command, ["sh", "-l"]);
     }
 
     #[test]

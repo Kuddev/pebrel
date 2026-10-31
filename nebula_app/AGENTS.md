@@ -28,4 +28,4 @@
 - 管理员更新的受保护目录与会话恢复分别见 [`update_installation`](../architecture/notes/nebula_app/platform/update_installation/) 和 [`update_download`](../architecture/notes/nebula_app/update_download/)，普通会话与管理员更新状态保持独立。
 - Windows Acrylic 的运行库回退与窗口生命周期见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-controller.md)。
 - Windows Acrylic 的动画期间透明回退与计时边界见 [`窗口状态切换`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-window-transitions.md)。
-- 登录项的启动意图与首窗静默边界见 [`登录启动`](../architecture/notes/nebula_app/platform/startup/2026-10-10-login-launch-intent.md)。
+- 登录项的启动意图、首窗静默与显式独立实例的运行时和会话归属见 [`启动边界`](../architecture/notes/nebula_app/platform/startup/)。

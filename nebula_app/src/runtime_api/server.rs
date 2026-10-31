@@ -223,7 +223,7 @@ impl RuntimeServer {
         Self::spawn_at(
             sink,
             hub,
-            (!crate::platform::elevation::requires_isolation()).then(port_file),
+            (!crate::platform::startup::instance::is_private()).then(port_file),
         )
     }
 

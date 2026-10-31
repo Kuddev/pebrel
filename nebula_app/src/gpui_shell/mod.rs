@@ -58,6 +58,8 @@ use gpui::{App, AppContext as _};
 
 use std::borrow::Cow;
 
+use crate::platform::startup::instance;
+
 /// GPUI 主窗没有可靠的标准错误句柄；保留父进程重定向诊断，但写失败不能
 /// 再把非致命错误升级成应用 panic。
 pub(crate) fn try_write_stderr(args: std::fmt::Arguments<'_>) {
@@ -104,7 +106,9 @@ pub fn run_shell(
         }
     }
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
-    let _elevated_handover = if crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
+    let _elevated_handover = if !instance::explicitly_requested()
+        && crate::platform::elevation::is_elevated().is_ok_and(|value| value)
+    {
         use crate::platform::elevation::handover::{Request, Startup, start_or_forward};
         let settings = nebula_settings::RuntimeSettings::load();
         let request = Request {
@@ -142,7 +146,8 @@ pub fn run_shell(
         None
     };
     // 管理员重复启动先交给已有拥有者；不能提前消耗“下次启动安装”的预约。
-    if crate::platform::CAPABILITIES.self_update_install
+    if !instance::explicitly_requested()
+        && crate::platform::CAPABILITIES.self_update_install
         && crate::update_download::handoff::apply_scheduled()
     {
         return;
@@ -182,10 +187,7 @@ pub fn run_shell(
         },
         runtime_hub.clone(),
     );
-    if runtime_server.is_none()
-        && initial_command.is_none()
-        && !crate::platform::elevation::requires_isolation()
-    {
+    if runtime_server.is_none() && initial_command.is_none() && !instance::is_private() {
         // 与另一份进程同时启动时，对方可能已经拿到 owner lock、但尚未来得及
         // 发布 endpoint。短暂等待并交接，避免继续打开一个无控制面的空窗口。
         let settings = nebula_settings::RuntimeSettings::load();
@@ -219,7 +221,7 @@ pub fn run_shell(
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
     }
-    if runtime_server.is_some() {
+    if runtime_server.is_some() && !instance::explicitly_requested() {
         crate::mobile_connection::resume_saved();
     }
     let _runtime_server = runtime_server;
@@ -241,7 +243,7 @@ pub fn run_shell(
         if initial_cwd.is_some()
             || initial_command.is_some()
             || shell_id.is_some()
-            || crate::platform::elevation::requires_isolation()
+            || instance::is_private()
             || !crate::platform::startup::start_hidden(
                 &nebula_settings::RuntimeSettings::load(),
                 launched_at_login,
