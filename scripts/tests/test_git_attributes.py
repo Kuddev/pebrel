@@ -71,8 +71,10 @@ class GitAttributeTests(unittest.TestCase):
             for name in paths:
                 self.assertNotIn(b"\r", (checkout / name).read_bytes(), name)
 
-    def test_legacy_hook_fixtures_keep_verified_bytes_on_checkout(self):
+    def test_checksum_pinned_assets_keep_verified_bytes_on_checkout(self):
         fixtures = {
+            "nebula_app/res/prompts/codex_prompt_suggestion.txt":
+                "3728870393e8d9776f983db00b1b4bea094b541d56478807d204f7e650232f4e",
             "scripts/tests/fixtures/ai-hooks-v1.5.0/opencode.js":
                 "5f155e7330a9ef51c5ad1a048e27bedf6f48ade94e0bbe0624d76e632b545a06",
             "scripts/tests/fixtures/ai-hooks-v1.5.0/pi.ts":
