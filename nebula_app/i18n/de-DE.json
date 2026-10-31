@@ -1,4 +1,18 @@
 {
+  "prompt_suggestions": {
+    "title": "Nachrichtenvorhersage",
+    "description": "Sagt die nächste Nachricht in leeren nativen Eingabefeldern von Claude Code, Pi und OpenCode voraus. Gilt für neue Sitzungen in der Sprache der App.",
+    "provider": "Anbieter",
+    "model": "Vorhersagemodell",
+    "choose_provider": "Anbieter auswählen",
+    "no_providers": "Fügen Sie einen konfigurierten Anbieter mit unterstützter API hinzu.",
+    "invalid_model": "Geben Sie eine Modell-ID mit höchstens 256 Zeichen ohne Leerzeichen ein.",
+    "save_failed": "Vorhersageeinstellungen konnten nicht gespeichert werden: {error}",
+    "saved": "Vorhersageeinstellungen gespeichert.",
+    "predicting": "{model} erstellt eine Vorhersage",
+    "launcher_fallback": "Prompt-Vorhersagen sind nicht verfügbar. {agent} wird normal gestartet. {error}",
+    "launcher_failed": "{agent} konnte nicht gestartet werden: {error}"
+  },
   "language": {
     "system": "Systemeinstellung",
     "self_name": "Deutsch",
