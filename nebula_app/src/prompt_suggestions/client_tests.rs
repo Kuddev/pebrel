@@ -48,10 +48,15 @@ fn requests_are_short_independent_and_contain_user_voice() {
     assert_eq!(body["store"], false);
     assert!(body.get("previous_response_id").is_none());
     assert!(body.get("tools").is_none());
-    let input: Value = serde_json::from_str(body["input"].as_str().unwrap()).unwrap();
-    assert_eq!(input["conversation"][0]["text"], "先把光标测完");
-    assert_eq!(input["language"], "zh-CN");
-    assert_eq!(input["user_voice_examples"], json!(["先把光标测完"]));
+    assert_eq!(body["input"][0], json!({"role":"user","content":"先把光标测完"}));
+    assert_eq!(body["instructions"], "Write the suggested user message in zh-CN.");
+    assert_eq!(body["input"][1]["role"], "user");
+    let fragment = body["input"][1]["content"].as_str().unwrap();
+    assert_eq!(
+        fragment,
+        format!("<external_prompt_suggestion>\n{INSTRUCTIONS}\n</external_prompt_suggestion>")
+    );
+    assert!(!body.to_string().contains("user_voice_examples"));
     let mut chat = provider_for_chat();
     chat.model = "local-small-model".into();
     let (_, body) = payload(&chat, "en", &messages).unwrap();

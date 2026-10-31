@@ -4,6 +4,10 @@
 use serde::{Deserialize, Serialize};
 
 pub mod client;
+pub(crate) mod http;
+pub(crate) mod install;
+pub(crate) mod launcher;
+pub mod service;
 
 pub const MAX_SUGGESTION_CHARS: usize = 240;
 const MAX_CONTEXT_CHARS: usize = 12_000;
@@ -17,7 +21,7 @@ pub const INSTRUCTIONS: &str = concat!(
     "\n\nReturn only JSON matching this schema: {\"type\":\"object\",\"properties\":{\"suggestion\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"suggestion\"],\"additionalProperties\":false}."
 );
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     pub text: String,
@@ -27,10 +31,21 @@ pub struct Message {
 pub fn context(messages: &[Message]) -> Vec<Message> {
     let mut remaining = MAX_CONTEXT_CHARS;
     let mut result = Vec::new();
-    for message in messages.iter().rev().filter(|m| matches!(m.role.as_str(), "user" | "assistant"))
-    {
+    // Long assistant/tool sequences must not evict the user's actual request.
+    // Reserve it first, then restore chronological order after bounded selection.
+    let latest_user = messages
+        .iter()
+        .rposition(|message| message.role == "user" && !message.text.trim().is_empty());
+    let indices = latest_user
+        .into_iter()
+        .chain((0..messages.len()).rev().filter(|index| Some(*index) != latest_user));
+    for index in indices {
         if result.len() == 8 || remaining == 0 {
             break;
+        }
+        let message = &messages[index];
+        if !matches!(message.role.as_str(), "user" | "assistant") {
+            continue;
         }
         let limit = remaining.min(MAX_MESSAGE_CHARS);
         let text = excerpt(&message.text, limit);
@@ -38,10 +53,10 @@ pub fn context(messages: &[Message]) -> Vec<Message> {
             continue;
         }
         remaining -= text.chars().count();
-        result.push(Message { role: message.role.clone(), text });
+        result.push((index, Message { role: message.role.clone(), text }));
     }
-    result.reverse();
-    result
+    result.sort_unstable_by_key(|(index, _)| *index);
+    result.into_iter().map(|(_, message)| message).collect()
 }
 
 /// Long answers often put results and remaining work at the end. Preserve both ends.
@@ -60,27 +75,6 @@ fn excerpt(text: &str, limit: usize) -> String {
     let tail: String =
         text.chars().rev().take(available - head).collect::<Vec<_>>().into_iter().rev().collect();
     format!("{}{GAP}{tail}", text.chars().take(head).collect::<String>())
-}
-
-/// Separate bounded wording evidence so long assistant answers cannot crowd out
-/// the user's voice. Native adapters supply actual submitted messages in memory.
-/// This is transient request context, not a persisted personality/profile.
-fn voice_examples(messages: &[Message]) -> Vec<String> {
-    let mut remaining = 1600;
-    let mut examples = Vec::new();
-    for message in messages.iter().rev().filter(|message| message.role == "user") {
-        if examples.len() == 6 || remaining == 0 {
-            break;
-        }
-        let text = excerpt(&message.text, remaining.min(360));
-        if text.trim().is_empty() || examples.contains(&text) {
-            continue;
-        }
-        remaining -= text.chars().count();
-        examples.push(text);
-    }
-    examples.reverse();
-    examples
 }
 
 pub fn parse(response: &str) -> Option<String> {
@@ -113,63 +107,6 @@ fn decode(response: &str) -> Result<Option<String>, ()> {
         return Err(());
     }
     Ok(Some(text.to_owned()))
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Identity {
-    pub agent: String,
-    pub session: String,
-    pub turn: String,
-    pub input_revision: u64,
-    pub provider: String,
-    pub language: String,
-}
-
-#[derive(Default)]
-pub struct State {
-    generation: u64,
-    handled_turn: Option<(String, String, String)>,
-    current: Option<Identity>,
-    candidate: Option<String>,
-}
-
-impl State {
-    /// One request per completed turn. Dismissal does not turn into repeated paid requests.
-    pub fn begin(&mut self, identity: Identity) -> Option<u64> {
-        let turn = (identity.agent.clone(), identity.session.clone(), identity.turn.clone());
-        if self.handled_turn.as_ref() == Some(&turn) {
-            return None;
-        }
-        self.invalidate();
-        self.handled_turn = Some(turn);
-        self.current = Some(identity);
-        Some(self.generation)
-    }
-
-    pub fn invalidate(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
-        self.current = None;
-        self.candidate = None;
-    }
-
-    pub fn finish(&mut self, generation: u64, identity: &Identity, response: Option<String>) {
-        if self.generation == generation && self.current.as_ref() == Some(identity) {
-            self.candidate = response;
-        }
-    }
-
-    pub fn candidate(&self, identity: &Identity, empty_editable: bool) -> Option<&str> {
-        (empty_editable && self.current.as_ref() == Some(identity))
-            .then_some(self.candidate.as_deref())
-            .flatten()
-    }
-
-    pub fn take(&mut self, identity: &Identity, empty_editable: bool) -> Option<String> {
-        self.candidate(identity, empty_editable)?;
-        let text = self.candidate.take();
-        self.invalidate();
-        text
-    }
 }
 
 #[cfg(test)]

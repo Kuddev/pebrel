@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
-use super::{INSTRUCTIONS, Message, context, decode, voice_examples};
+use super::{INSTRUCTIONS, Message, context, decode};
 use crate::ai_providers::{AiProvider, ProviderKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -66,6 +66,11 @@ pub struct PreparedClient {
 }
 
 impl PreparedClient {
+    #[cfg(test)]
+    pub(super) fn test_with_key(provider: AiProvider) -> Self {
+        Self { provider, key: Zeroizing::new(b"synthetic-test-key".to_vec()) }
+    }
+
     pub fn prepare(provider: AiProvider) -> Result<Self, Failure> {
         if !supported(&provider) {
             return Err(Failure::Unavailable);
@@ -204,12 +209,16 @@ fn payload(provider: &AiProvider, language: &str, messages: &[Message]) -> Optio
     if !supported(provider) {
         return None;
     }
-    let input = serde_json::to_string(&json!({
-        "language": language,
-        "conversation": context(messages),
-        "user_voice_examples": voice_examples(messages),
-    }))
-    .ok()?;
+    // Preserve actual message roles, then append the upstream user fragment.
+    // Language is a product setting, not a learned or persisted voice policy.
+    let locale = format!("Write the suggested user message in {language}.");
+    let mut input: Vec<Value> = context(messages)
+        .into_iter()
+        .map(|message| json!({"role": message.role, "content": message.text}))
+        .collect();
+    input.push(json!({"role":"user", "content":format!(
+        "<external_prompt_suggestion>\n{INSTRUCTIONS}\n</external_prompt_suggestion>"
+    )}));
     let reasoning_model = provider.model.starts_with("gpt-5")
         || provider.model.starts_with("gpt-6")
         || provider.model.starts_with("o3")
@@ -217,18 +226,18 @@ fn payload(provider: &AiProvider, language: &str, messages: &[Message]) -> Optio
     let (route, mut body) = if provider.kind == ProviderKind::Anthropic {
         (
             "messages",
-            json!({"model":provider.model,"max_tokens":512,"system":INSTRUCTIONS,
-            "messages":[{"role":"user","content":input}]}),
+            json!({"model":provider.model,"max_tokens":512,"system":locale,
+            "messages":input}),
         )
     } else if provider.wire_api == "responses" {
         (
             "responses",
             json!({"model":provider.model,"store":false,"max_output_tokens":512,
-            "instructions":INSTRUCTIONS,"input":input}),
+            "instructions":locale,"input":input}),
         )
     } else {
-        let mut body = json!({"model":provider.model,
-            "messages":[{"role":"system","content":INSTRUCTIONS},{"role":"user","content":input}]});
+        input.insert(0, json!({"role":"system", "content":locale}));
+        let mut body = json!({"model":provider.model, "messages":input});
         body[if reasoning_model { "max_completion_tokens" } else { "max_tokens" }] = json!(512);
         ("chat/completions", body)
     };
