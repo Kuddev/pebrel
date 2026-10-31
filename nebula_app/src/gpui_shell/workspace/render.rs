@@ -246,6 +246,9 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &PasteClipboard, window, cx| {
                 this.paste_focused_terminal(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &super::keyboard_bindings::ClearTerminal, _, cx| {
+                this.clear_focused_terminal(cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleFullscreen, window, _cx| {
                 window.toggle_fullscreen();
             }))
