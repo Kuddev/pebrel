@@ -2,8 +2,8 @@
 
 ## Status
 
-Implemented integration for verified Claude Code, Pi and OpenCode APIs; integrated
-product acceptance is in progress. Codex and Qoder do not yet have an adapter
+Implemented integration for verified Claude Code, Pi and OpenCode APIs, with
+Linux desktop product acceptance completed. Codex and Qoder do not yet have an adapter
 that satisfies independent-model access to their running native TUI editor.
 
 ## Context
@@ -112,6 +112,28 @@ configuration invalidation, repeated turns, authentication, malformed framing
 and unsupported routes. Settings cover defaults, validation, round trips and
 reset. Native adapters have independent lifecycle tests and real native SDK/TUI
 probes; those do not replace the integrated product/provider acceptance.
+
+The Linux x86_64 GPUI product at `a0801cb4` built successfully. Claude Code,
+Pi and OpenCode each passed two turns through the actual launcher, installer,
+resident service and native editor using an offline model fixture. Desktop
+checks covered all three loading-dot states, accepting without submission and
+rejecting late predictions after typing. Claude clears its loading hint before
+the native ghost suggestion appears. Pi/OpenCode render native editor hints,
+not inline cursor ghost text. These checks establish integration, not model quality.
+
+Actual settings controls passed provider selection, independent model saving,
+enable/disable, invalid-draft feedback, reopening and application restart.
+Prediction-only saves left provider metadata byte-for-byte unchanged, including
+the CLI main model and active-provider mapping. The panel remained readable at
+850 px window width. Creating provider metadata succeeded; editing credentials
+was not verified because the isolated desktop lacked `secret-tool` and a Secret
+Service daemon. The existing provider editor reported that dependency error.
+
+At the same revision, prediction tests passed (21, with one paid evaluation
+ignored), Runtime tests passed (97), Agent identity tests passed (47), settings
+UI tests passed (27) and settings crate tests passed (107). Architecture checks
+against `cf6bafb2` and the workspace formatting check passed. Linux execution
+does not establish native Windows or macOS behavior.
 
 Eight synthetic multi-turn requests using the unmodified upstream prompt and
 `gpt-6.1-sol` succeeded on the supplied Linux host. Observed latency was
