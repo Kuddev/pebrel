@@ -32,6 +32,9 @@ The user's latest direction makes current conversation context the voice source.
 - Existing application runtime discovery is per instance and already binds a
   loopback listener. Adding another daemon or a PTY proxy would duplicate
   lifecycle and cannot itself expose the editor's semantic draft state.
+- Native settings acceptance found that the existing provider route was hidden
+  from navigation and search. Placing the new prediction controls there without
+  restoring the route left both provider setup and prediction settings unreachable.
 
 ## Decision
 
@@ -61,6 +64,10 @@ The user's latest direction makes current conversation context the voice source.
   UI rendering never reads credentials. Model calls release the service lock.
   Configuration changes suppress pending results. No transcript or prediction
   state is persisted. Changes apply to subsequent completed turns.
+- The existing provider route is visible again, with prediction search aliases.
+  Its stable route ID and shared provider/credential store remain unchanged.
+  Prediction save writes only its enabled/provider/model fields; it does not
+  invoke provider metadata save or apply a provider to any CLI's main model.
 - Cancellation suppresses host publication; the blocking model call can retain
   its slot until timeout. Do not describe this as immediate provider-network abort.
 - Claude uses its native ghost suggestion/Tab acceptance. Pi and OpenCode use a
