@@ -30,7 +30,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 12] = [
     "application app 应用 update 更新 version 版本 github support 支持",
     "appearance ligatures 连字 外观 theme 主题 custom 自定义 template 模板 import 导入 export 导出 font 字体 opacity 透明度 background 背景 shader wgsl terminal effects effect 终端效果 着色器 video 视频 gif 动图 cursor 光标 smooth motion 平滑 动画 icon 图标 dim inactive panes 调暗非活动窗格 分屏变暗 scrollback scrolling speed history 回滚 滚动 速度 历史 滚轮 ctrl wheel zoom 缩放",
     "profiles 配置文件 shell terminal 终端 completion 补全 command history clear 命令历史 清除历史 startup 启动 environment refresh path 环境变量 刷新 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 duration timeout persistent auto-dismiss 时长 秒 常驻 自动关闭",
-    "providers provider ai 供应商 模型 api",
+    "providers provider ai 供应商 服务商 模型 api prediction prompt suggestions 补齐 预测",
     "ssh host 主机 remote 远程 connection 连接",
     "network 网络 proxy 代理 connectivity 连接",
     "interaction 交互 copy 复制 paste 粘贴 tab 标签 panel 面板 focus follows mouse 焦点跟随鼠标 自动聚焦",
@@ -40,8 +40,6 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 12] = [
     "agents agent hook hooks 智能体 钩子 接入 claude codex opencode cursor kimi pi omp copilot grok",
     "mobile phone android ios remote pairing qr lan relay 手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
 ];
-
-pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。
@@ -70,7 +68,7 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
 }
 
 pub(super) fn is_nav_section_visible(index: usize) -> bool {
-    !HIDDEN_NAV_SECTIONS.contains(&index)
+    index < SECTION_IDS.len()
 }
 
 pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
