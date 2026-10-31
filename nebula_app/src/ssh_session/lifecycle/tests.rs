@@ -82,11 +82,20 @@ enum Mode {
     RejectSftp,
     HangSftp,
     AcceptSftp,
+    /// 快路径 exec 被拒一次，随后按集成模式应答（安装重试路径）。
+    FastRejectThenInstall,
+    /// 远端资产/配置被用户改过（plan 报「edited preserved」）且 rcfile 在场：
+    /// shell 通道必须照常 dispatch，provider 记账失败不拖垮集成。
+    EditedAssetsWithRcfile,
+    /// 同上但 rcfile 缺失：不得 speculative dispatch，委托上游回退。
+    EditedAssetsBare,
 }
 
 struct Loopback {
     mode: Mode,
     hang: bool,
+    /// `FastRejectThenInstall` 只拒首个 `exec ` 请求一次。
+    fast_rejected: bool,
     data: mpsc::UnboundedSender<Vec<u8>>,
     window_changes: mpsc::UnboundedSender<WindowSize>,
     channels: Vec<Channel<server::Msg>>,
@@ -132,17 +141,38 @@ impl server::Handler for Loopback {
             return Ok(());
         }
         if command == b"python3 -" {
-            if matches!(self.mode, Mode::Integration | Mode::RejectIntegration) {
+            if matches!(
+                self.mode,
+                Mode::Integration
+                    | Mode::RejectIntegration
+                    | Mode::FastRejectThenInstall
+                    | Mode::EditedAssetsWithRcfile
+                    | Mode::EditedAssetsBare
+            ) {
                 self.scripts.insert(channel, Vec::new());
                 return session.channel_success(channel);
             }
             return session.channel_failure(channel);
         }
-        if command.starts_with(b"sh -c ")
-            && matches!(self.mode, Mode::Integration | Mode::RejectIntegration)
-        {
+        let fast_dispatch = command.starts_with(b"exec ")
+            && matches!(
+                self.mode,
+                Mode::Integration
+                    | Mode::RejectIntegration
+                    | Mode::FastRejectThenInstall
+                    | Mode::EditedAssetsWithRcfile
+                    | Mode::EditedAssetsBare
+            );
+        let upstream_dispatch = command.starts_with(b"sh -c ")
+            && matches!(self.mode, Mode::Integration | Mode::RejectIntegration);
+        if fast_dispatch || upstream_dispatch {
             self.data.send(b"bootstrap".to_vec()).unwrap();
-            if self.mode == Mode::RejectIntegration {
+            if self.mode == Mode::RejectIntegration
+                || (self.mode == Mode::FastRejectThenInstall && !self.fast_rejected)
+            {
+                if self.mode == Mode::FastRejectThenInstall {
+                    self.fast_rejected = true;
+                }
                 return session.channel_failure(channel);
             }
             use base64::Engine as _;
@@ -194,6 +224,11 @@ impl server::Handler for Loopback {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if !matches!(self.mode, Mode::RejectSftp | Mode::HangSftp | Mode::AcceptSftp) {
+            // loopback 不提供 SFTP：快路径的 SFTP 直装层在此快速失败、落回
+            // python 安装（真实主机的 SFTP 行为由端到端验证覆盖）。
+            return session.channel_failure(channel);
+        }
         assert_eq!(name, "sftp");
         let _ = self.data.send(b"sftp-request".to_vec());
         match self.mode {
@@ -368,7 +403,7 @@ impl server::Handler for Loopback {
         let action = request["action"].as_str().unwrap();
         self.data.send(action.as_bytes().to_vec()).unwrap();
         let result = if action == "snapshot" {
-            let files: serde_json::Map<String, serde_json::Value> = [
+            let mut files: serde_json::Map<String, serde_json::Value> = [
                 "claude",
                 "codex",
                 "codex_config",
@@ -386,13 +421,41 @@ impl server::Handler for Loopback {
             ]
             .into_iter()
             .map(|name| {
+                let (content, sha) =
+                    if name == "bashrc" && self.mode == Mode::EditedAssetsWithRcfile {
+                        // 内容被改过且 sha256 与 manifest 记账不符 → plan 报
+                        // 「edited remote bashrc preserved」（资产保护分支）。
+                        (json!("user-edited rc"), json!("deadbeef"))
+                    } else {
+                        (json!(null), json!(null))
+                    };
                 (
                     name.into(),
-                    json!({"path":format!("/test/{name}"), "sha256":null, "content":null}),
+                    json!({"path":format!("/test/{name}"), "sha256":sha, "content":content}),
                 )
             })
             .collect();
-            json!({"version":1,"root":"/test","python":"/usr/bin/python3","files":files,"providers":{},"codex_version":"","codex_features":""})
+            if self.mode == Mode::EditedAssetsBare {
+                // provider 配置被用户改坏（如 hooks 换成异机路径）而资产从未
+                // 安装：manifest 记账的 owned 组在当前配置里找不到、事件槽非
+                // 空 → plan 报「edited … hook preserved」。
+                files.insert(
+                    "claude".into(),
+                    json!({"path":"/test/claude","sha256":null,
+                           "content":"{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"C:\\\\elsewhere\\\\hook.exe\",\"timeout\":3}]}]}}"}),
+                );
+                files.insert(
+                    "manifest".into(),
+                    json!({"path":"/test/manifest","sha256":null,
+                           "content":"{\"version\":1,\"groups\":{\"claude\":{\"Stop\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"X claude\",\"timeout\":3}]}]}}"}),
+                );
+            }
+            let providers = if self.mode == Mode::EditedAssetsBare {
+                json!({"claude":true})
+            } else {
+                json!({})
+            };
+            json!({"version":1,"root":"/test","python":"/usr/bin/python3","files":files,"providers":providers,"codex_version":"","codex_features":""})
         } else {
             assert!(
                 request["files"].as_array().unwrap().iter().any(|file| file["name"] == "shell.py")
@@ -608,6 +671,7 @@ impl Fixture {
                 let handler = Loopback {
                     mode,
                     hang: first && mode == Mode::HangFirstConnection,
+                    fast_rejected: false,
                     data: data_tx.clone(),
                     window_changes: window_changes_tx.clone(),
                     channels: Vec::new(),
@@ -674,13 +738,169 @@ fn rejected_integration_exec_falls_back_to_a_fresh_ordinary_shell_channel() {
             open_shell(&acquired, size(), Some("/requested"), None, &Events::default())
                 .await
                 .unwrap();
-        for expected in [b"snapshot".as_slice(), b"apply", b"bootstrap", b"cd '/requested'\r"] {
+        // 快路径：安装（snapshot/apply）→ exec dispatch 被拒；委托上游
+        // prepare（再一轮 snapshot/apply）→ python bootstrap 也被拒 → 普通登录 shell。
+        for expected in [
+            b"snapshot".as_slice(),
+            b"apply",
+            b"bootstrap",
+            b"snapshot",
+            b"apply",
+            b"bootstrap",
+            b"cd '/requested'\r",
+        ] {
             assert_eq!(fixture.data.recv().await.unwrap(), expected);
         }
         assert!(channel.pending.iter().any(
             |message| matches!(message, ChannelMsg::Data{data} if data.starts_with(b"welcome"))
         ));
         drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+/// 缓存命中（本进程早前连接确认过安装）时，开 shell 完全不过 python 探测：
+/// 首个到达的事件就是 bootstrap exec，其后只有新连接的一次后台校验。
+#[test]
+fn fast_path_cache_hit_skips_the_install_probe() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Integration).await;
+        let key = fixture.route.pool_key();
+        super::fast_path::cache_seed_for_tests(&key, "/test");
+        let acquired = fixture.connect().await;
+        let (channel, _token) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        assert_eq!(
+            fixture.data.recv().await.unwrap(),
+            b"bootstrap".as_slice(),
+            "no probe before exec"
+        );
+        drop(channel);
+        // 新连接（reused=false）触发一次后台校验：snapshot（文件已一致则无 apply）。
+        let snapshot = b"snapshot".to_vec();
+        let mut seen = Vec::new();
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(200), fixture.data.recv()).await
+        {
+            seen.push(event);
+            if seen.contains(&snapshot) {
+                break;
+            }
+        }
+        assert!(seen.contains(&snapshot), "verification ran: {seen:?}");
+        // 缓存键 = 连接池键（每 Fixture 随机端口，天然隔离）；进程级缓存
+        // 在并发测试间不做清空——清空反而与其它测试的 seed 竞争。
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+/// 快路径 exec 被拒（瞬时抖动/服务器限制）→ 现场安装（snapshot/apply）→
+/// 重新 dispatch 成功。绝不因一次失败直接退化成无集成 shell。
+#[test]
+fn fast_path_reject_falls_through_install_and_dispatch() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::FastRejectThenInstall).await;
+        let key = fixture.route.pool_key();
+        super::fast_path::cache_seed_for_tests(&key, "/test");
+        let acquired = fixture.connect().await;
+        let (channel, _token) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        for expected in [b"bootstrap".as_slice(), b"snapshot", b"apply", b"bootstrap"] {
+            assert_eq!(fixture.data.recv().await.unwrap(), expected);
+        }
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+/// loopback 无 SFTP 子系统：快路径的 SFTP 直装层快速失败，落回 python
+/// 安装——这正是「SFTP 不可用的主机仍能集成」的回归线（也是其余 loopback
+/// 测试隐式走过的路径）。
+#[test]
+fn sftp_layer_falls_through_to_the_python_installer() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Integration).await;
+        let acquired = fixture.connect().await;
+        let (channel, _token) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        for expected in [b"snapshot".as_slice(), b"apply", b"bootstrap"] {
+            assert_eq!(fixture.data.recv().await.unwrap(), expected);
+        }
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+/// 远端配置被用户改过（plan 报「edited … preserved」）但 rcfile 在场时，
+/// shell 通道照样 dispatch——cwd/分组/分支上报只依赖 rcfile 资产，provider
+/// hook 记账的保守保护不得拖垮整条集成信道（用户 10-22 下午现场：被换成
+/// Windows 路径的 ~/.claude/settings.json 让所有 v13 pane 回退普通 shell）。
+#[test]
+fn provider_bookkeeping_failure_still_dispatches_the_installed_shell() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::EditedAssetsWithRcfile).await;
+        let acquired = fixture.connect().await;
+        let (channel, _token) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        // snapshot（plan 在「edited preserved」上失败）→ 不 apply → 直接 bootstrap。
+        for expected in [b"snapshot".as_slice(), b"bootstrap"] {
+            assert_eq!(fixture.data.recv().await.unwrap(), expected);
+        }
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+/// 配置被改且 rcfile 从未装过：不得 speculative dispatch，委托上游
+/// （上游 plan 同样失败）→ 普通登录 shell 回退。
+#[test]
+fn edited_assets_without_rcfile_still_fall_back() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::EditedAssetsBare).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), Some("/requested"), None, &Events::default())
+                .await
+                .unwrap();
+        // 快路径 snapshot + 委托后的上游 snapshot（plan 都在资产保护上失败）→ 回退。
+        for expected in [b"snapshot".as_slice(), b"snapshot", b"cd '/requested'\r"] {
+            assert_eq!(fixture.data.recv().await.unwrap(), expected);
+        }
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data{data} if data.starts_with(b"welcome"))
+        ));
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+/// 后台校验只在**新** TCP 连接上跑一次：复用连接的第二个 pane 不再发探测。
+#[test]
+fn reused_connection_skips_the_background_verification() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Integration).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        drop(channel);
+        // 排空首个连接的安装与后台校验事件。
+        while let Ok(Some(_)) =
+            tokio::time::timeout(Duration::from_millis(100), fixture.data.recv()).await
+        {}
+        let reused = fixture.connect().await;
+        assert!(reused.reused, "fixture pool must reuse the connection");
+        let (channel, _) =
+            open_shell(&reused, size(), None, None, &Events::default()).await.unwrap();
+        assert_eq!(fixture.data.recv().await.unwrap(), b"bootstrap".as_slice());
+        // 复用连接不得再出现 snapshot 探测。
+        let snapshot = b"snapshot".to_vec();
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(100), fixture.data.recv()).await
+        {
+            assert_ne!(event, snapshot, "reused connections skip verification");
+        }
+        drop(channel);
+        fixture.forget(&reused.session).await;
         fixture.forget(&acquired.session).await;
     });
 }

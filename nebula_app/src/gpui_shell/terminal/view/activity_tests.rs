@@ -656,3 +656,36 @@ fn claude_shift_enter_reaches_pty_without_committing_shell_history(cx: &mut Test
         .collect();
     assert_eq!(bytes, b"\n");
 }
+
+/// 远端仓库根走 `pebrel_git_root` UserVar（进出仓库的变化沿）：值变化才算
+/// 目录事件，驱动侧栏分组的 TitleChanged 打点链；空值清空、重复值安静。
+#[gpui::test]
+fn git_root_user_var_updates_only_on_change(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.process_event(
+            TermEvent::UserVar {
+                name: "pebrel_git_root".to_string().into(),
+                value: "/home/user/pebrel".into(),
+            },
+            cx,
+        );
+        assert_eq!(view.git_root, "/home/user/pebrel");
+        view.process_event(
+            TermEvent::UserVar { name: "pebrel_git_root".to_string(), value: String::new() },
+            cx,
+        );
+        assert_eq!(view.git_root, "", "leaving the repository clears the root");
+        view.process_event(
+            TermEvent::UserVar { name: "pebrel_git_root".to_string(), value: String::new() },
+            cx,
+        );
+        assert_eq!(view.git_root, "");
+        // 未知名字继续走补全/编辑器报告路径，不碰 git_root。
+        view.process_event(
+            TermEvent::UserVar { name: "some_other_var".to_string(), value: "x".into() },
+            cx,
+        );
+        assert_eq!(view.git_root, "");
+    });
+}

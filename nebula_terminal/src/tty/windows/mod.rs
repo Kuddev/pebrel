@@ -999,9 +999,19 @@ __nebula_precmd() {
         branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     fi
 
-    printf '\033]7;file://%s%s\007' "${HOSTNAME:-localhost}" "$(__nebula_win_path "$cwd")"
+    # OSC 7 吃 file URI（`/D:/x` 由终端解析）；NEBULA| 标题的 cwd 字段则必须
+    # 是宿主原生盘符路径（`D:\x`，与 PowerShell 侧 `(Get-Location).Path` 同形）。
+    # MSYS 的 `/d/x` 会被宿主当成 POSIX 来宾路径：新 tab 继承不到目录、侧栏
+    # 也无法与同一仓库的本地 tab 并组（用户 10-11）。真 POSIX 路径（无盘符
+    # 映射）按原样透传。纯参数展开，不再多 fork 一次子进程。
+    local win_cwd="$(__nebula_win_path "$cwd")" title_cwd="$cwd"
+    case "$win_cwd" in
+        /[A-Za-z]:/*|/[A-Za-z]:) title_cwd="${win_cwd#/}"; title_cwd="${title_cwd//\//\\}" ;;
+    esac
+
+    printf '\033]7;file://%s%s\007' "${HOSTNAME:-localhost}" "$win_cwd"
     printf '\033]133;A\007'
-    printf '\033]2;NEBULA|%s|%s\007' "$cwd" "$branch"
+    printf '\033]2;NEBULA|%s|%s\007' "$title_cwd" "$branch"
 
     if [[ -z ${__nebula_user_ps1-} ]]; then
         # Readline counts bytes in non-multibyte locales (including Git Bash's
@@ -1826,7 +1836,33 @@ __nebula_precmd >/dev/null
 [[ $PS1 == 'user-rc-ps1' ]] || exit 42
 rm -rf "$HOME"
 "#,
-        );
+        )
+    }
+
+    /// 标题协议的 cwd 字段必须是宿主盘符路径（`C:\Windows`），不能是 MSYS 的
+    /// `/c/Windows`：宿主侧的新 tab 继承与侧栏并组都按 `D:\…` 形态解析，POSIX
+    /// 串会被当成来宾路径（用户 10-11）。真 POSIX 路径（来宾自有目录）透传。
+    /// OSC 7 侧则保持 file URI 里的 `/C:/Windows`（终端解析时去前导斜杠）。
+    #[test]
+    fn bash_title_reports_the_host_drive_form_and_osc7_stays_a_uri() {
+        run_bash_integration_case(
+            r#"
+PATH=/usr/bin:/mingw64/bin:$PATH
+NEBULA_BASHRC_SOURCED=1
+HOME=/__nebula_test_missing_home__
+APPDATA=
+"#,
+            r#"
+cd /c/Windows || exit 50
+observed="$(__nebula_precmd)"
+[[ $observed == *"]2;NEBULA|C:\Windows|"* ]] || exit 51
+[[ $observed != *"]2;NEBULA|/c/Windows|"* ]] || exit 52
+[[ $observed == *"]7;file://"*"/C:/Windows"* ]] || exit 53
+cd /tmp || exit 54
+observed="$(__nebula_precmd)"
+[[ $observed == *"]2;NEBULA|/tmp|"* ]] || exit 55
+"#,
+        )
     }
 
     #[test]

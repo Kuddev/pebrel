@@ -123,6 +123,168 @@ fn supports(name: &str, args: &[String]) -> bool {
 mod tests {
     use super::*;
 
+    /// Hermetic git fixture: a fresh repo whose HEAD sits on a distinctive
+    /// branch, so `git rev-parse --abbrev-ref` is deterministic.
+    fn init_git_repo(root: &std::path::Path) {
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        git(&["symbolic-ref", "HEAD", "refs/heads/nebula-test-branch"]);
+        git(&[
+            "-c",
+            "user.email=nebula@example.com",
+            "-c",
+            "user.name=Nebula",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "--quiet",
+            "-m",
+            "init",
+        ]);
+    }
+
+    fn git_available() -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// The `NEBULA|cwd|branch` title is the only branch source for the sidebar
+    /// group chip; outside a repository the branch field must be empty (not
+    /// garbage), so the chip clears when leaving a repo.
+    #[test]
+    fn zsh_precmd_reports_git_branch_via_nebula_title() {
+        if !git_available() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_git_repo(&repo);
+        let plain = home.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let script = home.path().join("integration.zsh");
+        std::fs::write(&script, include_str!("../../res/shell/zshrc")).unwrap();
+
+        let run = |dir: &std::path::Path| {
+            std::process::Command::new("/bin/zsh")
+                .args([
+                    "-d",
+                    "-f",
+                    "-c",
+                    // Two precmds in one shell pin the change-edge contract: the
+                    // `pebrel_git_root` UserVar must ride only the first one.
+                    r#"source "$2"; cd "$1" && _nebula_precmd && _nebula_precmd"#,
+                    "nebula-title-test",
+                ])
+                .arg(dir)
+                .arg(&script)
+                .env("NEBULA_ZDOTDIR_WAS_SET", "1")
+                .env("NEBULA_ORIGINAL_ZDOTDIR", home.path())
+                .env("ZDOTDIR", home.path())
+                .env("TERM", "xterm-256color")
+                .output()
+                .unwrap()
+        };
+
+        let repo_output = run(&repo);
+        assert!(repo_output.status.success(), "{:?}", repo_output.stderr);
+        let stdout = String::from_utf8(repo_output.stdout).unwrap();
+        assert!(
+            stdout.contains(&format!("\x1b]2;NEBULA|{}|nebula-test-branch\x07", repo.display())),
+            "repo title missing: {stdout:?}"
+        );
+        assert_eq!(
+            stdout.matches("SetUserVar=pebrel_git_root=").count(),
+            1,
+            "the root var rides change edges only: {stdout:?}"
+        );
+        use base64::Engine as _;
+        let physical_root = base64::engine::general_purpose::STANDARD
+            .encode(repo.canonicalize().unwrap().display().to_string());
+        assert!(
+            stdout.contains(&format!("\x1b]1337;SetUserVar=pebrel_git_root={physical_root}\x07")),
+            "repo root missing: {stdout:?}"
+        );
+
+        let plain_output = run(&plain);
+        assert!(plain_output.status.success(), "{:?}", plain_output.stderr);
+        let stdout = String::from_utf8(plain_output.stdout).unwrap();
+        assert!(
+            stdout.contains(&format!("\x1b]2;NEBULA|{}|\x07", plain.display())),
+            "non-repo branch must be empty: {stdout:?}"
+        );
+        assert!(
+            !stdout.contains("SetUserVar=pebrel_git_root="),
+            "no root to report outside a repository: {stdout:?}"
+        );
+    }
+
+    /// Same protocol contract for the Linux local bash integration.
+    #[test]
+    fn bash_precmd_reports_git_branch_via_nebula_title() {
+        if !git_available() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_git_repo(&repo);
+        let script = home.path().join("integration.bash");
+        std::fs::write(&script, include_str!("../../res/shell/bashrc")).unwrap();
+
+        let output = std::process::Command::new("/bin/bash")
+            .args([
+                "-c",
+                // PROMPT_COMMAND normally primes `_nebula_last_status` via the
+                // capture hook before `_nebula_precmd` runs; do it by hand here.
+                // Two precmds pin the change-edge contract for the root var.
+                r#"source "$2"; cd "$1"; _nebula_last_status=0; _nebula_precmd; _nebula_precmd"#,
+                "nebula-title-test",
+            ])
+            .arg(&repo)
+            .arg(&script)
+            .env("HOME", home.path())
+            .env("TERM", "xterm-256color")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.contains(&format!("\x1b]2;NEBULA|{}|nebula-test-branch\x07", repo.display())),
+            "repo title missing: {stdout:?}"
+        );
+        assert_eq!(
+            stdout.matches("SetUserVar=pebrel_git_root=").count(),
+            1,
+            "the root var rides change edges only: {stdout:?}"
+        );
+        use base64::Engine as _;
+        let physical_root = base64::engine::general_purpose::STANDARD
+            .encode(repo.canonicalize().unwrap().display().to_string());
+        assert!(
+            stdout.contains(&format!("\x1b]1337;SetUserVar=pebrel_git_root={physical_root}\x07")),
+            "repo root missing: {stdout:?}"
+        );
+    }
+
     #[test]
     fn custom_commands_and_rcfiles_are_never_rewritten() {
         for name in ["bash", "zsh", "fish"] {

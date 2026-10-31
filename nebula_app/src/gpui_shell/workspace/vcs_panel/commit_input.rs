@@ -100,7 +100,11 @@ impl CommitInput {
         Self { input, language }
     }
 
-    pub(super) fn sync_language(&mut self, window: &mut Window, cx: &mut App) {
+    pub(in crate::gpui_shell::workspace) fn sync_language(
+        &mut self,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let language = ui_language(cx);
         if self.language == language {
             return;

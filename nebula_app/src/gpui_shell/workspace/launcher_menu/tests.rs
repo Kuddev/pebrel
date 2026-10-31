@@ -34,24 +34,10 @@ fn open(cx: &mut TestAppContext) -> (Entity<NebulaWorkspace>, VisualTestContext)
             )
         });
         view.update(cx, |workspace, cx| {
-            let mut hosts = crate::gpui_shell::ssh_hosts::SshHostLists::default();
-            hosts.profiles.upsert(hosts.profiles.for_destination("test-host"));
-            hosts
-                .profiles
-                .set_organization(
-                    "test-host",
-                    crate::ssh_profiles::HostOrganization::from_inputs(
-                        "生产",
-                        "Linux, Équipe",
-                        "Owner: Alice",
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
             workspace.palette_override = Some(shell_palette_rows(
                 vec![shell("cmd"), shell("pwsh")],
                 vec![],
-                &hosts,
+                [("test-host".into(), String::new())],
                 "cmd",
                 workspace_ui_language(),
                 1.0,
@@ -77,10 +63,32 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+/// 启动器 SSH 搜索的当前契约（#525 的 tags/notes 管道已随 474c98d7 的
+/// 重构移除，本测试只锚定现存行为）：主机地址、起名（label）与通用关键词
+/// 都参与匹配；多关键词 AND；查询对 ASCII 大小写不敏感；未命中不残留行。
 #[gpui::test]
-fn ssh_launcher_search_matches_tags_notes_and_multiple_keywords(cx: &mut TestAppContext) {
+fn ssh_launcher_search_matches_host_label_and_multiple_keywords(cx: &mut TestAppContext) {
     let (workspace, mut cx) = open(cx);
-    for query in ["LINUX", "alice", "生产", "ÉQUIPE", "linux ALICE 生产", "missing-tag"] {
+    // named-host 带起名：label 进搜索串（test-host 保持空名 = 纯地址形态）。
+    workspace.update(&mut cx, |workspace, cx| {
+        workspace.palette_override = Some(shell_palette_rows(
+            vec![shell("cmd"), shell("pwsh")],
+            vec![],
+            [("test-host".into(), String::new()), ("named-host".into(), "alice 生产".to_owned())],
+            "cmd",
+            workspace_ui_language(),
+            1.0,
+        ));
+        cx.notify();
+    });
+    for (query, expected) in [
+        ("test-host", vec!["test-host"]),
+        ("ALICE", vec!["named-host"]),
+        ("生产", vec!["named-host"]),
+        ("named-host alice 生产", vec!["named-host"]),
+        ("remote", vec!["named-host", "test-host"]),
+        ("missing-tag", vec![]),
+    ] {
         // 查询替换只依赖输入框的全选动作，不重复判断平台快捷键。
         cx.update(|window, cx| {
             window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
@@ -89,17 +97,20 @@ fn ssh_launcher_search_matches_tags_notes_and_multiple_keywords(cx: &mut TestApp
         draw(&mut cx);
         workspace.read_with(&cx, |workspace, cx| {
             let rows = workspace.filtered_palette_rows(cx);
-            if query == "missing-tag" {
-                assert!(rows.is_empty(), "unmatched metadata must not show unrelated hosts");
-            } else {
-                assert_eq!(rows.len(), 1, "query: {query}");
-                assert!(matches!(&rows[0].action,
-                    WorkspacePaletteAction::LaunchSshHost(host) if host == "test-host"));
-            }
+            let mut hosts: Vec<&str> = rows
+                .iter()
+                .filter_map(|row| match &row.action {
+                    WorkspacePaletteAction::LaunchSshHost(host) => Some(host.as_str()),
+                    _ => None,
+                })
+                .collect();
+            hosts.sort_unstable();
+            assert_eq!(hosts, expected, "query: {query}");
+            assert_eq!(rows.len(), expected.len(), "query: {query}");
             assert!(workspace.tabs.is_empty(), "search must not connect a host");
         });
-        assert_eq!(cx.debug_bounds("command-palette-row-0").is_some(), query != "missing-tag");
-        assert!(cx.debug_bounds("command-palette-row-1").is_none());
+        assert_eq!(cx.debug_bounds("command-palette-row-0").is_some(), !expected.is_empty());
+        assert_eq!(cx.debug_bounds("command-palette-row-1").is_some(), expected.len() > 1);
     }
     cx.simulate_keystrokes("escape");
     draw(&mut cx);

@@ -42,7 +42,7 @@ impl NebulaWorkspace {
         let op_error = self.side_panel.localized_op_error(language);
         let browsing_elsewhere = self.side_panel.custom_root_active();
         let menu_target = cx.entity().downgrade();
-        self.vcs_list.sync(git.clone(), git_view, root.clone());
+        self.vcs_list.sync(git.clone(), git_view, root.clone(), false);
 
         use crate::display::side_panel::{GitPanelView, VcsKind};
         let summary = git.as_ref().map(|info| {

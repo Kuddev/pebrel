@@ -944,6 +944,45 @@ impl TerminalView {
         }
     }
 
+    /// 无集成嵌套 shell（PowerShell→bash/zsh、cmd…）的 cwd 兜底：这些 shell
+    /// 不发 OSC 7，`cwd_reported_at` 会超时。挂在 Wakeup 沿上（cd 必然伴随
+    /// 提示符输出）+ 2s 节流；自报健在的 pane 短窗退避（1s——这只是**成本**
+    /// 闸门，省掉自报 pane 的进程枚举；误信防护在 `pane_cwd` 的目标可信
+    /// 判定里。窗口不能大：外层 shell 的旧上报戳会吞掉嵌套 shell 进场后
+    /// 第一次 cd 的探测沿——用户 10-15 现场的「要再回车一次才跟随」正是
+    /// 4s 窗口造成的）。远端 pane 不走这里：进程树在远端，那边有
+    /// `ssh_sftp::remote_cwd` 的 /proc 探测。
+    pub(super) fn probe_process_cwd(&mut self, cx: &mut Context<Self>) {
+        if self.exited.is_some()
+            || self.ssh_destination.is_some()
+            || self.cwd_self_reporting(std::time::Duration::from_secs(1))
+            || self.process_cwd_probe.is_some()
+            || self
+                .last_cwd_probe
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
+        {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let pid = session.shell_pid;
+        if pid == 0 {
+            return;
+        }
+        self.last_cwd_probe = Some(std::time::Instant::now());
+        let work = cx
+            .background_executor()
+            .spawn(async move { crate::platform::pane_cwd::pane_shell_cwd(pid) });
+        self.process_cwd_probe = Some(cx.spawn(async move |this, cx| {
+            let found = work.await;
+            let _ = this.update(cx, |view, cx| {
+                view.process_cwd_probe = None;
+                if let Some(path) = found {
+                    view.adopt_process_cwd(&path, cx);
+                }
+            });
+        }));
+    }
+
     /// OSC 7 到达且弱推断「运行中」时的完成证据探测：清运行态必须先证明
     /// 「回到提示符」——pane 进程树里只剩交互 shell（根进程或嵌套 shell），
     /// 没有任何命令子进程。与 `probe_restored_prompt` 共用节流与在途去重
