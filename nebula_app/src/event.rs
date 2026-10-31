@@ -66,6 +66,7 @@ use crate::window_context::{DetachedWindow, WindowBoot, WindowContext};
 use crate::window_transition::{NativeWindowStage, NativeWindowStageTracker};
 
 mod agent_runtime;
+mod inline_image;
 mod input_state;
 mod link_open;
 mod proxy;
@@ -2883,28 +2884,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         }
                     },
                     TerminalEvent::InlineImage { data, placement } => {
-                        // Decode off the PTY thread (here, on the UI loop) and
-                        // anchor the pixels to the pane. Textures upload lazily
-                        // on first draw.
-                        match crate::renderer::image::decode_png_bytes(&data) {
-                            Ok((px_w, px_h, rgba)) => {
-                                let images = &mut self.ctx.nebula_state.inline_images;
-                                images.push(crate::display::NebulaInlineImage {
-                                    placement,
-                                    rgba: std::sync::Arc::new(rgba),
-                                    px_w,
-                                    px_h,
-                                });
-                                // VRAM/heap guard against imgcat runaway loops.
-                                if images.len() > 16 {
-                                    images.remove(0);
-                                }
-                                *self.ctx.dirty = true;
-                            },
-                            Err(err) => {
-                                warn!("inline image decode failed: {err}");
-                            },
-                        }
+                        self.handle_inline_image(data, placement);
                     },
                     TerminalEvent::CommandStart => {
                         // 首个词就是交互式 shell（`cmd`、`wsl`、裸 `bash`）时不

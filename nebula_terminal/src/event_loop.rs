@@ -361,6 +361,27 @@ impl StreamProcessor {
                         parser_input_bytes += marker.len();
                     }
                 },
+                OscEvent::GraphicsReply(reply) => event_proxy.send_event(Event::PtyWrite(reply)),
+                OscEvent::SixelImage(image) => {
+                    let (width, height) = image.dimensions();
+                    let viewport = self.window_size.unwrap_or(WindowSize {
+                        num_cols: terminal.columns() as u16,
+                        num_lines: terminal.screen_lines() as u16,
+                        cell_width: 9,
+                        cell_height: 20,
+                    });
+                    if let Some((marker, image)) = terminal.nebula_queue_inline_image(
+                        crate::inline_image::ImageData::Sixel(Arc::new(image)),
+                        width,
+                        height,
+                        Default::default(),
+                        viewport,
+                    ) {
+                        self.pending_images.push_back(image);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
                 OscEvent::CellSizeQuery => self.gfx.lock().request_cell_size(),
                 OscEvent::InlineImage { data, width, height, options } => {
                     let viewport = self.window_size.unwrap_or(WindowSize {
@@ -369,9 +390,13 @@ impl StreamProcessor {
                         cell_width: 9,
                         cell_height: 20,
                     });
-                    if let Some((marker, image)) =
-                        terminal.nebula_queue_inline_image(data, width, height, options, viewport)
-                    {
+                    if let Some((marker, image)) = terminal.nebula_queue_inline_image(
+                        Arc::new(data).into(),
+                        width,
+                        height,
+                        options,
+                        viewport,
+                    ) {
                         self.pending_images.push_back(image);
                         self.advance(terminal, marker.as_bytes());
                         parser_input_bytes += marker.len();

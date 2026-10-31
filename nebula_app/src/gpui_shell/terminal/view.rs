@@ -784,7 +784,7 @@ impl TerminalView {
                 }
             },
             TermEvent::InlineImage { data, placement } => {
-                match self.inline_images.enqueue(data, placement) {
+                match self.inline_images.enqueue_inline(data, placement, &self.palette) {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }

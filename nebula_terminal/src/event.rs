@@ -29,10 +29,13 @@ pub enum Event {
     /// bundled PowerShell prompt emits).
     CwdReport(String),
 
-    /// An OSC 1337 inline image, sniffed out of the PTY stream.
+    /// An OSC 1337 or SIXEL image, placed at the ordered VT replay point.
     ///
     /// Grid cells own placement and lifetime; frontends only decode/cache pixels.
-    InlineImage { data: Arc<Vec<u8>>, placement: crate::inline_image::ImagePlacement },
+    InlineImage {
+        data: crate::inline_image::ImageData,
+        placement: crate::inline_image::ImagePlacement,
+    },
 
     /// A Kitty protocol image, published once its cells are already in the grid.
     ///

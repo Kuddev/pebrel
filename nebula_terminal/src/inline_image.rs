@@ -13,6 +13,31 @@ use crate::event::WindowSize;
 pub(crate) const MAX_IMAGE_CELLS: usize = 16 * 1024;
 static NEXT_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Clone, Debug)]
+pub enum ImageData {
+    Encoded(Arc<Vec<u8>>),
+    Sixel(Arc<crate::sixel::SixelImage>),
+}
+
+impl ImageData {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Encoded(bytes) => bytes.len(),
+            Self::Sixel(image) => image.encoded_len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl From<Arc<Vec<u8>>> for ImageData {
+    fn from(bytes: Arc<Vec<u8>>) -> Self {
+        Self::Encoded(bytes)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageDimension {
     #[default]

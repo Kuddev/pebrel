@@ -4,7 +4,7 @@ use std::sync::{Arc, Weak};
 
 use super::*;
 use crate::event::WindowSize;
-use crate::inline_image::ImageOptions;
+use crate::inline_image::{ImageData, ImageOptions};
 use crate::kitty_graphics::KittyGraphics;
 
 #[derive(Default)]
@@ -21,18 +21,8 @@ pub(crate) struct PendingImage {
 }
 
 enum Payload {
-    Inline {
-        data: Arc<Vec<u8>>,
-        width: u32,
-        height: u32,
-        options: ImageOptions,
-        viewport: WindowSize,
-    },
-    Graphics {
-        state: Weak<parking_lot::Mutex<KittyGraphics>>,
-        control: Vec<u8>,
-        data: Vec<u8>,
-    },
+    Inline { data: ImageData, width: u32, height: u32, options: ImageOptions, viewport: WindowSize },
+    Graphics { state: Weak<parking_lot::Mutex<KittyGraphics>>, control: Vec<u8>, data: Vec<u8> },
     ResetGraphics(Weak<parking_lot::Mutex<KittyGraphics>>),
 }
 
@@ -83,15 +73,13 @@ impl<T: EventListener> Term<T> {
     /// The stream owns payloads; retaining a disconnected Term cannot retain uploads.
     pub(crate) fn nebula_queue_inline_image(
         &mut self,
-        data: Vec<u8>,
+        data: ImageData,
         width: u32,
         height: u32,
         options: ImageOptions,
         viewport: WindowSize,
     ) -> Option<(String, Arc<PendingImage>)> {
-        self.pending_images
-            .queue(Payload::Inline { data: Arc::new(data), width, height, options, viewport })
-            .ok()
+        self.pending_images.queue(Payload::Inline { data, width, height, options, viewport }).ok()
     }
 
     pub(crate) fn nebula_queue_kitty(
@@ -168,6 +156,25 @@ impl<T: EventListener> Term<T> {
                     num_lines: self.screen_lines() as u16,
                     ..*viewport
                 };
+                if let ImageData::Sixel(sixel) = data {
+                    let mut sixel = (**sixel).clone();
+                    if !sixel.transparent {
+                        let color = self.grid.cursor.template.bg;
+                        let override_rgb = match color {
+                            Color::Named(named) => self.colors[named],
+                            Color::Indexed(index) => self.colors[index as usize],
+                            Color::Spec(rgb) => Some(rgb),
+                        };
+                        sixel.background = Some(override_rgb.map(Color::Spec).unwrap_or(color));
+                    }
+                    if let Some(placement) = self.insert_sixel(&sixel, viewport) {
+                        self.event_proxy.send_event(Event::InlineImage {
+                            data: ImageData::Sixel(Arc::new(sixel)),
+                            placement,
+                        });
+                    }
+                    return true;
+                }
                 let start_column = self.grid.cursor.point.column.0
                     + usize::from(self.grid.cursor.input_needs_wrap);
                 if let Some(layout) = options.layout(*width, *height, viewport, start_column) {

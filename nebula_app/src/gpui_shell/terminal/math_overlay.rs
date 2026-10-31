@@ -1111,8 +1111,13 @@ mod tests {
             .write_to(&mut output, image::ImageFormat::Png)
             .unwrap();
         let png = base64::engine::general_purpose::STANDARD.encode(output.into_inner());
-        let protocol =
-            format!("\x1b]1337;File=inline=1;width=4;height=1;preserveAspectRatio=0:{png}\x07");
+        let protocols = [
+            (
+                "osc1337",
+                format!("\x1b]1337;File=inline=1;width=4;height=1;preserveAspectRatio=0:{png}\x07"),
+            ),
+            ("sixel", "\x1b[?8452h\x1bP9;1q\"1;1;32;18#1;2;100;0;0!32~-!32~-!32~\x1b\\".to_owned()),
+        ];
         let cases = [
             ("main", "", "$x^2$ ", "TAIL\r\nprompt", true),
             ("alternate", "\x1b[?1049h", "$x^2$ ", "TAIL\r\nprompt", true),
@@ -1120,7 +1125,11 @@ mod tests {
             ("ansi-code-background", "", "\x1b[44m$x^2$\x1b[49m ", "TAIL\r\nprompt", false),
         ];
         let mut failures = Vec::new();
-        for (label, screen, prefix, suffix, expect_formula) in cases {
+        for (protocol_name, protocol, (label, screen, prefix, suffix, expect_formula)) in protocols
+            .iter()
+            .flat_map(|(name, payload)| cases.iter().map(move |case| (*name, payload, *case)))
+        {
+            let label = format!("{protocol_name}/{label}");
             let listener = Listener::default();
             let mut term =
                 Term::new(Config::default(), &TestSize { cols: 20, rows: 8 }, listener.clone());
@@ -1139,7 +1148,7 @@ mod tests {
             let mut store = InlineImageStore::default();
             for event in listener.0.lock().unwrap().drain(..) {
                 if let Event::InlineImage { data, placement } = event {
-                    store.enqueue(data, placement).unwrap();
+                    store.enqueue_inline(data, placement, &Default::default()).unwrap();
                 }
             }
             while let Some(pending) = store.start_next() {

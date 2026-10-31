@@ -123,7 +123,11 @@ fn character_art_drag_maps_visual_rows_back_to_exact_source_text(cx: &mut TestAp
     });
     draw(&mut cx);
     draw(&mut cx);
+    // 先完成启动布局同步，再记录拖选应保持不变的网格基线。
+    cx.executor().advance_clock(TerminalView::STARTUP_GRID_GRACE);
+    draw(&mut cx);
     let (start, end, grid) = terminal.read_with(&cx, |view, _| {
+        assert!(view.grid_synced, "drag geometry requires the settled viewport");
         let (top, height) = view.character_art.frame.cell(3, 4, 3.0);
         assert!(height < 1.0, "the actual terminal element must mount character-art geometry");
         let (next, _) = view.character_art.frame.cell(4, 15, 4.0);
