@@ -293,6 +293,24 @@ test("stale config and disabled config never launch inference", async () => {
   assert.equal(disabled.timers.size, 0);
 });
 
+test("valid 256-character model names predict while config responses remain bounded in UTF-8 bytes", async () => {
+  for (const unit of ["m", "模", "😺"]) {
+    const loading = unit.repeat(256) + " 正在预测";
+    const f = await fixture({ config: response({ enabled: true, loading_text: loading }) });
+    await f.finish(); await f.advance(0);
+    assert.equal(f.requests.length, 2);
+    assert.equal((await f.render()).props.tail, loading + ".");
+    f.pending.resolve(response({ suggestion: "继续测试" })); await flush();
+    assert.deepEqual(f.suggestions, [{ text: "继续测试" }]);
+  }
+  for (const loading of ["x".repeat(8193), "中".repeat(3000)]) {
+    const f = await fixture({ config: response({ enabled: true, loading_text: loading }) });
+    await f.finish(); await f.advance(0);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.timers.size, 0);
+  }
+});
+
 test("requires process-only native suppression and authenticated loopback bridge", async () => {
   for (const env of [
     { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: undefined },

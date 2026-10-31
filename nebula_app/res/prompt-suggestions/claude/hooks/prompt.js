@@ -107,6 +107,12 @@ function readJson(response) {
   if (!response.ok || typeof response.text !== "string" || response.text.length > 8192) {
     throw new Error("Invalid prediction bridge response");
   }
+  let bytes = 0;
+  for (const char of response.text) {
+    const point = char.codePointAt(0);
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes > 8192) throw new Error("Invalid prediction bridge response");
+  }
   return JSON.parse(response.text);
 }
 
@@ -134,8 +140,9 @@ async function predict($, turn, revision) {
       `${connection.endpoint}/v1/prompt-suggestions/config`,
       { headers: connection.headers },
     ));
+    // Settings own model-name validation; the complete response is bounded above.
     if (!config.enabled || typeof config.loading_text !== "string" ||
-        config.loading_text.length > 200 || config.loading_text.trim() === "" ||
+        config.loading_text.trim() === "" ||
         /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(config.loading_text)) return;
     if (!await sameEmptyComposer($, revision, session)) return;
     startLoading($, config.loading_text, revision);
