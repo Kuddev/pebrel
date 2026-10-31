@@ -9,9 +9,112 @@ pub(crate) const SUPPORTED: bool = cfg!(windows);
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod handover;
 
-/// A failed token query must not publish a potentially privileged control plane.
+/// 提升窗口隔离判定：进程提升而桌面 shell 非提升才隔离。
+///
+/// 旧判定「进程提升即隔离」在内置 Administrator 桌面会话下会退化为会话
+/// 保存整体静默失效——那种会话关闭了 UAC Admin Approval Mode，explorer
+/// 和一切用户进程同为提升，于是每一个 pebrel 实例都被当成「管理员窗口」，
+/// session 永不落盘，恢复功能在整台机器上不可用。与桌面 shell 对齐后：
+/// 管理员桌面会话正常保存/恢复；普通账户下 UAC runas 打开的提权窗口
+/// 仍不覆盖普通工作区（原始设计意图）。
 pub(crate) fn requires_isolation() -> bool {
-    is_elevated().unwrap_or(true)
+    isolate(is_elevated().map_err(|_| ()), desktop_shell_elevated())
+}
+
+/// 真值表核心，独立成函数供单测。进程侧入参是**查询结果**（含失败）：
+/// token 查询失败是「未知」而非「非提升」，不得进入与桌面 shell 的合成
+/// 判定——桌面提升不能洗白一个状态未知的进程（失败同样可能发生在真正的
+/// runas 提权进程上），fail-closed 直接隔离。`None` 表示查询不到桌面
+/// shell（SSH/服务会话），按非提升处理：保守回退到旧的仅看进程语义。
+fn isolate(process_elevated: Result<bool, ()>, desktop_shell: Option<bool>) -> bool {
+    match process_elevated {
+        Err(()) => true,
+        Ok(elevated) => elevated && !desktop_shell.unwrap_or(false),
+    }
+}
+
+/// 桌面 shell（explorer.exe）是否提升。结果进程内缓存：token 不随运行
+/// 变化，而该判定在每个窗口的持久化路径上都会被问到。
+#[cfg(windows)]
+fn desktop_shell_elevated() -> Option<bool> {
+    use std::sync::OnceLock;
+    static ELEVATED: OnceLock<Option<bool>> = OnceLock::new();
+    *ELEVATED.get_or_init(query_desktop_shell_elevation)
+}
+
+#[cfg(windows)]
+fn query_desktop_shell_elevation() -> Option<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+    use windows_sys::Win32::Security::{
+        GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
+        TOKEN_QUERY, TokenIntegrityLevel,
+    };
+    use windows_sys::Win32::System::SystemServices::SECURITY_MANDATORY_HIGH_RID;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
+
+    // SAFETY: handles are closed on every path; buffers have their declared
+    // sizes; the two-pass GetTokenInformation length protocol is followed.
+    unsafe {
+        // 桌面 shell 窗口定位 explorer：SSH/服务会话没有它，返回 None 走回退。
+        let shell = GetShellWindow();
+        if shell.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(shell, &mut pid);
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            log::debug!("desktop shell process query failed: {}", GetLastError());
+            return None;
+        }
+        let mut token = std::ptr::null_mut();
+        let opened = OpenProcessToken(process, TOKEN_QUERY, &mut token);
+        let open_error = GetLastError();
+        CloseHandle(process);
+        if opened == 0 {
+            log::debug!("desktop shell token query failed: {open_error}");
+            return None;
+        }
+
+        // TokenIntegrityLevel 返回变长的 TOKEN_MANDATORY_LABEL（SID 变长），
+        // 按标准两段式协议先问长度再取值。
+        let mut needed = 0u32;
+        GetTokenInformation(token, TokenIntegrityLevel, std::ptr::null_mut(), 0, &mut needed);
+        if needed == 0 {
+            CloseHandle(token);
+            return None;
+        }
+        let mut buffer = vec![0u8; needed as usize];
+        let ok = GetTokenInformation(
+            token,
+            TokenIntegrityLevel,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        );
+        let info_error = GetLastError();
+        CloseHandle(token);
+        if ok == 0 {
+            log::debug!("desktop shell integrity query failed: {info_error}");
+            return None;
+        }
+        let label = &*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>();
+        let count = *GetSidSubAuthorityCount(label.Label.Sid);
+        if count == 0 {
+            return None;
+        }
+        // SID 最后一个 sub-authority 就是完整性级别 RID；High 及以上视作提升。
+        let rid = *GetSidSubAuthority(label.Label.Sid, u32::from(count - 1));
+        Some(rid >= SECURITY_MANDATORY_HIGH_RID as u32)
+    }
+}
+
+#[cfg(not(windows))]
+fn desktop_shell_elevated() -> Option<bool> {
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
