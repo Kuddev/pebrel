@@ -486,6 +486,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell_pointer.invalidate();
         window.focus(&self.focus_handle, cx);
         self.pending_link_open = false;
         cx.emit(TerminalViewEvent::FocusRequested);
@@ -554,6 +555,7 @@ impl TerminalView {
             );
             return;
         }
+        self.begin_shell_pointer(event);
         let (point, side) = self.grid_point(event.position);
         let ty = match event.click_count {
             1 => SelectionType::Simple,
@@ -722,6 +724,9 @@ impl TerminalView {
             );
             return;
         }
+        if self.selecting && !pending_link_open {
+            self.finish_shell_pointer(event);
+        }
         self.selecting = false;
         let (point, _) = self.grid_point(event.position);
         let open_link = pending_link_open
@@ -745,6 +750,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell_pointer.invalidate();
         if self.finish_completion_popup_scrollbar(event.position, cx) {
             cx.stop_propagation();
             return;

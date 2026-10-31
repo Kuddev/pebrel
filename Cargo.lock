@@ -5371,6 +5371,7 @@ dependencies = [
  "toml_edit 0.24.0+spec-1.1.0",
  "tray-icon",
  "ttf-parser",
+ "unicode-segmentation",
  "unicode-width",
  "ureq",
  "windows 0.61.3",

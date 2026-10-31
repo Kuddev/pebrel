@@ -141,6 +141,7 @@ toml_edit.workspace = true
 ttf-parser = { version = "=0.25.1", default-features = false, features = ["opentype-layout", "std"] }
 tokio = { version = "1", features = ["fs", "io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
 unicode-width = "0.2.0"
+unicode-segmentation = "1.13.3"
 # Assistant fix requests: blocking HTTP on a background OS thread (spec 001).
 # ureq over reqwest: no tokio coupling for one short JSON POST, small tree.
 # 更新下载要能跟随用户代理：socks-proxy 让 ureq 支持 socks5:// 代理地址；
