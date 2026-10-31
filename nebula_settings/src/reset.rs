@@ -23,6 +23,7 @@ const RESET_KEYS: &[&str] = &[
     "cursor_blink",
     "cursor_motion",
     "copy_on_select",
+    "click_to_move_cursor",
     "focus_follows_mouse",
     "dim_inactive_panes",
     "multiline_paste_confirm",
