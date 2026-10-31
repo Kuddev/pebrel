@@ -622,37 +622,39 @@ fn ssh_bell_does_not_report_a_blocked_or_finished_command(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn claude_shift_enter_reaches_pty_without_committing_shell_history(cx: &mut TestAppContext) {
-    let (view, window, receiver) = open(cx);
-    window.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.running_program = Some("claude".into());
-            view.suggest.last_committed = "claude".into();
-            view.suggest.line_buf = "a multiline prompt".into();
-            feed(view, b"\x1b[?9001h");
-            view.on_key_down(
-                &KeyDownEvent {
-                    keystroke: gpui::Keystroke::parse("shift-enter").unwrap(),
-                    is_held: false,
-                    prefer_character_input: false,
-                },
-                window,
-                cx,
-            );
-            assert_eq!(view.suggest.last_committed, "claude");
-            assert!(
-                view.suggest.line_buf.is_empty(),
-                "multiline invalidates the single-line shadow"
-            );
+fn agent_shift_enter_reaches_pty_without_committing_shell_history(cx: &mut TestAppContext) {
+    for (program, expected) in [("claude", b"\n".as_slice()), ("codebuddy", b"\x1b\r")] {
+        let (view, window, receiver) = open(cx);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.running_program = Some(program.into());
+                view.suggest.last_committed = program.into();
+                view.suggest.line_buf = "a multiline prompt".into();
+                feed(view, b"\x1b[?9001h");
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse("shift-enter").unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(view.suggest.last_committed, program);
+                assert!(
+                    view.suggest.line_buf.is_empty(),
+                    "multiline invalidates the single-line shadow"
+                );
+            });
         });
-    });
-    let bytes: Vec<u8> = receiver
-        .try_iter()
-        .filter_map(|message| match message {
-            Msg::Input(bytes) => Some(bytes.into_owned()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-    assert_eq!(bytes, b"\n");
+        let bytes: Vec<u8> = receiver
+            .try_iter()
+            .filter_map(|message| match message {
+                Msg::Input(bytes) => Some(bytes.into_owned()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(bytes, expected);
+    }
 }
