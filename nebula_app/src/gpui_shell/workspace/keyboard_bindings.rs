@@ -28,6 +28,10 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "ctrl-alt-right",
     "ctrl-alt-up",
     "ctrl-alt-down",
+    "ctrl-alt-shift-left",
+    "ctrl-alt-shift-right",
+    "ctrl-alt-shift-up",
+    "ctrl-alt-shift-down",
     "ctrl-tab",
     "ctrl-shift-tab",
     "ctrl-shift-pageup",
@@ -91,7 +95,8 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         // 抢走按键，CC/Codex 收不到 0x1b（旧壳无 overlay 时 Esc 一定进 PTY）。
         KeyBinding::new("escape", CloseCommandPalette, Some(PALETTE_KEY_CONTEXT)),
         // 分屏（旧壳 nebula_key_bindings 同键位）：ctrl+shift+d 左右、
-        // ctrl+shift+s 上下、ctrl+shift+enter 缩放、ctrl+alt+方向切聚焦。
+        // ctrl+shift+s 上下、ctrl+shift+enter 缩放、ctrl+alt+方向切聚焦，
+        // 再加 shift 与该方向的 pane 交换位置。
         KeyBinding::new("ctrl-shift-d", SplitRight, None),
         KeyBinding::new("ctrl-shift-s", SplitDown, None),
         KeyBinding::new("ctrl-shift-enter", ToggleZoom, None),
@@ -99,6 +104,10 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-alt-right", FocusPaneRight, None),
         KeyBinding::new("ctrl-alt-up", FocusPaneUp, None),
         KeyBinding::new("ctrl-alt-down", FocusPaneDown, None),
+        KeyBinding::new("ctrl-alt-shift-left", pane_header::SwapPaneLeft, None),
+        KeyBinding::new("ctrl-alt-shift-right", pane_header::SwapPaneRight, None),
+        KeyBinding::new("ctrl-alt-shift-up", pane_header::SwapPaneUp, None),
+        KeyBinding::new("ctrl-alt-shift-down", pane_header::SwapPaneDown, None),
         KeyBinding::new("ctrl-tab", SelectNextTab, None),
         KeyBinding::new("ctrl-shift-tab", SelectPreviousTab, None),
         // 移动标签与终端回滚翻页分开：回滚只处理不带 Ctrl 的

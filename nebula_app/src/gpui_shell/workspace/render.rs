@@ -211,6 +211,18 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &FocusPaneDown, window, cx| {
                 this.navigate_pane(SplitNav::Down, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &pane_header::SwapPaneLeft, window, cx| {
+                this.swap_pane(SplitNav::Left, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &pane_header::SwapPaneRight, window, cx| {
+                this.swap_pane(SplitNav::Right, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &pane_header::SwapPaneUp, window, cx| {
+                this.swap_pane(SplitNav::Up, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &pane_header::SwapPaneDown, window, cx| {
+                this.swap_pane(SplitNav::Down, window, cx);
+            }))
             .on_action(cx.listener(Self::select_tab))
             .on_action(cx.listener(|this, _: &SelectNextTab, window, cx| {
                 this.select_adjacent_tab(true, window, cx);
