@@ -982,6 +982,7 @@ impl EventSink {
 
 #[derive(Clone, Default)]
 pub struct RuntimeHub {
+    predictions: Arc<crate::prompt_suggestions::service::Service>,
     inner: Arc<Mutex<HubState>>,
 }
 

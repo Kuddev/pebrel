@@ -14,6 +14,7 @@ const RESIDENT_ENDPOINT: &str = "resident";
 struct HostedEndpoint {
     endpoint: Endpoint,
     shared_discovery: bool,
+    prediction_token: String,
 }
 
 static CHILD_ENDPOINT: Mutex<Option<HostedEndpoint>> = Mutex::new(None);
@@ -21,9 +22,20 @@ static CHILD_ENDPOINT: Mutex<Option<HostedEndpoint>> = Mutex::new(None);
 /// Shared residents export discovery mode; private instances export only their
 /// own address. An explicit mode also replaces a nested launch's inherited pin.
 pub(crate) fn apply_child_endpoint(env: &mut std::collections::HashMap<String, String>) {
-    env.retain(|key, _| !key.eq_ignore_ascii_case(ENDPOINT_ENV));
+    env.retain(|key, _| {
+        ![ENDPOINT_ENV, "PEBREL_PREDICTION_ENDPOINT", "PEBREL_PREDICTION_TOKEN"]
+            .iter()
+            .any(|name| key.eq_ignore_ascii_case(name))
+    });
     if let Some(hosted) = CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
     {
+        if !hosted.prediction_token.is_empty() {
+            env.insert(
+                "PEBREL_PREDICTION_ENDPOINT".into(),
+                format!("http://127.0.0.1:{}", hosted.endpoint.port),
+            );
+            env.insert("PEBREL_PREDICTION_TOKEN".into(), hosted.prediction_token.clone());
+        }
         env.insert(
             ENDPOINT_ENV.to_owned(),
             child_endpoint_value(&hosted.endpoint, hosted.shared_discovery),
@@ -264,6 +276,7 @@ impl RuntimeServer {
             return None;
         }
 
+        let prediction_token = hub.predictions.token.clone();
         let server_token = endpoint.token.clone();
         let spawned = std::thread::Builder::new()
             .name("nebula-runtime-api".into())
@@ -274,6 +287,7 @@ impl RuntimeServer {
                 Some(HostedEndpoint {
                     endpoint: endpoint.clone(),
                     shared_discovery: path.is_some(),
+                    prediction_token,
                 });
             Some(Self { endpoint, port_file: path, _owner_lock: owner_lock })
         } else {
@@ -431,7 +445,7 @@ mod tests {
         // including differently cased Windows environment keys.
         env.insert(ENDPOINT_ENV.to_ascii_lowercase(), "old private endpoint".into());
         apply_child_endpoint(&mut env);
-        assert_eq!(env.len(), 1);
+        assert_eq!(env.len(), 3);
         assert_eq!(env[ENDPOINT_ENV], RESIDENT_ENDPOINT);
         let discovered =
             read_inherited_endpoint(Some(env[ENDPOINT_ENV].as_ref()), || path.clone()).unwrap();
