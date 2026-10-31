@@ -198,6 +198,22 @@
     }
   },
   "settings": {
+    "search": {
+      "terms": {
+        "application": "application app update version github support",
+        "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
+        "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
+        "providers": "providers provider ai api prediction prompt suggestions",
+        "ssh": "ssh host remote connection",
+        "network": "network proxy connectivity",
+        "interaction": "interaction copy paste tab panel focus follows mouse",
+        "keymap": "keymap key binding shortcut quick terminal",
+        "advanced": "advanced session tray restore startup autostart login silent",
+        "backup": "backup cloud sync export restore webdav s3 sftp 123 nextcloud synology nas r2 minio snapshots",
+        "agents": "agents agent hook hooks claude codex opencode cursor kimi pi omp copilot grok",
+        "mobile": "mobile phone android ios remote pairing qr lan relay"
+      }
+    },
     "opacity": {
       "title": "Window background opacity",
       "description": "Lower values make terminal and Settings backgrounds more transparent. Text stays opaque."
