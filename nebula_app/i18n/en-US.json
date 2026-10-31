@@ -1989,5 +1989,8 @@
   "session.tabs_reopened_after_crash": "After an unexpected exit, reopened {count} tabs. Sessions are starting; any startup errors remain in their tabs.",
   "terminal.ssh_session_stopped": "Session stopped.",
   "terminal.ssh_session_keys": "Press R to reconnect. Press Enter to close this terminal.",
-  "terminal.ssh_reconnecting": "Reconnecting…"
+  "terminal.ssh_reconnecting": "Reconnecting…",
+  "startup": {
+    "handover_unconfirmed": "The running Pebrel instance did not confirm the open request. It may already have opened the tab or window. Check the existing window before trying again; this launch will not retry."
+  }
 }

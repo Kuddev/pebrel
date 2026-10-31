@@ -294,6 +294,8 @@ impl WindowIdentity {
 /// Available CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Subcommands {
+    /// Start a native AI agent with process-local Pebrel prompt predictions.
+    Predict(crate::prompt_suggestions::launcher::Options),
     /// Render Markdown, JSON tables, or Git progress in the current terminal.
     View(crate::native_view_cli::Options),
     /// Agent-oriented terminal control: split panes, run commands, start Codex/Claude,
