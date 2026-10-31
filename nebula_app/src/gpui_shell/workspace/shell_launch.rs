@@ -15,6 +15,18 @@
 use gpui::App;
 use std::path::Path;
 
+/// Direct commands use the same launch identity at startup and in a resident tab.
+pub(super) fn command_launch(
+    command: &crate::config::ui_config::Program,
+    cwd: Option<&Path>,
+) -> crate::session::LaunchSession {
+    let program = command.program().to_owned();
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
+    let launch =
+        crate::session::LaunchSession::Shell { name, program, args: command.args().to_vec() };
+    at_explicit_directory(launch, cwd)
+}
+
 /// Resolve one explicit request, applying its directory only to the launch snapshot.
 pub(super) fn resolve_shell_at(
     shell_id: &str,
@@ -38,7 +50,7 @@ pub(super) fn at_explicit_directory(
     };
     // Encode explicit directories before the PTY fallback sees an inherited cwd.
     // Both guest paths and validated host paths go through WSL's own --cd parser.
-    if crate::shell_detect::is_wsl_launcher(program)
+    if crate::platform::launch_directory::is_wsl_program(program)
         && let Some(directory) = crate::platform::launch_directory::wsl_argument(cwd)
         && let Some(updated) = crate::shell_detect::wsl_args_in_directory(program, args, &directory)
     {
@@ -93,7 +105,8 @@ pub(super) fn profile_shell(
     profile: &crate::config::ui_config::Profile,
 ) -> nebula_terminal::tty::Shell {
     let shell = profile.shell();
-    if let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
+    if crate::platform::launch_directory::is_wsl_program(shell.program())
+        && let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
         && !launch.chooses_directory
         && let Some(cwd) =
             profile.cwd.as_deref().and_then(crate::platform::launch_directory::wsl_argument)

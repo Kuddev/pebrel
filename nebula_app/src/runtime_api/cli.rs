@@ -397,8 +397,8 @@ fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
             )?;
             print_response(&response, options.pretty)
         },
-        CliCommand::NewTab { window } => {
-            let response = request_once("tab.new", json!({ "window_id": window }), timeout)?;
+        CliCommand::NewTab(launch) => {
+            let response = request_once("tab.new", tab_launch_params(launch)?, timeout)?;
             print_response(&response, options.pretty)
         },
         CliCommand::CloseTab { window, tab_index } => {
@@ -586,6 +586,41 @@ fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
     }
 }
 
+pub(super) fn tab_launch_params(
+    launch: crate::cli::TabLaunchOptions,
+) -> Result<Value, Box<dyn Error>> {
+    let mut params = json!({ "window_id": launch.window });
+    if let Some(cwd) = launch.cwd {
+        // The resident may have been started in a different directory.
+        let cwd = crate::cli::repair_context_menu_dir(cwd);
+        let wsl = cfg!(windows)
+            && (launch.shell.as_deref().is_some_and(|id| {
+                id.eq_ignore_ascii_case("wsl")
+                    || id.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("wsl:"))
+            }) || launch
+                .command
+                .first()
+                .is_some_and(|program| crate::platform::launch_directory::is_wsl_program(program)));
+        params["cwd"] = if wsl {
+            json!(crate::platform::launch_directory::wsl_argument(&cwd).ok_or_else(|| {
+                CliError::new("invalid_params", "cwd is not a valid WSL path")
+            })?)
+        } else {
+            let absolute = std::path::absolute(cwd)?;
+            json!(absolute.to_str().ok_or_else(|| {
+                CliError::new("invalid_params", "cwd cannot be represented as a UTF-8 JSON string")
+            })?)
+        };
+    }
+    if let Some(shell) = launch.shell {
+        params["shell"] = json!(shell);
+    }
+    if !launch.command.is_empty() {
+        params["argv"] = json!(launch.command);
+    }
+    Ok(params)
+}
+
 /// Dig a pane's transition counter out of a command response's embedded
 /// snapshot. Returns `None` when the shape is unexpected, which degrades the
 /// follow-up wait to plain state matching rather than failing the command.
@@ -695,6 +730,88 @@ impl Error for CliError {}
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn tab_launch_rejects_non_utf8_directory_with_structured_error() {
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let name = {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(b"project-\xff".to_vec())
+        };
+        #[cfg(windows)]
+        let name = {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[b'p' as u16, 0xd800])
+        };
+        let cwd = root.path().join(name);
+        std::fs::create_dir(&cwd).unwrap();
+        assert!(cwd.to_str().is_none());
+        let error = tab_launch_params(crate::cli::TabLaunchOptions {
+            window: None,
+            cwd: Some(cwd),
+            shell: None,
+            command: Vec::new(),
+        })
+        .unwrap_err();
+        assert_eq!(error.downcast_ref::<CliError>().unwrap().code(), "invalid_params");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn tab_launch_wsl_names_keep_native_directory_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("./project");
+        let expected = std::path::absolute(&cwd).unwrap();
+        for (shell, command) in [
+            (Some("wsl:Ubuntu".into()), Vec::new()),
+            (None, vec!["wsl".into(), "literal value".into()]),
+            (None, vec!["wsl.exe".into()]),
+        ] {
+            let params = tab_launch_params(crate::cli::TabLaunchOptions {
+                window: None,
+                cwd: Some(cwd.clone()),
+                shell,
+                command,
+            })
+            .unwrap();
+            assert_eq!(params["cwd"], json!(expected));
+        }
+    }
+
+    #[test]
+    fn tab_launch_resolves_the_callers_directory_and_omits_absent_fields() {
+        let options = crate::cli::TabLaunchOptions {
+            window: Some(7),
+            cwd: Some("project space".into()),
+            shell: None,
+            command: vec!["program".into(), "two words".into(), "".into()],
+        };
+        let params = tab_launch_params(options).unwrap();
+        assert_eq!(params["cwd"], json!(std::env::current_dir().unwrap().join("project space")));
+        assert_eq!(params["argv"], json!(["program", "two words", ""]));
+        assert!(params.get("shell").is_none());
+        let options = crate::cli::TabLaunchOptions {
+            window: None,
+            cwd: None,
+            shell: None,
+            command: Vec::new(),
+        };
+        assert_eq!(tab_launch_params(options).unwrap(), json!({"window_id": null}));
+        for (shell, command) in [
+            (Some("wsl:Ubuntu".into()), vec![]),
+            (None, vec!["wsl.exe".into(), "--exec".into(), "sh".into()]),
+        ] {
+            let options = crate::cli::TabLaunchOptions {
+                window: None,
+                cwd: Some("/home/guest/project".into()),
+                shell,
+                command,
+            };
+            assert_eq!(tab_launch_params(options).unwrap()["cwd"], "/home/guest/project");
+        }
+    }
 
     #[test]
     fn plugin_response_checks_identity_and_envelope() {
