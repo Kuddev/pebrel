@@ -8,6 +8,8 @@ use gpui_component::{
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod shell_pointer;
+
 struct Probe {
     terminal: Entity<TerminalView>,
     input: Entity<InputState>,

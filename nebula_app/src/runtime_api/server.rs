@@ -148,12 +148,7 @@ pub fn try_open_directory_existing(dir: &std::path::Path, shell: Option<&str>) -
 /// 仍先发送 ATTACH，保证隐藏驻留进程被唤醒；真正的窗口由同一 GPUI App
 /// 创建，避免第二个进程争抢 runtime.port 和托盘所有权。
 pub fn try_open_window_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
-    if legacy_request("ATTACH").is_none() {
-        return false;
-    }
-    cli::request_once("window.create", handover_params(dir, shell), IO_TIMEOUT)
-        .map(|response| response.ok)
-        .unwrap_or(false)
+    handover::open("window.create", handover_params(dir, shell))
 }
 
 /// 交接请求的参数：目录与 shell 都可缺省。
@@ -172,34 +167,25 @@ fn handover_params(dir: Option<&std::path::Path>, shell: Option<&str>) -> serde_
 }
 
 fn try_open_tab_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
-    if legacy_request("ATTACH").is_none() {
-        return false;
-    }
-    // ATTACH 与 tab.new 落到同一事件队列，窗口先恢复，新标签随后创建。
-    cli::request_once("tab.new", handover_params(dir, shell), IO_TIMEOUT)
-        .map(|response| response.ok)
-        .unwrap_or(false)
+    handover::open("tab.new", handover_params(dir, shell))
 }
 
-fn legacy_request(verb: &str) -> Option<()> {
+pub(super) fn attach_endpoint() -> Option<Endpoint> {
+    let attach = |endpoint: Endpoint| legacy_request_to("ATTACH", &endpoint).map(|_| endpoint);
     let local = CHILD_ENDPOINT
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .as_ref()
         .map(|hosted| hosted.endpoint.clone());
     if let Some(endpoint) = local {
-        return legacy_request_to(verb, &endpoint);
+        return attach(endpoint);
     }
     if std::env::var_os(ENDPOINT_ENV).is_some() {
-        return read_endpoint().and_then(|endpoint| legacy_request_to(verb, &endpoint));
+        return read_endpoint().and_then(attach);
     }
     read_endpoint()
-        .and_then(|endpoint| legacy_request_to(verb, &endpoint))
-        // 已运行的 pre-v1 版本只发布 mux.port；升级期间仍允许普通启动交接。
-        .or_else(|| {
-            read_endpoint_from(legacy_port_file())
-                .and_then(|endpoint| legacy_request_to(verb, &endpoint))
-        })
+        .and_then(attach)
+        .or_else(|| read_endpoint_from(legacy_port_file()).and_then(attach))
 }
 
 fn legacy_request_to(verb: &str, endpoint: &Endpoint) -> Option<()> {
