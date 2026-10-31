@@ -37,6 +37,13 @@ use gpui::{App, KeyBinding};
 
 gpui::actions!(nebula_terminal, [TerminalTab, TerminalBackTab]);
 
+/// Explicit user-configured terminal bytes, adapted from config::Action::Esc.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = nebula_terminal, no_json)]
+pub(super) struct SendString {
+    pub(super) text: String,
+}
+
 pub(super) const KEY_CONTEXT: &str = "NebulaTerminal";
 
 /// 终端必须先于组件库 Root 接住 Tab；否则同一次按键在补齐写入后还会触发

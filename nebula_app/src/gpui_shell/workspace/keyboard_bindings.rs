@@ -242,6 +242,11 @@ fn workspace_binding_in_context(
         return Some(KeyBinding::new(&combo, action, scope));
     }
     match action {
+        Action::Esc(text) => Some(KeyBinding::new(
+            &combo,
+            crate::gpui_shell::terminal::SendString { text: text.clone() },
+            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+        )),
         Action::ToggleCommandPalette => Some(KeyBinding::new(&combo, ToggleCommandPalette, scope)),
         Action::ToggleShellPicker => Some(KeyBinding::new(&combo, ToggleShellPicker, scope)),
         Action::CreateNewTab => Some(KeyBinding::new(&combo, NewTerminal, scope)),
@@ -306,11 +311,14 @@ impl NebulaWorkspace {
             if crate::display::keymap::parse_combo(&combo).is_none() {
                 continue;
             }
-            // Register at both workspace and terminal depth so a cleared default
-            // cannot continue to intercept input through a more specific context.
+            // Terminal strings have one scoped binding; workspace actions also
+            // need the root binding so they can override less-specific defaults.
             for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
                 if let Some(binding) = workspace_binding_in_context(&combo, &action, scope) {
                     current_bindings.push(binding);
+                }
+                if matches!(action, crate::config::Action::Esc(_)) {
+                    break;
                 }
             }
         }

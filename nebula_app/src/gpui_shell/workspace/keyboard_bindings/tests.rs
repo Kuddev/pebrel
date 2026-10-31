@@ -388,6 +388,118 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn send_string_keybind_dispatches_exact_bytes_only_to_the_focused_terminal(
+        cx: &mut TestAppContext,
+    ) {
+        use nebula_terminal::event_loop::Msg;
+        use nebula_terminal::vte::ansi::{
+            Handler as _, KeyboardModes, KeyboardModesApplyBehavior, NamedPrivateMode, PrivateMode,
+        };
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        let (terminal, receiver) = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "string shortcut fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                let receiver =
+                    terminal.update(cx, |view, _| view.install_completion_test_session());
+                workspace.update_keybinds(
+                    vec![("shift+enter".into(), r#"SendString:"\u001b\r""#.into())],
+                    cx,
+                );
+                (terminal, receiver)
+            })
+        });
+        cx.run_until_parked();
+        let drain = || {
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<u8>>()
+        };
+        // Explicit strings bypass both paste framing and protocol key encoding.
+        for mode in [
+            None,
+            Some(PrivateMode::Named(NamedPrivateMode::BracketedPaste)),
+            Some(PrivateMode::Unknown(9001)),
+        ] {
+            terminal.update(&mut cx, |view, _| {
+                if let Some(mode) = mode {
+                    view.session.as_ref().unwrap().term.lock().set_private_mode(mode);
+                }
+            });
+            press("shift-enter", &mut cx);
+            press("shift-enter", &mut cx);
+            assert_eq!(drain(), b"\x1b\r\x1b\r");
+        }
+        terminal.update(&mut cx, |view, _| {
+            let mut term = view.session.as_ref().unwrap().term.lock();
+            term.set_options(nebula_terminal::term::Config {
+                kitty_keyboard: true,
+                ..Default::default()
+            });
+            term.set_keyboard_mode(
+                KeyboardModes::DISAMBIGUATE_ESC_CODES | KeyboardModes::REPORT_EVENT_TYPES,
+                KeyboardModesApplyBehavior::Replace,
+            );
+            assert!(term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+        });
+        press("shift-enter", &mut cx);
+        assert_eq!(drain(), b"\x1b\r", "no synthetic protocol key-up");
+
+        for text in ["", "\r\n\t\\\"中文"] {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(
+                    vec![(
+                        "shift+enter".into(),
+                        format!("SendString:{}", serde_json::to_string(text).unwrap()),
+                    )],
+                    cx,
+                );
+            });
+            press("shift-enter", &mut cx);
+            assert_eq!(drain(), text.as_bytes());
+        }
+        terminal.update(&mut cx, |view, _| view.marked_text = Some("composing".into()));
+        press("shift-enter", &mut cx);
+        assert!(drain().is_empty(), "IME composition must not inject the shortcut");
+        terminal.update(&mut cx, |view, _| view.marked_text = None);
+
+        // The launcher's real Input has focus inside the same workspace.
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.update_keybinds(
+                vec![("ctrl+alt+f9".into(), r#"SendString:"\u001b\r""#.into())],
+                cx,
+            );
+        });
+        press(if is_macos() { "cmd-k" } else { "ctrl-k" }, &mut cx);
+        assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        press("ctrl-alt-f9", &mut cx);
+        assert!(drain().is_empty(), "input fields must not write to the terminal");
+        press("escape", &mut cx);
+
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+        press("shift-enter", &mut cx);
+        assert_eq!(drain(), b"\x1b[13;2u", "removal restores negotiated keys");
+    }
+
+    #[gpui::test]
     fn command_shortcut_registration_follows_runtime_platform(cx: &mut TestAppContext) {
         let (_directory, workspace, mut cx) = open_workspace(1, cx);
         press("cmd-k", &mut cx);

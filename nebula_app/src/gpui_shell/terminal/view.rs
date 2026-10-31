@@ -1677,6 +1677,7 @@ impl Render for TerminalView {
             .py(px(8.0))
             .px(px(12.0))
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_send_string))
             .on_action(cx.listener(Self::on_terminal_tab))
             .on_action(cx.listener(Self::on_terminal_back_tab))
             .on_key_down(cx.listener(Self::on_key_down))

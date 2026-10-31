@@ -682,15 +682,25 @@ pub(crate) fn display_combo(mods: ModifiersState, key: &BindingKey) -> Option<St
 pub(crate) fn parse_action(name: &str) -> Option<Action> {
     use serde::Deserialize as _;
     let name = name.trim();
+    if let Some((kind, payload)) = name.split_once(':')
+        && kind.eq_ignore_ascii_case("SendString")
+    {
+        return serde_json::from_str::<String>(payload).ok().map(Action::Esc);
+    }
     if name.eq_ignore_ascii_case("unbound") {
         return Some(Action::None);
     }
     Action::deserialize(toml::Value::String(name.to_owned())).ok()
 }
 
-/// Action → 存储名（Debug 名即 variant 名；仅 unit variants 会出现在
-/// 自定义表里，Debug 输出必然干净）。
+/// Action → 存储名；带文本的动作使用 JSON 保持转义与单行存储。
 pub(crate) fn action_storage_name(action: &Action) -> String {
+    if let Action::Esc(text) = action {
+        return format!(
+            "SendString:{}",
+            serde_json::to_string(text).expect("string serialization")
+        );
+    }
     format!("{action:?}")
 }
 
@@ -1180,6 +1190,39 @@ mod tests {
         assert_eq!(parse_action("none"), Some(Action::None));
         assert_eq!(parse_action("unbound"), Some(Action::None));
         assert!(parse_action("NotAnAction").is_none());
+    }
+
+    #[test]
+    fn send_string_keybind_roundtrips_control_characters_as_one_settings_line() {
+        let text = "\u{1b}\r\n\t\0\\\"中文: =";
+        let action = Action::Esc(text.into());
+        let stored = action_storage_name(&action);
+        assert!(!stored.contains(['\r', '\n']));
+        assert_eq!(parse_action(&stored), Some(action.clone()));
+        assert_eq!(parse_action(r#"SendString:"\u001b\r""#), Some(Action::Esc("\u{1b}\r".into())));
+        assert_eq!(parse_action(r#"sendstring: """#), Some(Action::Esc(String::new())));
+        let settings = format!("keybind=shift+enter:{stored}\n");
+        let raw = nebula_settings::keybind_pairs_from_text(&settings);
+        let bindings = build_bindings(&raw);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].action, action);
+        assert_eq!(nebula_settings::apply_keybinds("", &raw), settings);
+    }
+
+    #[test]
+    fn send_string_keybind_rejects_malformed_or_non_string_payloads() {
+        for value in [
+            "SendString",
+            "SendString:",
+            "SendString:null",
+            "SendString:12",
+            "SendString:[]",
+            r#"SendString:"\x1b\r""#,
+            r#"SendString:"unterminated"#,
+            r#"SendString:"ok" trailing"#,
+        ] {
+            assert!(parse_action(value).is_none(), "{value}");
+        }
     }
 
     #[test]
