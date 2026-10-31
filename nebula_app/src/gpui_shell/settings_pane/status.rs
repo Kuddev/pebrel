@@ -40,41 +40,49 @@ impl ProviderStatus {
     pub(in crate::gpui_shell) fn text(&self, language: crate::display::UiLanguage) -> String {
         match self {
             Self::Notice(message) => language.text(*message).into(),
-            Self::ClaudeConfirmation => language.text(crate::i18n::Message::ProvidersClaudeConfirmation).into(),
-            Self::AppliedToClaude(path) => format!("{}: {}", language.text(crate::i18n::Message::ProvidersAppliedClaude), path.display()),
-            Self::ModelsFetched(count) => language.text(crate::i18n::Message::ProvidersModelsFetched).replace("{count}", &count.to_string()),
-            Self::Saved => language.pick("供应商配置已保存", "Provider settings saved").into(),
-            Self::Added => language.pick("已添加自定义供应商", "Custom provider added").into(),
+            Self::ClaudeConfirmation => {
+                language.text(crate::i18n::Message::ProvidersClaudeConfirmation).into()
+            },
+            Self::AppliedToClaude(path) => format!(
+                "{}: {}",
+                language.text(crate::i18n::Message::ProvidersAppliedClaude),
+                path.display()
+            ),
+            Self::ModelsFetched(count) => language
+                .text(crate::i18n::Message::ProvidersModelsFetched)
+                .replace("{count}", &count.to_string()),
+            Self::Saved => {
+                language.text(crate::i18n::Message::SettingsStatusProviderSettingsSaved).into()
+            },
+            Self::Added => {
+                language.text(crate::i18n::Message::SettingsStatusCustomProviderAdded).into()
+            },
             Self::AtLeastOneRequired => {
-                language.pick("至少保留一个供应商", "Keep at least one provider").into()
+                language.text(crate::i18n::Message::SettingsStatusKeepAtLeastOneProvider).into()
             },
             Self::Deleted => language
-                .pick("供应商及其凭据已删除", "Provider and its credentials deleted")
+                .text(crate::i18n::Message::SettingsStatusProviderAndItsCredentialsDeleted)
                 .into(),
-            Self::ApiKeySaved => language
-                .pick(
-                    "API Key 已保存到系统凭据管理器",
-                    "API key saved to the system credential manager",
-                )
-                .into(),
-            Self::Testing => language.pick("正在测试连接…", "Testing connection...").into(),
+            Self::ApiKeySaved => {
+                language.text(crate::i18n::Message::SettingsStatusApiKeySavedToThe).into()
+            },
+            Self::Testing => {
+                language.text(crate::i18n::Message::SettingsStatusTestingConnection).into()
+            },
             Self::TestResult { outcome, elapsed_ms } => {
                 format!("{} · {elapsed_ms} ms", language.provider_test_message(outcome))
             },
-            Self::CodexConfirmation => language
-                .pick(
-                    "再次点击确认：API Key 将明文写入 Codex auth.json（原文件会备份）",
-                    "Click again to confirm: the API key will be written in plain text to Codex auth.json (the original file will be backed up)",
-                )
-                .into(),
+            Self::CodexConfirmation => {
+                language.text(crate::i18n::Message::SettingsStatusClickAgainToConfirmThe).into()
+            },
             Self::AppliedToCodex(path) => format!(
                 "{}: {}",
-                language.pick("已应用到 Codex", "Applied to Codex"),
+                language.text(crate::i18n::Message::SettingsStatusAppliedToCodex),
                 path.display()
             ),
             Self::Error(error) => format!(
                 "{}: {error}",
-                language.pick("操作失败", "Operation failed")
+                language.text(crate::i18n::Message::SettingsStatusOperationFailed)
             ),
         }
     }
@@ -116,53 +124,46 @@ impl BackupStatus {
     pub(in crate::gpui_shell) fn text(&self, language: crate::display::UiLanguage) -> String {
         match self {
             Self::Notice(message) => language.text(*message).into(),
-            Self::PassphraseTooShort => language
-                .pick("备份密码至少 8 位", "The backup password must be at least 8 characters")
-                .into(),
-            Self::SelectionRequired => language
-                .pick("请至少勾选一个备份类别", "Select at least one backup category")
-                .into(),
-            Self::Processing => language.pick("处理中…", "Processing...").into(),
+            Self::PassphraseTooShort => {
+                language.text(crate::i18n::Message::SettingsStatusTheBackupPasswordMustBe).into()
+            },
+            Self::SelectionRequired => {
+                language.text(crate::i18n::Message::SettingsStatusSelectAtLeastOneBackup).into()
+            },
+            Self::Processing => {
+                language.text(crate::i18n::Message::SettingsStatusProcessing).into()
+            },
             Self::RemoteConfigSaved => {
-                language.pick("远端配置已保存", "Remote configuration saved").into()
+                language.text(crate::i18n::Message::SettingsStatusRemoteConfigurationSaved).into()
             },
             Self::CredentialEmpty => {
-                language.pick("凭据不能为空", "Credentials cannot be empty").into()
+                language.text(crate::i18n::Message::SettingsStatusCredentialsCannotBeEmpty).into()
             },
-            Self::CredentialUnsupported => language
-                .pick(
-                    "当前协议不需要独立凭据",
-                    "The current protocol does not use a separate credential",
-                )
-                .into(),
-            Self::CredentialSaved => language
-                .pick(
-                    "凭据已写入系统凭据管理器",
-                    "Credential saved to the system credential manager",
-                )
-                .into(),
+            Self::CredentialUnsupported => {
+                language.text(crate::i18n::Message::SettingsStatusTheCurrentProtocolDoesNot).into()
+            },
+            Self::CredentialSaved => {
+                language.text(crate::i18n::Message::SettingsStatusCredentialSavedToTheSystem).into()
+            },
             Self::Completed(BackupCompletion::Exported(path)) => format!(
                 "{}: {}",
-                language.pick("已导出加密备份", "Encrypted backup exported"),
+                language.text(crate::i18n::Message::SettingsStatusEncryptedBackupExported),
                 path.display()
             ),
             Self::Completed(BackupCompletion::Restored) => language
-                .pick(
-                    "已从备份恢复（字体/托盘等部分设置重启后生效）",
-                    "Backup restored (some settings, including fonts and tray options, apply after restart)",
-                )
+                .text(crate::i18n::Message::SettingsStatusBackupRestoredSomeSettingsIncluding)
                 .into(),
-            Self::Completed(BackupCompletion::Pushed(location)) => {
-                format!("{} {location}", language.pick("已推送到", "Pushed to"))
-            },
-            Self::Completed(BackupCompletion::Pulled(name)) => format!(
-                "{} {name} {}",
-                language.pick("已从", "Restored from"),
-                language.pick("恢复（部分设置重启后生效）", "(some settings apply after restart)")
+            Self::Completed(BackupCompletion::Pushed(location)) => language.format(
+                crate::i18n::Message::SettingsStatusPushedTo,
+                &[("location", &location.to_string())],
+            ),
+            Self::Completed(BackupCompletion::Pulled(name)) => language.format(
+                crate::i18n::Message::SettingsStatusRestoredFrom,
+                &[("name", &name.to_string())],
             ),
             Self::Error(error) => format!(
                 "{}: {error}",
-                language.pick("备份操作失败", "Backup operation failed")
+                language.text(crate::i18n::Message::SettingsStatusBackupOperationFailed)
             ),
         }
     }
@@ -182,25 +183,22 @@ impl TerminalImportError {
         match self {
             Self::Scan(error) => format!(
                 "{}: {error}",
-                language.pick("无法扫描终端目录", "Could not scan the terminal directory")
+                language.text(crate::i18n::Message::SettingsStatusCouldNotScanTheTerminal)
             ),
             Self::NoSupportedTerminal => language
-                .pick(
-                    "目录中未找到受支持的终端程序",
-                    "No supported terminal program was found in the directory",
-                )
+                .text(crate::i18n::Message::SettingsStatusNoSupportedTerminalProgramWas)
                 .into(),
             Self::Load(error) => format!(
                 "{}: {error}",
-                language.pick("无法读取终端配置", "Could not read terminal profiles")
+                language.text(crate::i18n::Message::SettingsStatusCouldNotReadTerminalProfiles)
             ),
             Self::Import(error) => format!(
                 "{}: {error}",
-                language.pick("无法导入终端", "Could not import the terminal")
+                language.text(crate::i18n::Message::SettingsStatusCouldNotImportTheTerminal)
             ),
             Self::Save(error) => format!(
                 "{}: {error}",
-                language.pick("无法保存终端配置", "Could not save terminal profiles")
+                language.text(crate::i18n::Message::SettingsStatusCouldNotSaveTerminalProfiles)
             ),
         }
     }
@@ -256,94 +254,96 @@ impl SshStatus {
 
     pub(in crate::gpui_shell) fn text(&self, language: crate::display::UiLanguage) -> String {
         match self {
-            Self::LibraryImportedPartial { added, error } => language.format(crate::i18n::Message::HostsImportedPartial,
-                &[("added", &added.to_string()), ("error", error)]),
-            Self::LibraryProcessing => language.text(crate::i18n::Message::HostsProcessing).to_owned(),
+            Self::LibraryImportedPartial { added, error } => language.format(
+                crate::i18n::Message::HostsImportedPartial,
+                &[("added", &added.to_string()), ("error", error)],
+            ),
+            Self::LibraryProcessing => {
+                language.text(crate::i18n::Message::HostsProcessing).to_owned()
+            },
             Self::LibraryReloaded => language.text(crate::i18n::Message::HostsReloaded).to_owned(),
             Self::LibraryExported => language.text(crate::i18n::Message::HostsExported).to_owned(),
-            Self::LibraryImported { added, skipped } => language.format(crate::i18n::Message::HostsImported,
-                &[("added", &added.to_string()), ("skipped", &skipped.to_string())]),
-
-            Self::Saved(destination) => {
-                format!("{} {destination}", language.pick("已保存", "Saved"))
-            },
-            Self::Copied(label) => language.format(crate::i18n::Message::HostsCopied, &[("name", label)]),
-            Self::Pinned => language.pick("置顶状态已更新", "Pin status updated").into(),
-            Self::Imported(count) => format!(
-                "{} {count} {}",
-                language.pick("已导入，config 源共", "Imported"),
-                language.pick("个别名", "config aliases")
+            Self::LibraryImported { added, skipped } => language.format(
+                crate::i18n::Message::HostsImported,
+                &[("added", &added.to_string()), ("skipped", &skipped.to_string())],
             ),
-            Self::Opening(host) => {
-                format!("{} {host}…", language.pick("正在打开", "Opening"))
+
+            Self::Saved(destination) => language.format(
+                crate::i18n::Message::SettingsStatusSavedTo,
+                &[("destination", &destination.to_string())],
+            ),
+            Self::Copied(label) => {
+                language.format(crate::i18n::Message::HostsCopied, &[("name", label)])
             },
+            Self::Pinned => {
+                language.text(crate::i18n::Message::SettingsStatusPinStatusUpdated).into()
+            },
+            Self::Imported(count) => language.format(
+                crate::i18n::Message::SettingsStatusImportedAliases,
+                &[("count", &count.to_string())],
+            ),
+            Self::Opening(host) => language.format(
+                crate::i18n::Message::SettingsStatusOpeningHost,
+                &[("host", &host.to_string())],
+            ),
             Self::DeleteCommitted { hidden_config: true } => language
-                .pick(
-                    "已隐藏 config 别名，并清理 Pebrel Profile 与凭据",
-                    "Config alias hidden; Pebrel profile and credentials removed",
-                )
+                .text(crate::i18n::Message::SettingsStatusConfigAliasHiddenPebrelProfile)
                 .into(),
             Self::DeleteCommitted { hidden_config: false } => language
-                .pick(
-                    "已删除主机、Profile 与凭据",
-                    "Host, profile, and credentials deleted",
-                )
+                .text(crate::i18n::Message::SettingsStatusHostProfileAndCredentialsDeleted)
                 .into(),
             Self::CleanupPartial(details) => format!(
                 "{}: {details}",
-                language.pick(
-                    "主机已从列表移除，但部分清理失败",
-                    "Host removed from the list, but some cleanup failed",
-                )
+                language.text(crate::i18n::Message::SettingsStatusHostRemovedFromTheList)
             ),
-            Self::Restored(host) => {
-                format!("{} {host}", language.pick("已恢复", "Restored"))
-            },
+            Self::Restored(host) => language.format(
+                crate::i18n::Message::SettingsStatusRestoredHost,
+                &[("host", &host.to_string())],
+            ),
             Self::Validation(error) => error.text(language).into(),
             Self::PersistFailed(error) => format!(
                 "{}: {error}",
-                language.pick("写入设置失败", "Failed to write settings")
+                language.text(crate::i18n::Message::SettingsStatusFailedToWriteSettings)
             ),
             Self::DeleteFailed(error) => format!(
                 "{}: {error}",
-                language.pick("删除主机失败", "Failed to delete host")
+                language.text(crate::i18n::Message::SettingsStatusFailedToDeleteHost)
             ),
             Self::UndoFailed(error) => {
-                format!("{}: {error}", language.pick("撤销失败", "Undo failed"))
+                format!(
+                    "{}: {error}",
+                    language.text(crate::i18n::Message::SettingsStatusUndoFailed)
+                )
             },
             Self::TestStartFailed(error) => format!(
                 "{}: {error}",
-                language.pick("无法启动连接测试", "Could not start the connection test")
+                language.text(crate::i18n::Message::SettingsStatusCouldNotStartTheConnection)
             ),
             Self::ProfileLoadFailed(error) => format!(
                 "{}: {error}",
-                language.pick("加载 SSH Profile 失败", "Failed to load the SSH profile")
+                language.text(crate::i18n::Message::SettingsStatusFailedToLoadTheSsh)
             ),
             Self::ProfileSaveFailed(error) => format!(
                 "{}: {error}",
-                language.pick("保存 SSH Profile 失败", "Failed to save the SSH profile")
+                language.text(crate::i18n::Message::SettingsStatusFailedToSaveTheSsh)
             ),
             Self::HostListSaveFailed(error) => format!(
                 "{}: {error}",
-                language.pick("保存主机列表失败", "Failed to save the host list")
+                language.text(crate::i18n::Message::SettingsStatusFailedToSaveTheHost)
             ),
             Self::CredentialSaveFailed(error) => format!(
                 "{}: {error}",
-                language.pick(
-                    "Profile 已保存，但密码写入凭据管理器失败",
-                    "The profile was saved, but the password could not be written to the credential manager",
-                )
+                language.text(crate::i18n::Message::SettingsStatusTheProfileWasSavedBut)
             ),
-            Self::SavedWithCleanupError { destination, error } => format!(
-                "{} {destination}, {}: {error}",
-                language.pick("已保存", "Saved"),
-                language.pick(
-                    "但旧地址凭据清理失败",
-                    "but credentials for the previous address could not be removed",
-                )
+            Self::SavedWithCleanupError { destination, error } => language.format(
+                crate::i18n::Message::SettingsStatusSavedCleanupFailed,
+                &[("destination", &destination.to_string()), ("error", &error.to_string())],
             ),
             Self::Error(error) => {
-                format!("{}: {error}", language.pick("SSH 操作失败", "SSH operation failed"))
+                format!(
+                    "{}: {error}",
+                    language.text(crate::i18n::Message::SettingsStatusSshOperationFailed)
+                )
             },
         }
     }
