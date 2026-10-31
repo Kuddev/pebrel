@@ -205,5 +205,8 @@
     "move_left": "Nach links verschieben",
     "move_right": "Nach rechts verschieben",
     "tab_color": "Tab-Farbe"
+  },
+  "startup": {
+    "handover_unconfirmed": "Die laufende Pebrel-Instanz hat die Öffnungsanfrage nicht bestätigt. Der Tab oder das Fenster wurde möglicherweise bereits geöffnet. Prüfen Sie das vorhandene Fenster, bevor Sie es erneut versuchen. Dieser Start wiederholt die Anfrage nicht."
   }
 }

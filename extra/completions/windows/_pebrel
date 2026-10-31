@@ -48,7 +48,15 @@ _pebrel() {
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-command-$line[2]:"
         case $line[2] in
-            (view)
+            (predict)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':agent:(claude pi opencode)' \
+'*::args -- Arguments forwarded unchanged to the native agent:_default' \
+&& ret=0
+;;
+(view)
 _arguments "${_arguments_options[@]}" : \
 '--type=[Native renderer\: Markdown, JSON/NDJSON table, or Git progress]:KIND:(markdown table git)' \
 '(--plain)--native[Force native output, for a compatible remote terminal]' \
@@ -1322,7 +1330,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-help-command-$line[1]:"
         case $line[1] in
-            (view)
+            (predict)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(view)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1722,6 +1734,7 @@ esac
 (( $+functions[_pebrel_commands] )) ||
 _pebrel_commands() {
     local commands; commands=(
+'predict:Start a native AI agent with process-local Pebrel prompt predictions' \
 'view:Render Markdown, JSON tables, or Git progress in the current terminal' \
 'ctl:Agent-oriented terminal control\: split panes, run commands, start Codex/Claude, send prompts, wait for state changes, and read verified terminal output' \
 'env:Report this pane'\''s terminal identity, the control-plane path, and every command available to it. Answers even with no runtime reachable, so an agent can always discover what it has instead of guessing' \
@@ -2273,6 +2286,7 @@ _pebrel__env_commands() {
 (( $+functions[_pebrel__help_commands] )) ||
 _pebrel__help_commands() {
     local commands; commands=(
+'predict:Start a native AI agent with process-local Pebrel prompt predictions' \
 'view:Render Markdown, JSON tables, or Git progress in the current terminal' \
 'ctl:Agent-oriented terminal control\: split panes, run commands, start Codex/Claude, send prompts, wait for state changes, and read verified terminal output' \
 'env:Report this pane'\''s terminal identity, the control-plane path, and every command available to it. Answers even with no runtime reachable, so an agent can always discover what it has instead of guessing' \
@@ -2641,6 +2655,11 @@ _pebrel__help__plugin__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help plugin run commands' commands "$@"
 }
+(( $+functions[_pebrel__help__predict_commands] )) ||
+_pebrel__help__predict_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help predict commands' commands "$@"
+}
 (( $+functions[_pebrel__help__setup-ai_commands] )) ||
 _pebrel__help__setup-ai_commands() {
     local commands; commands=()
@@ -2901,6 +2920,11 @@ _pebrel__plugin__help__run_commands() {
 _pebrel__plugin__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin run commands' commands "$@"
+}
+(( $+functions[_pebrel__predict_commands] )) ||
+_pebrel__predict_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel predict commands' commands "$@"
 }
 (( $+functions[_pebrel__setup-ai_commands] )) ||
 _pebrel__setup-ai_commands() {

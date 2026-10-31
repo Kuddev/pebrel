@@ -781,6 +781,7 @@ if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) {
             }
         } catch {}
 
+        Start-PebrelPointerReadLine
         $line = $null
         if ($global:NebulaPreviousPSConsoleHostReadLine -and -not $global:NebulaPreviousReadLineRunning) {
             $global:NebulaPreviousReadLineRunning = $true
@@ -827,6 +828,7 @@ Clear-Host
 "#,
     include_str!("../connection.ps1"),
     include_str!("../completion.ps1"),
+    include_str!("../pointer.ps1"),
     include_str!("../clipboard.ps1")
 );
 
