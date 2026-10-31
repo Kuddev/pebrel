@@ -293,7 +293,8 @@ pub struct AiHookEvent {
     pub bridge_sequence: Option<u64>,
     pub occurred_at_ms: Option<u64>,
     pub received_at_ms: u64,
-    /// 进程内严格单调的接收序号，用于稳定批处理；不冒充 provider 顺序。
+    /// 进程内严格单调的接收序号；远端原始信封在进入 GPUI 队列前盖章，
+    /// 本地 Hook 在读取时盖章。不冒充 provider 顺序。
     pub received_sequence: u64,
     /// 写入命名管道的那个进程的真实 pid，由内核回答
     /// （`GetNamedPipeClientProcessId`），不是载荷里自报的。路由的第二因子：

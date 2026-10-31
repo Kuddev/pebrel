@@ -44,7 +44,12 @@ impl EventProxy {
 impl EventListener for EventProxy {
     fn send_event(&self, event: TerminalEvent) {
         if let TerminalEvent::AiHookEnvelope(envelope) = event {
-            if let Some(hook) = crate::ai_hook::parse_remote_envelope(&envelope, self.tab_id) {
+            let received_sequence = crate::ai_hook::next_receive_sequence();
+            if let Some(hook) = crate::ai_hook::parse_remote_envelope_with_sequence(
+                &envelope,
+                self.tab_id,
+                received_sequence,
+            ) {
                 self.send_event(EventType::AiHook(hook));
             }
             return;

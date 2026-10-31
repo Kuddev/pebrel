@@ -162,6 +162,11 @@ fn install_into(root: &mut Value, command: &str) -> Option<bool> {
                 }
                 found = true;
                 let Some(entry) = cmd.as_object_mut() else { continue };
+                // Prompt identity depends on this hook finishing before Claude
+                // processes the submitted prompt.
+                if event == "UserPromptSubmit" && entry.remove("async").is_some() {
+                    changed = true;
+                }
                 if entry.get("command").and_then(Value::as_str) != Some(&desired_command) {
                     entry.insert("command".into(), json!(desired_command));
                     changed = true;
@@ -627,6 +632,16 @@ mod generated_hook_tests {
         for event in CLAUDE_EVENTS {
             assert_eq!(root["hooks"][event].as_array().map(Vec::len), Some(1));
         }
+        assert_eq!(install_into(&mut root, HELPER), Some(false));
+    }
+
+    #[test]
+    fn claude_prompt_submit_hook_is_healed_to_synchronous_delivery() {
+        let mut root = json!({});
+        assert_eq!(install_into(&mut root, HELPER), Some(true));
+        root["hooks"]["UserPromptSubmit"][0]["hooks"][0]["async"] = json!(true);
+        assert_eq!(install_into(&mut root, HELPER), Some(true));
+        assert!(root["hooks"]["UserPromptSubmit"][0]["hooks"][0].get("async").is_none());
         assert_eq!(install_into(&mut root, HELPER), Some(false));
     }
 

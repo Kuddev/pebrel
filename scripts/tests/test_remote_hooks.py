@@ -244,6 +244,20 @@ class RemoteHooksTests(unittest.TestCase):
         self.assertEqual(payloads[-1]["transcript_path"], payloads[0]["transcript_path"])
         self.assertNotIn("last_assistant_message", payloads[-1])
 
+    def test_large_claude_failure_keeps_prompt_identity_and_error(self):
+        bridge = module("remote_bridge")
+        payload = {"hook_event_name": "StopFailure", "session_id": "main",
+                   "prompt_id": "current-prompt", "error": "unknown",
+                   "last_assistant_message": "x" * 70000}
+        with patch.object(bridge, "write_terminal") as write:
+            bridge.send("claude", False, "", payload, TOKEN)
+        frame = write.call_args.args[0]
+        encoded = frame.split(b";", 3)[3].removesuffix(b"\x07")
+        body = json.loads(base64.b64decode(encoded).split(b"\n", 1)[1])
+        self.assertEqual(body["prompt_id"], "current-prompt")
+        self.assertEqual(body["error"], "unknown")
+        self.assertNotIn("last_assistant_message", body)
+
     def test_large_pi_events_keep_the_native_file_and_bridge_lifetime(self):
         bridge = module("remote_bridge")
         payload = {"kind": "done", "session_id": "pi-native", "session_file": "/sessions/pi.jsonl",
