@@ -128,11 +128,18 @@ pub(in crate::gpui_shell) struct HostLibraryState {
     scroll: gpui::UniformListScrollHandle,
     pub(super) busy: bool,
     sequence: u64,
+    pub(super) skill_busy: bool,
+    pub(super) skill_result:
+        Option<Result<(crate::ai_agents::AgentKind, std::path::PathBuf), String>>,
+    pub(super) skill_copy: Entity<crate::gpui_shell::copy_feedback::CopyFeedback>,
+    _skill_copy_subscription: gpui::Subscription,
 }
 
 impl HostLibraryState {
     pub(in crate::gpui_shell) fn new(window: &mut Window, cx: &mut Context<SettingsPane>) -> Self {
         let language = crate::gpui_shell::config::ui_language(cx);
+        let skill_copy = cx.new(|_| crate::gpui_shell::copy_feedback::CopyFeedback::new());
+        let skill_copy_subscription = cx.observe(&skill_copy, |_, _, cx| cx.notify());
         Self {
             search: cx.new(|cx| {
                 InputState::new(window, cx)
@@ -150,6 +157,10 @@ impl HostLibraryState {
             scroll: Default::default(),
             busy: false,
             sequence: 0,
+            skill_busy: false,
+            skill_result: None,
+            skill_copy,
+            _skill_copy_subscription: skill_copy_subscription,
         }
     }
 
@@ -667,6 +678,7 @@ impl SettingsPane {
             .child(
                 v_flex().flex_1().min_w_0().justify_center().gap(px(1.0)).child(title).child(
                     div()
+                        .debug_selector(move || format!("ssh-host-detail-{ix}"))
                         .min_w_0()
                         .truncate()
                         .text_size(px(12.0))
@@ -686,7 +698,20 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
+        // 提前构建 AI 控制开关：它要用 &mut cx，必须在下面 `cx.theme()` 的
+        // 不可变借用之前完成，否则 NLL 报借用冲突。
+        let ai_control = self.switch_row(
+            "ssh_ai_control",
+            language.pick("允许 AI 控制服务器", "Allow AI to control servers"),
+            language.pick(
+                "智能体可以在这台机器保存的服务器上执行命令、传输文件。密码与私钥始终留在系统凭据库，不会交给智能体；每次操作追加到 ssh_audit.jsonl。",
+                "Agents can run commands and transfer files on your saved servers. Passwords and keys stay in the system keychain and are never handed to an agent; every action is appended to ssh_audit.jsonl.",
+            ),
+            self.runtime.ssh_ai_control,
+            cx,
+        );
         let controls = self.library_controls(cx);
+        let skill_controls = self.ssh_skill_controls(cx);
         let header = self.library_header(cx);
         let config_banner = self.library_config_banner(cx);
         let theme = cx.theme();
@@ -718,6 +743,7 @@ impl SettingsPane {
         )
         .track_scroll(&self.ssh_library.scroll)
         .w_full()
+        .flex_shrink_0()
         .h(px(HOST_ROW_HEIGHT * host_count.clamp(1, 8) as f32));
 
         let hidden_rows = self.ssh_show_hidden.then(|| {
@@ -764,10 +790,13 @@ impl SettingsPane {
         let undo_bar = self.ssh_delete_undo.as_ref().map(|undo| (undo.host.clone(), undo.seq));
 
         div()
+            .debug_selector(|| "ssh-settings-content".into())
             .flex()
             .flex_col()
             .gap(px(14.0))
             .w_full()
+            .min_w_0()
+            .flex_shrink_0()
             .max_w(px(1000.0))
             .px(px(if f32::from(window.viewport_size().width) < 1000.0 { 12.0 } else { 36.0 }))
             .pt(px(16.0))
@@ -844,6 +873,8 @@ impl SettingsPane {
                         ),
                 )
             })
+            .child(ai_control)
+            .child(skill_controls)
             .when_some(self.ssh_status.clone(), |group, status| {
                 let error = status.is_error();
                 let message = status.text(language);

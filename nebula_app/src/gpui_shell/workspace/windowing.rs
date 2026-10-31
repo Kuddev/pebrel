@@ -194,6 +194,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::AgentFork { .. }
         | RuntimeCommand::AgentPrompt { .. }
         | RuntimeCommand::AgentPaste { .. }
+        | RuntimeCommand::SshShell(_)
         | RuntimeCommand::AgentRead { .. } => RuntimeWindowPolicy::Preserve,
     }
 }
@@ -703,6 +704,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::CloseTab { window_id, .. }
         | RuntimeCommand::RenameTab { window_id, .. }
         | RuntimeCommand::MoveTab { window_id, .. } => (*window_id, None),
+        RuntimeCommand::SshShell(params) => (params.window_id, None),
         RuntimeCommand::Prompt { window_id, pane_id, .. }
         | RuntimeCommand::Paste { window_id, pane_id, .. }
         | RuntimeCommand::ClosePane { window_id, pane_id }

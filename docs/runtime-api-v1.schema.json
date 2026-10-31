@@ -103,7 +103,15 @@
             "conversation.read",
             "conversation.send",
             "conversation.choose",
-            "conversation.key"
+            "conversation.key",
+            "ssh.assets.list",
+            "ssh.assets.show",
+            "ssh.credentials.list",
+            "ssh.exec",
+            "ssh.upload",
+            "ssh.download",
+            "ssh.sync",
+            "ssh.shell"
           ]
         },
         "params": {

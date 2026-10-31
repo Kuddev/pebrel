@@ -1051,6 +1051,9 @@ pub struct RuntimeSettings {
     /// AI message toasts inside the application. System notifications and
     /// terminal/tab state are independent. Default on for existing users.
     pub ai_toasts: bool,
+    /// 允许本地 AI 客户端（`pebrel cli`）在已保存的服务器上执行命令与传输文件。
+    /// 默认关：这是一次需要用户知情同意的授权，不是默认能力。
+    pub ssh_ai_control: bool,
     /// Display lifetime for in-app cards; default mode retains each kind's lifetime.
     pub notification_duration: NotificationDuration,
     /// 新会话欢迎屏 fastfetch（默认关：启动速度优先于观感，旧壳裁定）。
@@ -1257,6 +1260,7 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             bell: raw.value("bell").and_then(BellModeName::from_settings).unwrap_or_default(),
             ai_toasts: raw.bool_on("ai_toasts").unwrap_or(true),
+            ssh_ai_control: raw.bool_on("ssh_ai_control").unwrap_or(false),
             notification_duration: raw
                 .value("notification_duration")
                 .and_then(NotificationDuration::from_settings)

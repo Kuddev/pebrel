@@ -17,13 +17,14 @@ mod extended;
 mod kimi;
 mod managed_files;
 mod runtime_skills;
+pub(crate) use runtime_skills::{SSH_SKILL_MD, install_ssh_skill_for};
 pub(super) mod settings;
 use codex_hooks::{ensure_codex_hooks, remove_codex_hooks};
 use codex_notify::{codex_config_dir, ensure_codex_notify, remove_codex_notify};
 pub use config_guard::spawn_config_guard;
 use runtime_skills::{
-    ManagedSkillInstall, ManagedSkillRemoval, ensure_runtime_skills, remove_runtime_skill,
-    runtime_skill_candidates,
+    ManagedSkillInstall, ManagedSkillRemoval, ensure_runtime_skills, ensure_ssh_skills,
+    remove_runtime_skill, remove_ssh_skill, runtime_skill_candidates, ssh_skill_candidates,
 };
 
 static ANNOUNCED: AtomicBool = AtomicBool::new(false);
@@ -317,6 +318,22 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
                 },
             }
         }
+        for (agent, path) in ssh_skill_candidates() {
+            match remove_ssh_skill(&path) {
+                Ok(ManagedSkillRemoval::Removed) => {
+                    println!("{agent}: 已移除 Pebrel SSH Skill（{}）。", path.display())
+                },
+                Ok(ManagedSkillRemoval::Absent) => {},
+                Ok(ManagedSkillRemoval::Conflict) => {
+                    eprintln!("{agent}: {} 已被用户修改，保留该 Skill。", path.display());
+                    failed = true;
+                },
+                Err(error) => {
+                    eprintln!("{agent}: 移除 SSH Skill 失败：{error}");
+                    failed = true;
+                },
+            }
+        }
     } else {
         for (agent, path, result) in ensure_runtime_skills() {
             match result {
@@ -337,11 +354,58 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
                 },
             }
         }
+        for (agent, path, result) in ensure_ssh_skills() {
+            match result {
+                Ok(ManagedSkillInstall::Installed) => {
+                    println!("{agent}: 已安装 Pebrel SSH Skill 到 {}。", path.display())
+                },
+                Ok(ManagedSkillInstall::Current) => {},
+                Ok(ManagedSkillInstall::Conflict) => {
+                    eprintln!(
+                        "{agent}: {} 存在非 Pebrel 管理或被编辑的 Skill，未覆盖。",
+                        path.display()
+                    );
+                    failed = true;
+                },
+                Err(error) => {
+                    eprintln!("{agent}: 安装 SSH Skill 失败：{error}");
+                    failed = true;
+                },
+            }
+        }
         println!("默认接入 Claude Code 与 Codex；其他 Agent 由设置菜单控制。");
         println!("Codex 原生 Hook 可能需要在 /hooks 中审阅启用；notify 兼容路径仍保留。");
         println!("对新启动的会话生效；正在运行的会话保持原快照。");
     }
     i32::from(failed)
+}
+
+/// 设置页的一键入口：把两份受管 Skill（Runtime + SSH）装进检测到的
+/// Claude Code / Codex，返回一句面向用户的结果描述。
+pub(crate) fn install_ai_skills() -> String {
+    let mut installed = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    let mut tally = |result: std::io::Result<ManagedSkillInstall>| match result {
+        Ok(ManagedSkillInstall::Installed) => installed += 1,
+        Ok(ManagedSkillInstall::Current) => {},
+        Ok(ManagedSkillInstall::Conflict) => skipped += 1,
+        Err(_) => failed += 1,
+    };
+    for (_, _, result) in ensure_runtime_skills() {
+        tally(result);
+    }
+    for (_, _, result) in ensure_ssh_skills() {
+        tally(result);
+    }
+    match (installed, skipped, failed) {
+        (0, 0, 0) => "未检测到 Claude Code / Codex，先运行一次后重试。".to_owned(),
+        (_, _, 0) if skipped == 0 => {
+            format!("Skill 已安装到 Claude Code 与 Codex（{installed} 项）。")
+        },
+        (_, _, 0) => format!("Skill 安装完成：{installed} 项，跳过 {skipped} 项同名自定义 Skill。"),
+        _ => format!("Skill 安装部分失败：成功 {installed}，冲突 {skipped}，失败 {failed}。"),
+    }
 }
 
 fn claude_config_dir() -> Option<PathBuf> {

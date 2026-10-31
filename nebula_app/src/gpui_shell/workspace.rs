@@ -632,6 +632,11 @@ pub struct NebulaWorkspace {
     sidebar_collapsed: bool,
     /// 只折叠 TABS 分区，不影响整个左栏；与旧壳分区标题的 chevron 同义。
     tabs_section_collapsed: bool,
+    /// 左侧栏「SSH」分区：与 TABS 同级，位于其上。
+    ssh_section_collapsed: bool,
+    /// 侧栏 SSH 分区的展示投影（地址、名称、图标 id）。只在生命周期事件里
+    /// 重建——渲染回调不读盘；这里也**不持有**可写快照，永不 save。
+    sidebar_ssh: Vec<(String, String, Option<String>)>,
     /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进标题栏。
     tabs_position: nebula_settings::TabsPositionName,
     density: nebula_settings::DensityName,
@@ -925,6 +930,8 @@ impl NebulaWorkspace {
             settings_restore_side_panel_open: false,
             sidebar_collapsed: false,
             tabs_section_collapsed: false,
+            ssh_section_collapsed: false,
+            sidebar_ssh: Self::load_sidebar_ssh_hosts(),
             tabs_position: runtime.tabs_position,
             density: runtime.density,
             sidebar_width,
@@ -1102,8 +1109,10 @@ impl NebulaWorkspace {
                     shell_name: profile.shell_id.clone().or_else(|| Some(profile.name.clone())),
                 }
             },
-            LaunchSession::Ssh { host } => {
-                TerminalLaunch::Ssh { destination: host.clone(), cwd: None, resume_target: None }
+            LaunchSession::Ssh { host } => TerminalLaunch::Ssh {
+                destination: host.clone(),
+                cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+                resume_target: None,
             },
             LaunchSession::Serial { destination } => {
                 TerminalLaunch::Serial { destination: destination.clone() }
@@ -1282,7 +1291,7 @@ impl NebulaWorkspace {
         if self.settings_open {
             self.leave_settings(window, cx);
         }
-        {
+        let label = {
             let mut lists = crate::gpui_shell::ssh_hosts::SshHostLists::load();
             if !lists.is_from_config(&destination) {
                 lists.remember(&destination);
@@ -1290,25 +1299,16 @@ impl NebulaWorkspace {
                     log::warn!("持久化 SSH 主机列表失败: {err}");
                 }
             }
-        }
-        let (launch, session) = if destination.starts_with(crate::serial_session::SCHEME) {
-            (
-                crate::gpui_shell::terminal::view::TerminalLaunch::Serial {
-                    destination: destination.clone(),
-                },
-                crate::session::LaunchSession::Serial { destination },
-            )
-        } else {
-            (
-                crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
-                    destination: destination.clone(),
-                    cwd: remote_cwd,
-                    resume_target: None,
-                },
-                crate::session::LaunchSession::Ssh { host: destination },
-            )
+            lists.profiles.labels().get(&destination).cloned()
         };
+        let session = if destination.starts_with(crate::serial_session::SCHEME) {
+            crate::session::LaunchSession::Serial { destination }
+        } else {
+            crate::session::LaunchSession::Ssh { host: destination }
+        };
+        let launch = Self::terminal_launch_from_session(&session, remote_cwd.map(Into::into));
         self.open_remote_tab(launch, session, window, cx);
+        self.tab_meta[self.active].custom_name = label;
     }
 
     /// 在聚焦 pane 上开分屏（ctrl+shift+d / ctrl+shift+s，对齐旧壳

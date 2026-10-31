@@ -32,6 +32,7 @@ mod editor;
 pub(super) mod library;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod serial_tests;
+mod skills;
 use crate::i18n::Message;
 
 /// 删除撤销窗口时长，旧壳 Undo 条同值。

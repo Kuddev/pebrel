@@ -46,6 +46,7 @@ const RESET_KEYS: &[&str] = &[
     "vcs_display",
     "bell",
     "ai_toasts",
+    "ssh_ai_control",
     "notification_duration",
     "fetch",
     "auto_check_updates",
@@ -151,6 +152,15 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_disables_ssh_ai_control_and_preserves_unknown_keys() {
+        let original = "ssh_ai_control=1\ncustom=keep\n";
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(original)).ssh_ai_control);
+        let restored = default_settings_text(original);
+        assert_eq!(restored, "custom=keep\n");
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ssh_ai_control);
+    }
 
     #[test]
     fn reset_restores_auto_scrollbar_visibility() {

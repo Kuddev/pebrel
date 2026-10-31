@@ -1298,6 +1298,135 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(cli)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_pebrel__cli_commands" \
+"*::: :->cli" \
+&& ret=0
+
+    case $state in
+    (cli)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-cli-command-$line[1]:"
+        case $line[1] in
+            (assets)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_pebrel__cli__assets_commands" \
+"*::: :->assets" \
+&& ret=0
+
+    case $state in
+    (assets)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-cli-assets-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':asset_id -- Asset id from `pebrel cli assets list`:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(exec)
+_arguments "${_arguments_options[@]}" : \
+'--timeout-ms=[]:TIMEOUT_MS:_default' \
+'--max-output-bytes=[]:MAX_OUTPUT_BYTES:_default' \
+'--stdin[Read the command from stdin. Preferred in PowerShell, where quoting is lossy]' \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':asset_id -- Asset id from `pebrel cli assets list`:_default' \
+'::command -- One complete remote shell command. Omit it and pass --stdin instead:_default' \
+&& ret=0
+;;
+(shell)
+_arguments "${_arguments_options[@]}" : \
+'--window=[]:WINDOW:_default' \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':asset_id:_default' \
+&& ret=0
+;;
+(upload)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':asset_id:_default' \
+':local_path:_default' \
+':remote_path:_default' \
+&& ret=0
+;;
+(download)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':asset_id:_default' \
+':remote_path:_default' \
+':local_path:_default' \
+&& ret=0
+;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+'--delete[Remove remote files that do not exist locally. Refuses shallow targets]' \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':asset_id:_default' \
+':local_path:_default' \
+':remote_path:_default' \
+&& ret=0
+;;
+(credentials)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_pebrel__cli__credentials_commands" \
+"*::: :->credentials" \
+&& ret=0
+
+    case $state in
+    (credentials)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-cli-credentials-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::asset_id:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_pebrel__help_commands" \
@@ -1686,6 +1815,86 @@ esac
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(cli)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__help__cli_commands" \
+"*::: :->cli" \
+&& ret=0
+
+    case $state in
+    (cli)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-help-cli-command-$line[1]:"
+        case $line[1] in
+            (assets)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__help__cli__assets_commands" \
+"*::: :->assets" \
+&& ret=0
+
+    case $state in
+    (assets)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-help-cli-assets-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(exec)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(shell)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(upload)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(download)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(credentials)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__help__cli__credentials_commands" \
+"*::: :->credentials" \
+&& ret=0
+
+    case $state in
+    (credentials)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-help-cli-credentials-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1714,6 +1923,7 @@ _pebrel_commands() {
 'plugin:Check or invoke a local plugin package without starting a GUI or plugin daemon' \
 'theme:Export, verify, or import a portable ZIP theme package' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
+'cli:Control the servers saved in Pebrel from an agent\: list assets, run one command, open a tab, or transfer files. Credentials stay in the system keychain and are never passed in or out' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel commands' commands "$@"
@@ -1808,6 +2018,74 @@ _pebrel__agent__send_commands() {
 _pebrel__agent__wait_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel agent wait commands' commands "$@"
+}
+(( $+functions[_pebrel__cli_commands] )) ||
+_pebrel__cli_commands() {
+    local commands; commands=(
+'assets:List saved servers. Alias\: hosts' \
+'exec:Run one command on a saved server over a temporary connection' \
+'shell:Open an interactive SSH tab in the Pebrel window' \
+'upload:Copy a local file or directory to a server' \
+'download:Copy a remote file or directory to this machine' \
+'sync:Mirror a local directory to a server directory' \
+'credentials:Report whether a server has saved credentials. Never prints secrets' \
+    )
+    _describe -t commands 'pebrel cli commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__assets_commands] )) ||
+_pebrel__cli__assets_commands() {
+    local commands; commands=(
+'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
+'show:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
+    )
+    _describe -t commands 'pebrel cli assets commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__assets__list_commands] )) ||
+_pebrel__cli__assets__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli assets list commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__assets__show_commands] )) ||
+_pebrel__cli__assets__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli assets show commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__credentials_commands] )) ||
+_pebrel__cli__credentials_commands() {
+    local commands; commands=(
+'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
+    )
+    _describe -t commands 'pebrel cli credentials commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__credentials__list_commands] )) ||
+_pebrel__cli__credentials__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli credentials list commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__download_commands] )) ||
+_pebrel__cli__download_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli download commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__exec_commands] )) ||
+_pebrel__cli__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli exec commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__shell_commands] )) ||
+_pebrel__cli__shell_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli shell commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__sync_commands] )) ||
+_pebrel__cli__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli sync commands' commands "$@"
+}
+(( $+functions[_pebrel__cli__upload_commands] )) ||
+_pebrel__cli__upload_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel cli upload commands' commands "$@"
 }
 (( $+functions[_pebrel__config_commands] )) ||
 _pebrel__config_commands() {
@@ -2263,6 +2541,7 @@ _pebrel__help_commands() {
 'plugin:Check or invoke a local plugin package without starting a GUI or plugin daemon' \
 'theme:Export, verify, or import a portable ZIP theme package' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
+'cli:Control the servers saved in Pebrel from an agent\: list assets, run one command, open a tab, or transfer files. Credentials stay in the system keychain and are never passed in or out' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel help commands' commands "$@"
@@ -2308,6 +2587,74 @@ _pebrel__help__agent__send_commands() {
 _pebrel__help__agent__wait_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help agent wait commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli_commands] )) ||
+_pebrel__help__cli_commands() {
+    local commands; commands=(
+'assets:List saved servers. Alias\: hosts' \
+'exec:Run one command on a saved server over a temporary connection' \
+'shell:Open an interactive SSH tab in the Pebrel window' \
+'upload:Copy a local file or directory to a server' \
+'download:Copy a remote file or directory to this machine' \
+'sync:Mirror a local directory to a server directory' \
+'credentials:Report whether a server has saved credentials. Never prints secrets' \
+    )
+    _describe -t commands 'pebrel help cli commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__assets_commands] )) ||
+_pebrel__help__cli__assets_commands() {
+    local commands; commands=(
+'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
+'show:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
+    )
+    _describe -t commands 'pebrel help cli assets commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__assets__list_commands] )) ||
+_pebrel__help__cli__assets__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli assets list commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__assets__show_commands] )) ||
+_pebrel__help__cli__assets__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli assets show commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__credentials_commands] )) ||
+_pebrel__help__cli__credentials_commands() {
+    local commands; commands=(
+'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
+    )
+    _describe -t commands 'pebrel help cli credentials commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__credentials__list_commands] )) ||
+_pebrel__help__cli__credentials__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli credentials list commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__download_commands] )) ||
+_pebrel__help__cli__download_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli download commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__exec_commands] )) ||
+_pebrel__help__cli__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli exec commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__shell_commands] )) ||
+_pebrel__help__cli__shell_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli shell commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__sync_commands] )) ||
+_pebrel__help__cli__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli sync commands' commands "$@"
+}
+(( $+functions[_pebrel__help__cli__upload_commands] )) ||
+_pebrel__help__cli__upload_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help cli upload commands' commands "$@"
 }
 (( $+functions[_pebrel__help__config_commands] )) ||
 _pebrel__help__config_commands() {

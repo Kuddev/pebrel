@@ -111,6 +111,11 @@ pub(super) fn handle_connection(
         "runtime.orchestrate" => {
             orchestrate::orchestrate_connection(&mut stream, request, sink, hub)
         },
+        // SSH 资源域自己处理完整生命周期：闸门、审计、IO，都要在 UI 线程之外
+        // 完成，只有 `ssh.shell` 再单独派发一次窗口命令。
+        method if method.starts_with("ssh.") => {
+            super::ssh_api::connection(&mut stream, request, sink, hub)
+        },
         _ => dispatch_connection(&mut stream, request, sink, hub),
     }
 }
@@ -177,7 +182,9 @@ pub(super) fn runtime_description() -> Value {
             "pane.exec",
             "pane.wait",
             "git.status", "git.diff", "git.history",
-            "git.stage", "git.unstage", "git.commit", "git.fetch", "git.pull", "git.push"
+            "git.stage", "git.unstage", "git.commit", "git.fetch", "git.pull", "git.push",
+            "ssh.assets.list", "ssh.assets.show", "ssh.credentials.list",
+            "ssh.exec", "ssh.upload", "ssh.download", "ssh.sync", "ssh.shell"
         ],
         // Additive params cannot be detected from `capabilities`: an older
         // build ignores an unknown `after_seq` and still races. Clients that
@@ -218,7 +225,8 @@ pub(super) fn runtime_description() -> Value {
             "window": ["close"],
             "tab": ["close", "rename", "move"],
             "pane": ["list", "read", "send", "paste", "wait", "exec", "close", "zoom", "resize"],
-            "agent": ["list", "send", "delegate", "paste", "read", "wait"]
+            "agent": ["list", "send", "delegate", "paste", "read", "wait"],
+            "cli": ["assets", "exec", "shell", "upload", "download", "sync", "credentials"]
         }
     });
     if cfg!(feature = "gpui-shell") {
