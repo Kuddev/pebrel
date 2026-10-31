@@ -318,7 +318,9 @@ pub fn active_enabled(store: &ProviderStore) -> Option<&AiProvider> {
 }
 
 pub fn save(store: &ProviderStore) -> io::Result<()> {
-    save_to_path(store, &store_path())
+    save_to_path(store, &store_path())?;
+    crate::prompt_suggestions::service::invalidate_config();
+    Ok(())
 }
 
 fn save_to_path(store: &ProviderStore, path: &Path) -> io::Result<()> {
@@ -358,6 +360,7 @@ pub fn save_api_key(id: &str, key: &str) -> io::Result<String> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "API key is empty"));
     }
     crate::ssh_credentials::store_generic_secret(&credential_target(id), key.as_bytes())?;
+    crate::prompt_suggestions::service::invalidate_config();
     Ok(api_key_hint(key))
 }
 
@@ -374,6 +377,7 @@ pub fn store_provider_api_key(provider: &mut AiProvider, key: &str) -> io::Resul
 
 pub fn delete_api_key(id: &str) -> io::Result<()> {
     crate::ssh_credentials::delete_generic_secret(&credential_target(id))?;
+    crate::prompt_suggestions::service::invalidate_config();
     Ok(())
 }
 
