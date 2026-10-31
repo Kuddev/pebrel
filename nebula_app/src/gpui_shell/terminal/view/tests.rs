@@ -341,6 +341,30 @@ fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
 }
 
 #[test]
+fn explicit_line_height_uses_natural_metrics_and_preserves_theme_in_auto() {
+    use gpui::px;
+    for multiplier in [0.5, 1.0, 1.46, 5.0] {
+        assert_eq!(
+            typography::line_height_for_view(
+                px(15.0),
+                Some(1.5),
+                Some(multiplier),
+                20.0,
+                4.0,
+                1.5,
+            ),
+            typography::effective_line_height(20.0 * multiplier, 4.0, 1.5),
+        );
+    }
+    for theme in [None, Some(1.5)] {
+        assert_eq!(
+            typography::line_height_for_view(px(15.0), theme, None, 20.0, 4.0, 1.5),
+            typography::effective_line_height_with_theme(20.0, 15.0, theme, 4.0, 1.5),
+        );
+    }
+}
+
+#[test]
 fn maple_reading_rows_restore_2_2_2_height_without_changing_columns() {
     use gpui::px;
     for (font_size, expected_device_height) in [(13.0, 29.0), (14.0, 31.0)] {
@@ -351,7 +375,7 @@ fn maple_reading_rows_restore_2_2_2_height_without_changing_columns() {
             0.0,
         );
         let height =
-            typography::line_height_for_view(px(font_size), None, font_size * 1.32, 4.0, 1.5);
+            typography::line_height_for_view(px(font_size), None, None, font_size * 1.32, 4.0, 1.5);
         assert!((height.as_f32() * 1.5 - expected_device_height).abs() < 1e-5);
         assert!(
             height > width * 2.0,

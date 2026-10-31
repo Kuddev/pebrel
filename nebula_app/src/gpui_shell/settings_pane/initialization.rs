@@ -765,6 +765,7 @@ impl SettingsPane {
             ui_font_family_input,
             font_size_input,
             font_size_editing: None,
+            line_height_editing: false,
             font_picker_trigger_bounds: None,
             font_picker_cjk_bounds: None,
             backup_selection: backup_remote.selection,
