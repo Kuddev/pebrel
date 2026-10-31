@@ -9,7 +9,9 @@
     "invalid_model": "Saisissez un identifiant de modèle de 256 caractères maximum, sans espaces.",
     "save_failed": "Impossible d’enregistrer les réglages de prédiction : {error}",
     "saved": "Réglages de prédiction enregistrés.",
-    "predicting": "{model} prépare une prédiction"
+    "predicting": "{model} prépare une prédiction",
+    "launcher_fallback": "La prédiction de messages est indisponible. Démarrage normal de {agent}. {error}",
+    "launcher_failed": "Impossible de démarrer {agent} : {error}"
   },
   "language": {
     "system": "Suivre le système",

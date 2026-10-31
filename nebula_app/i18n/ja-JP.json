@@ -9,7 +9,9 @@
     "invalid_model": "空白を含まない256文字以内のモデル ID を入力してください。",
     "save_failed": "予測設定を保存できませんでした：{error}",
     "saved": "予測設定を保存しました。",
-    "predicting": "{model} が予測中"
+    "predicting": "{model} が予測中",
+    "launcher_fallback": "メッセージ予測を利用できません。{agent} を通常どおり起動します。{error}",
+    "launcher_failed": "{agent} を起動できませんでした: {error}"
   },
   "tray": {
     "show": "Pebrel を表示",

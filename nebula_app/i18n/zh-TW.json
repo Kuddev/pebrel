@@ -9,7 +9,9 @@
     "invalid_model": "請輸入不超過 256 個字元且不含空白的模型 ID。",
     "save_failed": "無法儲存預測設定：{error}",
     "saved": "預測設定已儲存。",
-    "predicting": "{model} 正在預測"
+    "predicting": "{model} 正在預測",
+    "launcher_fallback": "提示詞預測暫不可用，將正常啟動 {agent}。{error}",
+    "launcher_failed": "無法啟動 {agent}：{error}"
   },
   "tray": {
     "show": "顯示 Pebrel",

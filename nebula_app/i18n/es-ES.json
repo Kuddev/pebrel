@@ -9,7 +9,9 @@
     "invalid_model": "Introduce un ID de modelo de hasta 256 caracteres, sin espacios.",
     "save_failed": "No se pudieron guardar los ajustes de predicción: {error}",
     "saved": "Ajustes de predicción guardados.",
-    "predicting": "{model} está generando una predicción"
+    "predicting": "{model} está generando una predicción",
+    "launcher_fallback": "La predicción de mensajes no está disponible. {agent} se iniciará normalmente. {error}",
+    "launcher_failed": "No se pudo iniciar {agent}: {error}"
   },
   "language": {
     "system": "Seguir el sistema",

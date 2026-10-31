@@ -9,7 +9,9 @@
     "invalid_model": "공백 없이 256자 이하의 모델 ID를 입력하세요.",
     "save_failed": "예측 설정을 저장하지 못했습니다: {error}",
     "saved": "예측 설정이 저장되었습니다.",
-    "predicting": "{model} 예측 중"
+    "predicting": "{model} 예측 중",
+    "launcher_fallback": "메시지 예측을 사용할 수 없습니다. {agent}를 정상적으로 시작합니다. {error}",
+    "launcher_failed": "{agent}를 시작하지 못했습니다: {error}"
   },
   "language": {
     "system": "시스템 설정 따르기",

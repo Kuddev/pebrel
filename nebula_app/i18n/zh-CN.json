@@ -9,7 +9,9 @@
     "invalid_model": "请输入不超过 256 个字符且不含空白的模型 ID。",
     "save_failed": "无法保存预测设置：{error}",
     "saved": "预测设置已保存。",
-    "predicting": "{model} 正在预测"
+    "predicting": "{model} 正在预测",
+    "launcher_fallback": "提示词预测暂不可用，将正常启动 {agent}。{error}",
+    "launcher_failed": "无法启动 {agent}：{error}"
   },
   "native_result": {
     "json_items": "{count} 项",
