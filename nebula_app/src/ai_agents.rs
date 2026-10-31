@@ -52,10 +52,11 @@ pub enum AgentKind {
     Maki,
     Trae,
     CodeBuddy,
+    CommandCode,
 }
 
 impl AgentKind {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::Claude,
         Self::Codex,
         Self::Gemini,
@@ -83,6 +84,7 @@ impl AgentKind {
         Self::Maki,
         Self::Trae,
         Self::CodeBuddy,
+        Self::CommandCode,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -114,6 +116,7 @@ impl AgentKind {
             Self::Maki => "maki",
             Self::Trae => "trae-cli",
             Self::CodeBuddy => "codebuddy",
+            Self::CommandCode => "command-code",
         }
     }
 
@@ -146,6 +149,7 @@ impl AgentKind {
             Self::Maki => "Maki",
             Self::Trae => "Trae CLI",
             Self::CodeBuddy => "CodeBuddy Code",
+            Self::CommandCode => "Command Code",
         }
     }
 
@@ -187,6 +191,8 @@ impl AgentKind {
             Self::Trae => &["trae-cli"],
             // @tencent-ai/codebuddy-code 2.150.0's interactive bin entries.
             Self::CodeBuddy => &["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"],
+            // The package's `cmd` bin is omitted: it is the Windows Command Prompt.
+            Self::CommandCode => &["command-code", "commandcode", "cmdc"],
         }
     }
 
@@ -273,6 +279,7 @@ impl AgentKind {
             | Self::Trae
             | Self::CodeBuddy => return None,
             Self::Kimi => format!("kimi --session {session_id}"),
+            Self::CommandCode => format!("command-code --resume {session_id}"),
         })
     }
 
@@ -288,6 +295,7 @@ impl AgentKind {
             Self::Pi => Some("pi".to_owned()),
             Self::OhMyPi => Some("omp".to_owned()),
             Self::Kimi => Some("kimi".to_owned()),
+            Self::CommandCode => Some("command-code".to_owned()),
             Self::Hermes => Some("hermes".to_owned()),
             _ => None,
         }
@@ -304,6 +312,7 @@ impl AgentKind {
             Self::Pi => format!("pi --fork {session_id}"),
             Self::OhMyPi => format!("omp --fork {session_id}"),
             Self::Kimi => format!("kimi --fork {session_id}"),
+            Self::CommandCode => format!("command-code --resume {session_id} --fork-session"),
             _ => return None,
         })
     }
@@ -1006,6 +1015,30 @@ mod tests {
             assert_eq!(identify(text), None, "{text}");
         }
         assert!(detect("codebuddy", &format!("{screen}\nuser@host:~$ ")).is_none());
+    }
+
+    #[test]
+    fn command_code_launches_resolve_without_claiming_cmd() {
+        for command in
+            ["cmdc", "npx --yes command-code", "node /opt/node_modules/command-code/dist/index.mjs"]
+        {
+            assert_eq!(
+                AgentKind::parse_command(command),
+                Some(AgentKind::CommandCode),
+                "{command}"
+            );
+        }
+        assert_eq!(AgentKind::parse_command("cmd.exe /c dir"), None);
+        let agent = AgentKind::CommandCode;
+        assert_eq!(
+            agent.resume_command("abc-123").as_deref(),
+            Some("command-code --resume abc-123")
+        );
+        assert_eq!(
+            agent.fork_command("abc-123").as_deref(),
+            Some("command-code --resume abc-123 --fork-session")
+        );
+        assert_eq!(agent.resume_command("x; calc"), None);
     }
 
     #[test]
