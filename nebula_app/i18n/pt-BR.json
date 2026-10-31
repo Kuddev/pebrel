@@ -9,7 +9,9 @@
     "invalid_model": "Informe um ID de modelo de até 256 caracteres, sem espaços.",
     "save_failed": "Não foi possível salvar as configurações de previsão: {error}",
     "saved": "Configurações de previsão salvas.",
-    "predicting": "{model} está gerando uma previsão"
+    "predicting": "{model} está gerando uma previsão",
+    "launcher_fallback": "A previsão de mensagens está indisponível. {agent} será iniciado normalmente. {error}",
+    "launcher_failed": "Não foi possível iniciar {agent}: {error}"
   },
   "language": {
     "system": "Seguir o sistema",

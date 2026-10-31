@@ -9,7 +9,9 @@
     "invalid_model": "Geben Sie eine Modell-ID mit höchstens 256 Zeichen ohne Leerzeichen ein.",
     "save_failed": "Vorhersageeinstellungen konnten nicht gespeichert werden: {error}",
     "saved": "Vorhersageeinstellungen gespeichert.",
-    "predicting": "{model} erstellt eine Vorhersage"
+    "predicting": "{model} erstellt eine Vorhersage",
+    "launcher_fallback": "Prompt-Vorhersagen sind nicht verfügbar. {agent} wird normal gestartet. {error}",
+    "launcher_failed": "{agent} konnte nicht gestartet werden: {error}"
   },
   "language": {
     "system": "Systemeinstellung",

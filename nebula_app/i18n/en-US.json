@@ -9,7 +9,9 @@
     "invalid_model": "Enter a model ID of up to 256 characters, without spaces.",
     "save_failed": "Could not save prediction settings: {error}",
     "saved": "Prediction settings saved.",
-    "predicting": "{model} is predicting"
+    "predicting": "{model} is predicting",
+    "launcher_fallback": "Prompt predictions are unavailable. Starting {agent} normally. {error}",
+    "launcher_failed": "Could not start {agent}: {error}"
   },
   "native_result": {
     "json_items": "{count} items",
