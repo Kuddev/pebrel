@@ -261,10 +261,21 @@ mod tests {
         assert_eq!(matching_sections("透度", zh).first(), Some(&1));
         assert!(matching_sections("no such setting", en).is_empty());
         assert_eq!(matching_sections("", en), visible_nav_sections().collect::<Vec<_>>());
-        assert!(!matching_sections("AI", en).contains(&3));
-        assert!(matching_sections("API Providers", en).is_empty());
-        assert!(matching_sections("供应商", zh).is_empty());
+        assert!(matching_sections("AI", en).contains(&3));
+        assert_eq!(matching_sections("API Providers", en), vec![3]);
+        assert_eq!(matching_sections("供应商", zh), vec![3]);
         assert_eq!(matching_sections("Agents", en), vec![10]);
+    }
+
+    #[test]
+    fn prediction_search_uses_the_existing_provider_route() {
+        for language in [crate::display::UiLanguage::ZhCn, crate::display::UiLanguage::EnUs] {
+            for query in ["prediction", "prompt suggestions", "补齐", "预测"] {
+                assert_eq!(matching_sections(query, language), vec![3], "{query}");
+            }
+            assert!(!matching_sections("shell", language).contains(&3));
+            assert!(matching_sections("missing prediction control", language).is_empty());
+        }
     }
 
     #[test]
