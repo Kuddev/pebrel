@@ -1,4 +1,18 @@
 {
+  "prompt_suggestions": {
+    "title": "提示詞預測",
+    "description": "為 Claude Code、Pi 和 OpenCode 的原生空輸入框預測下一句話。新工作階段生效，語言跟隨軟體設定。",
+    "provider": "供應商",
+    "model": "預測模型",
+    "choose_provider": "選擇供應商",
+    "no_providers": "請先新增已設定且 API 受支援的供應商。",
+    "invalid_model": "請輸入不超過 256 個字元且不含空白的模型 ID。",
+    "save_failed": "無法儲存預測設定：{error}",
+    "saved": "預測設定已儲存。",
+    "predicting": "{model} 正在預測",
+    "launcher_fallback": "提示詞預測暫不可用，將正常啟動 {agent}。{error}",
+    "launcher_failed": "無法啟動 {agent}：{error}"
+  },
   "tray": {
     "show": "顯示 Pebrel",
     "quit": "結束"
