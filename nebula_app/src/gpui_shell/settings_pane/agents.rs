@@ -149,7 +149,8 @@ impl SettingsPane {
         cx.notify();
     }
 
-    pub(super) fn section_agents(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn section_agents(&mut self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
+        self.prepare_agent_brands(window, cx);
         if self.agents.rows.is_none() && !self.agents.loading {
             self.refresh_agents(cx);
         }
@@ -301,7 +302,17 @@ impl SettingsPane {
                 view.child(div().text_xs().text_color(muted).child(note))
             });
         use crate::gpui_shell::assets::nav;
-        let icon = if let Some(path) = match agent {
+        let icon = if matches!(
+            agent,
+            AgentKind::Qoder
+                | AgentKind::Qwen
+                | AgentKind::CodeBuddy
+                | AgentKind::Droid
+                | AgentKind::Antigravity
+                | AgentKind::Hermes
+        ) {
+            self.provider_brand(agent)
+        } else if let Some(path) = match agent {
             AgentKind::Claude => Some(nav::AGENT_CLAUDE),
             AgentKind::Codex => Some(nav::AGENT_OPENAI),
             AgentKind::OpenCode => Some(nav::AGENT_OPENCODE),
@@ -311,11 +322,6 @@ impl SettingsPane {
             AgentKind::OhMyPi => Some(nav::AGENT_OMP),
             AgentKind::Copilot => Some(nav::AGENT_COPILOT),
             AgentKind::Grok => Some(nav::AGENT_GROK),
-            AgentKind::Qoder => Some(nav::AGENT_QODER),
-            AgentKind::Qwen => Some(nav::AGENT_QWEN),
-            AgentKind::CodeBuddy => Some(nav::AGENT_CODEBUDDY),
-            AgentKind::Antigravity => Some(nav::AGENT_ANTIGRAVITY),
-            AgentKind::Hermes => Some(nav::AGENT_HERMES),
             _ => None,
         } {
             Icon::default()
