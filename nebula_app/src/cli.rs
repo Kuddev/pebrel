@@ -16,6 +16,9 @@ use crate::config::ui_config::Program;
 use crate::config::window::{Class, Identity};
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 
+mod tab;
+pub use tab::*;
+
 /// CLI options for the main Pebrel executable.
 #[derive(Parser, Default, Debug)]
 #[clap(
@@ -379,77 +382,6 @@ pub enum WindowCommand {
 #[derive(Args, Debug)]
 pub struct WindowCloseOptions {
     /// Window id from `pebrel pane list`.
-    pub window: u64,
-
-    #[clap(flatten)]
-    pub output: ShortOutput,
-
-    #[clap(long, default_value_t = SHORT_TIMEOUT_MS)]
-    pub timeout_ms: u64,
-}
-
-#[derive(Args, Debug)]
-pub struct TabResourceOptions {
-    #[clap(subcommand)]
-    pub command: TabCommand,
-}
-
-/// Tab indices are scoped to one window, so `--window` is always required.
-#[derive(Subcommand, Debug)]
-pub enum TabCommand {
-    /// Close an idle tab.
-    Close(TabCloseOptions),
-    /// Set a tab's custom name. Pass an empty name to restore the generated title.
-    Rename(TabRenameOptions),
-    /// Move a tab to another index in the same window.
-    Move(TabMoveOptions),
-}
-
-#[derive(Args, Debug)]
-pub struct TabCloseOptions {
-    /// Zero-based tab index from the runtime snapshot.
-    pub tab: usize,
-
-    /// Window containing the tab.
-    #[clap(long)]
-    pub window: u64,
-
-    #[clap(flatten)]
-    pub output: ShortOutput,
-
-    #[clap(long, default_value_t = SHORT_TIMEOUT_MS)]
-    pub timeout_ms: u64,
-}
-
-#[derive(Args, Debug)]
-pub struct TabRenameOptions {
-    /// Zero-based tab index from the runtime snapshot.
-    pub tab: usize,
-
-    /// New custom name. An empty string restores the generated title.
-    pub name: String,
-
-    /// Window containing the tab.
-    #[clap(long)]
-    pub window: u64,
-
-    #[clap(flatten)]
-    pub output: ShortOutput,
-
-    #[clap(long, default_value_t = SHORT_TIMEOUT_MS)]
-    pub timeout_ms: u64,
-}
-
-#[derive(Args, Debug)]
-pub struct TabMoveOptions {
-    /// Current zero-based tab index.
-    pub tab: usize,
-
-    /// Destination zero-based tab index in the same window.
-    pub to: usize,
-
-    /// Window containing the tab.
-    #[clap(long)]
     pub window: u64,
 
     #[clap(flatten)]
@@ -1100,11 +1032,8 @@ pub enum ControlCommand {
         #[clap(long)]
         pane: Option<u64>,
     },
-    /// Create a default-shell tab in the target window.
-    NewTab {
-        #[clap(long)]
-        window: Option<u64>,
-    },
+    /// Open a terminal tab, optionally running a program instead of the default shell.
+    NewTab(TabLaunchOptions),
     /// Close an idle tab by its zero-based index.
     CloseTab {
         #[clap(long)]

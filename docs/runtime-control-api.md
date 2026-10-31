@@ -84,12 +84,25 @@ pebrel agent read codex --lines 80               # 读它最近打印了什么
 pebrel agent wait codex --after-seq 41           # 等它这一轮结束
 
 pebrel window close 3                            # 关闭空闲窗口
+pebrel tab new --cwd ./project --command claude   # 在新标签中直接启动命令
+pebrel tab new --window 3 --cwd ./project --command claude --resume
 pebrel tab rename 2 tests --window 3             # 按窗口内零基索引重命名 tab
 pebrel tab move 2 0 --window 3                   # 同一窗口内移动 tab
 ```
 
 它们是完整协议的**薄别名**：同一个请求函数、同一套响应信封、同样的 generation 与 `after_seq`
 竞态保护，短的只是命令行，不是语义。
+
+`pebrel tab new` 和 `pebrel ctl new-tab` 共用启动参数：`--cwd`（也可写
+`--working-directory`）、`--shell` 或 `--command`。`--command` 后的全部参数作为
+程序 argv 直接交给本机 PTY，不拼接为 Shell 命令；需要管道等语法时，显式运行
+`--command sh -c '...'` 或相应的 PowerShell 命令。`--shell` 与 `--command` 互斥。
+相对目录按调用 CLI 的进程目录解析；显式 WSL 启动保留 `/home/...` 形式的 guest 路径。
+
+省略 `--window` 时沿用窗口选择设置：通常选择最近活动的窗口，`use_new` 则新建窗口；
+`--window <id>` 始终指定已有窗口，ID 无效会失败而不新建标签。没有驻留 Runtime 时
+返回 `runtime_unavailable`。成功响应确认标签已创建，并提供 `window_id`、`pane_id`
+和快照，不表示程序已完成；启动错误沿用终端的失败状态与诊断保留机制。
 
 `pane` 与 `agent` 分成两个资源不只是为了好读——它们走的是**不同**的协议方法。Agent 路径带
 generation 绑定（Codex 退出重开后不会把任务投给新会话），pane 路径没有这层保护。用两个资源名把
@@ -174,7 +187,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `window.create` | 创建新窗口 | `cwd?`, `shell?` |
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
-| `tab.new` | 创建标签（默认 Shell，或 `shell` 点名的那个） | `window_id?`, `cwd?`, `shell?` |
+| `tab.new` | 创建标签（默认 Shell、指定 Shell 或直接程序） | `window_id?`, `cwd?`, `shell?`, `argv?` |
 | `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
@@ -201,6 +214,10 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
 升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
 需要重启驻留实例。
+
+`tab.new` 的可选 `argv` 使用与 `pane.exec` 相同的参数预算与校验，并与 `shell`
+互斥；它启动的是标签内的交互 PTY 程序。没有 `argv` 的旧请求保持原行为，旧 Runtime
+会拒绝带 `argv` 的请求。客户端不会把失败请求改为默认 Shell 或自动重发启动。
 
 `pane.paste` 专用于确实需要保留换行的输入：只接受 UTF-8，限制 32 KiB，拒绝 ESC、NUL
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本

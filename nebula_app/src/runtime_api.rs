@@ -785,6 +785,8 @@ pub enum RuntimeCommand {
         cwd: Option<PathBuf>,
         /// 见 [`RuntimeCommand::NewWindow::shell_id`]。
         shell_id: Option<String>,
+        /// Direct PTY program, mutually exclusive with a configured shell id.
+        command: Option<crate::config::ui_config::Program>,
     },
     CloseTab {
         window_id: Option<u64>,

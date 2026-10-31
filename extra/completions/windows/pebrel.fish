@@ -81,7 +81,7 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_s
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "new-window" -d 'Create and focus a new terminal window'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "close-window" -d 'Close an idle window. Omitting --window targets the uniquely resolved window'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "focus" -d 'Focus a window or one of its panes'
-complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "new-tab" -d 'Create a default-shell tab in the target window'
+complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "new-tab" -d 'Open a terminal tab, optionally running a program instead of the default shell'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "close-tab" -d 'Close an idle tab by its zero-based index'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "rename-tab" -d 'Set a tab\'s custom name. An empty value restores the generated title'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and not __fish_seen_subcommand_from describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help" -f -a "move-tab" -d 'Move a tab to another index in the same window'
@@ -188,7 +188,10 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subco
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from focus" -l timeout-ms -d 'Maximum time to wait for a command response' -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from focus" -l pretty -d 'Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from focus" -s h -l help -d 'Print help'
-complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -l window -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -l window -d 'Target window; omitted uses the window policy (most recently active by default)' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -l cwd -d 'Working directory for the new terminal (relative to this CLI process)' -r -f -a "(__fish_complete_directories)"
+complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -l shell -d 'Shell id from the settings, for example bash or wsl:Ubuntu' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -s e -l command -d 'Program and arguments to execute directly; must be the last option' -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -l timeout-ms -d 'Maximum time to wait for a command response' -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -l pretty -d 'Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from new-tab" -s h -l help -d 'Print help'
@@ -324,7 +327,7 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subco
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "new-window" -d 'Create and focus a new terminal window'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "close-window" -d 'Close an idle window. Omitting --window targets the uniquely resolved window'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "focus" -d 'Focus a window or one of its panes'
-complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "new-tab" -d 'Create a default-shell tab in the target window'
+complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "new-tab" -d 'Open a terminal tab, optionally running a program instead of the default shell'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "close-tab" -d 'Close an idle tab by its zero-based index'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "rename-tab" -d 'Set a tab\'s custom name. An empty value restores the generated title'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ctl; and __fish_seen_subcommand_from help" -f -a "move-tab" -d 'Move a tab to another index in the same window'
@@ -352,11 +355,19 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand window; and __fish_seen_su
 complete -c pebrel -n "__fish_pebrel_using_subcommand window; and __fish_seen_subcommand_from close" -s h -l help -d 'Print help'
 complete -c pebrel -n "__fish_pebrel_using_subcommand window; and __fish_seen_subcommand_from help" -f -a "close" -d 'Close an idle window. Busy panes require confirmation in the GUI instead'
 complete -c pebrel -n "__fish_pebrel_using_subcommand window; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from close rename move help" -s h -l help -d 'Print help'
-complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from close rename move help" -f -a "close" -d 'Close an idle tab'
-complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from close rename move help" -f -a "rename" -d 'Set a tab\'s custom name. Pass an empty name to restore the generated title'
-complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from close rename move help" -f -a "move" -d 'Move a tab to another index in the same window'
-complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from close rename move help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from new close rename move help" -s h -l help -d 'Print help'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from new close rename move help" -f -a "new" -d 'Open a terminal tab, optionally running a program instead of the default shell'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from new close rename move help" -f -a "close" -d 'Close an idle tab'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from new close rename move help" -f -a "rename" -d 'Set a tab\'s custom name. Pass an empty name to restore the generated title'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from new close rename move help" -f -a "move" -d 'Move a tab to another index in the same window'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and not __fish_seen_subcommand_from new close rename move help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -l window -d 'Target window; omitted uses the window policy (most recently active by default)' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -l cwd -d 'Working directory for the new terminal (relative to this CLI process)' -r -f -a "(__fish_complete_directories)"
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -l shell -d 'Shell id from the settings, for example bash or wsl:Ubuntu' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -s e -l command -d 'Program and arguments to execute directly; must be the last option' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -l timeout-ms -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -l pretty -d 'Pretty-print the JSON response. Output is JSON either way'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from new" -s h -l help -d 'Print help'
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from close" -l window -d 'Window containing the tab' -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from close" -l timeout-ms -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from close" -l pretty -d 'Pretty-print the JSON response. Output is JSON either way'
@@ -369,6 +380,7 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subco
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from move" -l timeout-ms -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from move" -l pretty -d 'Pretty-print the JSON response. Output is JSON either way'
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from move" -s h -l help -d 'Print help'
+complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from help" -f -a "new" -d 'Open a terminal tab, optionally running a program instead of the default shell'
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from help" -f -a "close" -d 'Close an idle tab'
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from help" -f -a "rename" -d 'Set a tab\'s custom name. Pass an empty name to restore the generated title'
 complete -c pebrel -n "__fish_pebrel_using_subcommand tab; and __fish_seen_subcommand_from help" -f -a "move" -d 'Move a tab to another index in the same window'
@@ -599,7 +611,7 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subc
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "new-window" -d 'Create and focus a new terminal window'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "close-window" -d 'Close an idle window. Omitting --window targets the uniquely resolved window'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "focus" -d 'Focus a window or one of its panes'
-complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "new-tab" -d 'Create a default-shell tab in the target window'
+complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "new-tab" -d 'Open a terminal tab, optionally running a program instead of the default shell'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "close-tab" -d 'Close an idle tab by its zero-based index'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "rename-tab" -d 'Set a tab\'s custom name. An empty value restores the generated title'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "move-tab" -d 'Move a tab to another index in the same window'
@@ -616,6 +628,7 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subc
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "exec-pane" -d 'Execute argv as an independent non-TTY child and capture stdout/stderr separately'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from ctl" -f -a "wait" -d 'Wait until a pane reaches a semantic task state'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from window" -f -a "close" -d 'Close an idle window. Busy panes require confirmation in the GUI instead'
+complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from tab" -f -a "new" -d 'Open a terminal tab, optionally running a program instead of the default shell'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from tab" -f -a "close" -d 'Close an idle tab'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from tab" -f -a "rename" -d 'Set a tab\'s custom name. Pass an empty name to restore the generated title'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and __fish_seen_subcommand_from tab" -f -a "move" -d 'Move a tab to another index in the same window'

@@ -242,7 +242,11 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (new-tab)
 _arguments "${_arguments_options[@]}" : \
-'--window=[]:WINDOW:_default' \
+'--window=[Target window; omitted uses the window policy (most recently active by default)]:WINDOW:_default' \
+'--cwd=[Working directory for the new terminal (relative to this CLI process)]:CWD:_files -/' \
+'(-e --command)--shell=[Shell id from the settings, for example bash or wsl\:Ubuntu]:SHELL:_default' \
+'*-e+[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
+'*--command=[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
 '--timeout-ms=[Maximum time to wait for a command response]:TIMEOUT_MS:_default' \
 '--pretty[Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines]' \
 '-h[Print help]' \
@@ -662,7 +666,20 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-tab-command-$line[1]:"
         case $line[1] in
-            (close)
+            (new)
+_arguments "${_arguments_options[@]}" : \
+'--window=[Target window; omitted uses the window policy (most recently active by default)]:WINDOW:_default' \
+'--cwd=[Working directory for the new terminal (relative to this CLI process)]:CWD:_files -/' \
+'(-e --command)--shell=[Shell id from the settings, for example bash or wsl\:Ubuntu]:SHELL:_default' \
+'*-e+[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
+'*--command=[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
+'--timeout-ms=[]:TIMEOUT_MS:_default' \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(close)
 _arguments "${_arguments_options[@]}" : \
 '--window=[Window containing the tab]:WINDOW:_default' \
 '--timeout-ms=[]:TIMEOUT_MS:_default' \
@@ -706,7 +723,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-tab-help-command-$line[1]:"
         case $line[1] in
-            (close)
+            (new)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1502,7 +1523,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-help-tab-command-$line[1]:"
         case $line[1] in
-            (close)
+            (new)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1892,7 +1917,7 @@ _pebrel__ctl_commands() {
 'new-window:Create and focus a new terminal window' \
 'close-window:Close an idle window. Omitting --window targets the uniquely resolved window' \
 'focus:Focus a window or one of its panes' \
-'new-tab:Create a default-shell tab in the target window' \
+'new-tab:Open a terminal tab, optionally running a program instead of the default shell' \
 'close-tab:Close an idle tab by its zero-based index' \
 'rename-tab:Set a tab'\''s custom name. An empty value restores the generated title' \
 'move-tab:Move a tab to another index in the same window' \
@@ -2000,7 +2025,7 @@ _pebrel__ctl__help_commands() {
 'new-window:Create and focus a new terminal window' \
 'close-window:Close an idle window. Omitting --window targets the uniquely resolved window' \
 'focus:Focus a window or one of its panes' \
-'new-tab:Create a default-shell tab in the target window' \
+'new-tab:Open a terminal tab, optionally running a program instead of the default shell' \
 'close-tab:Close an idle tab by its zero-based index' \
 'rename-tab:Set a tab'\''s custom name. An empty value restores the generated title' \
 'move-tab:Move a tab to another index in the same window' \
@@ -2369,7 +2394,7 @@ _pebrel__help__ctl_commands() {
 'new-window:Create and focus a new terminal window' \
 'close-window:Close an idle window. Omitting --window targets the uniquely resolved window' \
 'focus:Focus a window or one of its panes' \
-'new-tab:Create a default-shell tab in the target window' \
+'new-tab:Open a terminal tab, optionally running a program instead of the default shell' \
 'close-tab:Close an idle tab by its zero-based index' \
 'rename-tab:Set a tab'\''s custom name. An empty value restores the generated title' \
 'move-tab:Move a tab to another index in the same window' \
@@ -2654,6 +2679,7 @@ _pebrel__help__ssh_commands() {
 (( $+functions[_pebrel__help__tab_commands] )) ||
 _pebrel__help__tab_commands() {
     local commands; commands=(
+'new:Open a terminal tab, optionally running a program instead of the default shell' \
 'close:Close an idle tab' \
 'rename:Set a tab'\''s custom name. Pass an empty name to restore the generated title' \
 'move:Move a tab to another index in the same window' \
@@ -2669,6 +2695,11 @@ _pebrel__help__tab__close_commands() {
 _pebrel__help__tab__move_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help tab move commands' commands "$@"
+}
+(( $+functions[_pebrel__help__tab__new_commands] )) ||
+_pebrel__help__tab__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help tab new commands' commands "$@"
 }
 (( $+functions[_pebrel__help__tab__rename_commands] )) ||
 _pebrel__help__tab__rename_commands() {
@@ -2915,6 +2946,7 @@ _pebrel__ssh_commands() {
 (( $+functions[_pebrel__tab_commands] )) ||
 _pebrel__tab_commands() {
     local commands; commands=(
+'new:Open a terminal tab, optionally running a program instead of the default shell' \
 'close:Close an idle tab' \
 'rename:Set a tab'\''s custom name. Pass an empty name to restore the generated title' \
 'move:Move a tab to another index in the same window' \
@@ -2930,6 +2962,7 @@ _pebrel__tab__close_commands() {
 (( $+functions[_pebrel__tab__help_commands] )) ||
 _pebrel__tab__help_commands() {
     local commands; commands=(
+'new:Open a terminal tab, optionally running a program instead of the default shell' \
 'close:Close an idle tab' \
 'rename:Set a tab'\''s custom name. Pass an empty name to restore the generated title' \
 'move:Move a tab to another index in the same window' \
@@ -2952,6 +2985,11 @@ _pebrel__tab__help__move_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel tab help move commands' commands "$@"
 }
+(( $+functions[_pebrel__tab__help__new_commands] )) ||
+_pebrel__tab__help__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel tab help new commands' commands "$@"
+}
 (( $+functions[_pebrel__tab__help__rename_commands] )) ||
 _pebrel__tab__help__rename_commands() {
     local commands; commands=()
@@ -2961,6 +2999,11 @@ _pebrel__tab__help__rename_commands() {
 _pebrel__tab__move_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel tab move commands' commands "$@"
+}
+(( $+functions[_pebrel__tab__new_commands] )) ||
+_pebrel__tab__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel tab new commands' commands "$@"
 }
 (( $+functions[_pebrel__tab__rename_commands] )) ||
 _pebrel__tab__rename_commands() {

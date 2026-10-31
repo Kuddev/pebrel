@@ -81,11 +81,7 @@ pub(super) fn initial_startup(
     isolated: bool,
 ) -> WorkspaceStartup {
     if let Some(command) = command {
-        let program = command.program().to_owned();
-        let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
-        let launch =
-            crate::session::LaunchSession::Shell { name, program, args: command.args().to_vec() };
-        let launch = super::super::shell_launch::at_explicit_directory(launch, cwd.as_deref());
+        let launch = super::super::shell_launch::command_launch(&command, cwd.as_deref());
         return WorkspaceStartup::LaunchTerminal { cwd, launch };
     }
     if cwd.is_some() || isolated {
@@ -173,7 +169,9 @@ mod startup_tests {
     #[gpui::test]
     fn invalid_explicit_shell_cannot_create_a_runtime_window(cx: &mut gpui::TestAppContext) {
         let error = cx
-            .update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into())))
+            .update(|cx| {
+                open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into()), None)
+            })
             .unwrap_err();
         assert_eq!(error.code, "invalid_shell");
         assert!(cx.update(|cx| cx.windows().is_empty()));

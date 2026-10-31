@@ -355,6 +355,53 @@ fn tab_and_window_requests_take_an_optional_shell() {
 }
 
 #[test]
+fn tab_new_preserves_direct_argv_and_rejects_invalid_launch_requests() {
+    let argv = json!(["program with spaces", "--flag", "", "$(literal)", "two words"]);
+    let command = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "tab.new",
+        json!({"window_id": 7, "cwd": "/project", "argv": argv}),
+    ))
+    .unwrap();
+    let RuntimeCommand::NewTab { window_id, cwd, command: Some(command), .. } = command else {
+        panic!("direct command was discarded");
+    };
+    assert_eq!(window_id, Some(7));
+    assert_eq!(cwd, Some(PathBuf::from("/project")));
+    assert_eq!(command.program(), "program with spaces");
+    assert_eq!(command.args(), ["--flag", "", "$(literal)", "two words"]);
+    for params in [
+        json!({"argv": []}),
+        json!({"argv": [""]}),
+        json!({"argv": [" \t"]}),
+        json!({"argv": ["sh\n"]}),
+        json!({"argv": ["sh", "a\u{0}b"]}),
+        json!({"argv": "sh -c true"}),
+        json!({"argv": ["sh"], "shell": "bash"}),
+        json!({"argv": vec!["sh"; 257]}),
+        json!({"argv": ["sh", &"a".repeat(MAX_PROMPT_BYTES)]}),
+    ] {
+        let error = RuntimeCommand::from_request(&ApiRequest::new(
+            "token".into(),
+            "tab.new",
+            params.clone(),
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_params", "{params}");
+    }
+    let old = RuntimeCommand::from_request(&ApiRequest::new("token".into(), "tab.new", json!({})))
+        .unwrap();
+    assert!(matches!(old, RuntimeCommand::NewTab { command: None, shell_id: None, .. }));
+    let window = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "window.create",
+        json!({"argv": ["sh"]}),
+    ))
+    .unwrap_err();
+    assert_eq!(window.code, "invalid_params");
+}
+
+#[test]
 fn layout_mutations_parse_and_enforce_their_bounds() {
     let parse = |method: &str, params: Value| {
         RuntimeCommand::from_request(&ApiRequest::new("token".into(), method, params))
