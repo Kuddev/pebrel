@@ -154,6 +154,7 @@ async function predict($, turn, revision) {
     if (text && await sameEmptyComposer($, revision, session)) {
       // Native suggest rechecks empty/not-working atomically when it lands.
       // It owns Tab/right-arrow acceptance and never submits the draft.
+      stopLoading($);
       await $.prompt.suggest({ text });
     }
   } catch {
