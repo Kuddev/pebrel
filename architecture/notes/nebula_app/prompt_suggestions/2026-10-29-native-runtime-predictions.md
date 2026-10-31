@@ -125,9 +125,14 @@ Actual settings controls passed provider selection, independent model saving,
 enable/disable, invalid-draft feedback, reopening and application restart.
 Prediction-only saves left provider metadata byte-for-byte unchanged, including
 the CLI main model and active-provider mapping. The panel remained readable at
-850 px window width. Creating provider metadata succeeded; editing credentials
-was not verified because the isolated desktop lacked `secret-tool` and a Secret
-Service daemon. The existing provider editor reported that dependency error.
+850 px window width. The initial desktop lacked Secret Service components and
+the existing provider editor reported the dependency error. A follow-up run
+used an isolated HOME, D-Bus session and actual Secret Service daemon: creating
+a provider and saving a synthetic credential through the product UI succeeded,
+and an independent keychain lookup returned the same test value. The new provider
+was selectable for prediction without changing its main model or metadata.
+No real credentials or model requests were used in this settings check; the
+temporary keychain, configuration, extracted dependencies and processes were removed.
 
 At the same revision, prediction tests passed (21, with one paid evaluation
 ignored), Runtime tests passed (97), Agent identity tests passed (47), settings

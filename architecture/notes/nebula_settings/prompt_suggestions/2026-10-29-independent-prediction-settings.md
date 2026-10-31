@@ -5,6 +5,9 @@
 Implemented settings contract; native UI integration awaits product compilation.
 Native adapter availability is independent of this UI.
 
+Subsequent UI integration and Linux acceptance are recorded in the
+[resident integration decision](../../nebula_app/prompt_suggestions/2026-10-29-native-runtime-predictions.md).
+
 ## Context
 
 Users need one prediction provider/model across supported AI CLI editors without

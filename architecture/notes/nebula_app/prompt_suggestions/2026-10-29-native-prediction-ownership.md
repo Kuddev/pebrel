@@ -9,6 +9,10 @@ Prompt policy is superseded by the
 [upstream prompt boundary](2026-10-29-upstream-prompt-boundary.md), which also
 clarifies differences between this client and native upstream generation.
 
+Prototype lifecycle and voice-evidence ownership are superseded by the
+[resident integration decision](2026-10-29-native-runtime-predictions.md),
+which records completed native-adapter and Linux product acceptance.
+
 ## Context
 
 The requested feature predicts a user's next message in an AI CLI's empty native
