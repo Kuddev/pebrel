@@ -1,22 +1,72 @@
 // Only transport and ephemeral UI lifecycle live here. Prompt/model policy belongs
 // to Pebrel's host; native adapters own input identity and completed-turn events.
-export function conversation(messages) {
+// Read only the bounded edges of native text blocks. Never join a whole answer
+// or allocate one array entry per character of a large pasted message.
+export function textExcerpt(parts, textOf = part => part, limit = 3000) {
+  const edge = (reverse, budget) => {
+    const chars = [];
+    for (let index = reverse ? parts.length - 1 : 0;
+      index >= 0 && index < parts.length && chars.length < budget;
+      index += reverse ? -1 : 1) {
+      const text = textOf(parts[index]);
+      // A truncation marker must not turn an all-whitespace draft into context.
+      if (typeof text !== 'string' || !/\S/u.test(text)) continue;
+      if (chars.length) chars.push('\n');
+      if (reverse) {
+        for (let at = text.length; at > 0 && chars.length < budget;) {
+          const end = at--;
+          const low = text.charCodeAt(at);
+          if (low >= 0xdc00 && low <= 0xdfff && at > 0) {
+            const high = text.charCodeAt(at - 1);
+            if (high >= 0xd800 && high <= 0xdbff) at--;
+          }
+          chars.push(text.slice(at, end));
+        }
+      } else {
+        for (const char of text) {
+          if (chars.length === budget) break;
+          chars.push(char);
+        }
+      }
+    }
+    return chars;
+  };
+  const head = edge(false, limit + 1);
+  if (head.length <= limit) return head.join('');
+  const gap = '\n[... omitted ...]\n';
+  if (limit <= gap.length + 1) return edge(true, limit).reverse().join('');
+  head.length = Math.floor((limit - gap.length) / 2);
+  return head.join('') + gap + edge(true, limit - gap.length - head.length).reverse().join('');
+}
+
+export function conversation(messages, {
+  roleOf = message => message.role,
+  textOf = (message, limit) => textExcerpt([message.text], undefined, limit),
+} = {}) {
   const result = [];
   let remaining = 12000;
-  for (const message of messages.slice(-24).reverse()) {
-    if (!['user', 'assistant'].includes(message.role) || typeof message.text !== 'string') continue;
-    const chars = [];
-    const limit = Math.min(3000, remaining);
-    for (const char of message.text.trim()) {
-      if (chars.length === limit) break;
-      chars.push(char);
-    }
-    if (!chars.length) continue;
-    result.push({ role: message.role, text: chars.join('') });
-    remaining -= chars.length;
-    if (!remaining) break;
+  let userIndex = -1;
+  // A tool-heavy turn can contain many assistant messages after one user turn.
+  // Reserve that user's words before allocating the remaining transport budget.
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (roleOf(messages[index]) !== 'user') continue;
+    const text = textOf(messages[index], 3000);
+    if (!text.trim()) continue;
+    userIndex = index;
+    result.push({ index, message: { role: 'user', text } });
+    remaining -= [...text].length;
+    break;
   }
-  return result.reverse();
+  for (let index = messages.length - 1; index >= 0 && remaining > 0 && result.length < 24; index--) {
+    if (index === userIndex) continue;
+    const role = roleOf(messages[index]);
+    if (!['user', 'assistant'].includes(role)) continue;
+    const text = textOf(messages[index], Math.min(3000, remaining));
+    if (!text.trim()) continue;
+    result.push({ index, message: { role, text } });
+    remaining -= [...text].length;
+  }
+  return result.sort((a, b) => a.index - b.index).map(entry => entry.message);
 }
 
 export function validSuggestion(text) {
@@ -94,7 +144,7 @@ export function createPrediction({ agent, transport, snapshot, present, insert,
     read: () => state,
     cancel,
     validate,
-    async completed(turn, messages) {
+    async completed(turn, messages, extraction) {
       const owner = { ...snapshot() };
       if (disposed || !transport || !eligible(owner) || !turn) return;
       const key = `${owner.session}\0${turn}`;
@@ -118,7 +168,7 @@ export function createPrediction({ agent, transport, snapshot, present, insert,
           publish({ kind: 'loading', text: `${config.loading_text}${'.'.repeat(dots)}`, owner });
         }, 400);
         const reply = await transport.predict({ agent, session: owner.session, turn,
-          revision: owner.revision, messages: conversation(messages) }, controller.signal);
+          revision: owner.revision, messages: conversation(messages, extraction) }, controller.signal);
         if (!current()) return;
         if (validSuggestion(reply.suggestion)) {
           publish({ kind: 'ready', text: reply.suggestion, owner });

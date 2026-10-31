@@ -1,4 +1,4 @@
-import { createPrediction } from '../shared/client.mjs';
+import { createPrediction, textExcerpt } from '../shared/client.mjs';
 
 // `prompt` is the official session_prompt slot's TuiPromptRef, never a renderer
 // search or an object inferred from textarea properties.
@@ -67,13 +67,10 @@ export function connectSession({ api, session, prompt, editable, present, transp
       const messages = api.state.session.messages(session);
       const last = messages.findLast(message => message.role === 'assistant');
       if (!last || last.error || last.finish !== 'stop' || !last.time.completed) return;
-      const conversation = messages.filter(message => ['user', 'assistant'].includes(message.role))
-        .slice(-24).map(message => ({
-          role: message.role,
-          text: api.state.part(message.id).filter(part => part.type === 'text' && !part.ignored)
-            .map(part => part.text).join('\n'),
-        }));
-      void prediction.completed(last.id, conversation);
+      void prediction.completed(last.id, messages, {
+        textOf: (message, limit) => textExcerpt(api.state.part(message.id),
+          part => part.type === 'text' && !part.ignored ? part.text : undefined, limit),
+      });
     });
   });
   const unsubError = api.event.on('session.error', event => {

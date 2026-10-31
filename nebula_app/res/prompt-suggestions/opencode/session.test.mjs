@@ -7,6 +7,7 @@ function fixture({ initialBusy = false } = {}) {
   let key;
   let response;
   let requests = 0;
+  let requestBody;
   let status = { type: initialBusy ? 'busy' : 'idle' };
   let disposed = 0;
   const events = new Map();
@@ -29,7 +30,7 @@ function fixture({ initialBusy = false } = {}) {
   const adapter = connectSession({ api, session: 's1', prompt: () => native, editable: () => true,
     present: () => {}, transport: {
       config: async () => ({ enabled: true, loading_text: 'sol 正在预测' }),
-      predict: body => { requests++; assert.equal(body.agent, 'opencode'); return new Promise(resolve => { response = resolve; }); },
+      predict: body => { requests++; requestBody = body; assert.equal(body.agent, 'opencode'); return new Promise(resolve => { response = resolve; }); },
     } });
   adapter.changed();
   const emit = type => {
@@ -40,7 +41,8 @@ function fixture({ initialBusy = false } = {}) {
     let consumed = false;
     key({ event: { name }, consume() { consumed = true; } });
     return consumed;
-  }, resolve: suggestion => response({ suggestion }), requests: () => requests, disposed: () => disposed };
+  }, resolve: suggestion => response({ suggestion }), requests: () => requests,
+  requestBody: () => requestBody, disposed: () => disposed };
 }
 
 test('only a completed main turn predicts; native right-arrow accepts without sending', async () => {
@@ -103,4 +105,25 @@ test('failed turns and interacting during a running turn never predict', async (
     assert.equal(f.requests(), 0);
     f.adapter.dispose();
   }
+});
+
+test('native parts are read only for bounded recent context and the latest user', async () => {
+  const f = fixture();
+  const messages = [{ id: 'u1', role: 'user' }, ...Array.from({ length: 40 }, (_, index) => ({
+    id: `a${index}`, role: 'assistant', finish: 'stop', time: { completed: 1 },
+  }))];
+  const reads = [];
+  f.api.state.session.messages = () => messages;
+  f.api.state.part = id => {
+    reads.push(id);
+    return id === 'u1' ? [{ type: 'text', text: '只改侧边 tab 喵' }]
+      : [{ type: 'text', text: '开始' + '😺'.repeat(200_000) + '最后的纠正' }];
+  };
+  f.emit('busy'); f.emit('idle'); await flush();
+  const context = f.requestBody().messages;
+  assert.equal(context[0].text, '只改侧边 tab 喵');
+  assert.deepEqual(reads, ['u1', 'a39', 'a38', 'a37', 'a36']);
+  assert.ok(context.at(-1).text.endsWith('最后的纠正'));
+  assert.ok(context.reduce((sum, message) => sum + [...message.text].length, 0) <= 12000);
+  f.resolve(null); await flush(); f.adapter.dispose();
 });

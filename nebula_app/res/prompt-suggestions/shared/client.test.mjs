@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { conversation, createPrediction, createTransport } from './client.mjs';
+import { conversation, createPrediction, createTransport, textExcerpt } from './client.mjs';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture() {
@@ -100,9 +100,57 @@ test('context is bounded in Unicode characters without voice rewriting', () => {
   const result = conversation(Array.from({ length: 40 }, () => ({ role: 'user', text })));
   assert.equal(result.length, 4);
   assert.equal(result.reduce((sum, item) => sum + Array.from(item.text).length, 0), 12000);
-  assert.equal(result[0].text, '喵😺'.repeat(1500));
+  assert.ok(result[0].text.startsWith('喵😺'));
+  assert.ok(result[0].text.endsWith('喵😺'));
+  assert.ok(result[0].text.includes('[... omitted ...]'));
   assert.deepEqual(conversation([{ role: 'tool', text: 'ignore' }, { role: 'user', text: '好耶！' }]),
     [{ role: 'user', text: '好耶！' }]);
+});
+
+test('a tool-heavy turn retains the latest nonempty user and original message order', () => {
+  const messages = [{ role: 'user', text: '先测中文喵' },
+    ...Array.from({ length: 40 }, (_, index) => ({ role: 'assistant', text: `${index}:` + '中'.repeat(4000) })),
+    { role: 'user', text: ' '.repeat(5000) }, { role: 'tool', text: 'private' }];
+  const result = conversation(messages);
+  assert.equal(result[0].text, '先测中文喵');
+  assert.equal(result.filter(message => message.role === 'user').length, 1);
+  assert.ok(result.at(-1).text.startsWith('39:'));
+  const positions = result.slice(1).map(message => Number.parseInt(message.text, 10));
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  assert.ok(result.length <= 24);
+  assert.ok(result.reduce((sum, message) => sum + [...message.text].length, 0) <= 12000);
+});
+
+test('long messages keep final corrections with bounded character and block reads', () => {
+  const original = '开始测中文' + '😺'.repeat(1_000_000) + '最后只改侧边 tab';
+  const iterate = String.prototype[Symbol.iterator];
+  let characters = 0;
+  String.prototype[Symbol.iterator] = function* () {
+    for (const char of iterate.call(this)) { characters++; yield char; }
+  };
+  let result;
+  try { result = conversation([{ role: 'user', text: original }]); }
+  finally { String.prototype[Symbol.iterator] = iterate; }
+  assert.ok(result[0].text.startsWith('开始测中文'));
+  assert.ok(result[0].text.endsWith('最后只改侧边 tab'));
+  assert.equal([...result[0].text].length, 3000);
+  assert.ok(characters < 10_000, `read ${characters} characters of a giant message`);
+  const parts = [{ text: '首部' + '😺'.repeat(5000) },
+    { get text() { assert.fail('must not read a discarded middle block'); } },
+    { text: '😺'.repeat(5000) + '尾部纠正' }];
+  const excerpt = textExcerpt(parts, part => part.text);
+  assert.ok(excerpt.startsWith('首部'));
+  assert.ok(excerpt.endsWith('尾部纠正'));
+  assert.equal([...excerpt].length, 3000);
+  assert.equal(textExcerpt(['一😺', '二']), '一😺\n二');
+});
+
+test('native extraction never opens discarded historical text', () => {
+  const history = Array.from({ length: 1000 }, () => ({ role: 'assistant',
+    get text() { assert.fail('discarded history must not be materialized'); } }));
+  const recent = [{ role: 'user', text: '原话喵' },
+    ...Array.from({ length: 4 }, () => ({ role: 'assistant', text: '中'.repeat(4000) }))];
+  assert.equal(conversation([...history, ...recent])[0].text, '原话喵');
 });
 
 test('transport uses authenticated loopback HTTP and bounds its response', async t => {

@@ -47,14 +47,9 @@ function startLoading($, text, revision) {
 }
 
 function boundedMessages(messages) {
-  const result = [];
-  let remaining = 12000;
-  for (let index = messages.length - 1; index >= 0 && remaining > 0; index -= 1) {
-    const message = messages[index];
-    if (message.role !== "user" && message.role !== "assistant") continue;
-    if (typeof message.text !== "string" || message.text.length === 0) continue;
-    const limit = Math.min(remaining, 3000);
+  function excerpt(message, limit) {
     let text = message.text;
+    if (typeof text !== "string" || !/\S/u.test(text)) return "";
     if (text.length > limit) {
       const gap = "\n[... omitted ...]\n";
       if (limit <= gap.length + 2) {
@@ -66,12 +61,31 @@ function boundedMessages(messages) {
         text = head + gap + tail;
       }
     }
+    return text;
+  }
+  const result = [];
+  let remaining = 12000;
+  let userIndex = -1;
+  // Reserve the latest user's wording even after a long, tool-heavy answer.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== "user") continue;
+    const text = excerpt(messages[index], 3000);
+    if (text.trim() === "") continue;
+    userIndex = index;
+    result.push({ index, message: { role: "user", text } });
+    remaining -= text.length;
+    break;
+  }
+  for (let index = messages.length - 1; index >= 0 && remaining > 0 && result.length < 24; index -= 1) {
+    if (index === userIndex) continue;
+    const message = messages[index];
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const text = excerpt(message, Math.min(remaining, 3000));
     if (text.trim() === "") continue;
     remaining -= text.length;
-    result.push({ role: message.role, text });
-    if (result.length === 24) break;
+    result.push({ index, message: { role: message.role, text } });
   }
-  return result.reverse();
+  return result.sort((a, b) => a.index - b.index).map(entry => entry.message);
 }
 
 async function bridge($) {
