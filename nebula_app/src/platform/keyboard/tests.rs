@@ -11,9 +11,8 @@ use nebula_terminal::tty::{self, EventedReadWrite};
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::Console::*;
 
-use crate::input::terminal_input::{
-    RuntimeKey, RuntimeKeyModifiers, build_runtime_sequence_for_program,
-};
+use crate::input::terminal_input::build_runtime_sequence_for_program;
+use crate::runtime_api::{RuntimeKey, RuntimeKeyModifiers};
 
 const FIXTURE: &str = "platform::keyboard::tests::console_reader_fixture";
 
