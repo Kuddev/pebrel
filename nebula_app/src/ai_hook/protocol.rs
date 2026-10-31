@@ -125,6 +125,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     let permission_mode = context_string(&payload, &["permission_mode", "permissionMode"])
         .as_deref()
         .and_then(AiPermissionMode::parse);
+    let mut native_attention = None;
     let (kind, message) = match source.as_str() {
         // 第二道串台门。第一道在 nebula_hook 里靠环境变量判断调用方是不是别家
         // 的 hook runner；那种门会被上游改名静默失效，所以这里独立再拦一次：
@@ -220,7 +221,9 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         },
         "cursor" if payload.get("hookEventName").is_some() => return None,
         "cursor" | "copilot" | "grok" | "antigravity" => {
-            super::native_events::parse(&source, native_event?, &payload)?
+            let event = super::native_events::parse(&source, native_event?, &payload)?;
+            native_attention = event.attention_kind;
+            (event.kind, event.message)
         },
         _ => return None,
     };
@@ -268,6 +271,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         AiTurnOutcome::Unknown
     };
     let attention = (kind == AiHookKind::NeedsAttention).then(|| AttentionContext {
+        kind: super::attention::from_payload(&source, &payload, permission_mode, native_attention),
         source: source.clone(),
         pane_id: pane,
         session_id: session_id.clone(),
