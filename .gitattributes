@@ -6,6 +6,8 @@ nebula_app/src/platform/pi_session.sh text eol=lf
 scripts/tests/fixtures/ai-hooks-v1.5.0/* -text
 # Embedded remote hooks keep POSIX newlines in Windows binaries.
 nebula_app/res/hooks/* text eol=lf
+# Preserve the checksum-pinned upstream prediction prompt on every platform.
+nebula_app/res/prompts/codex_prompt_suggestion.txt text eol=lf
 # Editable vector sources must match their losslessly compressed SVGZ payloads.
 nebula_app/assets/icons/*.svg text eol=lf
 # Checksum-pinned offline reader distributions retain their upstream bytes.
