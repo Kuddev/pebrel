@@ -1992,5 +1992,8 @@
   "session.tabs_reopened_after_crash": "上次未正常退出，已重新打开 {count} 个标签。会话正在启动，启动错误会保留在对应标签中。",
   "terminal.ssh_session_stopped": "会话已结束。",
   "terminal.ssh_session_keys": "按 R 重新连接，按 Enter 关闭此终端。",
-  "terminal.ssh_reconnecting": "正在重新连接…"
+  "terminal.ssh_reconnecting": "正在重新连接…",
+  "startup": {
+    "handover_unconfirmed": "运行中的 Pebrel 未确认打开请求，标签页或窗口可能已经创建。请先检查已有窗口，再决定是否重试；本次启动不会重复发送请求。"
+  }
 }
