@@ -215,6 +215,7 @@ fn event_fingerprint(event: &AiHookEvent) -> u64 {
     event.answer.hash(&mut hasher);
     event.background_tasks.hash(&mut hasher);
     if let Some(attention) = event.attention.as_ref() {
+        attention.kind.hash(&mut hasher);
         attention.cwd.hash(&mut hasher);
         attention.project.hash(&mut hasher);
         attention.permission_or_tool.hash(&mut hasher);

@@ -185,6 +185,11 @@ fn osc7501_overrides_conflicting_hooks_in_either_arrival_order(cx: &mut TestAppC
                 assert_eq!(view.progress, progress);
                 let agent = view.runtime_agent().unwrap();
                 assert_eq!(agent.state_source, RuntimeAgentStateSource::Osc7501);
+                assert_eq!(
+                    agent.attention_kind,
+                    (state == RuntimeTaskState::Attention)
+                        .then_some(crate::ai_hook::AttentionKind::Unknown)
+                );
                 assert_eq!(agent.session_id.as_deref(), Some(session));
                 assert!(agent.hook_seen);
             }
@@ -216,6 +221,10 @@ fn absent_or_cleared_osc7501_falls_back_to_hooks_then_screen(cx: &mut TestAppCon
         view.refresh_agent_screen_state(cx);
         assert_eq!(view.runtime_task_state(), RuntimeTaskState::Attention);
         assert_eq!(view.runtime_agent().unwrap().state_source, RuntimeAgentStateSource::Screen);
+        assert_eq!(
+            view.runtime_agent().unwrap().attention_kind,
+            Some(crate::ai_hook::AttentionKind::Unknown)
+        );
         wire.feed(view, cx, b"\x1b]7501;state=done:app=claude-code\x07");
         assert_eq!(view.runtime_task_state(), RuntimeTaskState::Finished);
         wire.feed(view, cx, b"\x1b]7501;state=clear\x07");

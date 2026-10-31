@@ -301,6 +301,15 @@ impl TerminalView {
                 self.agent_activity.rule().map(str::to_owned)
             },
             hook_seen: self.agent_activity.hook_seen(),
+            attention_kind: (self.runtime_task_state()
+                == crate::runtime_api::RuntimeTaskState::Attention)
+                .then(|| {
+                    if self.effective_program_status().is_some() {
+                        crate::ai_hook::AttentionKind::Unknown
+                    } else {
+                        self.agent_activity.attention_kind().unwrap_or_default()
+                    }
+                }),
         }
     }
 

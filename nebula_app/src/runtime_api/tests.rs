@@ -130,7 +130,40 @@ fn detected_agent(kind: &str, session_id: Option<&str>) -> RuntimeAgent {
         session_id: session_id.map(str::to_owned),
         state_source: RuntimeAgentStateSource::Hook,
         state_rule: None,
+        attention_kind: None,
         hook_seen: true,
+    }
+}
+
+#[test]
+fn agent_attention_details_are_optional_and_round_trip_as_stable_strings() {
+    let mut agent = detected_agent("claude", Some("session"));
+    let legacy = serde_json::to_value(&agent).unwrap();
+    assert!(legacy.get("attention_kind").is_none());
+    assert_eq!(serde_json::from_value::<RuntimeAgent>(legacy).unwrap(), agent);
+    let schema: Value =
+        serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json")).unwrap();
+    let kinds =
+        schema["$defs"]["agent"]["properties"]["attention_kind"]["enum"].as_array().unwrap();
+    assert_eq!(kinds.len(), 5);
+    assert!(
+        !schema["$defs"]["agent"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("attention_kind"))
+    );
+    for (kind, name) in [
+        (crate::ai_hook::AttentionKind::Permission, "permission"),
+        (crate::ai_hook::AttentionKind::Selection, "selection"),
+        (crate::ai_hook::AttentionKind::Confirmation, "confirmation"),
+        (crate::ai_hook::AttentionKind::Input, "input"),
+        (crate::ai_hook::AttentionKind::Unknown, "unknown"),
+    ] {
+        agent.attention_kind = Some(kind);
+        let json = serde_json::to_value(&agent).unwrap();
+        assert_eq!(json["attention_kind"], name);
+        assert!(kinds.contains(&json["attention_kind"]));
+        assert_eq!(serde_json::from_value::<RuntimeAgent>(json).unwrap(), agent);
     }
 }
 
@@ -1196,6 +1229,7 @@ fn agents_list_projection_keeps_window_and_tab_identity() {
         session_id: Some("thread-7".into()),
         state_source: RuntimeAgentStateSource::Hook,
         state_rule: None,
+        attention_kind: None,
         hook_seen: true,
     });
     let hub = RuntimeHub::new();

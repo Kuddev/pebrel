@@ -261,6 +261,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         AiTurnOutcome::Unknown
     };
     let attention = (kind == AiHookKind::NeedsAttention).then(|| AttentionContext {
+        kind: super::attention::from_payload(&source, &payload, permission_mode),
         source: source.clone(),
         pane_id: pane,
         session_id: session_id.clone(),

@@ -2504,6 +2504,16 @@
         "state_rule": {
           "type": "string"
         },
+        "attention_kind": {
+          "description": "Optional interaction detail while task_state is attention. Unknown means the current evidence cannot classify the request; absence is also valid for older servers. This does not authorize an automatic reply.",
+          "enum": [
+            "permission",
+            "selection",
+            "confirmation",
+            "input",
+            "unknown"
+          ]
+        },
         "hook_seen": {
           "type": "boolean"
         }

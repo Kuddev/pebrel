@@ -325,6 +325,13 @@ SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，�
 `RuntimeHub` 再对真正的状态跃迁盖 `state_change_seq`，因此外部客户端不需要自行解析标题或
 终端文本来猜生命周期。
 
+当 `task_state` 为 `attention` 时，Agent 对象还提供可选的 `attention_kind`，用于区分
+工具权限、计划确认、选项问答和自由输入；字段定义以
+[`agent` schema](runtime-api-v1.schema.json#/$defs/agent) 为准。分类来自已接收的结构化
+hook，屏幕规则、OSC 7501 或缺少类型的旧通知返回 `unknown`，不会从提示正文猜测。
+请求解决或 pane 失败后省略该字段；旧服务端也可能没有它。此细节不改变 `pane.wait` 的
+状态条件或 `state_change_seq`，也不表示调用者已获准自动回答权限请求。
+
 `pane.read` 直接锁定 pane 的 `Term`，通过 `bounds_to_string` 读取 Grid/scrollback；它不使用
 截图或渲染快照，也不会改变用户的滚动位置、选区和光标。范围固定锚定 buffer 底部，所以用户
 正翻看历史时结果仍稳定。`lines` 默认 120，范围 1..=2000，响应最多 1 MiB，并返回：
