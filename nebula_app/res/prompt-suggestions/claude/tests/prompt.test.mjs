@@ -44,6 +44,7 @@ async function fixture(options = {}) {
       suggest: async value => {
         if (draft !== "") return { isShown: false };
         suggestions.push(value);
+        if (options.suggestPending) await options.suggestPending.promise;
         return { isShown: true };
       },
     },
@@ -131,6 +132,20 @@ test("successful main turn uses native suggestion and noneditable cycling hint",
   assert.deepEqual(f.suggestions, [{ text: "那就跑一轮真机测试喵～" }]);
   assert.equal((await f.render()).props.tail, undefined);
   assert.equal(f.timers.size, 0);
+});
+
+test("native suggestion handoff hides loading before the native promise resolves", async () => {
+  const suggestPending = deferred();
+  const f = await fixture({ suggestPending });
+  await f.finish();
+  await f.advance(0);
+  f.pending.resolve(response({ suggestion: "继续验证喵", model: "gpt-6sol" }));
+  await flush();
+  assert.deepEqual(f.suggestions, [{ text: "继续验证喵" }]);
+  assert.equal((await f.render()).props.tail, undefined);
+  assert.equal(f.timers.size, 0);
+  suggestPending.resolve();
+  await flush();
 });
 
 test("nonempty, failed, interrupted, blank and subagent completions never request", async () => {
