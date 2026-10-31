@@ -304,6 +304,22 @@ impl ThemeLibraryStore {
     }
 
     pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), StoreError> {
+        self.delete_checked(id, expected_revision, None)
+    }
+
+    pub fn delete_unchanged(&self, expected: &ThemeDocument) -> Result<(), StoreError> {
+        let id = expected
+            .id()
+            .ok_or_else(|| StoreError::InvalidDocument("custom themes require an id".to_owned()))?;
+        self.delete_checked(id, expected.revision(), Some(expected))
+    }
+
+    fn delete_checked(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        expected: Option<&ThemeDocument>,
+    ) -> Result<(), StoreError> {
         if builtin_documents()
             .into_iter()
             .any(|document| document.id() == Some(id) || document.name() == id)
@@ -317,7 +333,9 @@ impl ThemeLibraryStore {
         let Some(document) = current else {
             return Err(StoreError::Conflict { expected: Some(expected_revision), actual: None });
         };
-        if document.revision() != expected_revision {
+        if document.revision() != expected_revision
+            || expected.is_some_and(|value| *value != document)
+        {
             return Err(StoreError::Conflict {
                 expected: Some(expected_revision),
                 actual: Some(document.revision()),

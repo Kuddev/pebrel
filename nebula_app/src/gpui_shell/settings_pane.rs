@@ -56,6 +56,7 @@ mod search_header;
 mod segmented;
 mod setting_help;
 mod terminal_effect;
+mod theme_management;
 mod theme_picker;
 
 mod initialization;
