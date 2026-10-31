@@ -1,6 +1,6 @@
 import { CustomEditor, VERSION, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
-import { createPrediction, createTransport } from '../shared/client.mjs';
+import { createPrediction, createTransport, textExcerpt } from '../shared/client.mjs';
 import { predictionEditor } from './editor.mjs';
 
 // Verified against Pi 1.4.0's public extension API. Older/forked SDKs must not
@@ -67,7 +67,7 @@ export default function (pi: ExtensionAPI) {
   pi.on('session_shutdown', detach);
   pi.on('agent_start', () => { success = false; prediction.cancel(); });
   pi.on('agent_end', event => {
-    const last = [...event.messages].reverse().find(message => message.role === 'assistant');
+    const last = event.messages.findLast(message => message.role === 'assistant');
     success = last?.role === 'assistant' && last.stopReason === 'stop';
   });
   pi.on('ui_prompt_start', () => { blocked = true; prediction.cancel(); });
@@ -75,15 +75,14 @@ export default function (pi: ExtensionAPI) {
   pi.on('agent_settled', (event, ctx) => {
     if (event.aborted || !success || !editor) return;
     context = ctx;
-    const branch = ctx.sessionManager.getBranch();
-    const messages = branch.flatMap(entry => {
-      if (entry.type !== 'message' || (entry.message.role !== 'user' && entry.message.role !== 'assistant')) return [];
-      const content = entry.message.content;
-      const text = typeof content === 'string' ? content : content
-        .filter(block => block.type === 'text').map(block => block.text).join('\n');
-      return [{ role: entry.message.role, text }];
-    });
     // Do not await the network in Pi's event dispatch path.
-    void prediction.completed(ctx.sessionManager.getLeafId(), messages);
+    void prediction.completed(ctx.sessionManager.getLeafId(), ctx.sessionManager.getBranch(), {
+      roleOf: entry => entry.type === 'message' ? entry.message.role : undefined,
+      textOf: (entry, limit) => {
+        const content = entry.message.content;
+        return typeof content === 'string' ? textExcerpt([content], undefined, limit)
+          : textExcerpt(content, block => block.type === 'text' ? block.text : undefined, limit);
+      },
+    });
   });
 }

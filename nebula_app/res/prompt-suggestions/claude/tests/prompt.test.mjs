@@ -315,3 +315,21 @@ test("native context is bounded, text-only and keeps both ends of long answers",
   f.pending.resolve(response({ suggestion: null }));
   await flush();
 });
+
+test("long assistant-only runs keep the latest nonempty user without opening old text", async () => {
+  const messages = [{ role: "user", get text() { assert.fail("old text must not be read"); } },
+    { role: "user", text: "先测中文" + "😺".repeat(200_000) + "最后只改侧边 tab 喵" },
+    ...Array.from({ length: 40 }, (_, index) => ({ role: "assistant", text: `${index}:` + "中".repeat(4000) })),
+    { role: "user", text: " ".repeat(5000) }];
+  const f = await fixture({ messages });
+  await f.finish(); await f.advance(0);
+  assert.equal(f.requests.length, 2);
+  const context = JSON.parse(f.requests[1].body).messages;
+  assert.equal(context[0].role, "user");
+  assert.ok(context[0].text.startsWith("先测中文"));
+  assert.ok(context[0].text.endsWith("最后只改侧边 tab 喵"));
+  assert.ok(context.at(-1).text.startsWith("39:"));
+  assert.ok(context.reduce((sum, message) => sum + message.text.length, 0) <= 12000);
+  assert.ok(context.length <= 24);
+  f.pending.resolve(response({ suggestion: null })); await flush();
+});
