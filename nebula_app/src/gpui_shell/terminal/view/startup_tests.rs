@@ -448,12 +448,18 @@ fn completion_mode_hybrid_lists_without_writing_and_cancels_pending_results(
 ) {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("mode-candidate.txt"), b"").unwrap();
+    std::fs::write(directory.path().join("mode-choice.txt"), b"").unwrap();
+    crate::completion::record_command(
+        &crate::nebula_history::HistoryScope::Local,
+        "nvim mode-cached.txt",
+        directory.path().to_str().unwrap(),
+    );
     let (view, window, receiver) = open_at(cx, Some(directory.path().to_path_buf()));
     view.update(window, |view, cx| {
         view.suggest.suggest_env = crate::display::SuggestEnv::Local;
         view.ghost_enabled = true;
         view.completion_style = crate::display::CompletionStyle::Hybrid;
-        feed(view, "❯ cat mode-c".as_bytes());
+        feed(view, "❯ nvim mode-c".as_bytes());
         refresh_completion_from_grid(view, cx);
     });
     window.run_until_parked();
@@ -483,6 +489,12 @@ fn completion_mode_hybrid_lists_without_writing_and_cancels_pending_results(
     );
     view.update(window, |view, cx| {
         assert_eq!(view.suggest.completion_items[0].insert, "andidate.txt");
+        assert_eq!(view.suggest.completion_items[1].insert, "hoice.txt");
+        assert_eq!(view.suggest.completion_items.len(), 2);
+        assert_eq!(view.suggest.completion_selected, Some(0));
+        assert!(view.handle_completion_key("tab", cx));
+        assert_eq!(view.suggest.completion_selected, Some(1));
+        assert!(view.handle_completion_key("tab", cx));
         assert_eq!(view.suggest.completion_selected, Some(0));
         crate::display::nebula_input_char(&mut view.suggest, 'a');
         feed(view, b"a");
