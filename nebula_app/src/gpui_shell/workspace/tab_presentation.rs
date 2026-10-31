@@ -62,7 +62,8 @@ impl NebulaWorkspace {
             WorkspaceTab::Code { view, .. } => view.read(cx).tab_title(cx).into(),
             tab @ WorkspaceTab::Terminal { .. } => {
                 // 标签 = 聚焦 pane 的 cwd 末级目录名（旧壳 chrome_tab_label
-                // 规则）。分屏计数**不拼在这里**：这份字符串还要喂给 runtime
+                // 规则）；本地已识别 agent 运行时改用其
+                // 上报的任务标题。分屏计数**不拼在这里**：这份字符串还要喂给 runtime
                 // API 的 tab label、跨窗拖拽标题和重命名预填，掺进 "⊞2" 会
                 // 一路泄漏，而且长标题下会被 truncate_tab_label 截掉、被
                 // custom_name 整条顶掉。计数改由 TabPresentation::pane_count
