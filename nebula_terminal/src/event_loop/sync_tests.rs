@@ -84,11 +84,11 @@ fn read(
     assert_eq!(consumed, bytes.len());
     consumed
 }
-fn observe(prefix: &str, images: usize, closed: bool) -> usize {
+fn observe(graphics: &str, prefix: &str, images: usize, closed: bool) -> usize {
     let (mut loop_, mut state, listener, mut slave) = setup();
     let bytes = format!(
         "{prefix}\x1b[?2026h{}{}",
-        image().repeat(images),
+        graphics.repeat(images),
         if closed { "\x1b[?2026l" } else { "" }
     );
     let wire = read(&mut loop_, &mut state, &mut slave, bytes.as_bytes());
@@ -104,44 +104,60 @@ fn observe(prefix: &str, images: usize, closed: bool) -> usize {
 }
 #[test]
 fn committed_prefix_has_actual_wakeup_before_open_image_batch() {
-    assert_eq!(observe("A", 1, false), 1);
+    for graphics in [image(), "\x1bPq~\x1b\\"] {
+        assert_eq!(observe(graphics, "A", 1, false), 1);
+    }
 }
 #[test]
 fn completed_frame_has_actual_wakeup_before_next_open_image_batch() {
-    assert_eq!(observe("\x1b[?2026hA\x1b[?2026l", 1, false), 1);
+    for graphics in [image(), "\x1bPq~\x1b\\"] {
+        assert_eq!(observe(graphics, "\x1b[?2026hA\x1b[?2026l", 1, false), 1, "{graphics:?}");
+    }
 }
 #[test]
 fn committed_prefix_refreshes_with_multiple_images() {
-    assert_eq!(observe("A", 3, false), 1);
-    assert_eq!(observe("A", 1, true), 1);
+    for graphics in [image(), "\x1bPq~\x1b\\"] {
+        assert_eq!(observe(graphics, "A", 3, false), 1);
+        assert_eq!(observe(graphics, "A", 1, true), 1);
+    }
 }
 #[test]
 fn synchronized_image_waits_for_commit_at_every_split() {
-    let bytes = image().as_bytes();
-    for split in 0..=bytes.len() {
-        let (mut loop_, mut state, listener, mut slave) = setup();
-        read(&mut loop_, &mut state, &mut slave, b"\x1b[?2026h");
-        listener.0.lock().unwrap().clear();
-        for part in [&bytes[..split], &bytes[split..]] {
-            if !part.is_empty() {
-                read(&mut loop_, &mut state, &mut slave, part);
+    for graphics in [image(), "\x1bPq~\x1b\\"] {
+        let bytes = graphics.as_bytes();
+        for split in 0..=bytes.len() {
+            let (mut loop_, mut state, listener, mut slave) = setup();
+            read(&mut loop_, &mut state, &mut slave, b"\x1b[?2026h");
+            listener.0.lock().unwrap().clear();
+            for part in [&bytes[..split], &bytes[split..]] {
+                if !part.is_empty() {
+                    read(&mut loop_, &mut state, &mut slave, part);
+                }
+                assert!(listener.0.lock().unwrap().is_empty(), "split={split}");
             }
-            assert!(listener.0.lock().unwrap().is_empty(), "split={split}");
+            read(&mut loop_, &mut state, &mut slave, b"\x1b[?2026l");
+            let events = listener.0.lock().unwrap();
+            assert_eq!(events.iter().filter(|e| matches!(e, Event::Wakeup)).count(), 1);
+            assert_eq!(events.iter().filter(|e| matches!(e, Event::InlineImage { .. })).count(), 1);
         }
-        read(&mut loop_, &mut state, &mut slave, b"\x1b[?2026l");
-        let events = listener.0.lock().unwrap();
-        assert_eq!(events.iter().filter(|e| matches!(e, Event::Wakeup)).count(), 1);
-        assert_eq!(events.iter().filter(|e| matches!(e, Event::InlineImage { .. })).count(), 1);
     }
 }
 #[test]
 fn separately_read_prefix_and_final_commit_both_refresh() {
-    let (mut loop_, mut state, listener, mut slave) = setup();
-    read(&mut loop_, &mut state, &mut slave, b"A");
-    assert_eq!(listener.0.lock().unwrap().iter().filter(|e| matches!(e, Event::Wakeup)).count(), 1);
-    listener.0.lock().unwrap().clear();
-    read(&mut loop_, &mut state, &mut slave, format!("\x1b[?2026h{}", image()).as_bytes());
-    listener.0.lock().unwrap().clear();
-    read(&mut loop_, &mut state, &mut slave, b"\x1b[?2026l");
-    assert_eq!(listener.0.lock().unwrap().iter().filter(|e| matches!(e, Event::Wakeup)).count(), 1);
+    for graphics in [image(), "\x1bPq~\x1b\\"] {
+        let (mut loop_, mut state, listener, mut slave) = setup();
+        read(&mut loop_, &mut state, &mut slave, b"A");
+        assert_eq!(
+            listener.0.lock().unwrap().iter().filter(|e| matches!(e, Event::Wakeup)).count(),
+            1
+        );
+        listener.0.lock().unwrap().clear();
+        read(&mut loop_, &mut state, &mut slave, format!("\x1b[?2026h{graphics}").as_bytes());
+        listener.0.lock().unwrap().clear();
+        read(&mut loop_, &mut state, &mut slave, b"\x1b[?2026l");
+        assert_eq!(
+            listener.0.lock().unwrap().iter().filter(|e| matches!(e, Event::Wakeup)).count(),
+            1
+        );
+    }
 }

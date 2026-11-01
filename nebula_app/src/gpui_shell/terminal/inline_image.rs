@@ -21,6 +21,7 @@ const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
 
 enum ImageData {
     Encoded(Arc<Vec<u8>>),
+    Sixel { image: Arc<nebula_terminal::sixel::SixelImage>, background: [u8; 3] },
     Pixels { data: Weak<Vec<u8>>, channels: u8 },
 }
 
@@ -28,12 +29,13 @@ impl ImageData {
     fn encoded_bytes(&self) -> usize {
         match self {
             Self::Encoded(data) => data.len(),
+            Self::Sixel { image, .. } => image.encoded_len(),
             Self::Pixels { .. } => 0,
         }
     }
     fn available(&self) -> bool {
         match self {
-            Self::Encoded(_) => true,
+            Self::Encoded(_) | Self::Sixel { .. } => true,
             Self::Pixels { data, .. } => data.strong_count() != 0,
         }
     }
@@ -82,7 +84,41 @@ impl InlineImageStore {
         data: Arc<Vec<u8>>,
         placement: ImagePlacement,
     ) -> Result<(), &'static str> {
-        if data.len() > MAX_IMAGE_ENCODED_BYTES {
+        self.enqueue_encoded(ImageData::Encoded(data), placement)
+    }
+
+    pub fn enqueue_inline(
+        &mut self,
+        data: nebula_terminal::inline_image::ImageData,
+        placement: ImagePlacement,
+        palette: &super::colors::Palette,
+    ) -> Result<(), &'static str> {
+        use nebula_terminal::inline_image::ImageData as Payload;
+        match data {
+            Payload::Encoded(bytes) => self.enqueue(bytes, placement),
+            Payload::Sixel(image) => {
+                let background = image
+                    .background_color()
+                    .map(|color| {
+                        let rgb = super::element::rgb_from_rgba(palette.resolve(
+                            color,
+                            &Default::default(),
+                            false,
+                        ));
+                        [rgb.r, rgb.g, rgb.b]
+                    })
+                    .unwrap_or_default();
+                self.enqueue_encoded(ImageData::Sixel { image, background }, placement)
+            },
+        }
+    }
+
+    fn enqueue_encoded(
+        &mut self,
+        data: ImageData,
+        placement: ImagePlacement,
+    ) -> Result<(), &'static str> {
+        if data.encoded_bytes() > MAX_IMAGE_ENCODED_BYTES {
             return Err("encoded terminal image exceeds 12 MiB");
         }
         if !placement.layout.width.is_finite()
@@ -99,7 +135,7 @@ impl InlineImageStore {
         if self
             .queued
             .iter()
-            .filter(|pending| matches!(pending.data, ImageData::Encoded(_)))
+            .filter(|pending| !matches!(pending.data, ImageData::Pixels { .. }))
             .count()
             >= MAX_QUEUED_IMAGES
         {
@@ -107,7 +143,7 @@ impl InlineImageStore {
         }
         let next_bytes = self
             .queued_bytes
-            .checked_add(data.len())
+            .checked_add(data.encoded_bytes())
             .ok_or("terminal image queue size overflow")?;
         if next_bytes > MAX_QUEUED_BYTES {
             return Err("terminal image decode queue exceeds 32 MiB");
@@ -115,11 +151,7 @@ impl InlineImageStore {
 
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-        self.queued.push_back(PendingInlineImage {
-            sequence,
-            data: ImageData::Encoded(data),
-            placement,
-        });
+        self.queued.push_back(PendingInlineImage { sequence, data, placement });
         self.queued_bytes = next_bytes;
         Ok(())
     }
@@ -235,6 +267,18 @@ pub(super) fn decode(pending: PendingInlineImage) -> Result<(u64, InlineImage), 
             decode_pixels(&data, channels, pending.placement.layout)?
         },
         ImageData::Encoded(data) => decode_bytes(data.as_slice())?,
+        ImageData::Sixel { image, background } => {
+            let (width, height) = image.dimensions();
+            let mut bgra =
+                image.decode_rgba_with_background(background).ok_or("invalid SIXEL image")?;
+            let decoded_bytes = bgra.len();
+            for pixel in bgra.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+            let buffer =
+                image::RgbaImage::from_raw(width, height, bgra).ok_or("invalid SIXEL pixels")?;
+            (Arc::new(RenderImage::new([Frame::new(buffer)])), decoded_bytes)
+        },
     };
     Ok((
         pending.sequence,
@@ -912,5 +956,73 @@ mod tests {
         drop(owner);
         assert!(store.start_next().is_none());
         assert_eq!(store.queued_bytes, 0);
+    }
+
+    fn sixel_payload(transparent: bool) -> nebula_terminal::inline_image::ImageData {
+        let background = usize::from(transparent);
+        let bytes = format!("\x1bP9;{background}q\"2;1;2;6#1;2;100;0;0@\x1b\\").into_bytes();
+        nebula_terminal::inline_image::ImageData::Sixel(Arc::new(
+            nebula_terminal::sixel::SixelImage::parse(bytes).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn sixel_decodes_natural_pixels_and_keeps_aspect_in_display_geometry() {
+        for transparent in [false, true] {
+            let mut store = InlineImageStore::default();
+            let owner = ImageIdentity::new();
+            let mut placement = placement(&owner);
+            placement.layout.height = 12.0;
+            placement.layout.rows = 12;
+            store
+                .enqueue_inline(sixel_payload(transparent), placement, &Default::default())
+                .unwrap();
+            let (_, decoded) = decode(store.start_next().unwrap()).unwrap();
+            assert_eq!(decoded.decoded_bytes, 48, "aspect must not expand the pixel allocation");
+            assert_eq!(decoded.image.size(0), size(gpui::DevicePixels(2), gpui::DevicePixels(6)));
+            assert_eq!(decoded.placement.layout.height, 12.0);
+            let pixels = decoded.image.as_bytes(0).unwrap();
+            assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+            for pixel in pixels[4..].chunks_exact(4) {
+                assert_eq!(pixel, if transparent { &[0, 0, 0, 0] } else { &[24, 10, 8, 255] });
+            }
+        }
+    }
+
+    #[test]
+    fn sixel_and_osc_share_encoded_slots_while_kitty_keeps_weak_slots() {
+        let mut store = InlineImageStore::default();
+        let owner = ImageIdentity::new();
+        let palette = Default::default();
+        let sixel = sixel_payload(true);
+        let png = Arc::new(encoded_png());
+        for _ in 0..MAX_QUEUED_IMAGES / 2 {
+            store.enqueue(png.clone(), placement(&owner)).unwrap();
+            store.enqueue_inline(sixel.clone(), placement(&owner), &palette).unwrap();
+        }
+        assert_eq!(store.queued_bytes, (png.len() + sixel.len()) * MAX_QUEUED_IMAGES / 2);
+        assert!(store.enqueue_inline(sixel, placement(&owner), &palette).is_err());
+        assert!(store.enqueue(png, placement(&owner)).is_err());
+        let raw = Arc::new(vec![1u8; 8]);
+        let raw_owner = ImageIdentity::new();
+        store.enqueue_pixels(Arc::downgrade(&raw), 4, placement(&raw_owner)).unwrap();
+        assert_eq!(Arc::strong_count(&raw), 1);
+        drop(owner);
+        let next = store.start_next().unwrap();
+        assert!(matches!(next.data, ImageData::Pixels { .. }));
+        assert_eq!(store.queued_bytes, 0);
+    }
+
+    #[test]
+    fn clearing_sixel_during_decode_does_not_resurrect_its_image() {
+        let mut store = InlineImageStore::default();
+        let owner = ImageIdentity::new();
+        store.enqueue_inline(sixel_payload(true), placement(&owner), &Default::default()).unwrap();
+        let pending = store.start_next().unwrap();
+        drop(owner);
+        store.finish(decode(pending)).unwrap();
+        assert!(store.frame_images().is_empty());
+        assert_eq!(store.decoded_bytes, 0);
+        assert!(store.decoding.is_none());
     }
 }

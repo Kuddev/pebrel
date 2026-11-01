@@ -111,6 +111,8 @@ pub enum OscEvent {
         payload: Vec<u8>,
     },
     CellSizeQuery,
+    GraphicsReply(String),
+    SixelImage(crate::sixel::SixelImage),
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +124,12 @@ enum Phase {
     Esc,
     /// Match only CSI 16 t; unrelated CSI parameters are skipped without buffering.
     Csi(u8),
+    GraphicsQuery,
+    DcsHeader,
+    Dcs,
+    DcsEsc,
+    IgnoreString,
+    IgnoreEsc,
     /// Inside `ESC ]` … collecting the OSC payload.
     Osc,
     /// Inside an OSC and saw `ESC` — maybe the `ESC \` string terminator.
@@ -164,7 +172,11 @@ impl CwdSniffer {
                 },
                 Phase::Esc => self.step_escape(b, i, &mut events),
                 Phase::Csi(matched) => {
-                    if b == 0x1b {
+                    if matched == 0 && b == b'?' {
+                        self.payload.clear();
+                        self.payload.push(b);
+                        self.phase = Phase::GraphicsQuery;
+                    } else if b == 0x1b {
                         self.phase = Phase::Esc;
                     } else if b == 0x18 || b == 0x1a {
                         self.phase = Phase::Ground;
@@ -180,6 +192,75 @@ impl CwdSniffer {
                             3
                         });
                     }
+                },
+                Phase::GraphicsQuery => {
+                    if b == 0x1b {
+                        self.reset_to_ground();
+                        self.phase = Phase::Esc;
+                    } else if matches!(b, 0x18 | 0x1a) {
+                        self.reset_to_ground();
+                    } else if (0x40..=0x7e).contains(&b) {
+                        self.payload.push(b);
+                        if let Some(reply) = crate::sixel::graphics_reply(&self.payload) {
+                            events.push((i + 1, OscEvent::GraphicsReply(reply)));
+                        }
+                        self.reset_to_ground();
+                    } else if self.payload.len() < 64 {
+                        self.payload.push(b);
+                    } else {
+                        self.reset_to_ground();
+                    }
+                },
+                Phase::DcsHeader => {
+                    if b == 0x1b {
+                        self.phase = Phase::Esc;
+                    } else if matches!(b, 0x18 | 0x1a) {
+                        self.reset_to_ground();
+                    } else if b == b'q' {
+                        self.payload.push(b);
+                        self.phase = Phase::Dcs;
+                    } else if matches!(b, 0x00..=0x17 | 0x19 | 0x1c..=0x1f | 0x7f) {
+                        // Formatting controls do not change DCS parameters.
+                    } else if (b.is_ascii_digit() || b == b';') && self.payload.len() < 64 {
+                        self.payload.push(b);
+                    } else {
+                        self.phase = Phase::IgnoreString;
+                        self.release_payload();
+                    }
+                },
+                Phase::Dcs => match b {
+                    0x1b => self.phase = Phase::DcsEsc,
+                    0x18 | 0x1a => self.reset_to_ground(),
+                    _ if self.payload.len() < crate::sixel::MAX_BYTES - 2 => self.payload.push(b),
+                    _ => {
+                        self.phase = Phase::IgnoreString;
+                        self.release_payload();
+                    },
+                },
+                Phase::DcsEsc => {
+                    if b == b'\\' {
+                        self.payload.extend_from_slice(b"\x1b\\");
+                        if let Some(image) =
+                            crate::sixel::SixelImage::parse(std::mem::take(&mut self.payload))
+                        {
+                            events.push((i + 1, OscEvent::SixelImage(image)));
+                        }
+                        self.reset_to_ground();
+                    } else {
+                        // An interrupted string must not swallow the next
+                        // control sequence, including another DCS or OSC.
+                        self.reset_to_ground();
+                        self.step_escape(b, i, &mut events);
+                    }
+                },
+                Phase::IgnoreString => match b {
+                    0x1b => self.phase = Phase::IgnoreEsc,
+                    0x18 | 0x1a => self.reset_to_ground(),
+                    _ => (),
+                },
+                Phase::IgnoreEsc => {
+                    self.reset_to_ground();
+                    self.step_escape(b, i, &mut events);
                 },
                 Phase::Osc => self.step_osc(b, i, &mut events),
                 Phase::OscEsc => {
@@ -216,6 +297,12 @@ impl CwdSniffer {
     fn step_escape(&mut self, b: u8, i: usize, events: &mut Vec<(usize, OscEvent)>) {
         match b {
             b'[' => self.phase = Phase::Csi(0),
+            b'P' => {
+                self.release_payload();
+                self.payload.extend_from_slice(b"\x1bP");
+                self.phase = Phase::DcsHeader;
+            },
+            b'X' | b'^' => self.phase = Phase::IgnoreString,
             b']' => {
                 self.phase = Phase::Osc;
                 self.payload.clear();
@@ -300,9 +387,19 @@ impl CwdSniffer {
         Some(OscEvent::KittyGraphic { control: control.to_vec(), payload: payload.to_vec() })
     }
 
+    fn release_payload(&mut self) {
+        // Reuse short metadata buffers, but don't pin a multi-megabyte image
+        // allocation for the lifetime of a cancelled/disconnected stream.
+        if self.payload.capacity() > MAX_PAYLOAD {
+            self.payload = Vec::new();
+        } else {
+            self.payload.clear();
+        }
+    }
+
     fn reset_to_ground(&mut self) {
         self.phase = Phase::Ground;
-        self.payload.clear();
+        self.release_payload();
         self.interested = false;
     }
 
@@ -628,6 +725,22 @@ fn hex_val(c: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_and_cancelled_sixel_release_large_stream_buffers() {
+        for ending in [b"\x18".as_slice(), b"\x1a", b"\x1b[H"] {
+            let mut sniffer = CwdSniffer::default();
+            sniffer.feed(b"\x1bP9;1q");
+            sniffer.feed(&vec![b'?'; 128 * 1024]);
+            sniffer.feed(ending);
+            assert!(sniffer.payload.capacity() <= MAX_PAYLOAD);
+        }
+        let mut sniffer = CwdSniffer::default();
+        sniffer.feed(b"\x1bP9;1q");
+        assert!(sniffer.feed(&vec![b'?'; crate::sixel::MAX_BYTES]).is_empty());
+        assert!(sniffer.payload.capacity() <= MAX_PAYLOAD);
+        assert!(sniffer.feed(b"\x1b\\").is_empty());
+    }
 
     fn events(bytes: &[u8]) -> Vec<(usize, OscEvent)> {
         CwdSniffer::default().feed(bytes)
