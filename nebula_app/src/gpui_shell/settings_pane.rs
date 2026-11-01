@@ -450,8 +450,8 @@ impl SettingsPane {
                 window,
                 language.tr("settings.appearance.background_cover_title"),
                 SharedString::from(language.tr("settings.appearance.background_cover_description")),
-                language.pick("开启", "Enable"),
-                language.pick("取消", "Cancel"),
+                language.text(crate::i18n::Message::SettingsPaneEnable),
+                language.text(crate::i18n::Message::CommonCancel),
                 ButtonVariant::Primary,
             )
             .on_ok(move |_, _, cx| {
@@ -577,7 +577,7 @@ impl SettingsPane {
         #[cfg(windows)]
         let picked = pick_folder_with_wsl_places(
             window,
-            language.pick("选择终端安装目录", "Select a terminal installation directory"),
+            language.text(crate::i18n::Message::SettingsPaneSelectATerminalInstallationDirectory),
         );
         #[cfg(not(windows))]
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -586,7 +586,7 @@ impl SettingsPane {
             multiple: false,
             prompt: Some(
                 language
-                    .pick("选择终端安装目录", "Select a terminal installation directory")
+                    .text(crate::i18n::Message::SettingsPaneSelectATerminalInstallationDirectory)
                     .into(),
             ),
         });
@@ -619,10 +619,9 @@ impl SettingsPane {
         match outcome {
             Ok(count) => {
                 let language = crate::gpui_shell::config::ui_language(cx);
-                let message = format!(
-                    "{} {count} {}",
-                    language.pick("已导入", "Imported"),
-                    language.pick("个终端，立即可用", "terminals; they are ready to use")
+                let message = language.format(
+                    crate::i18n::Message::SettingsPaneImportedTerminals,
+                    &[("count", &count.to_string())],
                 );
                 crate::gpui_shell::toast::toast(
                     window,
@@ -722,7 +721,7 @@ impl SettingsPane {
     fn shell_select_row(&self, cx: &Context<Self>) -> impl IntoElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         self.row(
-            language.pick("默认 Shell", "Default shell"),
+            language.text(crate::i18n::Message::SettingsPaneDefaultShell),
             help("shell", language),
             crate::gpui_shell::widgets::settings_select_frame(
                 "settings-shell-select",
@@ -913,12 +912,12 @@ impl SettingsPane {
         let label: SharedString = current
             .map(str::to_owned)
             .unwrap_or_else(|| {
-                language.pick("继承当前目录", "Inherit current directory").to_owned()
+                language.text(crate::i18n::Message::SettingsPaneInheritCurrentDirectory).to_owned()
             })
             .into();
         let color = if has_dir { cx.theme().link } else { cx.theme().muted_foreground };
         self.row(
-            language.pick("启动目录", "Startup directory"),
+            language.text(crate::i18n::Message::SettingsPaneStartupDirectory),
             help("startup_directory", language),
             h_flex()
                 .gap_2()
@@ -939,7 +938,7 @@ impl SettingsPane {
                 .when(has_dir, |row| {
                     row.child(
                         NebulaButton::new("startup-directory-clear")
-                            .label(language.pick("清除", "Clear"))
+                            .label(language.text(crate::i18n::Message::CommonClear))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.clear_startup_directory(cx);
                             })),
@@ -954,7 +953,7 @@ impl SettingsPane {
         #[cfg(windows)]
         let picked = pick_folder_with_wsl_places(
             window,
-            language.pick("选择终端启动目录", "Select the terminal startup directory"),
+            language.text(crate::i18n::Message::SettingsPaneSelectTheTerminalStartupDirectory),
         );
         #[cfg(not(windows))]
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -962,7 +961,9 @@ impl SettingsPane {
             directories: true,
             multiple: false,
             prompt: Some(
-                language.pick("选择终端启动目录", "Select the terminal startup directory").into(),
+                language
+                    .text(crate::i18n::Message::SettingsPaneSelectTheTerminalStartupDirectory)
+                    .into(),
             ),
         });
         cx.spawn(async move |this, cx| {
@@ -1008,7 +1009,10 @@ impl SettingsPane {
                 .child(div().w(px(280.0)).child(Input::new(input)))
                 .child(
                     NebulaButton::new(SharedString::from(format!("save-{key}")))
-                        .label(crate::gpui_shell::config::ui_language(cx).pick("保存", "Save"))
+                        .label(
+                            crate::gpui_shell::config::ui_language(cx)
+                                .text(crate::i18n::Message::CommonSave),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let value = state.read(cx).value().to_string();
                             this.persist(&[(key, value)], cx);
@@ -1173,7 +1177,7 @@ impl SettingsPane {
             } else if video {
                 language.text(crate::i18n::Message::WallpaperVideo)
             } else {
-                language.pick("背景图片", "Background image")
+                language.text(crate::i18n::Message::CommonBackgroundImage)
             },
             if gif {
                 language.text(crate::i18n::Message::WallpaperGifDescription).into()
@@ -1281,7 +1285,7 @@ impl SettingsPane {
     fn section_profiles(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let terminal = self
-            .group(language.pick("启动", "Startup"), cx)
+            .group(language.text(crate::i18n::Message::SettingsPaneStartup), cx)
             .child(self.shell_select_row(cx))
             .child(self.startup_directory_row(cx))
             .when(
@@ -1297,7 +1301,7 @@ impl SettingsPane {
                 },
             );
         let alerts = self
-            .group(language.pick("提醒", "Alerts"), cx)
+            .group(language.text(crate::i18n::Message::SettingsPaneAlerts), cx)
             .child(self.switch_row(
                 "ai_toasts",
                 language.text(crate::i18n::Message::SettingsNotificationsAiMessages),
@@ -1313,15 +1317,15 @@ impl SettingsPane {
             ))
             .child(self.select_row(
                 "bell",
-                language.pick("终端铃声", "Terminal bell"),
+                language.text(crate::i18n::Message::SettingsPaneTerminalBell),
                 help("bell", language),
                 cx,
             ));
         let completion = self
-            .group(language.pick("补全", "Completion"), cx)
+            .group(language.text(crate::i18n::Message::SettingsPaneCompletion), cx)
             .child(self.switch_row(
                 "ghost",
-                language.pick("启用命令补全", "Enable command completion"),
+                language.text(crate::i18n::Message::SettingsPaneEnableCommandCompletion),
                 help("ghost", language),
                 self.runtime.ghost,
                 cx,
@@ -1344,7 +1348,7 @@ impl SettingsPane {
             .w_full()
             .gap(px(GROUP_GAP))
             .child(
-                self.group(language.pick("鼠标与选区", "Mouse and selection"), cx)
+                self.group(language.text(crate::i18n::Message::SettingsPaneMouseAndSelection), cx)
                     .child(
                         self.switch_row(
                             "focus_follows_mouse",
@@ -1359,62 +1363,62 @@ impl SettingsPane {
                     )
                     .child(self.switch_row(
                         "copy_on_select",
-                        language.pick("选中即复制", "Copy on select"),
+                        language.text(crate::i18n::Message::SettingsPaneCopyOnSelect),
                         help("copy_on_select", language),
                         self.runtime.copy_on_select,
                         cx,
                     ))
                     .child(self.switch_row(
                         "multiline_paste_confirm",
-                        language.pick("粘贴前确认", "Confirm pastes"),
+                        language.text(crate::i18n::Message::SettingsPaneConfirmPastes),
                         help("multiline_paste_confirm", language),
                         self.runtime.multiline_paste_confirm,
                         cx,
                     ))
                     .child(self.switch_row(
                         "panel_resize",
-                        language.pick("拖拽调节侧栏宽度", "Drag to resize the sidebar"),
+                        language.text(crate::i18n::Message::SettingsPaneDragToResizeTheSidebar),
                         help("panel_resize", language),
                         self.runtime.panel_resize,
                         cx,
                     ))
                     .child(self.switch_row(
                         "cjk_bold_regular",
-                        language.pick("中日韩粗体提亮", "Brighten CJK bold"),
+                        language.text(crate::i18n::Message::SettingsPaneBrightenCjkBold),
                         help("cjk_bold_regular", language),
                         self.runtime.cjk_bold_regular,
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("标签与窗口", "Tabs and windows"), cx)
+                self.group(language.text(crate::i18n::Message::SettingsPaneTabsAndWindows), cx)
                     .child(self.select_row(
                         "tabs_position",
-                        language.pick("标签栏位置", "Tab bar position"),
+                        language.text(crate::i18n::Message::SettingsPaneTabBarPosition),
                         help("tabs_position", language),
                         cx,
                     ))
                     .child(self.select_row(
                         "tab_reveal",
-                        language.pick("标签展开动效", "Tab reveal animation"),
+                        language.text(crate::i18n::Message::SettingsPaneTabRevealAnimation),
                         help("tab_reveal", language),
                         cx,
                     ))
                     .child(self.select_row(
                         "new_tab_position",
-                        language.pick("新标签位置", "New tab position"),
+                        language.text(crate::i18n::Message::SettingsPaneNewTabPosition),
                         help("new_tab_position", language),
                         cx,
                     ))
                     .child(self.select_row(
                         "windowing_behavior",
-                        language.pick("新建实例行为", "New instance behavior"),
+                        language.text(crate::i18n::Message::SettingsPaneNewInstanceBehavior),
                         help("windowing_behavior", language),
                         cx,
                     ))
                     .child(self.select_row(
                         "vcs_display",
-                        language.pick("侧栏版本控制", "Sidebar version control"),
+                        language.text(crate::i18n::Message::SettingsPaneSidebarVersionControl),
                         help("vcs_display", language),
                         cx,
                     )),
@@ -1426,7 +1430,7 @@ impl SettingsPane {
         // 平台没实现的开关整行不画：开着却没效果比没有更糟（见
         // `platform::capabilities` 的说明）。
         let caps = crate::platform::CAPABILITIES;
-        self.group(language.pick("会话生命周期", "Session lifecycle"), cx)
+        self.group(language.text(crate::i18n::Message::SettingsPaneSessionLifecycle), cx)
             .when(caps.launch_at_login, |group| {
                 group.child(self.switch_row(
                     "launch_at_login",
@@ -1448,10 +1452,7 @@ impl SettingsPane {
             .when(caps.hide_window_on_close, |group| {
                 group.child(self.switch_row(
                     "keep_session",
-                    language.pick(
-                        "关窗后保留后台会话",
-                        "Keep sessions running after the window closes",
-                    ),
+                    language.text(crate::i18n::Message::SettingsPaneKeepSessionsRunningAfterThe),
                     help("keep_session", language),
                     self.runtime.keep_session,
                     cx,
@@ -1459,14 +1460,14 @@ impl SettingsPane {
             })
             .child(self.switch_row(
                 "restore_session",
-                language.pick("启动时恢复上次标签", "Restore previous tabs at startup"),
+                language.text(crate::i18n::Message::SettingsPaneRestorePreviousTabsAtStartup),
                 help("restore_session", language),
                 self.runtime.restore_session,
                 cx,
             ))
             .child(self.switch_row(
                 "resume_ai",
-                language.pick("恢复时接续 AI 对话", "Resume AI conversations"),
+                language.text(crate::i18n::Message::SettingsPaneResumeAiConversations),
                 help("resume_ai", language),
                 self.runtime.resume_ai,
                 cx,
@@ -1474,7 +1475,7 @@ impl SettingsPane {
             .when(caps.system_tray, |group| {
                 group.child(self.switch_row(
                     "tray",
-                    language.pick("常驻系统托盘图标", "Keep an icon in the system tray"),
+                    language.text(crate::i18n::Message::SettingsPaneKeepAnIconInThe),
                     help("tray", language),
                     self.runtime.tray,
                     cx,
@@ -1556,7 +1557,7 @@ impl SettingsPane {
                     .hover(move |item| item.bg(hover_bg).text_color(foreground))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsPaneEvent::Close)))
                     .child(Icon::new(IconName::ArrowLeft).size(px(SETTINGS_NAV_ICON_SIZE)))
-                    .child(language.pick("返回工作区", "Back to workspace")),
+                    .child(language.text(crate::i18n::Message::SettingsPaneBackToWorkspace)),
             )
             .child(self.render_nav_search(window, cx));
         let searching = !self.settings_search_input.read(cx).value().trim().is_empty();
@@ -1603,7 +1604,7 @@ impl SettingsPane {
             .child(
                 Button::new("settings-restore-defaults")
                     .icon(IconName::Undo2)
-                    .label(language.pick("恢复默认设置", "Restore defaults"))
+                    .label(language.text(crate::i18n::Message::SettingsPaneRestoreDefaults))
                     .ghost()
                     .small()
                     .w_full()
@@ -1611,8 +1612,14 @@ impl SettingsPane {
                     .justify_start()
                     .px_3()
                     .text_color(muted)
-                    .tooltip(language.pick("恢复设置与快捷键；保留 SSH 主机、凭据和历史，并备份原设置。", "Restores settings and shortcuts. Keeps SSH hosts, credentials and history, and backs up current settings."))
-                    .on_click(cx.listener(|this, _, window, cx| this.confirm_reset_all_settings(window, cx))),
+                    .tooltip(
+                        language.text(
+                            crate::i18n::Message::SettingsPaneRestoresSettingsAndShortcutsKeeps,
+                        ),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.confirm_reset_all_settings(window, cx)
+                    })),
             )
             .into_any_element()
     }
