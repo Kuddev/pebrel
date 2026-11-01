@@ -198,6 +198,22 @@
     }
   },
   "settings": {
+    "search": {
+      "terms": {
+        "application": "application app update version github support",
+        "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
+        "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
+        "providers": "providers provider ai api prediction prompt suggestions",
+        "ssh": "ssh host remote connection",
+        "network": "network proxy connectivity",
+        "interaction": "interaction copy paste tab panel focus follows mouse",
+        "keymap": "keymap key binding shortcut quick terminal",
+        "advanced": "advanced session tray restore startup autostart login silent",
+        "backup": "backup cloud sync export restore webdav s3 sftp 123 nextcloud synology nas r2 minio snapshots",
+        "agents": "agents agent hook hooks claude codex opencode cursor kimi pi omp copilot grok",
+        "mobile": "mobile phone android ios remote pairing qr lan relay"
+      }
+    },
     "opacity": {
       "title": "Window background opacity",
       "description": "Lower values make terminal and Settings backgrounds more transparent. Text stays opaque."
@@ -1989,5 +2005,8 @@
   "session.tabs_reopened_after_crash": "After an unexpected exit, reopened {count} tabs. Sessions are starting; any startup errors remain in their tabs.",
   "terminal.ssh_session_stopped": "Session stopped.",
   "terminal.ssh_session_keys": "Press R to reconnect. Press Enter to close this terminal.",
-  "terminal.ssh_reconnecting": "Reconnecting…"
+  "terminal.ssh_reconnecting": "Reconnecting…",
+  "startup": {
+    "handover_unconfirmed": "The running Pebrel instance did not confirm the open request. It may already have opened the tab or window. Check the existing window before trying again; this launch will not retry."
+  }
 }

@@ -205,5 +205,8 @@
     "move_left": "Mover a la izquierda",
     "move_right": "Mover a la derecha",
     "tab_color": "Color de la pestaña"
+  },
+  "startup": {
+    "handover_unconfirmed": "La instancia de Pebrel en ejecución no confirmó la solicitud de apertura. Es posible que la pestaña o ventana ya se haya abierto. Compruebe la ventana existente antes de intentarlo de nuevo; este inicio no repetirá la solicitud."
   }
 }
