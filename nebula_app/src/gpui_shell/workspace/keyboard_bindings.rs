@@ -276,9 +276,7 @@ fn workspace_binding_in_context(
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
-        Action::CopyWorkingDirectory => {
-            Some(KeyBinding::new(&combo, CopyWorkingDirectory, scope))
-        },
+        Action::CopyWorkingDirectory => Some(KeyBinding::new(&combo, CopyWorkingDirectory, scope)),
         // macOS 的退出键走与托盘退出同一条路径：先落盘会话与草稿，再停 PTY。
         Action::Quit => Some(KeyBinding::new(&combo, QuitApp, scope)),
         // 屏蔽应用动作后，ReceiveChar 仍交给终端编码，保留改键释放旧键的语义。
