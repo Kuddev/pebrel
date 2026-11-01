@@ -334,6 +334,9 @@ impl TerminalView {
             return SidebarActivity::CommandFailed;
         }
         match state {
+            crate::runtime_api::RuntimeTaskState::Running if self.fullscreen_tool_owns_pane() => {
+                SidebarActivity::Idle
+            },
             crate::runtime_api::RuntimeTaskState::Running => SidebarActivity::Running,
             crate::runtime_api::RuntimeTaskState::WaitingInput => SidebarActivity::WaitingInput,
             crate::runtime_api::RuntimeTaskState::Attention => SidebarActivity::Attention,
@@ -348,6 +351,25 @@ impl TerminalView {
             crate::runtime_api::RuntimeTaskState::Failed => unreachable!("handled above"),
             crate::runtime_api::RuntimeTaskState::Idle => SidebarActivity::Idle,
         }
+    }
+
+    /// 普通全屏 TUI（lazygit、btop、vim、终端复用器……）占据 alternate screen 时是在等
+    /// 人操作，它自己的界面就是进度；spinner 表达的「等它跑完」不成立（#805）。
+    /// 只改 badge：RuntimeTaskState 仍是 Running，关闭确认与 agent.wait 不受影响。
+    /// Agent（不论屏幕形态）、OSC 7501 状态和未就绪的 SSH 连接照常转圈；OSC 9;4
+    /// 进度在 `sidebar_activity` 更早处已经接管。
+    fn fullscreen_tool_owns_pane(&self) -> bool {
+        self.effective_program_status().is_none()
+            && self.agent_activity.status() == crate::ai_agents::AgentStatus::Unknown
+            && !self
+                .running_program
+                .as_deref()
+                .is_some_and(|program| crate::ai_agents::AgentKind::parse(program).is_some())
+            && self
+                .ssh_stage
+                .as_ref()
+                .is_none_or(|stage| matches!(stage, crate::ssh_session::SshStage::Ready))
+            && self.term_mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// 认出「刚刚进入完成」这个边沿，并让对勾在闪现窗口结束后自己沉降为圆点。
