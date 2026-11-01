@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the pinned public VT core, with no desktop UI or private binary input.
 
-Linux x86_64 (CI) and Windows x64 produce both Android ABIs using pinned Zig
+Linux x86_64/aarch64 and Windows x64 produce both Android ABIs using pinned Zig
 distributions. Upstream dependency content hashes remain authoritative for transitive
 sources. All downloads, extraction, caches and products stay under --output.
 """
@@ -27,6 +27,17 @@ PINS = ROOT / "mobile/android/ghostty/UPSTREAM.json"
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def zig_host(system: str, machine: str) -> tuple[str, str]:
+    architecture = machine.lower()
+    if system == "Windows" and architecture in ("x86_64", "amd64"):
+        return "zig_windows", "zig-windows.zip"
+    if system == "Linux" and architecture in ("x86_64", "amd64"):
+        return "zig", "zig.tar.xz"
+    if system == "Linux" and architecture in ("aarch64", "arm64"):
+        return "zig_linux_arm64", "zig-linux-arm64.tar.xz"
+    raise SystemExit("Use Linux x86_64/aarch64 or Windows x64 for the pinned builder.")
 
 
 def source_archive(url: str, expected: str, archive: Path, extracted: Path) -> Path:
@@ -79,8 +90,7 @@ def main() -> None:
     parser.add_argument("--abi", choices=("arm64-v8a", "x86_64", "all"), default="all")
     args = parser.parse_args()
     windows = platform.system() == "Windows"
-    if platform.system() not in ("Linux", "Windows") or platform.machine().lower() not in ("x86_64", "amd64"):
-        raise SystemExit("The pinned builder runs on Linux x86_64 or Windows x64.")
+    zig_key, zig_archive = zig_host(platform.system(), platform.machine())
     pins = json.loads(PINS.read_text(encoding="utf-8"))
     output = args.output.resolve()
     ndk_value = os.environ.get("ANDROID_NDK_HOME")
@@ -94,8 +104,6 @@ def main() -> None:
     if f"Pkg.Revision = {pins['ndk_version']}" not in properties:
         raise SystemExit(f"Expected Android NDK {pins['ndk_version']} at {ndk}")
     sources = source_archive(pins["source_url"], pins["source_sha256"], output / "downloads/terminal-core.tar.gz", output / "sources")
-    zig_key = "zig_windows" if windows else "zig"
-    zig_archive = "zig-windows.zip" if windows else "zig.tar.xz"
     zig_root = source_archive(pins[f"{zig_key}_url"], pins[f"{zig_key}_sha256"], output / "downloads" / zig_archive, output / "tools")
     zig = zig_root / ("zig.exe" if windows else "zig")
     if subprocess.check_output([zig, "version"], text=True, encoding="utf-8").strip() != pins["zig_version"]:
