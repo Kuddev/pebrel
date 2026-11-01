@@ -45,10 +45,16 @@ class PowerShellSession(ShellSession):
 
 @unittest.skipUnless(os.name == "posix", "requires Unix PTYs")
 class PowerShellPointerTests(unittest.TestCase):
-    def start(self, mode: str = "Emacs", before: str = "") -> PowerShellSession:
+    def start(self, mode: str = "Emacs", before: str = "", *, legacy: bool = False) -> PowerShellSession:
         program = os.environ.get("NEBULA_TEST_PWSH") or shutil.which("pwsh")
         if not program:
             self.skipTest("pwsh is not installed")
+        module = os.environ.get("NEBULA_TEST_PSREADLINE_LEGACY") if legacy else None
+        if legacy and not module:
+            self.skipTest("NEBULA_TEST_PSREADLINE_LEGACY is not configured")
+        import_module = "Import-Module " + ("'" + module.replace("'", "''") + "'" if module else "PSReadLine")
+        if legacy:
+            import_module += "\nif ((Get-Module PSReadLine).Version -ge [Version]'2.1.0') { throw 'Fixture requires a legacy editor' }"
         temporary = tempfile.TemporaryDirectory(prefix="pebrel-pwsh-pointer-")
         self.addCleanup(temporary.cleanup)
         home = Path(temporary.name)
@@ -61,8 +67,9 @@ class PowerShellPointerTests(unittest.TestCase):
         bootstrap = home / "bootstrap.ps1"
         bootstrap.write_text((root.parents[2] / "nebula_app/res/shell/powershell.ps1").read_text(encoding="utf-8"), encoding="utf-8")
         script.write_text(
-            "Import-Module PSReadLine\n"
-            "Set-PSReadLineOption -HistorySaveStyle SaveNothing -PredictionSource None\n"
+            import_module + "\n"
+            "Set-PSReadLineOption -HistorySaveStyle SaveNothing\n"
+            "if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) { Set-PSReadLineOption -PredictionSource None }\n"
             f"Set-PSReadLineOption -EditMode {mode}\n"
             "$global:PebrelShellToken=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('pwsh:fixture'))\n"
             "function prompt { 'PS> ' }\n" + before + "\n" +
@@ -71,16 +78,22 @@ class PowerShellPointerTests(unittest.TestCase):
             "function global:PSConsoleHostReadLine {\n"
             "  [Console]::Write(\"$([char]27)]1337;SetUserVar=qa_ready=eA==$([char]7)\")\n"
             "  & $global:QaOriginalReadLine\n"
-            "}\n", encoding="utf-8",
+            "}\n" + (
+                # Bypass ConsoleHost's preloaded editor and run the imported
+                # legacy module's real ReadLine on this PTY instead.
+                "while ($true) { [Console]::Write((prompt)); $null = PSConsoleHostReadLine }\n"
+                if legacy else ""
+            ), encoding="utf-8",
         )
         # .NET's named mutexes (including PSReadLine history initialization)
         # require a real temporary directory on macOS even with SaveNothing.
         # Keep it inside this fixture instead of inheriting the runner's home.
         runtime_temp = home / "tmp"
         runtime_temp.mkdir()
+        environment = {"TMPDIR": str(runtime_temp) + os.sep}
         session = PowerShellSession(
-            program, home, ["-NoLogo", "-NoProfile", "-NoExit", "-File", str(script)],
-            {"TMPDIR": str(runtime_temp) + os.sep},
+            program, home, ["-NoLogo", "-NoProfile", "-NonInteractive" if legacy else "-NoExit", "-File", str(script)],
+            environment,
         )
         self.addCleanup(session.close)
         import fcntl
@@ -136,6 +149,38 @@ class PowerShellPointerTests(unittest.TestCase):
                 self.assertEqual(self.snapshot(session), (5, "echo  tail"))
                 os.write(session.master, b"\x18\x15" if mode == "Emacs" else b"\x1a")
                 self.assertEqual(self.snapshot(session)[1], changed)
+
+    def test_legacy_editor_moves_ascii_and_cjk_and_preserves_undo(self) -> None:
+        for mode in ("Emacs", "Windows"):
+            with self.subTest(mode=mode):
+                session = self.start(mode, legacy=True)
+                self.assertIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
+                os.write(session.master, "ls 中文".encode())
+                self.assertEqual(self.query(session)[3], "ls 中文")
+                self.action(session, 1 + 1)
+                self.assertEqual(self.snapshot(session), (1, "ls 中文"))
+                os.write(session.master, b"X")
+                self.assertEqual(self.snapshot(session), (2, "lXs 中文"))
+                self.query(session)
+                self.action(session, 4098 + 4)
+                self.action(session, 8195 + 6)
+                self.assertEqual(self.snapshot(session), (4, "lXs "))
+                os.write(session.master, b"\x18\x15" if mode == "Emacs" else b"\x1a")
+                self.assertEqual(self.snapshot(session)[1], "lXs 中文")
+
+    def test_legacy_editor_rejects_surrogates_without_moving_or_deleting(self) -> None:
+        session = self.start("Windows", before=(
+            "Set-PSReadLineKeyHandler -Chord Ctrl+o -ScriptBlock { "
+            "[Microsoft.PowerShell.PSConsoleReadLine]::Insert('echo ' + [char]::ConvertFromUtf32(0x1F431)) }"
+        ), legacy=True)
+        os.write(session.master, b"\x0f")
+        before = self.snapshot(session)
+        self.assertEqual(before[1], "echo 🐱")
+        self.assertEqual(self.query(session), ["pwsh:fixture", "unsupported:20000"])
+        self.action(session, 1)
+        self.action(session, 4098)
+        self.action(session, 8195 + 6)
+        self.assertEqual(self.snapshot(session), before)
 
     def test_native_races_bounds_and_replay(self) -> None:
         session = self.start()
