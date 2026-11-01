@@ -87,6 +87,80 @@ class SshIntegrationTest {
         persistentSession(SshSessionMode.TMUX)
     }
 
+    @Test fun tmuxHistoryImeCompositionReturnsToInputBeforeCommit() = tmuxHistoryImeComposition(false)
+
+    @Test fun manuallyEnteredTmuxRestoresInputAtImeComposition() = tmuxHistoryImeComposition(true)
+
+    private fun tmuxHistoryImeComposition(manualShell: Boolean) = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val target = instrumentation.targetContext
+        val name = "pebrel-ime-${System.nanoTime()}"
+        val command = "env LC_ALL=C.UTF-8 tmux -u new-session -e LC_ALL=C.UTF-8 -s '$name'"
+        val ready = CountDownLatch(1)
+        val connection = SshConnection(host.copy(fingerprint = expectedFingerprint),
+            "pebrel-test-only".toCharArray(), { _, _ -> error("Already trusted") })
+        val control = TmuxSessionControl(connection::query, {}, detectShell = manualShell)
+        val terminal = TerminalSession(SshTerminalTransport(connection,
+            if (manualShell) null else command, control), object : TerminalCallbacks() {
+            override fun onTransportReady(session: TerminalSession) { ready.countDown() }
+        })
+        val activity = instrumentation.startActivitySync(android.content.Intent(target, MainActivity::class.java)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK))
+        suspend fun awaitState(stage: String, check: () -> Boolean) {
+            try {
+                withTimeout(8_000) {
+                    while (!check()) {
+                        terminal.failureCause?.let { throw AssertionError("SSH failed", it) }
+                        delay(25)
+                    }
+                }
+            } catch (error: TimeoutCancellationException) {
+                throw AssertionError("$stage: readingHistory=${terminal.readingHistory}, frame=${terminal.frame?.text()}", error)
+            }
+        }
+        fun paneMode(): String = connection.query("tmux display-message -p -t '$name' '#{pane_mode}'")
+            .getString("stdout").trim()
+        try {
+            terminal.setVisible(true)
+            terminal.start()
+            assertTrue(ready.await(8, TimeUnit.SECONDS))
+            if (manualShell) {
+                control.identifyShellTerminal()
+                assertTrue(terminal.sendText("$command\r"))
+            }
+            awaitState("tmux initial frame") { terminal.frame?.alternateScreen == true }
+            lateinit var view: GhosttyView
+            lateinit var input: android.view.inputmethod.InputConnection
+            instrumentation.runOnMainSync {
+                view = GhosttyView(activity).apply { session = terminal; directInput = true }
+                activity.setContentView(view)
+            }
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                input = requireNotNull(view.onCreateInputConnection(android.view.inputmethod.EditorInfo()))
+            }
+            assertTrue(terminal.sendText("seq 1 200\r"))
+            awaitState("generated history") { terminal.frame?.text()?.lineSequence()?.any { it.trim() == "200" } == true }
+            terminal.wheel(-8, 2, 2)
+            awaitState("entered copy mode") { paneMode() == "copy-mode" }
+            assertTrue(terminal.readingHistory)
+            // Reuse the already-open IME: no keyboard-focus event may rescue this path.
+            instrumentation.runOnMainSync { assertTrue(input.setComposingText("zhong", 1)) }
+            awaitState("preedit restores live input") { !terminal.readingHistory && paneMode().isEmpty() }
+            val beforeCommit = connection.query("tmux capture-pane -p -t '$name'").getString("stdout")
+            assertFalse("Preedit must stay local", beforeCommit.contains("zhong"))
+            instrumentation.runOnMainSync {
+                assertTrue(input.commitText("echo 中文", 1))
+                assertTrue(input.commitText("\n", 1))
+            }
+            awaitState("committed Chinese command") { terminal.frame?.text()?.lineSequence()?.any { it.trim() == "中文" } == true }
+        } finally {
+            runCatching { connection.query("tmux kill-session -t '$name'") }
+            instrumentation.runOnMainSync { activity.finish() }
+            terminal.finishIfRunning()
+        }
+    }
+
     @Test fun herdrReattachesTheSameRemoteShellAndKeepsSftpAvailable() = runBlocking {
         persistentSession(SshSessionMode.HERDR)
     }
