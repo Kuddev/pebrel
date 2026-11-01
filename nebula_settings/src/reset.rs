@@ -27,6 +27,7 @@ const RESET_KEYS: &[&str] = &[
     "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
+    "show_tab_status",
     "terminal_proxy",
     "refresh_environment",
     "powerline",
@@ -154,6 +155,13 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_restores_tab_status_visibility() {
+        let text = default_settings_text("show_tab_status=0\ncustom=keep\n");
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&text)).show_tab_status);
+        assert!(text.contains("custom=keep"));
+    }
 
     #[test]
     fn reset_restores_auto_scrollbar_visibility() {
