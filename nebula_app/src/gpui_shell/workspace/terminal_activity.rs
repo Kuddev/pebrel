@@ -403,6 +403,27 @@ mod tests {
     }
 
     #[gpui::test]
+    fn fullscreen_tui_paints_no_spinner_until_it_leaves_the_alternate_screen(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
+        assert_spinner_running(&workspace, &mut window);
+        // A full-screen TUI waits for the user (#805): no badge and no frame demand.
+        terminals[0].update(&mut window, |view, cx| {
+            feed(view, b"\x1b[?1049h");
+            cx.notify();
+        });
+        draw(&mut window);
+        assert_spinner_stopped(&workspace, &mut window);
+        terminals[0].update(&mut window, |view, cx| {
+            feed(view, b"\x1b[?1049l");
+            cx.notify();
+        });
+        draw(&mut window);
+        assert_spinner_running(&workspace, &mut window);
+    }
+
+    #[gpui::test]
     fn top_tab_spinners_share_frames_and_stop_when_running_tab_scrolls_out(
         cx: &mut TestAppContext,
     ) {
