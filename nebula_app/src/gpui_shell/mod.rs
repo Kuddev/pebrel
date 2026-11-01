@@ -149,6 +149,14 @@ pub fn run_shell(
     {
         return;
     }
+    let _session_end = match crate::platform::session_end::Monitor::install() {
+        Ok(monitor) => monitor,
+        Err(error) => {
+            log::error!("Could not observe system session ending: {error}");
+            crate::platform::startup::report_error(&error, true);
+            return;
+        },
+    };
     let open_urls_tx = shell_tx.clone();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({

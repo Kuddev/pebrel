@@ -198,6 +198,23 @@
     }
   },
   "settings": {
+    "search": {
+      "terms": {
+        "application": "应用 更新 版本 支持",
+        "appearance": "连字 外观 主题 自定义 模板 导入 导出 字体 透明度 背景 背景模糊 模糊 语言 显示语言 终端效果 着色器 视频 动图 光标 平滑 动画 图标 调暗非活动窗格 分屏变暗 回滚 滚动 速度 历史 滚轮 缩放",
+        "profiles": "配置文件 终端 补全 命令历史 清除历史 启动 环境变量 刷新 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 时长 秒 常驻 自动关闭",
+        "providers": "供应商 服务商 模型 补齐 预测",
+        "ssh": "主机 远程 连接",
+        "network": "网络 代理 连接",
+        "interaction": "交互 复制 粘贴 标签 面板 焦点跟随鼠标 自动聚焦",
+        "keymap": "快速终端 独立窗口 已有窗口 按键映射 快捷键",
+        "advanced": "高级 会话 托盘 恢复 自启动 静默启动 开机 登录",
+        "backup": "云备份 云同步 云存储 备份 导出 恢复 坚果云 123云盘 群晖 快照",
+        "agents": "智能体 钩子 接入",
+        "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
+        "release_notes": "更新内容 更新日志 版本说明"
+      }
+    },
     "opacity": {
       "title": "窗口背景不透明度",
       "description": "同步调整终端和设置页背景；数值越低越透明，文字不变。"
@@ -1995,5 +2012,8 @@
   "session.tabs_reopened_after_crash": "上次未正常退出，已重新打开 {count} 个标签。会话正在启动，启动错误会保留在对应标签中。",
   "terminal.ssh_session_stopped": "会话已结束。",
   "terminal.ssh_session_keys": "按 R 重新连接，按 Enter 关闭此终端。",
-  "terminal.ssh_reconnecting": "正在重新连接…"
+  "terminal.ssh_reconnecting": "正在重新连接…",
+  "startup": {
+    "handover_unconfirmed": "运行中的 Pebrel 未确认打开请求，标签页或窗口可能已经创建。请先检查已有窗口，再决定是否重试；本次启动不会重复发送请求。"
+  }
 }

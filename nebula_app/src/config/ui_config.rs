@@ -730,7 +730,8 @@ pub struct Profile {
     /// Optional startup directory; falls back to the focused pane's cwd.
     #[serde(default)]
     pub cwd: Option<PathBuf>,
-    /// Optional shell family used by imported terminal profiles.
+    /// Optional shell family for icons and shell integration (for example `pwsh`).
+    /// This is not a user-defined alias for `--shell` or Runtime API `shell`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_id: Option<String>,
     /// Stable id from `terminal_profiles.json`; absent for ordinary config
@@ -744,7 +745,8 @@ impl Profile {
     /// Stable settings key for an imported profile. The shell family is part
     /// of the key so icon lookup can still work without loading the profile
     /// store during rendering; `|` is deliberately used because WSL ids can
-    /// themselves contain `:`.
+    /// themselves contain `:`. Ordinary Lua/TOML profiles have no store id;
+    /// adding these fields to a config entry does not register it in the store.
     pub fn settings_id(&self) -> Option<String> {
         Some(format!(
             "profile:{}|{}",
