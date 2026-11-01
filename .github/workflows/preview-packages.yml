@@ -330,7 +330,7 @@ jobs:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
       PREVIEW_ID: ${{ needs.prepare.outputs.preview_id }}
       ASSET_VERSION: ${{ needs.prepare.outputs.asset_version }}
-      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

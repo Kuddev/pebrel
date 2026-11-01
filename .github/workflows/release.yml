@@ -282,7 +282,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
