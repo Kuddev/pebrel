@@ -102,18 +102,6 @@ begin
     ExpandConstant('{localappdata}\Programs\Pebrel'));
 end;
 
-procedure InitializeWizard;
-begin
-  { Reuse the registered directory for normal upgrades, so Inno recognizes it
-    as an existing installation. Keep the old-brand relocation suggestion and
-    an explicit /DIR selection intact. }
-  if (PreviousInstallDir <> '') and
-    (CompareText(ExtractFileName(NormalizedDirectory(PreviousInstallDir)), 'Nebula Terminal') = 0) and
-    (ExpandConstant('{param:DIR|}') = '') then
-    WizardForm.DirEdit.Text := SuggestedInstallDir(PreviousInstallDir,
-      ExpandConstant('{localappdata}\Programs\Pebrel'));
-end;
-
 procedure DiscoverLegacyInstallation;
 var
   Pending, UninstallCommand: string;
@@ -318,9 +306,31 @@ begin
   Result := CompareText(Copy(Command, 1, Length(Prefix)), Prefix) = 0;
 end;
 
+function IsSingleCommandVerb(Key: string): Boolean;
+var
+  Children: TArrayOfString;
+begin
+  Result := RegGetSubkeyNames(HKCU, Key, Children);
+  if Result then
+    Result := (GetArrayLength(Children) = 1) and
+      (CompareText(Children[0], 'command') = 0);
+  if Result then
+    Result := RegGetSubkeyNames(HKCU, Key + '\command', Children) and
+      (GetArrayLength(Children) = 0);
+end;
+
+function IsOwnedWslVerb(Key, Executable: string): Boolean;
+var
+  Command: string;
+begin
+  Result := IsSingleCommandVerb(Key) and
+    RegQueryStringValue(HKCU, Key + '\command', '', Command) and
+    IsOwnedWslCommand(Command, Executable);
+end;
+
 function IsOwnedWslMenu(Key, Executable: string): Boolean;
 var
-  Owner, Command: string;
+  Owner: string;
   Children, Subkeys: TArrayOfString;
   Index: Integer;
 begin
@@ -337,8 +347,7 @@ begin
     if not RegGetSubkeyNames(HKCU, Key + '\shell', Children) then
       Exit;
     for Index := 0 to GetArrayLength(Children) - 1 do begin
-      if not RegQueryStringValue(HKCU, Key + '\shell\' + Children[Index] + '\command', '', Command) or
-        not IsOwnedWslCommand(Command, Executable) then
+      if not IsOwnedWslVerb(Key + '\shell\' + Children[Index], Executable) then
         Exit;
     end;
   end;
@@ -347,7 +356,7 @@ end;
 
 procedure RemoveOwnedWslContextMenusAt(Root, Executable: string);
 var
-  Key, Command: string;
+  Key: string;
   Names: TArrayOfString;
   NameIndex: Integer;
 begin
@@ -355,10 +364,7 @@ begin
     for NameIndex := 0 to GetArrayLength(Names) - 1 do
       if Pos('PebrelWsl', Names[NameIndex]) = 1 then begin
         Key := Root + '\' + Names[NameIndex];
-        Command := '';
-        if IsOwnedWslMenu(Key, Executable) or
-          (RegQueryStringValue(HKCU, Key + '\command', '', Command) and
-            IsOwnedWslCommand(Command, Executable)) then
+        if IsOwnedWslMenu(Key, Executable) or IsOwnedWslVerb(Key, Executable) then
           if not RegDeleteKeyIncludingSubkeys(HKCU, Key) then
             RaiseException('Unable to remove an owned WSL context menu: ' + Key);
       end;
@@ -410,16 +416,25 @@ begin
   end;
 end;
 
-procedure RegisterWslContextMenus;
-var
-  Distros: TArrayOfString;
-  Executable: string;
+#include "installer-context-menu.iss"
+
+#ifndef MigrationFixture
+procedure InitializeWizard;
 begin
-  Distros := WslDistroNames;
-  Executable := ExpandConstant('{app}\pebrel.exe');
-  RegisterWslContextMenuAt('Software\Classes\Directory\shell', Executable, '%1', Distros);
-  RegisterWslContextMenuAt('Software\Classes\Directory\Background\shell', Executable, '%V', Distros);
+  { Reuse the registered directory for normal upgrades, so Inno recognizes it
+    as an existing installation. Keep the old-brand relocation suggestion and
+    an explicit /DIR selection intact. }
+  if (PreviousInstallDir <> '') and
+    (CompareText(ExtractFileName(NormalizedDirectory(PreviousInstallDir)), 'Nebula Terminal') = 0) and
+    (ExpandConstant('{param:DIR|}') = '') then
+    WizardForm.DirEdit.Text := SuggestedInstallDir(PreviousInstallDir,
+      ExpandConstant('{localappdata}\Programs\Pebrel'));
+  #ifndef AcceptanceFixture
+  CreateExplorerMenuPage(ProductSettingsKey + '\ExplorerMenu', WslDistroNames);
+  #endif
 end;
+
+#endif
 
 procedure MigrateLegacyIntegrations;
 var
@@ -490,8 +505,9 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then
     Exit;
-  { 与旧版迁移无关，装完就要做：菜单项取决于本机装了哪些 WSL 发行版。 }
-  RegisterWslContextMenus;
+  #ifndef AcceptanceFixture
+  RegisterExplorerContextMenus;
+  #endif
   if LegacyInstallDir = '' then
     Exit;
   try
