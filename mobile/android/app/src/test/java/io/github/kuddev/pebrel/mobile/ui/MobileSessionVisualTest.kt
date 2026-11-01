@@ -22,6 +22,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -47,11 +48,36 @@ class MobileSessionVisualTest {
                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, onPane = { _, selected -> opened = selected.id })
             } } }
         }
-        for (theme in listOf("Paper", "Nord")) {
+        for (theme in listOf("MintLight", "Paper", "Nord")) {
             compose.runOnIdle { app.sessions.selectTheme(theme) }
             compose.onNodeWithText(pane.title).assertIsDisplayed().performClick()
             assertEquals(2L, opened)
             save("overview-${theme.lowercase()}", "mobile-overview")
+        }
+    }
+
+    @Test fun keyLoginRemainsReachableWithTheLightTheme() {
+        val app = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        app.sessions.selectTheme("MintLight")
+        compose.setContent {
+            view = LocalView.current
+            PebrelTheme { Surface(Modifier.fillMaxSize().testTag("ssh-key-form")) {
+                HostForm(HostProfile("key-preview", "Development server", "192.0.2.1", 22, "dev"),
+                    {}, false, false, {}, onSave = { _, _, _, _ -> })
+            } }
+        }
+        compose.onNodeWithText(app.getString(io.github.kuddev.pebrel.mobile.R.string.auth_key))
+            .performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(io.github.kuddev.pebrel.mobile.R.string.ssh_choose_key))
+            .performScrollTo().assertIsDisplayed().assertIsEnabled()
+        compose.runOnIdle {
+            val dialogView = checkNotNull(ShadowDialog.getLatestDialog().window).decorView
+            val bitmap = Bitmap.createBitmap(dialogView.width, dialogView.height, Bitmap.Config.ARGB_8888)
+            dialogView.draw(Canvas(bitmap))
+            val file = File("build/reports/mobile-ui/ssh-key-mintlight.png")
+            check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs())
+            file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            bitmap.recycle()
         }
     }
 
