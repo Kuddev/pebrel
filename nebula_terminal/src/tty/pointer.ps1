@@ -2,7 +2,7 @@
 function global:Test-PebrelPointerBinding {
     try {
         if (-not $global:PebrelCompletionInputReady -or
-            (Get-Module PSReadLine).Version -lt [Version]'2.1.0' -or
+            (Get-Module PSReadLine).Version -lt [Version]'1.2.0' -or
             (Get-PSReadLineOption).EditMode -eq 'Vi') { return $false }
         $bindings = @(Get-PSReadLineKeyHandler -ErrorAction Stop)
         $query = @($bindings | Where-Object { $_.Key -in 'Ctrl+Shift+F12','Shift+Ctrl+F12' })
@@ -56,6 +56,11 @@ function global:Invoke-PebrelPointerAction {
         try {
             $utf8 = New-Object Text.UTF8Encoding($false, $true)
             if (-not (Test-PebrelPointerBinding) -or $utf8.GetByteCount($line) -gt 4096) { throw 'Unsupported editor' }
+            # In-box PSReadLine has native cursor/delete APIs too. Its old
+            # renderer can lose surrogate pairs after an edit, so reject only
+            # affected buffers rather than disabling all ASCII/CJK pointer edits.
+            if ((Get-Module PSReadLine).Version -lt [Version]'2.1.0' -and
+                $line -match '[\uD800-\uDFFF]') { throw 'Unsupported Unicode buffer' }
             $bytes = $utf8.GetByteCount($line.Substring(0, $cursor))
             $global:PebrelPointerSnapshot = @{ Line=$line; Cursor=$cursor; Token=$global:PebrelShellToken; Anchor=$null }
             Send-PebrelPointerValue 'pebrel_pointer' "$owner`n$unit`n$bytes`n$line"
