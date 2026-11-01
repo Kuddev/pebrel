@@ -486,6 +486,7 @@ fn settings_nav_exposes_prediction_providers_without_changing_stable_routes() {
             "backup",
             "agents",
             "mobile",
+            "release-notes",
         ]
     );
 }
@@ -493,7 +494,7 @@ fn settings_nav_exposes_prediction_providers_without_changing_stable_routes() {
 #[test]
 fn settings_nav_starts_with_application_then_frequent_options() {
     let visible: Vec<_> = visible_nav_sections().collect();
-    assert_eq!(visible, vec![0, 1, 2, 10, 6, 7, 3, 4, 5, 11, 8, 9]);
+    assert_eq!(visible, vec![0, 1, 2, 10, 6, 7, 3, 4, 5, 11, 8, 9, RELEASE_NOTES_SECTION]);
     let zh_labels: Vec<_> = visible
         .iter()
         .map(|index| section_label(*index, crate::display::UiLanguage::ZhCn))
@@ -512,7 +513,8 @@ fn settings_nav_starts_with_application_then_frequent_options() {
             "网络",
             "手机远程",
             "高级",
-            "备份"
+            "备份",
+            "更新内容"
         ]
     );
     let en_labels: Vec<_> = visible
@@ -534,6 +536,7 @@ fn settings_nav_starts_with_application_then_frequent_options() {
             "Phone Remote",
             "Advanced",
             "Backup",
+            "Release notes",
         ]
     );
 }

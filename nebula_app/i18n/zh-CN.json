@@ -211,7 +211,8 @@
         "advanced": "高级 会话 托盘 恢复 自启动 静默启动 开机 登录",
         "backup": "云备份 云同步 云存储 备份 导出 恢复 坚果云 123云盘 群晖 快照",
         "agents": "智能体 钩子 接入",
-        "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知"
+        "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
+        "release_notes": "更新内容 更新日志 版本说明"
       }
     },
     "opacity": {
@@ -1471,7 +1472,13 @@
     "later": "稍后",
     "prepare_failed": "更新准备失败：{error}。Pebrel 将保持打开。",
     "draft_changed": "准备退出期间文档发生了变化。请保存或放弃最新修改后重试。",
-    "in_progress": "当前安装正在更新，请等待更新完成，Pebrel 随后会自动重新打开。"
+    "in_progress": "当前安装正在更新，请等待更新完成，Pebrel 随后会自动重新打开。",
+    "release_notes_title": "更新内容",
+    "release_notes_loading": "正在加载更新内容…",
+    "release_notes_failed": "无法加载更新内容：{error}",
+    "release_notes_retry": "重试",
+    "release_notes_empty": "此版本未提供更新说明。",
+    "open_release": "打开发布页"
   },
   "files.filter_placeholder": "过滤文件...",
   "files.match_case": "区分大小写",
