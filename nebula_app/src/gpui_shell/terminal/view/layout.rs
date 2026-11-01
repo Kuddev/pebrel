@@ -21,6 +21,10 @@ impl TerminalView {
         scale: f32,
         cx: &mut Context<Self>,
     ) {
+        if self.origin != origin || self.cell_width != cell_width || self.line_height != line_height
+        {
+            self.shell_pointer.invalidate();
+        }
         self.origin = origin;
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -31,6 +35,9 @@ impl TerminalView {
         };
         let change =
             self.viewports.observe(content.width.as_f32(), content.height.as_f32(), &metrics);
+        if change.is_some() {
+            self.shell_pointer.invalidate();
+        }
 
         // 启动稳定闸：开窗 resize 异步落地，首帧可能还是开窗前的旧尺寸。
         // 命中 spawn 网格前不向 Term/ConPTY 下发（PTY 出生即目标几何，
