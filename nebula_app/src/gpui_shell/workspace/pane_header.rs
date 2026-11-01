@@ -38,6 +38,8 @@ use crate::i18n::Message;
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
+gpui::actions!(nebula_workspace, [SwapPaneLeft, SwapPaneRight, SwapPaneUp, SwapPaneDown]);
+
 /// 标题条高度（逻辑 px）。终端网格自己会跟着变矮：`TerminalView` 用自身元素
 /// 的实测 bounds 驱动 `set_layout`，父层少 24px 就是少 24px。
 pub(super) const PANE_HEADER_H: f32 = 24.0;
@@ -221,6 +223,39 @@ struct PaneTitle {
 }
 
 impl NebulaWorkspace {
+    /// ctrl+alt+shift+方向：聚焦 pane 与该方向最近邻交换位置（目标判定同
+    /// `navigate_pane`）。只换叶位，视图/PTY/焦点都跟着原 pane 走。
+    pub(super) fn swap_pane(
+        &mut self,
+        nav: nebula_split::SplitNav,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.active;
+        let Some(WorkspaceTab::Terminal { panes, tree, focused, zoomed, .. }) =
+            self.tabs.get_mut(active)
+        else {
+            return;
+        };
+        if panes.len() < 2 {
+            return;
+        }
+        *zoomed = false;
+        let bounds = self.pane_bounds.borrow();
+        let rects: Vec<(u64, nebula_split::Rect)> = panes
+            .iter()
+            .filter_map(|pane| bounds.get(&pane.id).map(|b| (pane.id, super::to_split_rect(b))))
+            .collect();
+        drop(bounds);
+        let swapped = nebula_split::nav_target(&rects, *focused, nav)
+            .is_some_and(|target| tree.swap_leaves(*focused, target));
+        if swapped {
+            self.mark_structural_resize(active, cx);
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
     fn pane_title(&self, view: &Entity<TerminalView>, cx: &App, dark: bool) -> PaneTitle {
         let view = view.read(cx);
         // 与 tab 标题同一套推导，只是作用在**这个** pane 上：跑着的程序最有
