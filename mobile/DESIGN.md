@@ -9,9 +9,11 @@ Material 3; the terminal and rich reader retain their existing rendering paths.
 
 - Prefer library controls for selection, menus, dialogs, lists and buttons. Keep
   business wrappers small; let the library own focus, semantics and press feedback.
-- `HomeScreen` uses Material `ListItem` rows for a bounded four-session overview.
-  The full count and All sessions action remain visible. Title precedes host,
-  transport/state and path; terminal thumbnails are not the primary navigation.
+- `HomeScreen` retains the horizontally scrollable session-preview gallery, full
+  count and All sessions action. Local/SSH cards show the latest retained terminal
+  text when the gallery opens; desktop cards retain their host, state and path.
+  Every session remains reachable, and the whole card opens its exact target.
+  Do not replace terminal previews with metadata-only rows as a style change.
 - `SessionModeTabs` uses Material single-choice segmented buttons. Conversation
   and terminal are related views of the same pane, not separate application tabs.
   Only a change in selection navigates. Unsupported direct SSH sessions do not
@@ -28,8 +30,8 @@ Apply the Apple HIG principles of grouping related controls, a clear content
 hierarchy and progressive disclosure while retaining Android platform behavior.
 
 - Separate navigation, content and input. Give each region one clear purpose.
-- Prefer aligned rows for choosing sessions; allow rows to grow with font size.
-  Keep secondary paths subordinate and allow a full-detail destination.
+- Preserve the session gallery and grow its cards with font size. Keep saved-host
+  and computer lists aligned below it, with secondary paths subordinate.
 - Keep tool output collapsed until requested. Assistant prose remains a readable
   document; user messages receive a distinct surface without enclosing every reply.
 - Use theme shape roles: small (14 dp) for grouped mode controls, large (20 dp)

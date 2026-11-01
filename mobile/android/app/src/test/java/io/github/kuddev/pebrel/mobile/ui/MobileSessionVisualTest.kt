@@ -16,8 +16,10 @@ import io.github.kuddev.pebrel.mobile.PebrelApplication
 import io.github.kuddev.pebrel.mobile.connection.DesktopPane
 import io.github.kuddev.pebrel.mobile.connection.HostProfile
 import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
+import io.github.kuddev.pebrel.mobile.session.LocalSession
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,8 +34,11 @@ import org.robolectric.annotation.GraphicsMode
 class MobileSessionVisualTest {
     @get:Rule val compose = createComposeRule()
     private var view: View? = null
+    private val terminal = galleryTerminalFixture()
 
-    @Test fun overviewKeepsFullRowTargetsAndThemeHierarchy() {
+    @After fun closeTerminal() { terminal.finishIfRunning() }
+
+    @Test fun overviewKeepsPreviewCardsAndThemeHierarchy() {
         val app = ApplicationProvider.getApplicationContext<PebrelApplication>()
         val pane = DesktopPane(1, 2, "Review mobile conversation", "/workspace/pebrel", "Claude Code", "running", 1)
         val desktop = DesktopWorkspace("test-pc", HostProfile("test-host", "Development Mac", "192.0.2.1", 22, "dev"),
@@ -44,7 +49,8 @@ class MobileSessionVisualTest {
             view = LocalView.current
             PebrelTheme { Surface(Modifier.fillMaxSize().testTag("mobile-overview")) { Column {
                 HomeHeader({}, {})
-                HomeScreen(emptyList(), emptyList(), listOf(desktop), emptyList(),
+                HomeScreen(listOf(LocalSession("local-preview", "Build preview", "Local", terminal, "ready")),
+                    emptyList(), listOf(desktop), emptyList(),
                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, onPane = { _, selected -> opened = selected.id })
             } } }
         }
@@ -52,7 +58,8 @@ class MobileSessionVisualTest {
             compose.runOnIdle { app.sessions.selectTheme(theme) }
             compose.onNodeWithText(pane.title).assertIsDisplayed().performClick()
             assertEquals(2L, opened)
-            save("overview-${theme.lowercase()}", "mobile-overview")
+            compose.onNodeWithText("$ cargo test\n24 tests passed\n~/workspace $").assertIsDisplayed()
+            save("overview-gallery-${theme.lowercase()}", "mobile-overview")
         }
     }
 

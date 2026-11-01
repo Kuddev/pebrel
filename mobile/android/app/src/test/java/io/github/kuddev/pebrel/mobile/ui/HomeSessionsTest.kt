@@ -492,7 +492,7 @@ class HomeSessionsTest {
         compose.runOnIdle { assertEquals(listOf("computer", "ssh", "local"), opened) }
     }
 
-    @Test fun sessionRowPlacesTitleBeforeMetadataAtLargeTextSizes() {
+    @Test fun sessionPreviewKeepsItsTitleAndMetadataVisibleAtLargeTextSizes() {
         val cwd = "/workspace/project/src"
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 2f)) {
@@ -504,10 +504,10 @@ class HomeSessionsTest {
                 }
             }
         } }
-        compose.onNodeWithText(pane.title).assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(270.dp)
+        compose.onNodeWithText(pane.title).assertHeightIsAtLeast(360.dp).assertWidthIsAtLeast(133.dp)
         val path = compose.onNodeWithText(cwd, useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
         val title = compose.onNodeWithText(pane.title, useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue(title.bottom <= path.top)
+        assertTrue(path.bottom <= title.top)
     }
 
     // Asymmetric segment clipping needs real path hit testing, absent from legacy graphics.
