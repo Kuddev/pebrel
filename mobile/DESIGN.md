@@ -42,7 +42,8 @@ hierarchy and progressive disclosure while retaining Android platform behavior.
 
 ## Color and state
 
-- Preserve the approved Paper/Nord and other registered palettes. Rust theme
+- Use MintLight on fresh installs; preserve saved themes and the system-follow option.
+- Preserve all registered palettes. Rust theme
   definitions remain the palette authority; Android assets are generated from it.
 - Distinguish background, raised/selected surface, primary/secondary text, border,
   action and error. A semantic name alone does not prove sufficient contrast.
