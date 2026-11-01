@@ -589,6 +589,157 @@ fn wheel_over_terminal(cx: &mut VisualTestContext, delta_y: f32, control: bool) 
 }
 
 #[gpui::test]
+fn pi_wheel_pages_remote_fullscreen_without_mouse_reporting(cx: &mut TestAppContext) {
+    cx.update(crate::gpui_shell::math_view::register);
+    let (probe, mut cx) = open(cx);
+    let terminal = probe.read_with(&cx, |probe, _| probe.terminal.clone());
+    let (receiver, proxy) = terminal.update(&mut cx, |view, cx| {
+        view.install_remote_files_test_session("fixture@remote", cx);
+        let (session, receiver, _, proxy) = session::test_session_with_events();
+        view.session = Some(session);
+        super::super::startup_tests::feed(view, b"\x1b[?1049h");
+        (receiver, proxy)
+    });
+    let mut stream = nebula_terminal::event_loop::StreamProcessor::default();
+    draw(&mut cx);
+    let height = terminal.update(&mut cx, |view, _| {
+        view.running_program = Some("pi".into());
+        view.command_running_disproved = false;
+        view.line_height.as_f32()
+    });
+    receiver.try_iter().for_each(drop);
+    for (delta, expected) in [(3.0, b"\x1b[5~"), (-3.0, b"\x1b[6~")] {
+        wheel_over_terminal(&mut cx, delta * height, false);
+        let inputs: Vec<_> = receiver
+            .try_iter()
+            .filter_map(|message| match message {
+                Msg::Input(bytes) => Some(bytes.into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inputs, vec![expected.to_vec()], "one page per wheel event");
+    }
+    terminal.read_with(&cx, |view, _| {
+        assert_eq!(view.scroll_state(), (0, 0));
+        assert!(view.scrollbar_thumb(0, 0).is_none(), "no inert local scrollbar over Pi");
+    });
+
+    wheel_over_terminal(&mut cx, height * 0.5, false);
+    assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+    wheel_over_terminal(&mut cx, height * 0.5, false);
+    assert!(
+        receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"\x1b[5~")
+        })
+    );
+
+    // Paging uses the negotiated encoder, including complete Kitty key events.
+    terminal.update(&mut cx, |view, _| {
+        view.session.as_ref().unwrap().term.lock().set_options(nebula_terminal::term::Config {
+            kitty_keyboard: true,
+            ..Default::default()
+        });
+        super::super::startup_tests::feed(view, b"\x1b[>3u");
+        assert!(
+            view.term_mode()
+                .contains(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES)
+        );
+    });
+    wheel_over_terminal(&mut cx, -height, false);
+    let inputs: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .collect();
+    // Kitty permits the default press type to be omitted, but requires release.
+    assert_eq!(inputs, vec![b"\x1b[6~\x1b[6;1:3~".to_vec()]);
+    terminal.update(&mut cx, |view, _| {
+        super::super::startup_tests::feed(view, b"\x1b[<u");
+    });
+
+    // Negotiated application mouse reporting still wins over the fallback.
+    terminal.update(&mut cx, |view, _| {
+        super::super::startup_tests::feed(view, b"\x1b[?1000h\x1b[?1006h");
+    });
+    wheel_over_terminal(&mut cx, height, false);
+    let bytes: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(bytes.starts_with(b"\x1b[<64;"), "Pi still receives the SGR wheel report");
+    assert!(bytes.ends_with(b"M"));
+
+    // A retained conversation identity cannot page a different foreground TUI.
+    terminal.update(&mut cx, |view, cx| {
+        super::super::startup_tests::feed(view, b"\x1b[?1000l\x1b[?1006l");
+        view.seed_ai_session("pi".into(), "saved-session".into(), cx);
+        view.running_program = Some("less".into());
+    });
+    wheel_over_terminal(&mut cx, height, false);
+    assert!(
+        receiver
+            .try_iter()
+            .any(|message| { matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"\x1b[A") })
+    );
+    terminal.update(&mut cx, |view, _| {
+        view.running_program = Some("pi".into());
+        view.command_running_disproved = true;
+    });
+    wheel_over_terminal(&mut cx, height, false);
+    assert!(
+        receiver
+            .try_iter()
+            .any(|message| { matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"\x1b[A") })
+    );
+
+    // Explicit program reports override the last process observation.
+    terminal.update(&mut cx, |view, cx| {
+        view.command_running_disproved = false;
+        stream.feed(
+            &mut view.session.as_ref().unwrap().term.lock(),
+            &proxy,
+            b"\x1b]7501;state=working:app=less\x07",
+        );
+        view.refresh_program_status(cx);
+    });
+    wheel_over_terminal(&mut cx, height, false);
+    assert!(
+        receiver
+            .try_iter()
+            .any(|message| { matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"\x1b[A") })
+    );
+    terminal.update(&mut cx, |view, cx| {
+        view.running_program = Some("less".into());
+        stream.feed(
+            &mut view.session.as_ref().unwrap().term.lock(),
+            &proxy,
+            b"\x1b]7501;state=working:app=pi\x07",
+        );
+        view.refresh_program_status(cx);
+    });
+    wheel_over_terminal(&mut cx, height, false);
+    assert!(
+        receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"\x1b[5~")
+        })
+    );
+
+    // Leaving the alternate screen restores terminal scrollback instead of paging Pi.
+    terminal.update(&mut cx, |view, _| {
+        super::super::startup_tests::feed(view, b"\x1b[?1049l");
+        view.command_running_disproved = false;
+    });
+    wheel_over_terminal(&mut cx, height, false);
+    assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+}
+
+#[gpui::test]
 fn ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll(cx: &mut TestAppContext) {
     use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 

@@ -1360,7 +1360,7 @@ fn local_context_refusal(origin: InputOrigin, ssh_destination: Option<&str>) -> 
     })
 }
 
-fn runtime_chat_agent_kind(
+pub(super) fn runtime_chat_agent_kind(
     running_program: Option<&str>,
     command_running_disproved: bool,
 ) -> Option<crate::ai_agents::AgentKind> {
