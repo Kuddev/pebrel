@@ -10,19 +10,30 @@ fn in_box_powershell_advertises_owned_pointer_bindings() {
 $ErrorActionPreference = 'Stop'
 Import-Module PSReadLine
 $global:PebrelShellToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('pwsh:fixture'))
+$editorSetup = {{
+{editor}
+}}
+$pointerSetup = {{
+{pointer}
+}}
 foreach ($mode in 'Windows','Emacs') {{
     Set-PSReadLineOption -EditMode $mode
-    {editor}
-    {pointer}
+    & $editorSetup
+    & $pointerSetup
     if (-not (Test-PebrelPointerBinding)) {{ throw "Native pointer unavailable in $mode" }}
-    {editor}
-    {pointer}
+    & $editorSetup
+    & $pointerSetup
     if (-not (Test-PebrelPointerBinding)) {{ throw 'Reload revoked native pointer' }}
-    Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F10,1 -Function BeginningOfLine
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+Shift+F10,1' -Function BeginningOfLine
     if (Test-PebrelPointerBinding) {{ throw 'Changed user key was claimed' }}
-    {pointer}
+    & $pointerSetup
     if (Test-PebrelPointerBinding) {{ throw 'Reload replaced user key' }}
-    Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F10,1 -BriefDescription $global:PebrelPointerHandlerName -ScriptBlock {{ }}
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+Shift+F10,1' -BriefDescription $global:PebrelPointerHandlerName -ScriptBlock {{ }}
+    if (-not (Test-PebrelPointerBinding)) {{ throw 'Restored child chord unavailable' }}
+    Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F10 -Function BeginningOfLine
+    if (Test-PebrelPointerBinding) {{ throw 'Changed prefix was claimed' }}
+    & $pointerSetup
+    if (Test-PebrelPointerBinding) {{ throw 'Reload replaced user prefix' }}
 }}
 Set-PSReadLineOption -EditMode Vi
 if (Test-PebrelPointerBinding) {{ throw 'Unsupported Vi map was advertised' }}

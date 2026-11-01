@@ -207,7 +207,7 @@ class PowerShellPointerTests(unittest.TestCase):
         for mode, before in [
             ("Vi", ""),
             ("Emacs", "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F12 -Function BeginningOfLine"),
-            ("Windows", "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F10,1 -Function BeginningOfLine"),
+            ("Windows", "Set-PSReadLineKeyHandler -Chord 'Ctrl+Shift+F10,1' -Function BeginningOfLine"),
             ("Emacs", "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F10 -Function BeginningOfLine"),
         ]:
             with self.subTest(mode=mode, before=before):
