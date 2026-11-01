@@ -2571,6 +2571,5 @@ impl NebulaWorkspace {
         cx.notify();
     }
 }
-
 #[cfg(test)]
 mod tests;
