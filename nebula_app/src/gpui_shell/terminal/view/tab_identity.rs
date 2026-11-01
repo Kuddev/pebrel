@@ -54,9 +54,12 @@ impl TerminalView {
             ssh_label(self.ssh_destination.as_deref(), &crate::display::nebula_data_dir());
     }
 
-    /// A remote directory or OSC title must never replace a saved host name.
-    /// Local tabs continue to use their working directory, not program titles.
+    /// Native AI task titles name the focused pane; ordinary shells retain their
+    /// directory or saved SSH host name. Workspace manual names take precedence.
     pub fn tab_label(&self) -> String {
+        if let Some(task) = self.reported_ai_task() {
+            return task.to_owned();
+        }
         if let Some(destination) = &self.ssh_destination {
             return self.ssh_label.as_ref().unwrap_or(destination).clone();
         }
@@ -67,6 +70,29 @@ impl TerminalView {
                     .and_then(|path| last_path_component(&path.to_string_lossy()))
             })
             .unwrap_or_else(|| ".".to_owned())
+    }
+
+    fn reported_ai_task(&self) -> Option<&str> {
+        if self.exited.is_some()
+            || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
+        {
+            return None;
+        }
+        let program = self
+            .running_program
+            .as_deref()
+            .or_else(|| self.ai_session.as_ref().map(|session| session.source.as_str()))?;
+        let agent = crate::ai_agents::AgentKind::parse(program)?;
+        let title = self.title.trim();
+        (!title.is_empty()
+            && title != "shell"
+            && title != program
+            && title != agent.label()
+            && title != agent.display_name()
+            && title != self.cwd
+            && Some(title) != self.ssh_destination.as_deref()
+            && !title.starts_with("NEBULA|"))
+        .then_some(title)
     }
 
     /// Hover uses only already observed state: no filesystem scans, SSH calls,
@@ -94,18 +120,9 @@ impl TerminalView {
                 .as_deref()
                 .or_else(|| self.ai_session.as_ref().map(|session| session.source.as_str()));
             if let Some(program) = program {
-                let agent = crate::ai_agents::AgentKind::parse(program);
-                let name = agent.map_or(program, |agent| agent.label());
-                let title = self.title.trim();
-                let task = (!title.is_empty()
-                    && title != "shell"
-                    && title != program
-                    && title != name
-                    && title != self.cwd
-                    && Some(title) != self.ssh_destination.as_deref()
-                    && !title.starts_with("NEBULA|"))
-                .then_some(title);
-                let detail = match task.filter(|_| agent.is_some()) {
+                let name = crate::ai_agents::AgentKind::parse(program)
+                    .map_or(program, |agent| agent.label());
+                let detail = match self.reported_ai_task() {
                     Some(task) => format!("{name} · {task}"),
                     None => name.to_owned(),
                 };

@@ -905,18 +905,53 @@ fn ssh_tab_name_and_hover_preserve_host_identity_across_remote_titles(cx: &mut T
 }
 
 #[gpui::test]
-fn ai_tab_hover_shows_full_directory_and_reported_task_but_not_stale_task(cx: &mut TestAppContext) {
+fn ai_tab_name_shows_reported_task_and_restores_directory_on_exit(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.process_event(Event::CwdReport("/home/test/很长的项目目录".into()), cx);
-        view.running_program = Some("codex".into());
-        view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
-        assert_eq!(view.tab_label(), "很长的项目目录");
-        let hover = view.tab_tooltip(&view.tab_label());
-        assert!(hover.contains("/home/test/很长的项目目录"));
-        assert!(hover.contains("修复 SSH 标签名称"));
+        for program in ["codex", "claude", "pi", "opencode", "qoder"] {
+            view.running_program = Some(program.into());
+            assert_eq!(
+                view.tab_label(),
+                "很长的项目目录",
+                "a new task must not inherit an old title"
+            );
+            view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
+            assert_eq!(view.tab_label(), "修复 SSH 标签名称", "{program}");
+            let hover = view.tab_tooltip(&view.tab_label());
+            assert!(hover.contains("/home/test/很长的项目目录"));
+            assert!(hover.contains("修复 SSH 标签名称"));
+            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+            assert_eq!(view.tab_label(), "很长的项目目录");
+            assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
+        }
+    });
+}
+
+#[gpui::test]
+fn ai_task_name_preserves_remote_identity_in_hover_and_shell_fallback(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.ssh_destination = Some("root@192.0.2.10:2222".into());
+        view.ssh_label = Some("SG-1 新加坡".into());
+        view.cwd = "/srv/project".into();
+        view.running_program = Some("claude".into());
+        for title in ["", "shell", "claude", "Claude Code", "/srv/project", "root@192.0.2.10:2222"]
+        {
+            view.process_event(Event::Title(title.into()), cx);
+            assert_eq!(view.tab_label(), "SG-1 新加坡", "{title}");
+        }
+        view.process_event(Event::Title("修复登录失败".into()), cx);
+        assert_eq!(view.tab_label(), "修复登录失败");
+        assert_eq!(
+            view.tab_tooltip(&view.tab_label()),
+            "修复登录失败\nSG-1 新加坡\nroot@192.0.2.10:2222\n/srv/project\nclaude · 修复登录失败"
+        );
         view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
-        assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
+        assert_eq!(view.tab_label(), "SG-1 新加坡");
+        view.running_program = Some("htop".into());
+        view.process_event(Event::Title("ordinary application title".into()), cx);
+        assert_eq!(view.tab_label(), "SG-1 新加坡");
     });
 }
 

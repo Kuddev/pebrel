@@ -10,7 +10,7 @@ use super::*;
 #[derive(Clone, Debug, Default)]
 pub(super) struct TabMeta {
     pub(super) runtime_id: crate::runtime_api::tabs::TabId,
-    /// 用户重命名过的标签名；`None` = 跟着 cwd/文件名自动走。
+    /// 用户重命名过的标签名；`None` = 跟着任务、目录或文件名自动走。
     pub(super) custom_name: Option<String>,
     /// 色标（右键菜单的标签颜色）；`None` = 不画色条。
     pub(super) color: Option<Rgb>,
@@ -61,8 +61,8 @@ impl NebulaWorkspace {
             WorkspaceTab::Document { view, .. } => view.read(cx).tab_title().into(),
             WorkspaceTab::Code { view, .. } => view.read(cx).tab_title(cx).into(),
             tab @ WorkspaceTab::Terminal { .. } => {
-                // 标签 = 聚焦 pane 的 cwd 末级目录名（旧壳 chrome_tab_label
-                // 规则）。分屏计数**不拼在这里**：这份字符串还要喂给 runtime
+                // 标签跟随聚焦 pane 的原生 AI 任务名，普通 shell 回退到目录或主机。
+                // 分屏计数**不拼在这里**：这份字符串还要喂给 runtime
                 // API 的 tab label、跨窗拖拽标题和重命名预填，掺进 "⊞2" 会
                 // 一路泄漏，而且长标题下会被 truncate_tab_label 截掉、被
                 // custom_name 整条顶掉。计数改由 TabPresentation::pane_count
