@@ -44,6 +44,7 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "ctrl-shift-v",
     "alt-enter",
     "ctrl-shift-o",
+    "ctrl-shift-l",
 ];
 
 /// 存储格式 combo（`ctrl+shift+t`）→ gpui 绑定串（`ctrl-shift-t`）。键名
@@ -127,6 +128,7 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-v", gpui_component::input::Paste, Some("Input")),
         KeyBinding::new("alt-enter", ToggleFullscreen, None),
         KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
+        KeyBinding::new("ctrl-shift-l", CopyWorkingDirectory, None),
     ];
     // Tab selection and rename use the same defaults displayed by Settings.
     bindings.extend(crate::display::keymap::GPUI.default_shortcuts().into_iter().filter_map(
@@ -274,6 +276,7 @@ fn workspace_binding_in_context(
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
+        Action::CopyWorkingDirectory => Some(KeyBinding::new(&combo, CopyWorkingDirectory, scope)),
         // macOS 的退出键走与托盘退出同一条路径：先落盘会话与草稿，再停 PTY。
         Action::Quit => Some(KeyBinding::new(&combo, QuitApp, scope)),
         // 屏蔽应用动作后，ReceiveChar 仍交给终端编码，保留改键释放旧键的语义。

@@ -142,6 +142,7 @@ gpui::actions!(
         ResetFontSize,
         CopySelection,
         PasteClipboard,
+        CopyWorkingDirectory,
         ToggleFullscreen,
         OpenQuickJump
     ]
@@ -2570,6 +2571,5 @@ impl NebulaWorkspace {
         cx.notify();
     }
 }
-
 #[cfg(test)]
 mod tests;

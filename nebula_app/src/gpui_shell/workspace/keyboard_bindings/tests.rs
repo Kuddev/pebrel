@@ -16,11 +16,29 @@ fn control_character_defaults_follow_the_host_platform() {
         assert_eq!(bindings.is_empty(), is_macos(), "{combo}");
     }
     // Named keys and the established modified navigation chords retain their defaults.
-    for combo in ["ctrl-tab", "ctrl-shift-t", "ctrl-alt-left"] {
+    for combo in ["ctrl-tab", "ctrl-shift-t", "ctrl-alt-left", "ctrl-shift-l"] {
         let (bindings, pending) =
             keymap.bindings_for_input(&[Keystroke::parse(combo).unwrap()], &contexts);
         assert!(!pending && !bindings.is_empty(), "{combo}");
     }
+}
+
+#[test]
+fn copy_working_directory_default_binds_gpui_action() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let binding = workspace_binding_in_context(
+        "ctrl+shift+l",
+        &crate::config::Action::CopyWorkingDirectory,
+        None,
+    )
+    .expect("CopyWorkingDirectory must map to a GPUI binding");
+    assert!(binding.action().as_any().is::<CopyWorkingDirectory>());
+    let keymap = Keymap::new(vec![binding]);
+    let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let (bindings, pending) =
+        keymap.bindings_for_input(&[Keystroke::parse("ctrl-shift-l").unwrap()], &contexts);
+    assert!(!pending);
+    assert!(bindings.first().is_some_and(|b| b.action().as_any().is::<CopyWorkingDirectory>()));
 }
 
 #[test]

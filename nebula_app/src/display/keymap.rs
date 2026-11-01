@@ -66,6 +66,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
     (Action::SearchBackward, "搜索（向后）", "Search backward"),
     (Action::Copy, "复制", "Copy"),
     (Action::Paste, "粘贴", "Paste"),
+    (Action::CopyWorkingDirectory, "复制工作目录", "Copy working directory"),
     (Action::IncreaseFontSize, "增大字号", "Font size up"),
     (Action::DecreaseFontSize, "减小字号", "Font size down"),
     (Action::ResetFontSize, "重置字号", "Reset font size"),
@@ -78,7 +79,7 @@ pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
     ("标签页", "Tabs", 5),
     ("窗格", "Panes", 7),
     ("侧栏面板", "Side panels", 2),
-    ("终端", "Terminal", 9),
+    ("终端", "Terminal", 10),
 ];
 
 /// 只读展示行（无法在图形页编辑，TOML/settings 行仍可覆盖其中的表驱动键）。
@@ -165,6 +166,7 @@ pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
     ("cmd+8", Action::SelectTab8),
     ("cmd+9", Action::SelectLastTab),
     ("shift+cmd+g", Action::ToggleGitPanel),
+    ("shift+cmd+l", Action::CopyWorkingDirectory),
     ("cmd+plus", Action::IncreaseFontSize),
     ("cmd+=", Action::IncreaseFontSize),
     ("cmd+minus", Action::DecreaseFontSize),
@@ -212,6 +214,7 @@ fn action_message(action: &Action) -> Option<crate::i18n::Message> {
         Action::SearchBackward => Message::SettingsKeymapActionSearchBackward,
         Action::Copy => Message::CommonCopy,
         Action::Paste => Message::CommonPaste,
+        Action::CopyWorkingDirectory => Message::CommonCopyWorkingDirectory,
         Action::IncreaseFontSize => Message::SettingsKeymapActionFontSizeUp,
         Action::DecreaseFontSize => Message::SettingsKeymapActionFontSizeDown,
         Action::ResetFontSize => Message::SettingsKeymapActionResetFontSize,
@@ -1236,6 +1239,7 @@ mod tests {
             ("ctrl+alt+down", Action::FocusPaneDown),
             ("ctrl+shift+f", Action::ToggleFilesPanel),
             ("ctrl+shift+g", Action::ToggleGitPanel),
+            ("ctrl+shift+l", Action::CopyWorkingDirectory),
             ("ctrl+shift+up", Action::PromptJumpUp),
             ("ctrl+shift+down", Action::PromptJumpDown),
             ("ctrl+1", Action::SelectTab1),

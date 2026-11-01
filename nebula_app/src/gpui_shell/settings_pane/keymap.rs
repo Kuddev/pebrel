@@ -605,17 +605,26 @@ mod tests {
             .position(|(action, ..)| *action == crate::config::Action::Copy)
             .unwrap()
             + 1;
+        let copy_cwd_row = keymap::EDITABLE_ACTIONS
+            .iter()
+            .position(|(action, ..)| *action == crate::config::Action::CopyWorkingDirectory)
+            .unwrap()
+            + 1;
         cx.update(|window, cx| {
             pane.update(cx, |pane, cx| {
                 pane.keymap_binds = vec![("ctrl+alt+y".into(), "Copy".into())];
                 let matching_combo =
                     format!("コピー {}", keymap::display_stored_combo("ctrl+alt+y"));
-                for query in ["コピー", "COPY", "复制", &matching_combo] {
+                for query in ["コピー", "COPY", "复制"] {
                     pane.settings_search_input
                         .update(cx, |input, cx| input.set_value(query, window, cx));
-                    assert_eq!(pane.keymap_visible(cx), vec![copy_row], "{query}");
+                    assert_eq!(pane.keymap_visible(cx), vec![copy_row, copy_cwd_row], "{query}");
                     assert!(pane.matching_settings_sections(cx).contains(&7), "{query}");
                 }
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.set_value(&matching_combo, window, cx));
+                assert_eq!(pane.keymap_visible(cx), vec![copy_row], "{matching_combo}");
+                assert!(pane.matching_settings_sections(cx).contains(&7));
                 let different_combo =
                     format!("コピー {}", keymap::display_stored_combo("ctrl+alt+z"));
                 pane.settings_search_input
@@ -628,7 +637,7 @@ mod tests {
                     UiLanguage::FrFr;
                 pane.settings_search_input
                     .update(cx, |input, cx| input.set_value("Copier", window, cx));
-                assert_eq!(pane.keymap_visible(cx), vec![copy_row]);
+                assert_eq!(pane.keymap_visible(cx), vec![copy_row, copy_cwd_row]);
                 assert!(pane.matching_settings_sections(cx).contains(&7));
             });
         });
