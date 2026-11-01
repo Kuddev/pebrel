@@ -10,6 +10,7 @@ mod cli;
 mod command;
 pub(crate) mod conversation;
 pub(crate) mod git;
+mod handover;
 pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
@@ -982,6 +983,7 @@ impl EventSink {
 
 #[derive(Clone, Default)]
 pub struct RuntimeHub {
+    predictions: Arc<crate::prompt_suggestions::service::Service>,
     inner: Arc<Mutex<HubState>>,
 }
 
