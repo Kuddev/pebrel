@@ -350,6 +350,56 @@ fn issue_353_history_uses_echoed_command_and_refreshes_on_all_platforms(cx: &mut
 }
 
 #[gpui::test]
+fn nested_path_completion_after_native_tab_keeps_the_shell_in_control(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.completion_style = crate::display::CompletionStyle::Inline;
+            // Some shell integrations report prompt start without OSC 133;B.
+            view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+            feed(view, b"> ");
+            view.ghost_enabled = false;
+            view.replace_text_in_range(None, "cd lin", window, cx);
+            feed(view, b"cd lin");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+            assert!(view.suggest.line_buf.is_empty());
+            // The shell completed the parent directory; only subsequent typing
+            // is present in the mirror when Pebrel next considers a suggestion.
+            feed(view, b"gting/");
+            view.ghost_enabled = true;
+            view.replace_text_in_range(None, "li", window, cx);
+            feed(view, b"li");
+            refresh_completion_from_grid(view, cx);
+            assert!(view.suggest.screen_line.is_empty(), "a path suffix is not a command line");
+        })
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert!(view.suggest.suggestion.is_empty());
+            assert!(view.suggest.completion_items.is_empty());
+            view.on_terminal_tab(&TerminalTab, window, cx);
+        })
+    });
+    // A prompt marker may precede its editor capability report. Let the normal
+    // bounded query fallback deliver Tab when this shell never reports one.
+    window.run_until_parked();
+    window.executor().advance_clock(std::time::Duration::from_secs(1));
+    window.run_until_parked();
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"cd lin\tli\t", "both Tabs must reach the native editor unchanged");
+}
+
+#[gpui::test]
 fn completion_never_accepts_a_candidate_for_partial_pty_echo(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler as _;
     let directory = tempfile::tempdir().unwrap();

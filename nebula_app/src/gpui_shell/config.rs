@@ -96,6 +96,7 @@ pub struct Settings {
     /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
     /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
     pub ghost: bool,
+    pub prompt_suggestions_enabled: bool,
     pub completion_style: crate::display::CompletionStyle,
     /// 单元格宽度取整方式；同一窗口宽度下必须与旧壳得到相同列数。
     pub cell_width_mode: nebula_settings::CellWidthModeName,
@@ -309,6 +310,7 @@ impl Settings {
             show_tab_status: runtime.show_tab_status,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,
+            prompt_suggestions_enabled: runtime.prompt_suggestions.enabled,
             completion_style: runtime.completion_style,
             cell_width_mode: runtime.cell_width_mode,
             cjk_bold_regular: runtime.cjk_bold_regular,

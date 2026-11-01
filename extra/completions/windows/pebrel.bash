@@ -43,6 +43,9 @@ _pebrel() {
             pebrel,plugin)
                 cmd="pebrel__plugin"
                 ;;
+            pebrel,predict)
+                cmd="pebrel__predict"
+                ;;
             pebrel,setup-ai)
                 cmd="pebrel__setup__ai"
                 ;;
@@ -339,6 +342,9 @@ _pebrel() {
                 ;;
             pebrel__help,plugin)
                 cmd="pebrel__help__plugin"
+                ;;
+            pebrel__help,predict)
+                cmd="pebrel__help__predict"
                 ;;
             pebrel__help,setup-ai)
                 cmd="pebrel__help__setup__ai"
@@ -683,7 +689,7 @@ _pebrel() {
 
     case "${cmd}" in
         pebrel)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --launched-at-login --config-file --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] view ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --launched-at-login --config-file --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] predict view ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2587,7 +2593,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help)
-            opts="view ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh help"
+            opts="predict view ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3426,6 +3432,20 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__help__predict)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__help__setup__ai)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -4188,6 +4208,20 @@ _pebrel() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__predict)
+            opts="-h --help claude pi opencode [ARGS]..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
                 *)
                     COMPREPLY=()
                     ;;
