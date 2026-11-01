@@ -93,6 +93,7 @@ class SessionRepository(private val context: Context,
     private var desktopHistoryRevision = 0L
     private val desktopClients = java.util.concurrent.ConcurrentHashMap<String, DesktopRuntimeClient>()
     private val desktopTransitions = mutableMapOf<String, DesktopTransitions>()
+    private val desktopRoutes = mutableMapOf<String, RelayRouteAttempt>()
     private val conversationCache = ConversationCache()
     private var activeGit: DesktopGit? = null
     @Volatile private var foreground = false
@@ -191,7 +192,7 @@ class SessionRepository(private val context: Context,
 
     private fun refreshLanDiscovery() {
         val needed = foreground && computers.value.any {
-            it.hasConnected && it.relayProfile?.canRediscover == true && it.status !in setOf("ready", "approval") &&
+            it.hasConnected && lanRoute(it) != null && it.status !in setOf("ready", "approval") &&
                 DesktopReconnect.retryable(it.failure)
         }
         if (!needed) {
@@ -210,12 +211,16 @@ class SessionRepository(private val context: Context,
         }
     }
 
+    private fun lanRoute(desktop: DesktopWorkspace): RelayProfile? =
+        (savedRelays.value.find { it.id == desktop.host.id } ?: desktop.relayProfile)
+            ?.connectionRoutes()?.firstOrNull { it.canRediscover }
+
     internal fun recoverLanComputers(discovered: List<PairingComputer>) {
         if (!foreground) return
         for (desktop in computers.value) {
             if (!desktop.hasConnected || desktop.status in setOf("ready", "approval") ||
                 !DesktopReconnect.retryable(desktop.failure)) continue
-            val profile = desktop.relayProfile ?: continue
+            val profile = lanRoute(desktop) ?: continue
             val computer = discovered.firstOrNull { it.pin == profile.tlsPin } ?: continue
             profile.discoveredAt(computer)?.let(::connectRelay)
         }
@@ -224,7 +229,8 @@ class SessionRepository(private val context: Context,
     fun restoreDesktop(id: String): String? {
         val canonical = restoredRelayIds[id] ?: id
         if (computers.value.any { it.id == canonical }) return canonical
-        return savedRelays.value.find { "relay:${it.id}" == canonical || "relay:${it.legacyId}" == id }?.let(::connectRelay)
+        return savedRelays.value.find { profile -> "relay:${profile.id}" == canonical ||
+            profile.connectionRoutes().any { "relay:${it.legacyId}" == id } }?.let(::connectRelay)
     }
     private var renderOwner: String? = null
     private var renderToken: Any? = null
@@ -256,7 +262,7 @@ class SessionRepository(private val context: Context,
                 runCatching { relayStore.load() }.onSuccess { restored ->
                     val unique = RelayProfile.latestByComputer(restored)
                     withContext(Dispatchers.Main) {
-                        restored.forEach { restoredRelayIds["relay:${it.legacyId}"] = "relay:${it.id}" }
+                        restored.flatMap { it.connectionRoutes() }.forEach { restoredRelayIds["relay:${it.legacyId}"] = "relay:${it.id}" }
                         savedRelays.value = RelayProfile.latestByComputer(unique + savedRelays.value)
                     }
                     // 迁移写盘失败也保留已经解密的可用记录，避免把存储错误变成重新扫码。
@@ -691,12 +697,19 @@ class SessionRepository(private val context: Context,
         persistRelays()
     }
     fun connectRelay(profile: RelayProfile): String {
+        val saved = savedRelays.value.find { it.id == profile.id }
+        val attempt = RelayRouteAttempt.forProfile(profile, saved)
+        return connectRelayRoute(checkNotNull(attempt.next()), attempt)
+    }
+    private fun connectRelayRoute(profile: RelayProfile, attempt: RelayRouteAttempt): String {
         val previous = computers.value.find { it.host.id == profile.id }
         if (previous != null && previous.status in setOf("ready", "connecting", "approval") &&
             previous.relayProfile?.sameConnection(profile) == true) return previous.id
         val host = HostProfile(profile.id, profile.name, profile.url, 443, "", icon = profile.hostOs)
+        val id = previous?.id ?: "relay:${profile.id}"
+        desktopRoutes[id] = attempt
         return addDesktop(host, true, relayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay",
-            id = previous?.id ?: "relay:${profile.id}", relayProfile = profile)
+            id = id, relayProfile = profile, lanFallback = profile.mode == "lan" && attempt.hasFallback)
     }
     fun connectDesktop(host: HostProfile, password: CharArray, allowInput: Boolean): String {
         val id = UUID.randomUUID().toString()
@@ -705,7 +718,8 @@ class SessionRepository(private val context: Context,
     }
 
     private fun addDesktop(host: HostProfile, allowInput: Boolean, transport: DesktopTransport, source: String,
-                           id: String = UUID.randomUUID().toString(), relayProfile: RelayProfile? = null): String {
+                           id: String = UUID.randomUUID().toString(), relayProfile: RelayProfile? = null,
+                           lanFallback: Boolean = false): String {
         reconnect.cancelPending(id)
         resumeChecks.remove(id)?.cancel()
         val previous = computers.value.find { it.id == id }
@@ -737,11 +751,12 @@ class SessionRepository(private val context: Context,
                 }
                 if (relayProfile != null && savedRelays.value.find { it.id == relayProfile.id } != relayProfile) {
                     if (savedRelays.value.size < 64 || savedRelays.value.any { it.id == relayProfile.id }) {
-                        savedRelays.value = savedRelays.value.filterNot { it.id == relayProfile.id } + relayProfile
+                        savedRelays.value = RelayProfile.latestByComputer(savedRelays.value + relayProfile)
                         persistRelays()
                     } else error.value = "relay_storage_failed"
                 }
                 reconnect.forget(id)
+                desktopRoutes.remove(id)
                 val input = allowInput && (snapshot.optJSONObject("mobile_policy")?.optBoolean("allow_input") ?: negotiatedInput.get())
                 computers.value = computers.value.map { if (it.id == id) it.copy(panes = panes, status = "ready", hasConnected = true, failure = null,
                     allowInput = input, pairingApproval = null,
@@ -762,7 +777,8 @@ class SessionRepository(private val context: Context,
                 // 先交接所有权再异步释放旧连接；旧回调不会覆盖新状态，也不在 UI 线程等待网络。
                 replaced?.close()
                 if (desktopClients[id] !== client) { client.close(); return@launch }
-                val hello = client.connect(allowInput)
+                val hello = if (lanFallback) withTimeout(5000) { client.connect(allowInput) }
+                    else client.connect(allowInput)
                 negotiatedInput.set(allowInput && hello.optJSONObject("capabilities")?.optBoolean("input") == true)
                 val icon = desktopOsIcon(hello.optJSONObject("host")?.optString("os").orEmpty())
                 main.post {
@@ -791,6 +807,13 @@ class SessionRepository(private val context: Context,
     private fun desktopFailed(id: String, client: DesktopRuntimeClient, failure: DesktopFailureKind, immediate: Boolean = false) {
         if (!desktopClients.remove(id, client)) return // A late old callback cannot remove a recovered client.
         val current = computers.value.find { it.id == id } ?: return
+        val attempt = desktopRoutes.remove(id)
+        val fallback = attempt?.next(failure)
+        if (fallback != null) {
+            scope.launch { client.close() }
+            connectRelayRoute(fallback, checkNotNull(attempt))
+            return
+        }
         computers.value = computers.value.map { if (it.id == id) it.copy(status = if (it.hasConnected) "disconnected" else "failed", allowInput = false, failure = failure, pairingApproval = null) else it }
         if (current.hasConnected && current.relayProfile != null && DesktopReconnect.retryable(failure)) reconnect.schedule(id, immediate)
         else error.value = failure.code
@@ -988,6 +1011,7 @@ class SessionRepository(private val context: Context,
         refreshSshNetworkMonitor()
         val clients = desktopClients.values.toList(); desktopClients.clear(); computers.value = emptyList()
         desktopTransitions.clear()
+        desktopRoutes.clear()
         refreshLanDiscovery()
         drafts.value = emptyMap()
         recentCommands.value = emptyMap()
@@ -997,6 +1021,7 @@ class SessionRepository(private val context: Context,
     }
     fun closeDesktop(id: String) {
         desktopTransitions.remove(id)
+        desktopRoutes.remove(id)
         if (activeGit?.target?.desktop == id) activeGit = null
         reconnect.forget(id)
         resumeChecks.remove(id)?.cancel()

@@ -267,7 +267,9 @@ fun ComputerRows(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>, o
                     val relay = computer.relay
                     val profileId = desktops.find { it.id == computer.id }?.host?.id ?: computer.id
                     val saved = relays.find { it.id == profileId }
-                    ComputerRow(computer.title, computer.status, computer.transport, computer.address, computer.icon,
+                    val transport = if (saved?.alternate != null && computer.status !in setOf("ready", "connecting", "approval"))
+                        stringResource(R.string.computer_lan_relay) else computer.transport
+                    ComputerRow(computer.title, computer.status, transport, computer.address, computer.icon,
                         onForget = if (saved != null && onForget != null) ({ removing = saved }) else null) {
                         if (relay == null) onDesktop(computer.id) else onRelay(relay)
                     }
