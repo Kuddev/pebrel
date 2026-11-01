@@ -5,6 +5,9 @@ function global:Test-PebrelPointerBinding {
             (Get-Module PSReadLine).Version -lt [Version]'1.2.0' -or
             (Get-PSReadLineOption).EditMode -eq 'Vi') { return $false }
         $bindings = @(Get-PSReadLineKeyHandler -ErrorAction Stop)
+        # The editor can retain child chords after a user replaces their prefix.
+        # Such children are no longer reachable through the native dispatcher.
+        if ($bindings | Where-Object { $_.Key -in 'Ctrl+Shift+F10','Shift+Ctrl+F10' }) { return $false }
         $query = @($bindings | Where-Object { $_.Key -in 'Ctrl+Shift+F12','Shift+Ctrl+F12' })
         if ($query.Count -ne 1 -or $query[0].Function -ne $global:PebrelEditorHandlerName) { return $false }
         foreach ($digit in 0..9) {
