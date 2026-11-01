@@ -1056,6 +1056,32 @@ impl TerminalView {
             return;
         }
         if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+            // Pi's transcript uses paging keys; arrows edit its input. A saved
+            // conversation is not evidence that Pi still owns the foreground.
+            let agent = self
+                .effective_program_status()
+                .and_then(|status| status.app.as_deref())
+                .map_or_else(
+                    || {
+                        super::runtime::runtime_chat_agent_kind(
+                            self.running_program.as_deref(),
+                            self.command_running_disproved,
+                        )
+                    },
+                    crate::ai_agents::AgentKind::parse,
+                );
+            if let Some(key) = pi_wheel_paging_key(mode, agent, &event.modifiers, lines) {
+                // One page per accumulated wheel event, regardless of line count.
+                let bytes = crate::input::terminal_input::build_runtime_sequence(
+                    key,
+                    Default::default(),
+                    1,
+                    mode,
+                );
+                session.notifier.notify(bytes);
+                cx.notify();
+                return;
+            }
             // 备用屏（less/vim）：滚轮翻译成方向键。
             let seq: &[u8] = if mode.contains(TermMode::APP_CURSOR) {
                 if lines > 0 { b"\x1bOA" } else { b"\x1bOB" }
@@ -1085,6 +1111,27 @@ impl TerminalView {
     }
 }
 
+fn pi_wheel_paging_key(
+    mode: TermMode,
+    agent: Option<crate::ai_agents::AgentKind>,
+    modifiers: &gpui::Modifiers,
+    lines: i32,
+) -> Option<crate::runtime_api::RuntimeKey> {
+    if agent != Some(crate::ai_agents::AgentKind::Pi)
+        || !mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
+        || mode.intersects(TermMode::MOUSE_MODE)
+        || *modifiers != gpui::Modifiers::default()
+        || lines == 0
+    {
+        return None;
+    }
+    Some(if lines > 0 {
+        crate::runtime_api::RuntimeKey::PageUp
+    } else {
+        crate::runtime_api::RuntimeKey::PageDown
+    })
+}
+
 /// Preserve fractional deltas across events. Wheel speed must not rescale
 /// pixel-precise trackpad input, font zoom, or completion-list scrolling.
 fn wheel_scroll_lines(
@@ -1110,8 +1157,45 @@ fn wheel_scroll_lines(
 
 #[cfg(test)]
 mod scrolling_tests {
-    use super::wheel_scroll_lines;
+    use super::{pi_wheel_paging_key, wheel_scroll_lines};
     use gpui::{ScrollDelta, point, px};
+
+    #[test]
+    fn pi_wheel_pages_only_without_application_mouse_reporting() {
+        use crate::ai_agents::AgentKind;
+        use crate::runtime_api::RuntimeKey;
+        use nebula_terminal::term::TermMode;
+        let mode = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        let modifiers = gpui::Modifiers::default();
+        for (lines, key) in [(1, RuntimeKey::PageUp), (-3, RuntimeKey::PageDown)] {
+            assert_eq!(
+                pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, lines),
+                Some(key)
+            );
+        }
+        for mode in [
+            TermMode::empty(),
+            TermMode::ALT_SCREEN,
+            TermMode::ALTERNATE_SCROLL,
+            mode | TermMode::MOUSE_REPORT_CLICK,
+            mode | TermMode::MOUSE_DRAG,
+            mode | TermMode::MOUSE_MOTION,
+        ] {
+            assert_eq!(pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, 1), None);
+        }
+        for agent in [None, Some(AgentKind::Claude), Some(AgentKind::OhMyPi)] {
+            assert_eq!(pi_wheel_paging_key(mode, agent, &modifiers, 1), None);
+        }
+        for modifiers in [
+            gpui::Modifiers { shift: true, ..modifiers },
+            gpui::Modifiers { control: true, ..modifiers },
+            gpui::Modifiers { alt: true, ..modifiers },
+            gpui::Modifiers { platform: true, ..modifiers },
+        ] {
+            assert_eq!(pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, 1), None);
+        }
+        assert_eq!(pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, 0), None);
+    }
 
     #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
