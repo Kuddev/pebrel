@@ -667,6 +667,44 @@ mod tests {
     }
 
     #[test]
+    fn nested_directory_completion_stays_inside_the_typed_parent() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["lingting/lingting-agent", "lingting/lingting-boot", "licenseManagerShellext"]
+        {
+            std::fs::create_dir_all(root.path().join(name)).unwrap();
+        }
+        let session = Session::default();
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            for (line, expected) in
+                [("cd lin", "cd lingting/"), ("cd lingting/li", "cd lingting/lingting-agent/")]
+            {
+                let result = session
+                    .request_with_syntax(
+                        root.path().to_string_lossy().into_owned(),
+                        SuggestEnv::Local,
+                        line.into(),
+                        line.len(),
+                        style,
+                        None,
+                        Some(ShellSyntax::Posix),
+                    )
+                    .calculate(&Cancellation::default());
+                let item = if style == CompletionStyle::Popup {
+                    &result.completion_items[0]
+                } else {
+                    result.suggestion_edit.as_ref().unwrap()
+                };
+                let accepted: String = line
+                    .chars()
+                    .take(line.chars().count() - item.replace_chars)
+                    .chain(item.insert.chars())
+                    .collect();
+                assert_eq!(accepted, expected, "{style:?}: {line}");
+            }
+        }
+    }
+
+    #[test]
     fn path_completion_preserves_quotes_utf8_types_and_directory_roles_in_all_modes() {
         use crate::display::NebulaCompletionKind;
         use pebrel_completions::command_context::CommandContext;
