@@ -276,5 +276,8 @@
     "move_left": "Déplacer vers la gauche",
     "move_right": "Déplacer vers la droite",
     "tab_color": "Couleur de l’onglet"
+  },
+  "startup": {
+    "handover_unconfirmed": "L’instance Pebrel en cours n’a pas confirmé la demande d’ouverture. L’onglet ou la fenêtre existe peut-être déjà. Vérifiez la fenêtre existante avant de réessayer ; cette ouverture ne sera pas répétée automatiquement."
   }
 }

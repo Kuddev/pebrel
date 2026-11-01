@@ -1603,27 +1603,6 @@ impl NebulaWorkspace {
         }
     }
 
-    fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
-            if let Some((view, _)) = self.settings_surface.as_ref() {
-                let focus = view.read(cx).focus_handle(cx);
-                window.defer(cx, move |window, cx| window.focus(&focus, cx));
-            }
-            return;
-        }
-        let focus = match self.tabs.get(self.active) {
-            Some(tab @ WorkspaceTab::Terminal { .. }) => match tab.focused_view() {
-                Some(view) => view.read(cx).focus_handle(cx),
-                None => return,
-            },
-            Some(WorkspaceTab::Settings { view, .. }) => view.read(cx).focus_handle(cx),
-            Some(WorkspaceTab::Document { view, .. }) => view.read(cx).focus_handle(cx),
-            Some(WorkspaceTab::Code { view, .. }) => view.read(cx).focus_handle(cx),
-            Some(WorkspaceTab::Image { .. }) | None => return,
-        };
-        window.defer(cx, move |window, cx| window.focus(&focus, cx));
-    }
-
     /// 聚焦 tab 的**宿主可见** cwd。必须先识别 WSL，再读 `local_cwd()`：Windows
     /// 会把来宾 `/` 当成当前盘根目录，反过来的顺序会把 WSL `/` 显示成 `D:\`。
     /// WSL `/mnt/<盘>` 与可达 UNC 仍可供复制/Explorer 等宿主操作使用。

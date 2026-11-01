@@ -56,7 +56,7 @@ pub(crate) fn request_once_bounded(
     })
 }
 
-fn decode_plugin_response(
+pub(super) fn decode_plugin_response(
     request: &ApiRequest,
     bytes: &[u8],
 ) -> Result<ApiResponse, Box<dyn Error>> {

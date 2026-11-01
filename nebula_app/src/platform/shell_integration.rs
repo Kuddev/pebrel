@@ -43,6 +43,28 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
             options.env.insert("NEBULA_ZSH_INTEGRATION".into(), directory.clone());
             options.env.insert("ZDOTDIR".into(), directory);
         },
+        "pwsh" => {
+            let directory = root.join("powershell");
+            std::fs::create_dir_all(&directory)?;
+            let init = directory.join("init.ps1");
+            for (path, content) in [
+                (init.clone(), include_str!("../../res/shell/powershell.ps1").to_owned()),
+                (directory.join("native-editor.ps1"), tty::powershell_editor()),
+            ] {
+                if std::fs::read(&path).ok().as_deref() != Some(content.as_bytes()) {
+                    crate::atomic_file::write(&path, content.as_bytes())?;
+                }
+            }
+            options.shell = Some(tty::Shell::new(
+                program,
+                vec![
+                    "-NoLogo".into(),
+                    "-NoExit".into(),
+                    "-File".into(),
+                    init.to_string_lossy().into_owned(),
+                ],
+            ));
+        },
         "bash" => {
             std::fs::create_dir_all(&root)?;
             let init = root.join("bashrc");
@@ -115,6 +137,7 @@ fn supports(name: &str, args: &[String]) -> bool {
     match name {
         "zsh" => args.iter().all(|arg| matches!(arg.as_str(), "-l" | "--login" | "-i")),
         "bash" => !cfg!(target_os = "macos") && args.is_empty(),
+        "pwsh" => args.is_empty(),
         _ => false,
     }
 }
@@ -125,12 +148,14 @@ mod tests {
 
     #[test]
     fn custom_commands_and_rcfiles_are_never_rewritten() {
-        for name in ["bash", "zsh", "fish"] {
+        for name in ["bash", "zsh", "fish", "pwsh"] {
             assert!(!supports(name, &["-c".into(), "echo test".into()]));
             assert!(!supports(name, &["--norc".into()]));
             assert!(!supports(name, &["--rcfile".into(), "custom".into()]));
         }
         assert!(supports("zsh", &["-l".into()]));
+        assert!(supports("pwsh", &[]));
+        assert!(!supports("pwsh", &["-NoProfile".into()]));
         assert_eq!(supports("bash", &[]), !cfg!(target_os = "macos"));
     }
 
