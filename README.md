@@ -147,6 +147,12 @@ Choose **Inline** (Tab accepts the suggestion), **List** (Tab accepts the select
 candidate), or **Hybrid** (→ accepts the inline suggestion; Tab opens the list)
 in Settings.
 
+When Pebrel can query the pane's filesystem, file arguments to `nvim`, `code`, and
+`cat` use its current directory; history only ranks the discovered candidates.
+To choose among several files, select **Hybrid**: Tab opens the
+list, subsequent Tab presses cycle candidates, and Enter inserts the selection
+without running the command. Right arrow accepts the inline suggestion directly.
+
 <details>
 <summary>How history completion differs</summary>
 
