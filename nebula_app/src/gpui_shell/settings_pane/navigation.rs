@@ -67,7 +67,7 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
 }
 
 pub(super) fn is_nav_section_visible(index: usize) -> bool {
-    index < SECTION_IDS.len()
+    index < SECTION_IDS.len() && index != 3
 }
 
 pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {

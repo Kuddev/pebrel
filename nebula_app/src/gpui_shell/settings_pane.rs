@@ -1571,6 +1571,7 @@ impl SettingsPane {
             nav = nav.child(
                 div()
                     .id(("settings-nav", ix))
+                    .debug_selector(move || format!("settings-nav-{ix}"))
                     .px(px(10.0))
                     .ml_1()
                     .mr_1()

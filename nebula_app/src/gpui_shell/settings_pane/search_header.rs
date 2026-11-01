@@ -132,7 +132,10 @@ pub(super) fn matching_sections(query: &str, language: crate::display::UiLanguag
     }
 
     let tokens = query.split_whitespace().collect::<Vec<_>>();
+    // Keep prediction/model configuration reachable by deliberate search while
+    // hiding the provider entry from the default sidebar. Route IDs stay stable.
     let mut matches = visible_nav_sections()
+        .chain(std::iter::once(3))
         .filter_map(|index| {
             let message = SECTION_SEARCH_TERMS[index];
             let haystack = format!(
