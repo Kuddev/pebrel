@@ -28,6 +28,7 @@ mod program_status;
 mod reading;
 mod runtime;
 mod session_failure;
+mod shell_pointer;
 mod ssh_reconnect;
 mod startup;
 mod startup_command;
@@ -407,6 +408,7 @@ pub struct TerminalView {
     pub(super) inline_images: super::inline_image::InlineImageStore,
     image_paste: image_paste::ImagePasteState,
     native_clipboard: native_clipboard::NativeClipboard,
+    shell_pointer: shell_pointer::Pointer,
     path_drop: path_drop::PathDropState,
     /// SSH 直连目的地（`user@host[:port]`）；本地会话为 None。
     pub ssh_destination: Option<String>,
@@ -613,6 +615,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         if !visible {
+            self.shell_pointer.invalidate();
             self.clear_output_hover(cx);
         }
         if self.output_visible != visible {
@@ -657,6 +660,7 @@ impl TerminalView {
         }
         match event {
             TermEvent::Wakeup => {
+                self.restore_shell_pointer_selection();
                 self.observe_reading_output(cx);
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
@@ -820,6 +824,7 @@ impl TerminalView {
             },
             TermEvent::CommandStart => {
                 self.native_clipboard.clear();
+                self.shell_pointer.revoke();
                 self.on_command_start(cx);
             },
             // 退出码接到「上一条命令失败」的未读徽章上（⚠ 三角）；`Some(0)` 与
@@ -869,6 +874,7 @@ impl TerminalView {
                 }
                 self.suggest.completion_shell_report(&name, &value);
                 self.native_clipboard.observe(&name, &value);
+                self.observe_shell_pointer(&name, &value, cx);
                 self.handle_completion_editor_report(&name, &value, cx);
                 cx.notify();
             },
@@ -903,6 +909,7 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        self.shell_pointer.revoke();
         self.clear_output_hover(cx);
         self.reading.cancel_query();
         self.reading.cancel_copy();
@@ -942,9 +949,22 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes)
+            || self.shell_pointer_preserves_native_undo(&bytes);
+        self.write_editor_input(bytes, preserves_prompt, cx);
+    }
+
+    /// Only a verified native-editor operation can override the byte-stream gate.
+    fn write_editor_input(
+        &mut self,
+        bytes: Vec<u8>,
+        preserves_prompt: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.ssh_failed() {
             return;
         }
+        self.shell_pointer.invalidate();
         self.completion_editor.invalidate();
         self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
@@ -961,7 +981,6 @@ impl TerminalView {
                     status_acknowledged = term.acknowledge_program_status_results();
                 }
                 // Match the parser's Term-lock order before attributing queued prompts.
-                let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);
                 session.native_prompt.observe_input(self.prompt_input_epoch, preserves_prompt);
                 if !preserves_prompt {
                     term.nebula_end_prompt();
@@ -1143,6 +1162,7 @@ impl TerminalView {
     /// 热应用运行时设置（设置页改动后由宿主调用）。默认光标样式只更新
     /// `Term` 的 fallback；程序通过 DECSCUSR 设置的临时样式仍保持权威。
     pub fn apply_settings(&mut self, cx: &mut Context<Self>) {
+        self.shell_pointer.invalidate();
         crate::gpui_shell::font_loading::ensure_selected(cx);
         self.cursor_animation.reset();
         self.refresh_ssh_label();
@@ -1434,6 +1454,10 @@ impl TerminalView {
             && !mods.shift
             && self.marked_text.is_none()
             && !mode.intersects(TermMode::ALT_SCREEN | TermMode::VI);
+        if plain && self.delete_shell_pointer_selection(ks.key.as_str(), cx) {
+            cx.stop_propagation();
+            return;
+        }
         if plain && self.handle_completion_key(ks.key.as_str(), cx) {
             cx.notify();
             cx.stop_propagation();
