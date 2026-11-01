@@ -142,6 +142,7 @@ gpui::actions!(
         ResetFontSize,
         CopySelection,
         PasteClipboard,
+        CopyWorkingDirectory,
         ToggleFullscreen,
         OpenQuickJump
     ]
