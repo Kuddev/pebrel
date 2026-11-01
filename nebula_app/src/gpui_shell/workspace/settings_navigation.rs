@@ -34,6 +34,7 @@ impl NebulaWorkspace {
         match event {
             SettingsPaneEvent::Close => self.close_settings(window, cx),
             SettingsPaneEvent::Changed | SettingsPaneEvent::BackupRestored => {
+                crate::prompt_suggestions::service::invalidate_config();
                 self.apply_runtime_settings(cx);
                 // 键位编辑器可能改了 keybind= 表：注入/撤销随之热更新。
                 self.apply_custom_keybinds(cx);
