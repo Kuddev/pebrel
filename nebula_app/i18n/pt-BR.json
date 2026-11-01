@@ -205,5 +205,8 @@
     "move_left": "Mover para a esquerda",
     "move_right": "Mover para a direita",
     "tab_color": "Cor da aba"
+  },
+  "startup": {
+    "handover_unconfirmed": "A instância do Pebrel em execução não confirmou a solicitação de abertura. A aba ou janela pode já ter sido aberta. Verifique a janela existente antes de tentar novamente; esta inicialização não repetirá a solicitação."
   }
 }

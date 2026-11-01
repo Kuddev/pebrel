@@ -622,37 +622,97 @@ fn ssh_bell_does_not_report_a_blocked_or_finished_command(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn claude_shift_enter_reaches_pty_without_committing_shell_history(cx: &mut TestAppContext) {
-    let (view, window, receiver) = open(cx);
-    window.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.running_program = Some("claude".into());
-            view.suggest.last_committed = "claude".into();
-            view.suggest.line_buf = "a multiline prompt".into();
-            feed(view, b"\x1b[?9001h");
-            view.on_key_down(
-                &KeyDownEvent {
-                    keystroke: gpui::Keystroke::parse("shift-enter").unwrap(),
-                    is_held: false,
-                    prefer_character_input: false,
-                },
-                window,
-                cx,
-            );
-            assert_eq!(view.suggest.last_committed, "claude");
-            assert!(
-                view.suggest.line_buf.is_empty(),
-                "multiline invalidates the single-line shadow"
-            );
+fn agent_shift_enter_reaches_pty_without_committing_shell_history(cx: &mut TestAppContext) {
+    for (program, expected) in [("claude", b"\n".as_slice()), ("codebuddy", b"\x1b\r")] {
+        let (view, window, receiver) = open(cx);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.running_program = Some(program.into());
+                view.suggest.last_committed = program.into();
+                view.suggest.line_buf = "a multiline prompt".into();
+                feed(view, b"\x1b[?9001h");
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse("shift-enter").unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(view.suggest.last_committed, program);
+                assert!(
+                    view.suggest.line_buf.is_empty(),
+                    "multiline invalidates the single-line shadow"
+                );
+            });
         });
+        let bytes: Vec<u8> = receiver
+            .try_iter()
+            .filter_map(|message| match message {
+                Msg::Input(bytes) => Some(bytes.into_owned()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(bytes, expected);
+    }
+}
+
+#[gpui::test]
+fn fullscreen_tui_keeps_running_state_without_spinning_the_badge(cx: &mut TestAppContext) {
+    use crate::runtime_api::RuntimeTaskState;
+
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.mark_command_running();
+        view.running_program = Some("lazygit".into());
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+
+        // lazygit/btop 占据 alternate screen：在等人操作，不转圈（#805）。
+        feed(view, b"\x1b[?1049h");
+        assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running);
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+
+        // 自报进度的全屏程序仍由 OSC 9;4 驱动 badge。
+        view.progress = crate::taskbar::TaskProgress::Indeterminate;
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        view.progress = crate::taskbar::TaskProgress::None;
+
+        // 未就绪的 SSH 连接是真正的等待。
+        view.ssh_stage = Some(crate::ssh_session::SshStage::Authenticate);
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        view.ssh_stage = Some(crate::ssh_session::SshStage::Ready);
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+
+        // 全屏形态的 Agent 照常转圈。
+        view.running_program = Some("opencode".into());
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        view.running_program = Some("lazygit".into());
+
+        // 回到主屏（程序退出前的长尾输出）恢复 spinner。
+        feed(view, b"\x1b[?1049l");
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
     });
-    let bytes: Vec<u8> = receiver
-        .try_iter()
-        .filter_map(|message| match message {
-            Msg::Input(bytes) => Some(bytes.into_owned()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-    assert_eq!(bytes, b"\n");
+}
+
+#[gpui::test]
+fn fullscreen_multiplexer_keeps_spinning_for_hook_owned_work(cx: &mut TestAppContext) {
+    for program in ["tmux", "screen"] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.mark_command_running();
+            view.running_program = Some(program.into());
+            feed(view, b"\x1b[?1049h");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle, "{program}");
+
+            let session = format!("inside-{program}");
+            assert!(view.handle_ai_hook(&hook(&session, "UserPromptSubmit", 1), cx));
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running, "{program}");
+
+            // Hook ownership still wins when a process probe reports the multiplexer.
+            view.running_program = Some(program.into());
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running, "{program}");
+        });
+    }
 }
