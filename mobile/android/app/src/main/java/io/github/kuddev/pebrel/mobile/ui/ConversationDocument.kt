@@ -20,7 +20,7 @@ internal fun prepareConversation(messages: List<ConversationMessage>, colors: Re
                 if (message.truncated) append("<p class=\"message-notice\">${readerEscape(clippedLabel)}</p>")
                 append("</details>")
             } else {
-                append("<article data-message id=\"m-$id\"><header class=\"message-author\">")
+                append("<article class=\"${if (message.role == "user") "message-user" else "message-assistant"}\" data-message id=\"m-$id\"><header class=\"message-author\">")
                 append(readerEscape(if (message.role == "user") userLabel else agent))
                 append("</header>")
                 if (message.role == "user") append("<div class=\"user-message\">")

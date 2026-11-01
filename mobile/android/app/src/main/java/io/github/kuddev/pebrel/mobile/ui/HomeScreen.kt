@@ -6,17 +6,13 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
@@ -64,40 +60,40 @@ fun HomeScreen(
     val motion = rememberPebrelMotion()
     val cards = sessionCards(sessions, desktops)
     var newConnection by rememberSaveable { mutableStateOf(false) }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val thumbnailWidth = ((maxWidth - 44.dp) * .45f).coerceAtLeast(133.dp)
-        // 按 fontScale 留高；大字号 sp 的非线性换算会让卡片高度不随小标签一起放大。
-        val thumbnailHeight = 180.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
+    Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 8.dp, bottom = 105.dp)) {
             item {
                 GroupHeading(stringResource(R.string.sessions), cards.size, stringResource(R.string.all_sessions), onSessions)
                 Spacer(Modifier.height(8.dp))
-                AnimatedContent(
-                    targetState = cards,
-                    contentKey = { visibleSessions -> visibleSessions.map { it.key } },
-                    transitionSpec = { motion.collectionTransition() },
-                    label = "home_sessions",
-                ) { visibleSessions ->
-                    if (visibleSessions.isEmpty()) {
-                        Row(Modifier.fillMaxWidth().heightIn(min = 96.dp).animateContentSize(motion.contentSizeSpec())
-                            .workspaceFrame().padding(16.dp), verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            WorkspaceSymbol { Glyph(R.drawable.ic_terminal, Modifier.size(22.dp)) }
-                            HelperText(stringResource(R.string.no_sessions))
-                        }
-                    } else LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(visibleSessions, key = { it.key }) { card ->
-                            val local = card.local
-                            val thumbnailModifier = Modifier.width(thumbnailWidth).height(thumbnailHeight)
-                            if (local != null) SessionThumbnail(local, thumbnailModifier) { onSession(local.id) }
-                            else DesktopSessionThumbnail(checkNotNull(card.desktop), card.pane, thumbnailModifier, card.tab) {
-                                if (card.tab != null && onTab != null) onTab.invoke(card.desktop.id, card.tab)
-                                else if (card.pane != null && onPane != null) onPane.invoke(card.desktop.id, card.pane)
-                                else onDesktop(card.desktop.id)
-                            }
-                        }
+                if (cards.isEmpty()) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 96.dp).animateContentSize(motion.contentSizeSpec())
+                        .workspaceFrame().padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        WorkspaceSymbol { Glyph(R.drawable.ic_terminal, Modifier.size(22.dp)) }
+                        HelperText(stringResource(R.string.no_sessions))
                     }
                 }
+            }
+            // A bounded overview keeps saved hosts reachable; All sessions retains the full list.
+            items(cards.take(4), key = { it.key }, contentType = { "session" }) { card ->
+                val local = card.local
+                if (local != null) {
+                    val source = if (local.source == "Local") stringResource(R.string.local_device) else local.source
+                    SessionOverviewRow(local.title, source, local.status, R.drawable.ic_terminal) { onSession(local.id) }
+                } else {
+                    val desktop = checkNotNull(card.desktop)
+                    val pane = card.pane
+                    SessionOverviewRow(card.tab?.displayTitle ?: pane?.displayTitle ?: desktop.host.name,
+                        listOf(desktop.host.name, desktop.transport).filter(String::isNotBlank).joinToString(" · "),
+                        if (desktop.status == "ready") pane?.state ?: desktop.status else desktop.status,
+                        card.tab?.let(::tabIcon) ?: R.drawable.ic_terminal,
+                        path = card.tab?.file?.path ?: pane?.cwd.orEmpty()) {
+                        if (card.tab != null && onTab != null) onTab.invoke(desktop.id, card.tab)
+                        else if (pane != null && onPane != null) onPane.invoke(desktop.id, pane)
+                        else onDesktop(desktop.id)
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
             item {
                 Spacer(Modifier.height(22.dp))
@@ -167,66 +163,22 @@ internal fun sessionCards(sessions: List<LocalSession>, desktops: List<DesktopWo
 }
 
 @Composable
-private fun DesktopSessionThumbnail(desktop: DesktopWorkspace, pane: DesktopPane?, modifier: Modifier, tab: DesktopTab? = null, onClick: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    val status = statusLabel(desktop.status)
-    Column(modifier.workspaceFrame().clickable(onClick = onClick)) {
-        Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Glyph(tab?.let(::tabIcon) ?: R.drawable.ic_monitor, Modifier.size(14.dp))
-                Text("${desktop.transport} · $status", fontSize = 12.sp, lineHeight = 18.sp, color = colors.onSurfaceVariant,
-                    modifier = Modifier.weight(1f).padding(start = 6.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(desktop.host.name, fontSize = 14.sp, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            pane?.task?.takeIf(String::isNotBlank)?.let {
-                Text(it, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = LocalTerminalFont.current, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Text(tab?.file?.path ?: pane?.cwd.orEmpty(), fontSize = 12.sp, lineHeight = 18.sp, fontFamily = LocalTerminalFont.current, maxLines = 3,
-                color = colors.onSurfaceVariant, overflow = TextOverflow.Ellipsis)
-        }
-        Text(tab?.displayTitle ?: pane?.displayTitle ?: desktop.host.name, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp))
-    }
-}
-
-@Composable
-private fun SessionThumbnail(session: LocalSession, modifier: Modifier, onClick: () -> Unit) {
-    // One bounded capture when the gallery appears. No hidden terminal renderer or polling per card.
-    val preview = remember(session.id, session.status) {
-        session.terminal.previewText()
-    }
-    val colors = MaterialTheme.colorScheme
-    val source = if (session.source == "Local") stringResource(R.string.local_device) else session.source
-    val status = statusLabel(session.status)
-    Column(modifier.workspaceFrame().clickable(onClick = onClick)) {
-        Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).semantics { stateDescription = status }, contentAlignment = Alignment.Center) {
-                    if (session.status == "connecting") CircularProgressIndicator(Modifier.size(8.dp), strokeWidth = 1.2.dp)
-                    else Box(Modifier.size(6.dp).background(when (session.status) {
-                        "ready", "finished" -> colors.tertiary
-                        "failed" -> colors.error
-                        else -> colors.onSurfaceVariant.copy(alpha = .6f)
-                    }, CircleShape))
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(source, fontSize = 12.sp, lineHeight = 18.sp, color = colors.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).wrapContentWidth(Alignment.End)
-                        .background(colors.background.copy(alpha = .65f), RoundedCornerShape(50))
-                        .padding(horizontal = 7.dp, vertical = 3.dp))
-            }
-            Spacer(Modifier.height(5.dp))
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (preview.isBlank()) Glyph(R.drawable.ic_terminal, Modifier.align(Alignment.Center).size(22.dp))
-                else Text(preview, fontSize = 9.sp, lineHeight = 13.sp, fontFamily = LocalTerminalFont.current,
-                    color = colors.onSurfaceVariant, softWrap = false, maxLines = 6, overflow = TextOverflow.Clip)
-            }
-        }
-        Text(session.title, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp))
-    }
+private fun SessionOverviewRow(title: String, source: String, status: String, icon: Int,
+                               path: String = "", onClick: () -> Unit) {
+    val state = statusLabel(status)
+    ListItem(
+        headlineContent = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium) },
+        supportingContent = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("$source · $state", style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (path.isNotBlank()) Text(path, style = MaterialTheme.typography.bodySmall, fontFamily = LocalTerminalFont.current,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        } },
+        leadingContent = { Glyph(icon) },
+        trailingContent = { Glyph(R.drawable.ic_chevron, Modifier.size(16.dp)) },
+        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background,
+            supportingColor = MaterialTheme.colorScheme.onSurfaceVariant),
+        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).semantics { stateDescription = state },
+    )
 }
 
 @Composable
