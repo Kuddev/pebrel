@@ -614,8 +614,8 @@ const TERMINAL_PROXY_VARIABLES: [&str; 3] = ["http_proxy", "https_proxy", "all_p
 /// `http_proxy`、`https_proxy`、`all_proxy` 使用同一条已校验 URL，协议不改写。
 /// curl 在协议专用变量存在时忽略 `all_proxy`，所以不能只把原协议留在 `all_proxy`。
 /// HTTP URL 另加 `PEBREL_HTTP_PROXY`，系统代理和自定义地址走同一条标记。
-/// `no_proxy` 只在这次真的导出代理、并且绕过列表非空时追加；空列表由
-/// [`apply_terminal_proxy_env`] 写成空值，用来盖住继承来的绕过项。
+/// `no_proxy` 只在这次真的导出代理时追加；绕过列表为空时退回本机回环
+/// [`DEFAULT_TERMINAL_NO_PROXY`]，避免本地 HTTP 客户端把 localhost 也发给代理。
 fn terminal_proxy_assignments(
     mode: ProxyMode,
     url: &str,
@@ -636,11 +636,14 @@ fn terminal_proxy_assignments(
     if strip_prefix_ignore_case(&configured, "http://").is_some() {
         pairs.push((POWERSHELL_HTTP_PROXY.to_owned(), configured));
     }
-    if let Some(bypass) = terminal_no_proxy_value(no_proxy) {
-        pairs.push(("no_proxy".to_owned(), bypass));
-    }
+    let bypass =
+        terminal_no_proxy_value(no_proxy).unwrap_or_else(|| DEFAULT_TERMINAL_NO_PROXY.to_owned());
+    pairs.push(("no_proxy".to_owned(), bypass));
     pairs
 }
+
+/// 绕过列表为空时导出的回环地址。
+const DEFAULT_TERMINAL_NO_PROXY: &str = "localhost,127.0.0.1,::1";
 
 /// curl `no_proxy`：逗号分隔。`<local>`、`*.suffix` 和 IPv4 前缀通配只在导出时翻译，
 /// SSH 的 [`bypassed`] 仍认 WinINET 原文。
@@ -711,8 +714,8 @@ fn ipv4_prefix_wildcard_cidr(entry: &str) -> Option<String> {
 /// 把 [`terminal_proxy_assignments`] 写进子进程环境。同名变量不分大小写替换，
 /// 避免刷新出来的 `HTTP_PROXY` 和这里的 `http_proxy` 各留一份。三个代理变量
 /// 保留选定协议。SOCKS 用空标记遮蔽继承来的 `PEBREL_HTTP_PROXY`，避免
-/// WebRequest 还指着上一次的 HTTP 代理。绕过列表为空时同样用空的 `no_proxy`
-/// 盖住继承值。没有导出代理时这两项都不动。Windows 适配器另行维护 WSLENV。
+/// WebRequest 还指着上一次的 HTTP 代理。`no_proxy` 总会替换继承值。
+/// 没有导出代理时这两项都不动。Windows 适配器另行维护 WSLENV。
 fn apply_terminal_proxy_env(
     env: &mut HashMap<String, String>,
     mode: ProxyMode,
@@ -731,11 +734,6 @@ fn apply_terminal_proxy_env(
         // An empty override also shadows a marker inherited by an incremental
         // child environment; removing a map entry alone cannot remove its parent.
         env.insert(POWERSHELL_HTTP_PROXY.to_owned(), String::new());
-    }
-    let exports_bypass = pairs.iter().any(|(name, _)| name.eq_ignore_ascii_case("no_proxy"));
-    if !exports_bypass {
-        env.retain(|key, _| !key.eq_ignore_ascii_case("no_proxy"));
-        env.insert("no_proxy".to_owned(), String::new());
     }
     for (name, value) in pairs {
         env.retain(|key, _| !key.eq_ignore_ascii_case(&name));
@@ -1429,7 +1427,8 @@ mod tests {
             None,
             "",
         );
-        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs.len(), 4);
+        assert_eq!(assigned_proxy(&pairs, "no_proxy"), Some(DEFAULT_TERMINAL_NO_PROXY));
         assert_eq!(assigned_proxy(&pairs, "HTTP_PROXY"), Some("socks5://127.0.0.1:7897"));
         assert_eq!(assigned_proxy(&pairs, "HTTPS_PROXY"), Some("socks5://127.0.0.1:7897"));
         assert_eq!(assigned_proxy(&pairs, "ALL_PROXY"), Some("socks5://127.0.0.1:7897"));
@@ -1445,7 +1444,12 @@ mod tests {
             Some("http://system:1"),
             "",
         );
-        assert!(custom.iter().all(|(_, value)| value == "http://127.0.0.1:8080"));
+        assert!(
+            custom
+                .iter()
+                .filter(|(name, _)| name != "no_proxy")
+                .all(|(_, value)| value == "http://127.0.0.1:8080")
+        );
         assert_eq!(assigned_proxy(&custom, "PEBREL_HTTP_PROXY"), Some("http://127.0.0.1:8080"));
         assert!(
             terminal_proxy_assignments(
@@ -1464,7 +1468,12 @@ mod tests {
             Some("http://system:9"),
             "",
         );
-        assert!(system.iter().all(|(_, value)| value == "http://system:9"));
+        assert!(
+            system
+                .iter()
+                .filter(|(name, _)| name != "no_proxy")
+                .all(|(_, value)| value == "http://system:9")
+        );
         assert_eq!(assigned_proxy(&system, "PEBREL_HTTP_PROXY"), Some("http://system:9"));
         assert!(terminal_proxy_assignments(ProxyMode::System, "", true, None, "").is_empty());
         assert!(
@@ -1670,7 +1679,33 @@ mod tests {
     }
 
     #[test]
-    fn empty_bypass_shadows_inherited_no_proxy_only_when_a_proxy_is_injected() {
+    fn saved_custom_proxy_defaults_empty_bypass_to_loopback() {
+        use nebula_settings::{RawSettings, RuntimeSettings};
+
+        for (bypass_setting, expected) in [
+            ("", "localhost,127.0.0.1,::1"),
+            ("ssh_proxy_no_proxy=\n", "localhost,127.0.0.1,::1"),
+            ("ssh_proxy_no_proxy= ; , \n", "localhost,127.0.0.1,::1"),
+            ("ssh_proxy_no_proxy=internal.example\n", "internal.example"),
+            ("ssh_proxy_no_proxy=*\n", "*"),
+        ] {
+            let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&format!(
+                "ssh_proxy_mode=custom\nssh_proxy_url=socks5://127.0.0.1:6789\n\
+                 terminal_proxy=0\n{bypass_setting}"
+            )));
+            let mut env = HashMap::from([
+                ("NO_PROXY".to_owned(), "stale.example".to_owned()),
+                ("no_proxy".to_owned(), "other.example".to_owned()),
+            ]);
+            assert!(apply_saved_terminal_proxy_env(&mut env, &settings));
+            assert_eq!(env["no_proxy"], expected, "{bypass_setting:?}");
+            assert!(!env.contains_key("NO_PROXY"));
+            assert_eq!(env["http_proxy"], "socks5://127.0.0.1:6789");
+        }
+    }
+
+    #[test]
+    fn empty_bypass_replaces_inherited_no_proxy_only_when_a_proxy_is_injected() {
         let mut env = HashMap::from([
             ("NO_PROXY".to_owned(), "old.example".to_owned()),
             ("http_proxy".to_owned(), "http://old:1".to_owned()),
@@ -1683,7 +1718,7 @@ mod tests {
             None,
             "",
         ));
-        assert_eq!(env.get("no_proxy").map(String::as_str), Some(""));
+        assert_eq!(env.get("no_proxy").map(String::as_str), Some(DEFAULT_TERMINAL_NO_PROXY));
         assert_eq!(env.keys().filter(|key| key.eq_ignore_ascii_case("no_proxy")).count(), 1);
         forward_terminal_proxy_to_wsl(&mut env, Some("KEEP/p"));
         let wslenv = env.get("WSLENV").expect("empty bypass is still forwarded");

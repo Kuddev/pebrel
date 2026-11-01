@@ -89,6 +89,22 @@ pub(crate) fn symlink_file_for_test(
     }
 }
 
+/// Directory aliases use a distinct Windows API from file aliases.
+#[cfg(test)]
+pub(crate) fn symlink_directory_for_test(
+    target: &std::path::Path,
+    link: &std::path::Path,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::hostname_from_buffer;

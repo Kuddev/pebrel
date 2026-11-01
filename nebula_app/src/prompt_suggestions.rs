@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 
 pub mod client;
+pub(crate) mod http;
+pub(crate) mod install;
+pub(crate) mod launcher;
 pub mod service;
 
 pub const MAX_SUGGESTION_CHARS: usize = 240;
