@@ -1,6 +1,6 @@
 //! Workspace keyboard actions and their tab/focus transitions.
 
-use gpui::{Context, Window};
+use gpui::{Context, Focusable as _, Window};
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
@@ -15,6 +15,28 @@ pub(super) fn move_target(active: usize, len: usize, right: bool) -> Option<usiz
 }
 
 impl NebulaWorkspace {
+    pub(super) fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            if let Some((view, _)) = self.settings_surface.as_ref() {
+                let focus = view.read(cx).focus_handle(cx);
+                window.defer(cx, move |window, cx| window.focus(&focus, cx));
+            }
+            return;
+        }
+        let focus = match self.tabs.get(self.active) {
+            Some(tab @ WorkspaceTab::Terminal { .. }) => match tab.focused_view() {
+                Some(view) => view.read(cx).focus_handle(cx),
+                None => return,
+            },
+            Some(WorkspaceTab::Settings { view, .. }) => view.read(cx).focus_handle(cx),
+            Some(WorkspaceTab::Document { view, .. }) => view.read(cx).focus_handle(cx),
+            Some(WorkspaceTab::Code { view, .. }) => view.read(cx).focus_handle(cx),
+            Some(WorkspaceTab::Image { view }) => view.read(cx).focus_handle(cx),
+            None => return,
+        };
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+    }
+
     pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.tabs.len() {
             return;

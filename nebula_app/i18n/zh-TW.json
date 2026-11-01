@@ -1033,5 +1033,8 @@
     "busy_other": "另一主機正在傳輸：{destination}"
   },
   "terminal.ssh_disconnected": "連線已中斷，按 R 重新連線。",
-  "terminal.ssh_reconnect": "重新連線 (R)"
+  "terminal.ssh_reconnect": "重新連線 (R)",
+  "startup": {
+    "handover_unconfirmed": "執行中的 Pebrel 未確認開啟請求，分頁或視窗可能已經建立。請先檢查現有視窗，再決定是否重試；本次啟動不會重複傳送請求。"
+  }
 }
