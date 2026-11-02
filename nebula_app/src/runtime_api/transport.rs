@@ -51,6 +51,15 @@ pub(super) fn handle_connection(
         );
     }
 
+    if line.starts_with("GET ") || line.starts_with("POST ") {
+        return crate::prompt_suggestions::http::handle(
+            &mut stream,
+            &line,
+            &mut limited.into_inner(),
+            &hub.predictions,
+        );
+    }
+
     if !line.trim_start().starts_with('{') {
         return handle_legacy(&mut stream, &line, token, sink);
     }
@@ -573,6 +582,53 @@ pub(super) fn write_json_line<T: Serialize>(
 #[cfg(test)]
 mod wire_tests {
     use super::*;
+
+    #[test]
+    fn prediction_http_and_runtime_control_keep_separate_tokens_on_the_same_listener() {
+        let hub = RuntimeHub {
+            predictions: Arc::new(crate::prompt_suggestions::service::Service::test_disabled()),
+            ..RuntimeHub::new()
+        };
+        let runtime_token = "11111111111111111111111111111111";
+        let exchange = |request: String| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            client.write_all(request.as_bytes()).unwrap();
+            let (server, _) = listener.accept().unwrap();
+            let sink = EventSink::Callback(Arc::new(|_| panic!("no UI command is permitted")));
+            handle_connection(server, runtime_token, &sink, &hub).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            response
+        };
+        let config = |token: &str| {
+            format!(
+                "GET /v1/prompt-suggestions/config HTTP/1.1\r\nAuthorization: Bearer {token}\r\n\r\n"
+            )
+        };
+        assert!(exchange(config(runtime_token)).starts_with("HTTP/1.1 401"));
+        let response = exchange(config(&hub.predictions.token));
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"enabled\":false"));
+        let request = |token: &str| {
+            serde_json::to_string(&ApiRequest::new(token.into(), "runtime.describe", json!({})))
+                .unwrap()
+                + "\n"
+        };
+        assert!(exchange(request(&hub.predictions.token)).is_empty());
+        assert!(exchange(request(runtime_token)).contains("\"ok\":true"));
+        // The transport's first-line read may already buffer this entire body.
+        let body = r#"{"agent":"pi","session":"s","turn":"t","revision":1,"messages":[{"role":"user","text":"继续测试中文"}]}"#;
+        let response = exchange(format!(
+            "POST /v1/prompt-suggestions HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{body}",
+            hub.predictions.token,
+            body.len()
+        ));
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"suggestion\":null"));
+    }
+
     #[derive(Default)]
     struct CountingWriter {
         writes: usize,

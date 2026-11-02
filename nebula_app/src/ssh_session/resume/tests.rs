@@ -91,6 +91,10 @@ fn vanished_target_or_attach_failure_runs_default_shell_and_cwd_is_never_input()
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
+    let probe = Command::new("sh").args(["-c", &probe_command()]).output().unwrap();
+    assert!(probe.status.success());
+    assert_eq!(probe.stdout, PROBE_REPLY.as_bytes());
+
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("client's executable");
     std::fs::write(&binary, "#!/bin/sh\ncase \"$2\" in\ndisplay-message) printf '100:200\\n';;\nselect-window|select-pane) exit ${REJECT_SELECTION:-0};;\nattach-session) printf 'ATTACH_FAILED\\n'; exit 1;;\n*) exit 1;;\nesac\n").unwrap();

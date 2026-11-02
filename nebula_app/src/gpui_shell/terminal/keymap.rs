@@ -146,8 +146,11 @@ pub(super) fn encode_for_program(
     mode: &TermMode,
     program: Option<&str>,
 ) -> Option<Vec<u8>> {
-    if is_shift_enter(ks) && crate::input::terminal_input::shift_enter_as_lf(program, *mode) {
-        Some(b"\n".to_vec())
+    if is_shift_enter(ks)
+        && let Some(sequence) =
+            crate::input::terminal_input::shift_enter_compatibility(program, *mode)
+    {
+        Some(sequence.to_vec())
     } else {
         encode(ks, mode)
     }
@@ -892,6 +895,28 @@ mod tests {
         for chord in ["enter", "ctrl-enter", "alt-enter", "ctrl-shift-enter"] {
             let key = Keystroke::parse(chord).unwrap();
             assert_eq!(encode_for_program(&key, &mode, Some("claude")), encode(&key, &mode));
+        }
+    }
+
+    #[test]
+    fn codebuddy_shift_enter_matches_its_native_newline_contract() {
+        let key = Keystroke::parse("shift-enter").unwrap();
+        for program in ["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"] {
+            for mode in [TermMode::empty(), TermMode::WIN32_INPUT_MODE] {
+                assert_eq!(
+                    encode_for_program(&key, &mode, Some(program)),
+                    Some(b"\x1b\r".to_vec()),
+                );
+                for chord in ["enter", "ctrl-enter", "alt-enter", "ctrl-shift-enter"] {
+                    let key = Keystroke::parse(chord).unwrap();
+                    assert_eq!(encode_for_program(&key, &mode, Some(program)), encode(&key, &mode));
+                }
+            }
+            let negotiated = TermMode::WIN32_INPUT_MODE | TermMode::DISAMBIGUATE_ESC_CODES;
+            assert_eq!(
+                encode_for_program(&key, &negotiated, Some(program)),
+                Some(b"\x1b[13;2u".to_vec()),
+            );
         }
     }
 

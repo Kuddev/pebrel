@@ -190,14 +190,16 @@ pub struct StreamProcessor {
     remote_hook_token: Option<String>,
     // The stream owns unreplayed payloads: disconnecting drops them even if
     // the pane retains its Term. The Term only holds weak replay entries.
-    pending_images: Vec<Arc<crate::term::PendingImage>>,
+    pending_images: VecDeque<Arc<crate::term::PendingImage>>,
     inline_content: crate::inline_content::Registry,
     command_capture: crate::inline_content::CommandCapture,
+    gfx: Arc<parking_lot::Mutex<crate::kitty_graphics::KittyGraphics>>,
 }
 
 impl StreamProcessor {
     pub fn resize(&mut self, window_size: WindowSize) {
         self.window_size = Some(window_size);
+        self.gfx.lock().resize(window_size);
     }
 
     pub fn set_remote_hook_token(&mut self, token: String) {
@@ -215,7 +217,14 @@ impl StreamProcessor {
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
         terminal.cancel_redraw_anchor();
         terminal.with_program_status_preserved(|terminal| self.parser.stop_sync(terminal));
-        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
+        self.release_replayed_images();
+        terminal.nebula_flush_kitty(&mut self.gfx.lock(), self.window_size);
+    }
+
+    fn release_replayed_images(&mut self) {
+        while self.pending_images.front().is_some_and(|image| Arc::weak_count(image) == 0) {
+            self.pending_images.pop_front();
+        }
     }
 
     fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
@@ -315,7 +324,16 @@ impl StreamProcessor {
                     }
                 },
                 OscEvent::ProgramStatus(report) => terminal.report_program_status(report),
-                OscEvent::ProgramStatusReset => terminal.reset_program_status(),
+                OscEvent::ProgramStatusReset => {
+                    terminal.reset_program_status();
+                    if let Some((marker, command)) =
+                        terminal.nebula_queue_kitty_reset(Arc::downgrade(&self.gfx))
+                    {
+                        self.pending_images.push_back(command);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
                 OscEvent::RemoteHook { token, envelope } => {
                     if self.remote_hook_token.as_deref() == Some(token.as_str()) {
                         event_proxy.send_event(Event::AiHookEnvelope(envelope));
@@ -331,6 +349,19 @@ impl StreamProcessor {
                     terminal.reading_shell_marker(b'B', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_mark_prompt_input();
                 },
+                OscEvent::KittyGraphic { control, payload } => {
+                    if self.gfx.lock().try_query(terminal, &control, &payload) {
+                        continue;
+                    }
+                    if let Some((marker, command)) =
+                        terminal.nebula_queue_kitty(Arc::downgrade(&self.gfx), control, payload)
+                    {
+                        self.pending_images.push_back(command);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
+                OscEvent::CellSizeQuery => self.gfx.lock().request_cell_size(),
                 OscEvent::InlineImage { data, width, height, options } => {
                     let viewport = self.window_size.unwrap_or(WindowSize {
                         num_cols: terminal.columns() as u16,
@@ -341,16 +372,20 @@ impl StreamProcessor {
                     if let Some((marker, image)) =
                         terminal.nebula_queue_inline_image(data, width, height, options, viewport)
                     {
-                        self.pending_images.push(image);
+                        self.pending_images.push_back(image);
                         self.advance(terminal, marker.as_bytes());
                         parser_input_bytes += marker.len();
-                        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
                     }
                 },
             }
         }
         self.advance(terminal, &bytes[advanced..]);
-        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
+        self.release_replayed_images();
+        // Publish placements only once their cells are in the grid, and at most
+        // once per image: a chunked transfer must not queue 700 decodes.
+        let mut gfx = self.gfx.lock();
+        gfx.flush(event_proxy, self.window_size);
+        gfx.answer_cell_size_queries(self.window_size, event_proxy);
         parser_input_bytes
     }
 }
@@ -384,6 +419,16 @@ pub enum Msg {
     /// CUP sequences produced at the old width are never parsed into the new
     /// grid. A UI thread reaching into `Term::resize` directly would skip that.
     ResizeGrid(WindowSize),
+
+    /// Report the cell size in pixels without touching the console.
+    ///
+    /// A pane whose first layout already matches the grid it spawned with never
+    /// sends `Resize`, so the stream would never learn its cell size — and
+    /// `CSI 16 t` (`\x1b[6;height;widtht`) would go unanswered. Clients that ask
+    /// for it, yazi's older protocol driver among them, then fall back to scaling a
+    /// preview against the whole pane and stretching it. This message carries
+    /// only the metrics: no `ResizePseudoConsole`, no reflow, no debounce.
+    CellMetrics(WindowSize),
 }
 
 /// The main event loop.
@@ -467,6 +512,17 @@ where
                 Msg::ResizeGrid(window_size) => {
                     let notify_pty = resize.is_some_and(|pending| pending.notify_pty);
                     resize = Some(PendingResize { window_size, notify_pty });
+                },
+                Msg::CellMetrics(window_size) => {
+                    // Metrics only: the console keeps its geometry, but the
+                    // stream can now answer cell-size queries — including ones
+                    // that arrived before the first layout.
+                    state.stream.resize(window_size);
+                    state
+                        .stream
+                        .gfx
+                        .lock()
+                        .answer_cell_size_queries(Some(window_size), &self.event_proxy);
                 },
                 Msg::Shutdown => return Err(()),
             }
@@ -903,6 +959,12 @@ impl Notifier {
     /// See [`Msg::ResizeGrid`] for why the two halves are split.
     pub fn on_resize_grid(&mut self, window_size: WindowSize) {
         let _ = self.0.send(Msg::ResizeGrid(window_size));
+    }
+
+    /// Tell the stream its cell size without resizing anything. See
+    /// [`Msg::CellMetrics`].
+    pub fn on_cell_metrics(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::CellMetrics(window_size));
     }
 }
 
@@ -1464,3 +1526,7 @@ mod tests {
 #[cfg(all(test, unix))]
 #[path = "event_loop/sync_tests.rs"]
 mod sync_tests;
+
+#[cfg(test)]
+#[path = "event_loop/kitty_tests.rs"]
+mod kitty_tests;

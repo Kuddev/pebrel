@@ -356,7 +356,13 @@ fn prompt_line_snapshot(
     let prefix = &text[..text.len() - typed_tail.len()];
     let prompt = prefix.trim_end();
     let marker = prompt.chars().next_back()?;
-    if marker != NEBULA_PROMPT_ARROW && !semantic_prompt && !likely_prompt(prompt, marker, env) {
+    // OSC 133;A proves prompt activity, not where its input begins. A native
+    // completion or cursor edit can leave only a suffix in typed_tail; accepting
+    // an arbitrary prefix would turn `> cd parent/li` into command input `li`.
+    // Unknown prompt shapes need an explicit input boundary or native editor query.
+    if !likely_prompt(prompt, marker, env)
+        && !(semantic_prompt && matches!(marker, '$' | '#' | '%' | '>'))
+    {
         return None;
     }
     Some(PromptLineSnapshot { prompt: prompt.to_owned(), input: typed_tail.to_owned() })
@@ -456,6 +462,32 @@ fn likely_prompt(prompt: &str, marker: char, env: &SuggestEnv) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_start_alone_does_not_turn_a_nested_path_suffix_into_a_command() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::event_loop::StreamProcessor;
+        use nebula_terminal::grid::Grid;
+
+        for boundary in ["", "\x1b]133;B\x07"] {
+            let size = Grid::<Cell>::new(2, 80, 0);
+            let mut terminal = Term::new(Default::default(), &size, VoidListener);
+            let bytes = format!("\x1b]133;A\x07> {boundary}cd lingting/li");
+            StreamProcessor::default().feed(&mut terminal, &VoidListener, bytes.as_bytes());
+            // A native Tab completion invalidated the keystroke mirror. Only
+            // the suffix typed since then is known; OSC 133;A is not its boundary.
+            let snapshot = nebula_prompt_line_from_raw_grid(
+                &terminal,
+                terminal.grid().cursor.point,
+                "li",
+                &SuggestEnv::Local,
+            );
+            assert_eq!(
+                snapshot.map(|snapshot| snapshot.input),
+                (!boundary.is_empty()).then(|| "cd lingting/li".to_owned()),
+            );
+        }
+    }
 
     #[test]
     fn completion_waits_for_append_and_delete_echo_but_releases_shell_rewrites() {
@@ -598,8 +630,9 @@ mod tests {
         let env = SuggestEnv::Wsl { distro: "Ubuntu".to_owned() };
         assert_eq!(input_after_prompt("dev@box:~$ git status", "git stat", &env, false), None);
         assert_eq!(input_after_prompt("dev@box:~$ ", "", &env, false), None);
+        assert_eq!(input_after_prompt("custom prompt :: cargo t", "cargo t", &env, true), None,);
         assert_eq!(
-            input_after_prompt("custom prompt :: cargo t", "cargo t", &env, true),
+            input_after_prompt("> cargo t", "cargo t", &env, true),
             Some("cargo t".to_owned())
         );
     }

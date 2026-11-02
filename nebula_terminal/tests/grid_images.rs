@@ -193,7 +193,7 @@ fn public_grid_construction_and_clone_keep_image_snapshot_tracking() {
         }
         let image = ImageIdentity::new();
         let lifetime = Arc::downgrade(&image);
-        grid[Line(0)][Column(0)].set_image(ImageCell { image, column: 2, row: 3 });
+        grid[Line(0)][Column(0)].set_image(ImageCell { image, column: 2, row: 3, placement: None });
         *term.grid_mut() = grid;
         let run = snap(&term).image_runs.remove(0);
         assert_eq!((run.source_column, run.source_row), (2, 3));
@@ -212,6 +212,7 @@ fn deserialized_grid_can_receive_images_without_losing_snapshot_tracking() {
         image: ImageIdentity::new(),
         column: 0,
         row: 0,
+        placement: None,
     });
     *term.grid_mut() = grid;
     assert_eq!(snap(&term).image_runs.len(), 1);
@@ -224,6 +225,7 @@ fn image_cursor_template_transfer_enables_tracking_on_fresh_alternate_grid() {
         image: ImageIdentity::new(),
         column: 2,
         row: 3,
+        placement: None,
     });
     stream.feed(&mut term, &Listener, b"\x1b[?1049hX");
     let run = snap(&term).image_runs.remove(0);
@@ -270,6 +272,7 @@ fn native_source_rejects_image_changes_and_snapshot_obeys_row_filter() {
         image: ImageIdentity::new(),
         column: 0,
         row: 0,
+        placement: None,
     });
     assert!(!surface.source_row_matches(0, &term.grid()[Line(0)][..]));
     assert_eq!(snap(&term).image_runs.len(), 1);
@@ -285,7 +288,12 @@ fn external_image_cells_invalidate_reading_and_release_after_eviction() {
     let span = term.reading_span();
     let image = ImageIdentity::new();
     let lifetime = Arc::downgrade(&image);
-    term.grid_mut()[Line(0)][Column(0)].set_image(ImageCell { image, column: 0, row: 0 });
+    term.grid_mut()[Line(0)][Column(0)].set_image(ImageCell {
+        image,
+        column: 0,
+        row: 0,
+        placement: None,
+    });
     assert_eq!(term.reading_chunk(span, None, 1, 1), Err(ReadingError::StaleEpoch));
     assert_eq!(snap(&term).image_runs.len(), 1);
     stream.feed(&mut term, &Listener, b"\n");

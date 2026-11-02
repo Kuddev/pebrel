@@ -79,6 +79,7 @@ enum Mode {
     CompletionMetadata,
     Integration,
     RejectIntegration,
+    BrokenPosixQuoting,
     RejectSftp,
     HangSftp,
     AcceptSftp,
@@ -107,7 +108,33 @@ impl server::Handler for Loopback {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if command == b"sh -c 'printf PEBREL_POSIX_1'" {
+            if self.mode == Mode::BrokenPosixQuoting {
+                session.channel_success(channel)?;
+                session.data(channel, "PEBREL_POSIX_1")?;
+                session.exit_status_request(channel, 0)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
             return session.channel_failure(channel);
+        }
+        if command == resume::probe_command().as_bytes() {
+            if matches!(self.mode, Mode::Integration | Mode::RejectIntegration) {
+                session.channel_success(channel)?;
+                session.data(channel, resume::PROBE_REPLY)?;
+                session.exit_status_request(channel, 0)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
+            return session.channel_failure(channel);
+        }
+        if self.mode == Mode::BrokenPosixQuoting && command.starts_with(b"sh -c ") {
+            // Windows OpenSSH can accept exec, then the outer shell corrupts
+            // the nested command. Exec success is not shell startup success.
+            session.channel_success(channel)?;
+            session.data(channel, "unexpected EOF while looking for matching quote")?;
+            session.exit_status_request(channel, 2)?;
+            session.eof(channel)?;
+            return session.close(channel);
         }
         if self.mode == Mode::CompletionMetadata {
             if command == b"python3 -I -S -" {
@@ -679,6 +706,22 @@ fn rejected_integration_exec_falls_back_to_a_fresh_ordinary_shell_channel() {
         }
         assert!(channel.pending.iter().any(
             |message| matches!(message, ChannelMsg::Data{data} if data.starts_with(b"welcome"))
+        ));
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn a_host_with_sh_but_incompatible_exec_quoting_opens_its_ordinary_shell() {
+    check(async {
+        let fixture = Fixture::new(Mode::BrokenPosixQuoting).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        assert!(channel.identity_input.is_none(), "unsupported startup must not run POSIX code");
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
         ));
         drop(channel);
         fixture.forget(&acquired.session).await;

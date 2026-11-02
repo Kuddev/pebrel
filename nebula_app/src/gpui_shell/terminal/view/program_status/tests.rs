@@ -255,6 +255,22 @@ fn osc7501_cannot_override_pane_failures(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn osc7501_working_report_keeps_spinning_in_the_alternate_screen(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        let mut wire = Wire::install(view);
+        view.mark_command_running();
+        view.running_program = Some("btop".into());
+        wire.feed(view, cx, b"\x1b[?1049h");
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+        // 全屏推断只是弱证据，不能盖掉程序的显式报告（#805）。
+        wire.feed(view, cx, b"\x1b]7501;state=working:app=cargo\x07");
+        assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running);
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+    });
+}
+
+#[gpui::test]
 fn osc7501_error_and_ris_do_not_leave_stale_taskbar_state(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {

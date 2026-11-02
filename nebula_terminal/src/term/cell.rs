@@ -318,13 +318,18 @@ impl Cell {
     #[inline]
     pub fn image(&self) -> Option<&ImageCell> {
         match &self.extra.as_ref()?.0 {
-            Extra::Image { tile, .. } => Some(tile),
-            Extra::Text(_) => None,
+            Extra::Image { tile, .. }
+                if tile.image.is_alive()
+                    && tile.placement.as_ref().is_none_or(|placement| placement.is_alive()) =>
+            {
+                Some(tile)
+            },
+            _ => None,
         }
     }
 
     pub fn set_image(&mut self, image: ImageCell) {
-        if self.image().is_some() {
+        if self.extra.as_ref().is_some_and(|extra| matches!(extra.0, Extra::Image { .. })) {
             if let Extra::Image { tile, .. } = &mut Arc::make_mut(self.extra.as_mut().unwrap()).0 {
                 *tile = image;
             }

@@ -105,6 +105,42 @@ Files successfully loaded through `require` are added to the live-reload watch
 list. Extra local files can be registered with
 `pebrel.add_to_config_reload_watch_list(path)`.
 
+## Shell IDs And Config Profiles
+
+`pebrel --shell ID`, the runtime `shell=` preference and the Runtime API `shell`
+parameter select detected shells or imported terminal profiles. A Lua
+`config.profiles` entry does not register an ID for these selectors. Its `name`
+is a display label; its optional `shell_id` identifies the shell family for icons
+and integration. Passing `config check` validates the configuration, not a new
+shell alias.
+
+Imported profiles live in `terminal_profiles.json`. Their settings IDs combine
+the stored shell family and profile identity as
+`profile:<shell-id>|<profile-id>`, as defined by
+[`Profile::settings_id`](../nebula_app/src/config/ui_config.rs).
+The complete ID is case-sensitive and requires an actual, launchable store
+entry. Adding `terminal_profile_id` to a Lua entry does not create that entry.
+When using such an ID on the command line, quote it because it contains `|`.
+
+To open a program with custom arguments directly, use `-e`, with all Pebrel
+options before it. For example, on Windows with an Ubuntu WSL distribution:
+
+```powershell
+pebrel -e wsl.exe -d Ubuntu --cd '~'
+```
+
+This invokes WSL with its guest-home argument and does not look up a Lua profile.
+Do not combine `-e` with `--shell`. For shell ID selection, Windows PowerShell
+uses `powershell`; PowerShell 7 uses `pwsh` when it is detected. They are distinct
+IDs. See the [Runtime API shell parameter](runtime-control-api.md) for request
+and error behavior.
+
+Lua `config.profiles` 的 `shell_id` 表示 Shell 家族，不是 `--shell`、`shell=` 或
+Runtime API 的自定义别名；`config check` 成功也不代表注册了该 id。导入配置的完整
+settings id 必须对应 `terminal_profiles.json` 中的实际条目，区分大小写，命令行中
+需要加引号。要直接传入 WSL 等程序的启动参数，可使用上面的 `-e` 命令；所有
+Pebrel 选项须放在 `-e` 之前，且不能同时指定 `--shell`。
+
 ## Terminal Selection Colors (TOML Compatibility)
 
 For a legacy `pebrel.toml` configuration, the GPUI terminal accepts explicit

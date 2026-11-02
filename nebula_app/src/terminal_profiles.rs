@@ -23,7 +23,7 @@ pub(crate) struct TerminalProfile {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    /// Stable shell integration id (`pwsh`, `powershell`, `bash`, `nu`, `cmd`).
+    /// Stable shell integration id (`pwsh`, `powershell`, `bash`, `zsh`, `nu`, `cmd`).
     pub shell_id: String,
 }
 
@@ -125,18 +125,19 @@ impl TerminalProfiles {
     }
 }
 
-/// Scan only `directory` and its immediate `bin` child for known Windows shells.
+/// Scan the selected directory, `bin`, and MSYS2's `usr/bin` for known Windows shells.
 pub(crate) fn scan_directory(directory: &Path) -> io::Result<Vec<TerminalProfile>> {
     let directory = directory.canonicalize()?;
     if !directory.is_dir() {
         return Err(io::Error::new(io::ErrorKind::NotADirectory, "scan path is not a directory"));
     }
 
-    let roots = [directory.clone(), directory.join("bin")];
+    let roots = [directory.clone(), directory.join("bin"), directory.join("usr").join("bin")];
     let shells = [
         ("pwsh.exe", "PowerShell 7", "pwsh", &["-NoLogo"][..]),
         ("powershell.exe", "Windows PowerShell", "powershell", &["-NoLogo"][..]),
         ("bash.exe", "Git Bash", "bash", &["--login", "-i"][..]),
+        ("zsh.exe", "Zsh", "zsh", &["--login", "-i"][..]),
         ("nu.exe", "Nushell", "nu", &[][..]),
         ("cmd.exe", "Command Prompt", "cmd", &[][..]),
     ];
@@ -279,7 +280,6 @@ fn validate(profile: &TerminalProfile) -> io::Result<()> {
 mod tests {
     use super::{TerminalProfile, TerminalProfiles, scan_directory};
 
-    #[cfg(windows)]
     fn write_pe(path: &std::path::Path, machine: u16) {
         let mut bytes = vec![0_u8; 0x86];
         bytes[..2].copy_from_slice(b"MZ");
@@ -320,6 +320,41 @@ mod tests {
         assert!(profiles.iter().all(|profile| profile.command.is_absolute()));
         assert_eq!(profiles[0].name, "PowerShell 7");
         assert_eq!(profiles[0].args, ["-NoLogo"]);
+    }
+
+    #[test]
+    fn imports_msys_zsh_without_replacing_it_with_bash() {
+        for layout in ["", "bin", "usr/bin"] {
+            let temp = tempfile::tempdir().unwrap();
+            let directory = temp.path().join(layout);
+            std::fs::create_dir_all(&directory).unwrap();
+            for name in ["bash.exe", "zsh.exe"] {
+                // x86 PE fixtures are accepted on every supported Windows host
+                // and also exercise the same directory scan on Unix.
+                write_pe(&directory.join(name), 0x014c);
+            }
+
+            let found = scan_directory(temp.path()).unwrap();
+            let zsh = found
+                .iter()
+                .find(|profile| profile.shell_id == "zsh")
+                .unwrap_or_else(|| panic!("Zsh missing from {layout:?}: {found:?}"));
+            let command = directory.join("zsh.exe").canonicalize().unwrap();
+            assert_eq!(zsh.command, command);
+            assert_eq!(zsh.name, "Zsh");
+            assert_eq!(zsh.args, ["--login", "-i"]);
+            assert!(found.iter().any(|profile| profile.shell_id == "bash"));
+
+            let mut store = TerminalProfiles::default();
+            store.upsert(zsh.clone()).unwrap();
+            let path = temp.path().join("profiles.json");
+            store.save_to(&path).unwrap();
+            let reloaded = TerminalProfiles::load_from(&path).unwrap();
+            let config = reloaded.as_config_profiles();
+            assert_eq!(config[0].settings_id(), Some(format!("profile:zsh|{}", zsh.id)));
+            assert_eq!(config[0].shell().program(), command.to_str().unwrap());
+            assert_eq!(config[0].shell().args(), ["--login", "-i"]);
+        }
     }
 
     #[cfg(all(windows, target_arch = "x86_64"))]

@@ -1,5 +1,6 @@
 //! Sniffer for OSC sequences the vte parser drops: OSC 7 / OSC 9;9 (working
-//! directory), OSC 133 (shell markers), and OSC 7501 (program status).
+//! directory), OSC 133 (shell markers), OSC 7501 (program status), and the
+//! Kitty protocol APC (`ESC _ G … ESC \`, which vte also drops).
 //!
 //! The vte parser Nebula uses (crates.io `vte` 0.15) does not decode OSC 7
 //! (`file://` URI), OSC 9;9 (working directory) or OSC 133 (semantic prompt zones) —
@@ -36,6 +37,11 @@ const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 /// 远端 Hook JSON 使用 Base64 传输；上限阻止伪造 OSC 长时间占用内存。
 const MAX_HOOK_PAYLOAD: usize = 96 * 1024;
 
+/// Cap for one Kitty protocol APC. The protocol limits a single chunk to 4096
+/// base64 bytes; clients that ignore that limit still fit a 1 MiB transfer
+/// before the payload is dropped instead of buffered.
+const MAX_APC_PAYLOAD: usize = 1024 * 1024;
+
 /// An OSC or lifecycle event recognized by the sniffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscEvent {
@@ -52,11 +58,16 @@ pub enum OscEvent {
     /// OSC 133;D — the command finished. `exit_code` is the first parameter
     /// (`133;D;<code>[;aid=…]`), reported by Nebula's own shell integration;
     /// third-party integrations that send a bare `133;D` yield `None`.
-    CommandDone { exit_code: Option<i32> },
+    CommandDone {
+        exit_code: Option<i32>,
+    },
     /// OSC 1337 `SetUserVar=<name>=<b64>` — a shell-integration variable
     /// (the OSC 1337 shell-integration convention). Carries Nebula queries
     /// (`nebula_ai_query`) from the `#`-line interception, among others.
-    UserVar { name: String, value: String },
+    UserVar {
+        name: String,
+        value: String,
+    },
     /// OSC 9 — free-text program notification.
     Notify(String),
     /// OSC 9;4 — ConEmu 任务进度。`state` 是原始状态码，`value` 是 0..=100 的
@@ -66,14 +77,20 @@ pub enum OscEvent {
     /// 层做语义收窄：部分 shell 集成实测会用规范外的 `9;4;5;0` 表示「成功完成」，
     /// 把未知码当成非法而丢掉，等于让进度条卡在最后一个状态上
     /// 永远不消失。映射交给消费端。
-    Progress { state: u8, value: Option<u8> },
+    Progress {
+        state: u8,
+        value: Option<u8>,
+    },
     /// OSC 7501 program status, fully validated before publication.
     ProgramStatus(crate::program_status::Report),
     /// RIS clears program records at its byte-stream position, even while VT
     /// rendering is held in a synchronized-update buffer.
     ProgramStatusReset,
     /// Nebula 远端 Hook 私有 OSC：随机通道令牌 + 原始 Hook 信封。
-    RemoteHook { token: String, envelope: Vec<u8> },
+    RemoteHook {
+        token: String,
+        envelope: Vec<u8>,
+    },
     /// OSC 1337 `File=...inline=1:<base64>` — an inline image.
     /// Only static PNG/JPEG/GIF input is accepted; animated GIFs are rendered
     /// as their first frame by the frontend.
@@ -84,6 +101,16 @@ pub enum OscEvent {
         height: u32,
         options: crate::inline_image::ImageOptions,
     },
+    /// APC `ESC _ G <control>;<payload> ESC \` — one Kitty protocol
+    /// command. `control` is the raw key=value list, `payload` the raw base64
+    /// chunk (still encoded: the transfer state machine concatenates chunks
+    /// before decoding, because a chunk boundary is not guaranteed to fall on
+    /// a three-byte group).
+    KittyGraphic {
+        control: Vec<u8>,
+        payload: Vec<u8>,
+    },
+    CellSizeQuery,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -93,10 +120,17 @@ enum Phase {
     Ground,
     /// Saw `ESC` (0x1b).
     Esc,
+    /// Match only CSI 16 t; unrelated CSI parameters are skipped without buffering.
+    Csi(u8),
     /// Inside `ESC ]` … collecting the OSC payload.
     Osc,
     /// Inside an OSC and saw `ESC` — maybe the `ESC \` string terminator.
     OscEsc,
+    /// Inside an APC (`ESC _`) — collecting the Kitty protocol command.
+    Apc,
+    /// Inside an APC and saw `ESC` — only `ESC \` terminates an APC
+    /// (APC has no BEL form).
+    ApcEsc,
 }
 
 /// Streaming sniffer for additional terminal controls. Feed it every PTY byte; it returns
@@ -129,6 +163,24 @@ impl CwdSniffer {
                     }
                 },
                 Phase::Esc => self.step_escape(b, i, &mut events),
+                Phase::Csi(matched) => {
+                    if b == 0x1b {
+                        self.phase = Phase::Esc;
+                    } else if b == 0x18 || b == 0x1a {
+                        self.phase = Phase::Ground;
+                    } else if (0x40..=0x7e).contains(&b) {
+                        if matched == 2 && b == b't' {
+                            events.push((i + 1, OscEvent::CellSizeQuery));
+                        }
+                        self.phase = Phase::Ground;
+                    } else {
+                        self.phase = Phase::Csi(if b"16".get(matched as usize) == Some(&b) {
+                            matched + 1
+                        } else {
+                            3
+                        });
+                    }
+                },
                 Phase::Osc => self.step_osc(b, i, &mut events),
                 Phase::OscEsc => {
                     if b == b'\\' {
@@ -144,6 +196,18 @@ impl CwdSniffer {
                         self.step_escape(b, i, &mut events);
                     }
                 },
+                Phase::Apc => self.step_apc(b, i, &mut events),
+                Phase::ApcEsc => {
+                    if b == b'\\' {
+                        if let Some(event) = self.parse_apc() {
+                            events.push((i + 1, event));
+                        }
+                        self.reset_to_ground();
+                    } else {
+                        self.reset_to_ground();
+                        self.step_escape(b, i, &mut events);
+                    }
+                },
             }
         }
         events
@@ -151,8 +215,14 @@ impl CwdSniffer {
 
     fn step_escape(&mut self, b: u8, i: usize, events: &mut Vec<(usize, OscEvent)>) {
         match b {
+            b'[' => self.phase = Phase::Csi(0),
             b']' => {
                 self.phase = Phase::Osc;
+                self.payload.clear();
+                self.interested = true;
+            },
+            b'_' => {
+                self.phase = Phase::Apc;
                 self.payload.clear();
                 self.interested = true;
             },
@@ -182,6 +252,52 @@ impl CwdSniffer {
             0x1b => self.phase = Phase::OscEsc,
             _ => self.push(b),
         }
+    }
+
+    /// Handle one byte inside an APC payload. APC is terminated only by
+    /// `ESC \`, so `ESC` starts a two-byte lookahead instead of ending it.
+    fn step_apc(&mut self, b: u8, _i: usize, _events: &mut Vec<(usize, OscEvent)>) {
+        match b {
+            0x18 | 0x1a => self.reset_to_ground(), // CAN / SUB cancel the APC.
+            0x1b => self.phase = Phase::ApcEsc,
+            _ => self.push_apc(b),
+        }
+    }
+
+    /// Append an APC payload byte. Only Kitty protocol (`G…`) is ours; every
+    /// other APC is dropped after its first byte so an unrelated protocol
+    /// cannot grow the buffer.
+    fn push_apc(&mut self, b: u8) {
+        if !self.interested {
+            return;
+        }
+        if self.payload.is_empty() && b != b'G' {
+            self.interested = false;
+            return;
+        }
+        if self.payload.len() >= MAX_APC_PAYLOAD {
+            self.interested = false;
+            return;
+        }
+        self.payload.push(b);
+    }
+
+    /// Parse a completed APC into a Kitty protocol command.
+    fn parse_apc(&self) -> Option<OscEvent> {
+        if !self.interested {
+            return None;
+        }
+        let body = self.payload.strip_prefix(b"G")?;
+        let (control, payload) = match body.iter().position(|&b| b == b';') {
+            Some(split) => (&body[..split], &body[split + 1..]),
+            None => (body, &body[body.len()..]),
+        };
+        if !payload.is_empty()
+            && !payload.iter().all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(b))
+        {
+            return None;
+        }
+        Some(OscEvent::KittyGraphic { control: control.to_vec(), payload: payload.to_vec() })
     }
 
     fn reset_to_ground(&mut self) {
@@ -805,5 +921,70 @@ mod tests {
         oversized[16..20].copy_from_slice(&5000u32.to_be_bytes());
         oversized[20..24].copy_from_slice(&5000u32.to_be_bytes());
         assert!(events(&inline_image_osc(&oversized)).is_empty());
+    }
+
+    fn kitty_commands(events: &[(usize, OscEvent)]) -> Vec<(String, String)> {
+        events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                OscEvent::KittyGraphic { control, payload } => Some((
+                    String::from_utf8(control.clone()).unwrap(),
+                    String::from_utf8(payload.clone()).unwrap(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn apc_kitty_command_splits_control_from_payload() {
+        let parsed = events(b"\x1b_Ga=t,i=7,f=32,s=2,v=1,m=0;AAAA\x1b\\");
+        assert_eq!(parsed.len(), 1);
+        // The offset is just past the `ESC \` terminator, like every other
+        // event this sniffer reports.
+        assert_eq!(parsed[0].0, 34);
+        assert_eq!(
+            kitty_commands(&parsed),
+            vec![("a=t,i=7,f=32,s=2,v=1,m=0".to_owned(), "AAAA".to_owned())]
+        );
+    }
+
+    #[test]
+    fn apc_kitty_command_without_payload_parses() {
+        let parsed = events(b"\x1b_Ga=d,d=I,i=7\x1b\\");
+        assert_eq!(kitty_commands(&parsed), vec![("a=d,d=I,i=7".to_owned(), String::new())]);
+    }
+
+    #[test]
+    fn apc_kitty_command_split_across_reads_is_reassembled() {
+        let mut sniffer = CwdSniffer::default();
+        assert!(sniffer.feed(b"\x1b_Ga=t,i=7,m=1;AA").is_empty());
+        let parsed = sniffer.feed(b"BB\x1b\\");
+        assert_eq!(kitty_commands(&parsed), vec![("a=t,i=7,m=1".to_owned(), "AABB".to_owned())]);
+    }
+
+    #[test]
+    fn apc_from_another_protocol_is_dropped() {
+        assert!(events(b"\x1b_SomeOtherProtocol;payload\x1b\\").is_empty());
+        // A cancelled APC must not leak into the next command.
+        assert_eq!(kitty_commands(&events(b"\x1b_Ga=x\x18\x1b_Ga=t,i=1\x1b\\")).len(), 1);
+    }
+
+    #[test]
+    fn cell_size_query_survives_every_chunk_boundary_without_scanning_ordinary_text() {
+        let wire = b"text\x1b[16t";
+        for split in 0..=wire.len() {
+            let mut sniffer = CwdSniffer::default();
+            let mut found = sniffer.feed(&wire[..split]);
+            found.extend(sniffer.feed(&wire[split..]));
+            assert_eq!(
+                found.iter().filter(|(_, event)| matches!(event, OscEvent::CellSizeQuery)).count(),
+                1
+            );
+        }
+        let mut sniffer = CwdSniffer::default();
+        assert!(sniffer.feed(b"ordinary text without escapes").is_empty());
+        assert_eq!(sniffer.payload.capacity(), 0);
+        assert!(sniffer.feed(b"\x1b[116t\x1b[16;1t").is_empty());
     }
 }

@@ -209,6 +209,14 @@ impl AgentKind {
     /// Resolve an agent from a submitted shell command, including common
     /// interpreter and package-runner launch forms used inside WSL.
     pub fn parse_command(command: &str) -> Option<Self> {
+        if let Some(command) = prediction_launcher_command(command) {
+            return match command.split_ascii_whitespace().next()? {
+                "claude" => Some(Self::Claude),
+                "pi" => Some(Self::Pi),
+                "opencode" => Some(Self::OpenCode),
+                _ => None,
+            };
+        }
         let mut tokens = command
             .split_whitespace()
             .map(|token| token.trim_matches(['"', '\'']))
@@ -321,6 +329,34 @@ fn is_env_assignment(token: &str) -> bool {
     let mut bytes = name.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// Recognize only the app's exact native prediction launcher, including the
+/// quoted executable path emitted for POSIX/PowerShell/CMD. This is identity
+/// observation, not command execution or a general shell parser.
+fn prediction_launcher_command(command: &str) -> Option<&str> {
+    let (prefix, command) = command.trim().split_once(" predict ")?;
+    let prefix = prefix.strip_prefix("& ").unwrap_or(prefix).trim();
+    let executable = if let Some(quoted) =
+        prefix.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
+    {
+        if quoted.replace("'\\''", "").replace("''", "").contains('\'') {
+            return None;
+        }
+        quoted
+    } else if let Some(quoted) = prefix.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        if quoted.contains('"') {
+            return None;
+        }
+        quoted
+    } else {
+        if prefix.chars().any(char::is_whitespace) || prefix.contains(['\'', '"', ';', '|', '&']) {
+            return None;
+        }
+        prefix
+    };
+    let basename = executable.rsplit(['/', '\\']).next()?;
+    matches!(basename.to_ascii_lowercase().as_str(), "pebrel" | "pebrel.exe").then_some(command)
 }
 
 fn launcher_stem(token: &str) -> String {
@@ -933,6 +969,36 @@ fn slice_from_line<'a>(screen: &'a str, lines: &[&str], index: usize) -> &'a str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prediction_launcher_preserves_exact_native_agent_identity() {
+        for command in [
+            "pebrel predict claude --resume abc",
+            "'/opt/My App/pebrel' predict claude --fork-session",
+            "& 'C:\\My App\\pebrel.exe' predict claude",
+            "\"C:\\My App\\pebrel.exe\" predict claude",
+        ] {
+            assert_eq!(AgentKind::parse_command(command), Some(AgentKind::Claude), "{command}");
+        }
+        assert_eq!(
+            AgentKind::parse_command("pebrel predict pi --session file"),
+            Some(AgentKind::Pi)
+        );
+        assert_eq!(
+            AgentKind::parse_command("pebrel predict opencode --session id"),
+            Some(AgentKind::OpenCode)
+        );
+        for command in [
+            "pebrel agent claude",
+            "pebrel predict codex",
+            "other predict claude",
+            "echo /bin/pebrel predict claude",
+            "pebrel predict",
+            "pebrel predict --help",
+        ] {
+            assert_eq!(AgentKind::parse_command(command), None, "{command}");
+        }
+    }
 
     #[test]
     fn aliases_resolve_to_canonical_agents() {

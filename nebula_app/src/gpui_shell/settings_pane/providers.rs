@@ -3,6 +3,7 @@ use crate::ai_agents::AgentKind;
 use crate::ai_providers::{AiProvider, ProviderKind};
 
 mod brand;
+mod predictions;
 mod select_trigger;
 use select_trigger::ProviderSelectTrigger;
 
@@ -113,6 +114,7 @@ pub(super) struct ProviderUi {
     write_task: Option<Task<()>>,
     auth_task: Option<Task<()>>,
     loading_auth: bool,
+    predictions: Option<predictions::PredictionSettingsUi>,
 }
 
 impl ProviderUi {
@@ -143,6 +145,7 @@ impl ProviderUi {
             write_task: None,
             auth_task: None,
             loading_auth: false,
+            predictions: None,
         }
     }
 

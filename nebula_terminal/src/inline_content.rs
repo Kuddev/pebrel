@@ -383,7 +383,7 @@ mod tests {
             let image = ImageIdentity::new();
             let pixels = Arc::downgrade(&image);
             let mut cell = Cell::default();
-            let tile = ImageCell { image, column: 1, row: 2 };
+            let tile = ImageCell { image, column: 1, row: 2, placement: None };
             let marker = Marker { surface, row: 0 };
             if image_first {
                 cell.set_image(tile);

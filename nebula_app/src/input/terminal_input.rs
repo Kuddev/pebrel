@@ -258,9 +258,9 @@ pub(crate) fn build_runtime_sequence_for_program(
         && modifiers.shift
         && !modifiers.control
         && !modifiers.alt
-        && shift_enter_as_lf(program, mode)
+        && let Some(sequence) = shift_enter_compatibility(program, mode)
     {
-        return vec![b'\n'; usize::from(repeat)];
+        return sequence.repeat(usize::from(repeat));
     }
     build_runtime_sequence(key, modifiers, repeat, mode)
 }
@@ -566,13 +566,23 @@ pub(crate) fn use_win32_input_mode(mode: TermMode) -> bool {
 /// protocol. Claude enables CSI-u only for a terminal-name allowlist (including
 /// WT); unknown terminals use its LF newline binding. ConPTY translates a native
 /// Shift+Return record to CR for byte readers, even when UnicodeChar is LF.
+/// CodeBuddy's own terminal setup maps Shift+Enter to ESC CR. ConPTY's 9001
+/// announcement describes its host input, not this byte reader's capabilities.
 /// Keep native records for other Windows readers (Codex and PSReadLine).
-pub(crate) fn shift_enter_as_lf(program: Option<&str>, mode: TermMode) -> bool {
-    !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
-        && (!cfg!(windows)
-            || !use_win32_input_mode(mode)
-            || program.and_then(crate::ai_agents::AgentKind::parse)
-                == Some(crate::ai_agents::AgentKind::Claude))
+pub(crate) fn shift_enter_compatibility(
+    program: Option<&str>,
+    mode: TermMode,
+) -> Option<&'static [u8]> {
+    use crate::ai_agents::AgentKind;
+    if mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+        return None;
+    }
+    match program.and_then(AgentKind::parse) {
+        Some(AgentKind::CodeBuddy) => Some(b"\x1b\r"),
+        Some(AgentKind::Claude) => Some(b"\n"),
+        _ if cfg!(windows) && use_win32_input_mode(mode) => None,
+        _ => Some(b"\n"),
+    }
 }
 
 /// Synthesize key-up sequences for modifiers still held when the window loses
@@ -1184,6 +1194,42 @@ mod vt_tests {
             ),
             build_runtime_sequence(RuntimeKey::Enter, combined, 1, native),
         );
+    }
+
+    #[test]
+    fn codebuddy_runtime_newline_uses_its_documented_terminal_binding() {
+        let shift = RuntimeKeyModifiers { shift: true, ..Default::default() };
+        for program in ["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"] {
+            for mode in [TermMode::empty(), TermMode::WIN32_INPUT_MODE] {
+                for repeat in [0, 1, 2] {
+                    assert_eq!(
+                        build_runtime_sequence_for_program(
+                            RuntimeKey::Enter,
+                            shift,
+                            repeat,
+                            mode,
+                            Some(program),
+                        ),
+                        b"\x1b\r".repeat(usize::from(repeat)),
+                    );
+                }
+            }
+            for mode in [
+                TermMode::DISAMBIGUATE_ESC_CODES,
+                TermMode::WIN32_INPUT_MODE | TermMode::REPORT_ALL_KEYS_AS_ESC,
+            ] {
+                assert_eq!(
+                    build_runtime_sequence_for_program(
+                        RuntimeKey::Enter,
+                        shift,
+                        1,
+                        mode,
+                        Some(program),
+                    ),
+                    build_runtime_sequence(RuntimeKey::Enter, shift, 1, mode),
+                );
+            }
+        }
     }
 
     #[test]

@@ -11,6 +11,7 @@
 
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod acrylic;
+pub(crate) mod agent_launch;
 pub(crate) mod ai_session_identity;
 #[cfg(all(feature = "gpui-shell", feature = "video-background"))]
 pub(crate) mod background_media;
@@ -44,6 +45,8 @@ pub(crate) mod process_snapshot;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod quick_window;
 pub(crate) mod serial_port;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod session_end;
 pub mod shell;
 pub mod shell_integration;
 #[cfg(unix)]

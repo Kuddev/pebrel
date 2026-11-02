@@ -1,4 +1,18 @@
 {
+  "prompt_suggestions": {
+    "title": "提示詞預測",
+    "description": "為 Claude Code、Pi 和 OpenCode 的原生空輸入框預測下一句話。新工作階段生效，語言跟隨軟體設定。",
+    "provider": "供應商",
+    "model": "預測模型",
+    "choose_provider": "選擇供應商",
+    "no_providers": "請先新增已設定且 API 受支援的供應商。",
+    "invalid_model": "請輸入不超過 256 個字元且不含空白的模型 ID。",
+    "save_failed": "無法儲存預測設定：{error}",
+    "saved": "預測設定已儲存。",
+    "predicting": "{model} 正在預測",
+    "launcher_fallback": "提示詞預測暫不可用，將正常啟動 {agent}。{error}",
+    "launcher_failed": "無法啟動 {agent}：{error}"
+  },
   "tray": {
     "show": "顯示 Pebrel",
     "quit": "結束"
@@ -1019,5 +1033,8 @@
     "busy_other": "另一主機正在傳輸：{destination}"
   },
   "terminal.ssh_disconnected": "連線已中斷，按 R 重新連線。",
-  "terminal.ssh_reconnect": "重新連線 (R)"
+  "terminal.ssh_reconnect": "重新連線 (R)",
+  "startup": {
+    "handover_unconfirmed": "執行中的 Pebrel 未確認開啟請求，分頁或視窗可能已經建立。請先檢查現有視窗，再決定是否重試；本次啟動不會重複傳送請求。"
+  }
 }
