@@ -145,7 +145,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             Some("StopFailure") => (AiHookKind::TurnDone, context_string(&payload, &["error"])),
             Some("SessionEnd") => (AiHookKind::SessionEnd, None),
             // `Notification` 覆盖「权限询问」和「idle 提醒」两类，将来也可能
-            // 用来传别的东西。类型不可操作时丢掉，读不到类型时照常上报。
+            // 用来传别的东西。缺少明确的可操作类型就不能作为等待信号。
             Some("Notification") if !attention_is_actionable(&payload) => return None,
             Some("Notification") | Some("PermissionRequest") => {
                 (AiHookKind::NeedsAttention, attention_message(&payload))

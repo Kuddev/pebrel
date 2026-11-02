@@ -211,9 +211,7 @@ impl AgentActivity {
         if self.command_ended && event.kind != AiHookKind::SessionStart {
             return false;
         }
-        if event.legacy_attention
-            && !matches!(self.status(), AgentStatus::Working | AgentStatus::Blocked)
-        {
+        if event.legacy_attention {
             return false;
         }
         // Both bridges stay installed for old clients and pending hook trust.

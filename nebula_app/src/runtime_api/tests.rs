@@ -1165,6 +1165,7 @@ fn protocol_schema_is_valid_json_and_tracks_v1() {
     for source in [
         RuntimeAgentStateSource::Hook,
         RuntimeAgentStateSource::Osc7501,
+        RuntimeAgentStateSource::Title,
         RuntimeAgentStateSource::Screen,
         RuntimeAgentStateSource::Process,
     ] {

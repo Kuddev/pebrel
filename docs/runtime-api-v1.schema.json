@@ -2497,6 +2497,7 @@
           "enum": [
             "hook",
             "osc7501",
+            "title",
             "screen",
             "process"
           ]
