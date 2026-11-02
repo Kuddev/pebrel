@@ -37,6 +37,9 @@ pub(in crate::gpui_shell::workspace) struct VcsList {
     pub(super) rendered: Vec<usize>,
     view: Option<GitPanelView>,
     root: Option<PathBuf>,
+    /// 快照来自远端 pane（SSH Git 视图）：行内写操作改走远端 exec、双击开
+    /// 远端文档、本地专属入口（merge 编辑器、SVN 菜单）不画。行模型不变。
+    pub(super) remote: bool,
     rows: Vec<VcsRow>,
     lane_layout: (f32, f32),
     pub(super) scroll: gpui::ListState,
@@ -50,6 +53,7 @@ impl Default for VcsList {
             rendered: Vec::new(),
             view: None,
             root: None,
+            remote: false,
             rows: Vec::new(),
             lane_layout: (0.0, 0.0),
             scroll: gpui::ListState::new(0, gpui::ListAlignment::Top, px(34.0)),
@@ -58,11 +62,12 @@ impl Default for VcsList {
 }
 
 impl VcsList {
-    pub(super) fn sync(
+    pub(in crate::gpui_shell::workspace) fn sync(
         &mut self,
         snapshot: Option<Arc<GitInfo>>,
         view: GitPanelView,
         root: Option<PathBuf>,
+        remote: bool,
     ) {
         let same_snapshot = match (&self.snapshot, &snapshot) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -70,6 +75,7 @@ impl VcsList {
             _ => false,
         };
         let same_location = self.view == Some(view) && self.root == root;
+        self.remote = remote;
         if same_snapshot && same_location {
             return;
         }

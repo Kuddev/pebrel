@@ -32,11 +32,13 @@ pub(crate) mod file_preview;
 pub mod fonts;
 #[cfg(target_os = "linux")]
 pub(crate) mod global_shortcut;
+pub(crate) mod host_paths;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod keyboard;
 pub(crate) mod launch_directory;
 pub(crate) mod local_paths;
 pub mod notifications;
+pub(crate) mod pane_cwd;
 pub(crate) mod pi_session;
 pub(crate) mod private_file;
 pub(crate) mod process;

@@ -17,6 +17,38 @@ fn file(root: &Path, path: &str) -> PathBuf {
     path
 }
 
+/// 分支读取的四种形态：普通 ref、嵌套分支名、detached、linked worktree 的
+/// `.git` 指针文件（相对 gitdir 以根为基准）。读不到（无 `.git`）为 `None`。
+#[test]
+fn head_file_yields_the_branch_for_grouping() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().join("repo");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+
+    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert_eq!(super::git_head_branch(&root).as_deref(), Some("main"));
+    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/feature/x\n").unwrap();
+    assert_eq!(super::git_head_branch(&root).as_deref(), Some("feature/x"));
+    std::fs::write(root.join(".git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+    assert_eq!(
+        super::git_head_branch(&root).as_deref(),
+        Some("HEAD"),
+        "detached 与 --abbrev-ref 同口径"
+    );
+
+    // linked worktree：`.git` 是 gitdir 指针，HEAD 在真 gitdir 里。
+    let base = repo.path().join("main/.git/worktrees/wt");
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(&base.join("HEAD"), "ref: refs/heads/wt-branch\n").unwrap();
+    let worktree = repo.path().join("main/wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(worktree.join(".git"), "gitdir: ../.git/worktrees/wt\n").unwrap();
+    assert_eq!(super::git_head_branch(&worktree).as_deref(), Some("wt-branch"));
+
+    let plain = tempfile::tempdir().unwrap();
+    assert_eq!(super::git_head_branch(plain.path()), None, "非仓库没有分支");
+}
+
 #[test]
 fn remove_exact_rule_preserves_comments_crlf_and_other_paths() {
     let repo = repository();

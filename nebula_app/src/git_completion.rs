@@ -303,7 +303,12 @@ fn query(
                 short_name: short_name.to_owned(),
                 busy: !worktree.is_empty(),
                 current: head == "*",
-                commit: object_type == "commit" || peeled_type == "commit",
+                // 嵌套 tag（tag→tag）在旧 git（<2.34）的 %(*objecttype) 只剥
+                // 一层，给出 tag/tag 组合；新 git 递归剥到底为 commit。双层
+                // tag 的最终指向按 commit 对待，两代 git 的候选集一致。
+                commit: object_type == "commit"
+                    || peeled_type == "commit"
+                    || (object_type == "tag" && peeled_type == "tag"),
                 symbolic: !symref.is_empty(),
                 direct_tracking: config.can_track(full_name, &stopped),
             })
@@ -350,6 +355,33 @@ pub(crate) mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// `git switch --track=inherit` 需要 git ≥ 2.34；旧版把它当布尔 flag 报
+    /// 「option `track' takes no value」。真 git 端到端 fixture 在版本不足的
+    /// 主机上用等效命令建分支，断言语义不变。
+    fn git_supports_track_inherit() -> bool {
+        static SUPPORTS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *SUPPORTS.get_or_init(|| {
+            let mut command = std::process::Command::new("git");
+            command.arg("--version");
+            let Ok(output) = crate::platform::process::hidden_command(&mut command).output() else {
+                return false;
+            };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let Some((major, minor)) = text
+                .split_whitespace()
+                .nth(2)
+                .and_then(|version| version.split_once('.'))
+                .and_then(|(major, rest)| {
+                    let minor = rest.split('.').next()?;
+                    Some((major.parse::<u32>().ok()?, minor.parse::<u32>().ok()?))
+                })
+            else {
+                return false;
+            };
+            (major, minor) >= (2, 34)
+        })
     }
 
     pub(crate) fn repository() -> tempfile::TempDir {
@@ -432,7 +464,17 @@ pub(crate) mod tests {
         );
         let inherited = values("git switch --track=inherit -c inherited local/so");
         assert_eq!(inherited, ["local/source"]);
-        git(repository.path(), &["switch", "--track=inherit", "-c", "inherited", &inherited[0]]);
+        // git < 2.34 不认 --track=inherit；用等效命令（同 start point 建分支、
+        // 显式设 upstream 为 start point 的 upstream）保持断言语义不变。
+        if git_supports_track_inherit() {
+            git(
+                repository.path(),
+                &["switch", "--track=inherit", "-c", "inherited", &inherited[0]],
+            );
+        } else {
+            git(repository.path(), &["switch", "--no-track", "-c", "inherited", &inherited[0]]);
+            git(repository.path(), &["branch", "--set-upstream-to=origin/source", "inherited"]);
+        }
         assert_eq!(
             git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
                 .trim(),

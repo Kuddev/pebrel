@@ -34,6 +34,38 @@ pub(crate) fn git_repository_root(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// 仓库根的当前分支（读 `.git/HEAD`，与 [`git_repository_root`] 同样不
+/// spawn git）。
+///
+/// 侧栏本地分组的分支 chip 由此从 cwd 派生——标题协议在 fish 等无集成
+/// 嵌套 shell 里静默，从 cwd 推才两侧同源。linked worktree 的 `.git` 是
+/// `gitdir: <路径>` 指针（相对路径以根为基准）；HEAD 的 `ref: refs/heads/
+/// <名>` 取名，其他 ref 取末段，detached（对象 id）按 `--abbrev-ref` 的
+/// 口径给 "HEAD"。任何一步读不到都 `None`——chip 宁缺毋错。
+pub(crate) fn git_head_branch(root: &Path) -> Option<String> {
+    let dot_git = root.join(".git");
+    let head_path = if dot_git.is_dir() {
+        dot_git.join("HEAD")
+    } else {
+        let pointer = std::fs::read_to_string(&dot_git).ok()?;
+        let gitdir = pointer.trim().strip_prefix("gitdir:")?.trim();
+        let gitdir = PathBuf::from(gitdir);
+        let gitdir = if gitdir.is_absolute() { gitdir } else { root.join(gitdir) };
+        gitdir.join("HEAD")
+    };
+    let head = std::fs::read_to_string(head_path).ok()?;
+    let head = head.trim();
+    if let Some(name) = head.strip_prefix("ref: refs/heads/") {
+        let name = name.trim();
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
+    if let Some(rest) = head.strip_prefix("ref: ") {
+        return rest.trim().rsplit('/').next().map(str::to_owned);
+    }
+    // detached：一串对象 id。
+    (!head.is_empty()).then(|| "HEAD".to_owned())
+}
+
 /// 一条 gitignore 规则。
 ///
 /// 三个刻意的选择：

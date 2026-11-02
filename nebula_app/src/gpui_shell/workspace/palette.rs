@@ -131,7 +131,7 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn filtered_palette_rows(&self, cx: &App) -> Vec<WorkspacePaletteRow> {
-        let query = self.command_palette_input.read(cx).value().to_lowercase();
+        let query = self.command_palette_input.read(cx).value().to_ascii_lowercase();
         let words: Vec<_> = query.split_whitespace().collect();
         // Rendering must not stat `\\wsl.localhost\…` (it can start the guest or wait
         // on the redirector): a WSL pane offers the action and the handler maps it.
@@ -192,11 +192,34 @@ impl NebulaWorkspace {
             }
             // 启动器混排（旧壳 ⌘K 裁定）：SSH 主机与命令同列，置顶/隐藏
             // 次序由共享 merge 权威裁定。
-            rows.extend(shell_picker::ssh_palette_rows(
-                &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
-                usize::MAX,
-                language.pick("SSH 主机", "SSH HOSTS"),
-            ));
+            let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
+            rows.extend(
+                crate::gpui_shell::ssh_hosts::SshHostLists::load()
+                    .merged_with_labels()
+                    .into_iter()
+                    .map(|(host, label)| {
+                        let glyph = crate::display::ui::os_icons::resolve(
+                            ssh_icons.get(&host).map(String::as_str),
+                        )
+                        .glyph;
+                        let named = (!label.is_empty()).then_some(label.as_str());
+                        let (label, hint) = shell_picker::ssh_host_display(named, &host);
+                        let search =
+                            format!("{label} {host} ssh host remote lianjie 连接").to_lowercase();
+                        WorkspacePaletteRow {
+                            group_order: usize::MAX,
+                            group: language.pick("SSH 主机", "SSH HOSTS").to_owned(),
+                            label,
+                            hint,
+                            hint_style: WorkspacePaletteHintStyle::Metadata,
+                            search,
+                            action: WorkspacePaletteAction::LaunchSshHost(host),
+                            icon: None,
+                            icon_glyph: Some(glyph),
+                            icon_path: None,
+                        }
+                    }),
+            );
             rows
         });
         let mut rows: Vec<_> = rows
@@ -700,5 +723,354 @@ impl NebulaWorkspace {
                     .child(results),
             )
             .into_any_element()
+    }
+
+    pub(super) fn reset_palette_query(
+        &self,
+        placeholder: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_palette_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+        self.command_palette_input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx);
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+    }
+
+    /// 结果树里分组标题也是直接滚动子节点；键盘选中的是数据行，因此要把
+    /// 数据索引换成真实子节点索引，才能让 `ScrollHandle` 精确揭示当前行。
+    pub(super) fn palette_scroll_node_index(
+        rows: &[WorkspacePaletteRow],
+        selected: usize,
+    ) -> usize {
+        let mut node_ix = 0;
+        let mut previous_group: Option<&str> = None;
+        for (row_ix, row) in rows.iter().enumerate() {
+            if previous_group != Some(row.group.as_str()) {
+                previous_group = Some(row.group.as_str());
+                node_ix += 1;
+            }
+            if row_ix == selected {
+                return node_ix;
+            }
+            node_ix += 1;
+        }
+        0
+    }
+
+    pub(super) fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette_open {
+            self.close_command_palette(window, cx);
+            return;
+        }
+        self.command_manager_open = false;
+        self.command_palette_open = true;
+        self.command_palette_selected = 0;
+        self.palette_override = None;
+        self.shell_picker_open = false;
+        self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
+        self.quick_jump_filter = None;
+        self.reset_palette_query(
+            workspace_ui_language().pick("输入命令…", "Type a command..."),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(super) fn dismiss_palette_state(&mut self) {
+        self.launcher_menu = None;
+        self.command_palette_open = false;
+        self.palette_override = None;
+        self.shell_picker_open = false;
+        self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
+        self.quick_jump_filter = None;
+    }
+
+    pub(super) fn close_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.command_palette_open {
+            return;
+        }
+        self.dismiss_palette_state();
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn move_command_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if !self.command_palette_open {
+            return;
+        }
+        let rows = self.filtered_palette_rows(cx);
+        let len = rows.len();
+        if len == 0 {
+            self.command_palette_selected = 0;
+        } else {
+            self.command_palette_selected =
+                (self.command_palette_selected as isize + delta).rem_euclid(len as isize) as usize;
+            self.command_palette_scroll.scroll_to_item(Self::palette_scroll_node_index(
+                &rows,
+                self.command_palette_selected,
+            ));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn open_quick_jump_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.command_manager_open = false;
+        self.shell_picker_open = false;
+        self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
+        self.quick_jump_filter = Some(QuickJumpFilter::All);
+        self.palette_override = Some(quick_jump::rows(self, cx));
+        self.command_palette_open = true;
+        self.command_palette_selected = 0;
+        self.reset_palette_query(
+            QuickJumpFilter::All.placeholder(workspace_ui_language()),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// 三点 / Ctrl+K：旧壳 `NewTabMenu` → `open_shell_menu` → `PaletteMode::Profiles`。
+    pub(super) fn open_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.command_manager_open = false;
+        let default_shell_id = crate::platform::shell::effective_shell_id(
+            cx.try_global::<crate::gpui_shell::config::Settings>()
+                .and_then(|settings| settings.shell_id.as_deref()),
+        );
+        let language = workspace_ui_language();
+        let rows = shell_palette_rows(
+            crate::shell_detect::detect_shells(),
+            crate::terminal_profiles::TerminalProfiles::load()
+                .map(|store| store.as_config_profiles())
+                .unwrap_or_default(),
+            crate::gpui_shell::ssh_hosts::SshHostLists::load().merged_with_labels(),
+            &default_shell_id,
+            language,
+            window.scale_factor().max(0.5),
+        );
+        self.palette_override = Some(rows);
+        self.shell_picker_open = true;
+        self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
+        self.quick_jump_filter = None;
+        self.command_palette_open = true;
+        self.command_palette_selected = 0;
+        self.reset_palette_query(
+            WorkspacePaletteFilter::Launcher(crate::display::command_palette::LauncherFilter::All)
+                .placeholder(language),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(super) fn toggle_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette_open && self.shell_picker_open {
+            self.close_command_palette(window, cx);
+            return;
+        }
+        self.open_shell_palette(window, cx);
+    }
+
+    pub(super) fn set_workspace_palette_filter(
+        &mut self,
+        filter: WorkspacePaletteFilter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match filter {
+            WorkspacePaletteFilter::Launcher(filter) => {
+                if !self.shell_picker_open || self.launcher_filter == filter {
+                    return;
+                }
+                self.launcher_filter = filter;
+            },
+            WorkspacePaletteFilter::QuickJump(filter) => {
+                if self.quick_jump_filter.is_none() || self.quick_jump_filter == Some(filter) {
+                    return;
+                }
+                self.quick_jump_filter = Some(filter);
+            },
+        }
+        self.command_palette_selected = 0;
+        self.command_palette_scroll.scroll_to_item(0);
+        self.command_palette_input.update(cx, |input, cx| {
+            input.set_placeholder(filter.placeholder(workspace_ui_language()), window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn launcher_chip_counts(
+        &self,
+    ) -> [(crate::display::command_palette::LauncherFilter, usize); 3] {
+        use crate::display::command_palette::LauncherFilter;
+        let rows = self.palette_override.as_deref().unwrap_or(&[]);
+        let shell = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.action,
+                    WorkspacePaletteAction::LaunchShell(_)
+                        | WorkspacePaletteAction::LaunchProfile(_)
+                )
+            })
+            .count();
+        let ssh = rows
+            .iter()
+            .filter(|row| matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_)))
+            .count();
+        [
+            (LauncherFilter::All, shell + ssh),
+            (LauncherFilter::Ssh, ssh),
+            (LauncherFilter::Shell, shell),
+        ]
+    }
+
+    pub(super) fn quick_jump_chip_counts(&self) -> [(QuickJumpFilter, usize); 5] {
+        let rows = self.palette_override.as_deref().unwrap_or(&[]);
+        QuickJumpFilter::ALL.map(|filter| {
+            let count = rows.iter().filter(|row| filter.matches(&row.action)).count();
+            (filter, count)
+        })
+    }
+
+    /// 从弹窗选中的 shell 起一个新终端。走共享 v4 launch 身份，因此冷恢复
+    /// 拿得回真正的启动命令，侧栏短标也跟着对。
+    pub(super) fn launch_palette_shell(
+        &mut self,
+        detected: crate::shell_detect::DetectedShell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_palette_state();
+        let shell = detected.shell();
+        let launch = crate::session::LaunchSession::Shell {
+            name: detected.name.clone(),
+            program: shell.program().to_owned(),
+            args: shell.args().to_vec(),
+        };
+        let cwd = Self::startup_directory().or_else(|| {
+            self.tabs
+                .get(self.active)
+                .and_then(WorkspaceTab::focused_view)
+                .and_then(|view| view.read(cx).local_cwd())
+        });
+        self.add_terminal_with(launch, cwd, None, window, cx);
+    }
+
+    pub(super) fn launch_palette_profile(
+        &mut self,
+        profile: crate::config::ui_config::Profile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_palette_state();
+        let launch = shell_launch::profile_launch_session(profile);
+        let cwd = Self::startup_directory().or_else(|| {
+            self.tabs
+                .get(self.active)
+                .and_then(WorkspaceTab::focused_view)
+                .and_then(|view| view.read(cx).local_cwd())
+        });
+        self.add_terminal_with(launch, cwd, None, window, cx);
+    }
+
+    pub(super) fn run_palette_action(
+        &mut self,
+        action: crate::display::command_palette::PaletteAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::display::command_palette::PaletteAction;
+
+        if action == PaletteAction::OpenAiSessionPicker {
+            self.open_quick_jump_palette(window, cx);
+            return;
+        }
+        self.dismiss_palette_state();
+        match action {
+            PaletteAction::NewTab => self.add_terminal(window, cx),
+            PaletteAction::NewWindow => {
+                cx.defer(|cx| {
+                    if let Err(error) = windowing::open_new_window(cx, None) {
+                        log::warn!("failed to open GPUI window: {error}");
+                    }
+                });
+            },
+            PaletteAction::CopyCwd => {
+                if let Some(view) = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)
+                {
+                    view.update(cx, |view, cx| view.copy_working_directory(window, cx));
+                }
+                self.focus_active(window, cx);
+            },
+            PaletteAction::RevealCwd => {
+                if let Some(path) = self.active_local_cwd(cx) {
+                    open_in_file_manager(&path);
+                }
+                self.focus_active(window, cx);
+            },
+            PaletteAction::CloseTab => self.close_active(window, cx),
+            PaletteAction::SplitRight => {
+                let _ = self.split_focused(SplitDirection::LeftRight, window, cx);
+            },
+            PaletteAction::SplitDown => {
+                let _ = self.split_focused(SplitDirection::TopBottom, window, cx);
+            },
+            PaletteAction::LaunchSsh(host) => {
+                self.add_ssh_terminal(host, window, cx);
+            },
+            PaletteAction::NextTab if !self.tabs.is_empty() => {
+                self.activate_tab((self.active + 1) % self.tabs.len(), window, cx);
+            },
+            PaletteAction::PrevTab if !self.tabs.is_empty() => {
+                self.activate_tab(
+                    (self.active + self.tabs.len() - 1) % self.tabs.len(),
+                    window,
+                    cx,
+                );
+            },
+            PaletteAction::ToggleSidebar => {
+                self.sidebar_collapsed = !self.sidebar_collapsed;
+                self.sidebar_fold_armed = !tab_reveal_instant(cx);
+                self.focus_active(window, cx);
+            },
+            PaletteAction::OpenSettings => self.open_settings(window, cx),
+            PaletteAction::ToggleFilesPanel => {
+                self.toggle_file_tree(cx);
+                self.focus_active(window, cx);
+            },
+            PaletteAction::ToggleGitPanel => {
+                self.toggle_git_tree(cx);
+                self.focus_active(window, cx);
+            },
+            PaletteAction::ExportWorkspace => self.export_workspace(window, cx),
+            PaletteAction::ToggleGhost => {
+                let value = !nebula_settings::RuntimeSettings::load().ghost;
+                let _ = nebula_settings::persist_keys(&[("ghost", (value as u8).to_string())]);
+                self.apply_runtime_settings(cx);
+                self.focus_active(window, cx);
+            },
+            PaletteAction::CycleCompletionStyle => {
+                let runtime = nebula_settings::RuntimeSettings::load();
+                let next = runtime.completion_style.cycle().settings_value();
+                let _ = nebula_settings::persist_keys(&[("completion_style", next.to_owned())]);
+                self.apply_runtime_settings(cx);
+                self.focus_active(window, cx);
+            },
+            PaletteAction::SelectTheme(theme) => {
+                let name = nebula_settings::ThemeName::from_prompt_name(theme.prompt_name())
+                    .unwrap_or_default();
+                let _ = nebula_settings::persist_keys(
+                    &crate::gpui_shell::theme::theme_card_persist_updates(name),
+                );
+                self.apply_runtime_settings(cx);
+                self.focus_active(window, cx);
+            },
+            _ => self.focus_active(window, cx),
+        }
+        cx.notify();
     }
 }
