@@ -11,6 +11,7 @@ use crate::ssh_session::TmuxActivity;
 pub(super) struct RemoteActivity {
     pub context: Option<String>,
     pub sample_at: Option<Instant>,
+    title_sample_at: Option<Instant>,
 }
 
 impl TerminalView {
@@ -30,6 +31,7 @@ impl TerminalView {
             self.last_command_failed = false;
             self.remote_activity.context = context;
             self.remote_activity.sample_at = None;
+            self.remote_activity.title_sample_at = None;
             if let Some(session) = &self.session {
                 let mut term = session.term.lock();
                 term.end_program_status_activity();
@@ -52,10 +54,16 @@ impl TerminalView {
         {
             let title: String = observation.title.chars().filter(|ch| !ch.is_control()).collect();
             let title = title.trim();
-            if !title.is_empty() && !title.starts_with("NEBULA|") && self.title != title {
+            let title =
+                if title.is_empty() || title.starts_with("NEBULA|") { "shell" } else { title };
+            if self.title != title {
                 self.title = title.into();
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
+            }
+            if self.remote_activity.title_sample_at != Some(observation.observed_at) {
+                self.remote_activity.title_sample_at = Some(observation.observed_at);
+                self.observe_agent_title(observation.observed_at, cx);
             }
         }
         observation

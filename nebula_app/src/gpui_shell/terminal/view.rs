@@ -699,6 +699,7 @@ impl TerminalView {
                     // 协议串不是窗口标题，更不是 tab 名。
                 } else {
                     self.title = title;
+                    self.observe_agent_title(std::time::Instant::now(), cx);
                 }
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
@@ -708,6 +709,7 @@ impl TerminalView {
                     return;
                 }
                 self.title = String::from("shell");
+                self.observe_agent_title(std::time::Instant::now(), cx);
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             },
