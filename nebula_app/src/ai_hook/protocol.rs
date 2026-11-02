@@ -244,6 +244,13 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         && kind == AiHookKind::TurnDone
     {
         super::native_events::outcome(&source, native_event?, &payload)
+    } else if source == "opencode" && kind == AiHookKind::TurnDone {
+        match payload.get("outcome").and_then(Value::as_str) {
+            Some("succeeded") => AiTurnOutcome::Succeeded,
+            Some("failed") => AiTurnOutcome::Failed,
+            Some("cancelled") => AiTurnOutcome::Cancelled,
+            _ => AiTurnOutcome::Unknown,
+        }
     } else if matches!(source.as_str(), "pi" | "omp") && kind == AiHookKind::TurnDone {
         match payload.get("stop_reason").and_then(Value::as_str) {
             Some("stop") => AiTurnOutcome::Succeeded,
