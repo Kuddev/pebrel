@@ -162,6 +162,44 @@ fn redo(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn automatic_task_titles_follow_clicked_panes_and_preserve_manual_tab_names(
+    cx: &mut TestAppContext,
+) {
+    use nebula_terminal::event::Event;
+
+    let (fixture, mut cx) = RenameFixture::open(cx);
+    fixture.workspace.update(&mut cx, |workspace, cx| {
+        let WorkspaceTab::Terminal { panes, .. } = &workspace.tabs[0] else { panic!() };
+        for (pane, task) in panes.iter().zip(["修复前端登录", "验证后端接口"]) {
+            pane.view.update(cx, |view, cx| {
+                let _receiver = view.install_completion_test_session();
+                for event in
+                    [Event::Title("NEBULA|/srv/project||codex".into()), Event::Title(task.into())]
+                {
+                    view.remote_files_test_event(event, cx);
+                }
+            });
+        }
+        assert_eq!(workspace.tab_title(0, cx), "group-title");
+        apply_commit_rename(&mut workspace.tab_meta[0], "");
+        assert_eq!(workspace.tab_title(0, cx), "修复前端登录");
+        assert_eq!(workspace.tab_presentation(0, cx, true).title, "修复前端登录");
+        cx.notify();
+    });
+    settle(&mut cx);
+    let target = cx.debug_bounds(fixture.headers[1]).unwrap().center();
+    cx.simulate_click(target, Modifiers::default());
+    settle(&mut cx);
+    fixture.workspace.update(&mut cx, |workspace, cx| {
+        assert_eq!(workspace.tab_title(0, cx), "验证后端接口");
+        assert_eq!(workspace.tab_presentation(0, cx, false).title, "验证后端接口");
+        apply_commit_rename(&mut workspace.tab_meta[0], "我的工作区");
+        assert_eq!(workspace.tab_title(0, cx), "我的工作区");
+        assert_eq!(workspace.tab_presentation(0, cx, true).title, "我的工作区");
+    });
+}
+
+#[gpui::test]
 fn saved_names_undo_redo_then_typing_uses_native_history(cx: &mut TestAppContext) {
     let (fixture, mut cx) = RenameFixture::open(cx);
     for name in ["第一次命名", "第二次命名", "第三次命名"] {
