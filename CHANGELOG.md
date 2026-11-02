@@ -4,11 +4,13 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.3.2 - 2026-11-02
+## 2.4.0 - 2026-11-03
 
 ### English
 
-This release adds independently configurable next-prompt prediction, native shell pointer editing, Luau configuration and GLSL effects, and improves SSH task status, aligned activity icons and SFTP file previews. This is a Windows x64 release candidate; publication remains pending.
+This release brings remote file previews and editing to SFTP, moves programmable configuration and plugins to Luau, and adds GLSL effects. It also improves native shell editing, next-prompt prediction, SSH task recognition and activity indicators.
+
+Packages include Windows x64/ARM64 installers and portable ZIPs, macOS Apple Silicon/Intel builds, Linux x64 packages, an Android universal APK and the offline relay package. macOS, Linux and Android retain their Preview distribution labels.
 
 #### Added
 
@@ -45,6 +47,8 @@ This release adds independently configurable next-prompt prediction, native shel
 
 #### Improved
 
+- Give the Project and Support entries more horizontal padding inside their hover background. Addresses [#859](https://github.com/Kuddev/nebula/issues/859).
+- Enlarge the Keymap page’s Clear and Restore buttons and show a pointer cursor when hovering them. ([#644](https://github.com/Kuddev/pebrel/pull/644))
 - Preserve explicit client status: running uses the spinner, permission/input requests use the hand, and confirmed completion uses the completion mark. Complete Hook lifecycles are not overwritten by silence or screen guesses; notifications without an actionable type do not imply a request.
 - Handle OpenCode permission/question replies and busy/retry/idle events. Explicit outcome events preserve success, failure or interruption; an idle event without an outcome does not announce success. Exact coverage depends on the installed CLI and its enabled Hooks; older completion-only integrations retain narrower coverage.
 - Run programmable configuration and scripted plugin commands on Luau. New configurations use `pebrel.luau`; legacy `.lua` filenames remain accepted with Luau syntax and libraries, not full Lua 5.4 compatibility.
@@ -54,7 +58,9 @@ This release adds independently configurable next-prompt prediction, native shel
 
 ### 中文
 
-本版加入可独立配置模型的下一句预测、Shell 原生光标与选区编辑、Luau 配置和 GLSL 效果，并改进 SSH 任务状态、状态图标对齐与 SFTP 文件预览。本候选版本面向 Windows x64，尚未正式发布。
+本版为 SFTP 加入远端文件预览与编辑，将可编程配置和插件迁移到 Luau，并加入 GLSL 效果。同时改进 Shell 原生编辑、下一句预测、SSH 任务识别与活动状态指示。
+
+提供 Windows x64/ARM64 安装器与便携 ZIP、macOS Apple Silicon/Intel 包、Linux x64 包、Android universal APK 及离线中继包。macOS、Linux 和 Android 继续保留 Preview 分发标记。
 
 #### 新增
 
@@ -91,6 +97,8 @@ This release adds independently configurable next-prompt prediction, native shel
 
 #### 改进
 
+- 增加“项目与支持”入口在悬停背景内的左右留白。对应 [#859](https://github.com/Kuddev/nebula/issues/859)。
+- 扩大按键映射页“清除”和“恢复默认”按钮的点击区域，并在悬停时显示手形光标。 ([#644](https://github.com/Kuddev/pebrel/pull/644))
 - 保留客户端明确上报的状态：运行显示转圈，权限申请或等待输入显示手掌，明确完成显示完成标记。完整 Hook 生命周期不再被静默时间或屏幕猜测覆盖；缺少可操作类型的通知不会被当成请求。
 - 补齐 OpenCode 的权限/问答回复及忙碌、重试、空闲事件。明确的结果事件保留成功、失败或中断；没有结果的空闲事件不会被宣告为成功。准确覆盖范围取决于 CLI 版本及已启用的 Hook，旧版仅上报完成的集成仍保留较窄范围。
 - 可编程配置与脚本插件命令改用 Luau。新建配置使用 `pebrel.luau`，兼容发现旧 `.lua` 文件名；脚本使用 Luau 的语法和标准库，不保证 Lua 5.4 全量兼容。
@@ -100,20 +108,33 @@ This release adds independently configurable next-prompt prediction, native shel
 
 ### Contributors
 
-Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [M1nt-Ch0c0](https://github.com/M1nt-Ch0c0), [galact-byte](https://github.com/galact-byte), [glitch-cmyk658](https://github.com/glitch-cmyk658), [Tettu0530](https://github.com/Tettu0530) and [MeshedPoto](https://github.com/MeshedPoto) for the changes included since 2.3.1.
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/M1nt-Ch0c0"><img src="https://avatars.githubusercontent.com/u/232783406?v=4&amp;s=96" width="48" height="48" alt="M1nt-Ch0c0" title="M1nt-Ch0c0" /></a>
+  <a href="https://github.com/galact-byte"><img src="https://avatars.githubusercontent.com/u/94279960?v=4&amp;s=96" width="48" height="48" alt="galact-byte" title="galact-byte" /></a>
+  <a href="https://github.com/glitch-cmyk658"><img src="https://avatars.githubusercontent.com/u/278580960?v=4&amp;s=96" width="48" height="48" alt="glitch-cmyk658" title="glitch-cmyk658" /></a>
+  <a href="https://github.com/Tettu0530"><img src="https://avatars.githubusercontent.com/u/89886910?v=4&amp;s=96" width="48" height="48" alt="Tettu0530" title="Tettu0530" /></a>
+  <a href="https://github.com/MeshedPoto"><img src="https://avatars.githubusercontent.com/u/123916728?v=4&amp;s=96" width="48" height="48" alt="MeshedPoto" title="MeshedPoto" /></a>
+  <a href="https://github.com/WilliamWang1721"><img src="https://avatars.githubusercontent.com/u/140129782?v=4&amp;s=96" width="48" height="48" alt="GeekMr" title="GeekMr" /></a>
+</p>
 
-感谢以上贡献者参与 2.3.1 之后纳入本版的修复、功能与翻译。
+Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [M1nt-Ch0c0](https://github.com/M1nt-Ch0c0), [galact-byte](https://github.com/galact-byte), [glitch-cmyk658](https://github.com/glitch-cmyk658), [Tettu0530](https://github.com/Tettu0530), [MeshedPoto](https://github.com/MeshedPoto) and [GeekMr](https://github.com/WilliamWang1721) for the features, fixes, translations and release integration included since 2.3.1.
+
+感谢 [Kuddev](https://github.com/Kuddev)、[Aschenbath](https://github.com/Aschenbath)、[M1nt-Ch0c0](https://github.com/M1nt-Ch0c0)、[galact-byte](https://github.com/galact-byte)、[glitch-cmyk658](https://github.com/glitch-cmyk658)、[Tettu0530](https://github.com/Tettu0530)、[MeshedPoto](https://github.com/MeshedPoto) 和 [GeekMr](https://github.com/WilliamWang1721) 参与 2.3.1 之后纳入本版的功能、修复、翻译与发布整合。
 
 ### SHA256
-
-Windows x64 candidate assets are listed below. Other platform packages and the formal release remain pending.
-
-以下为 Windows x64 候选包；其他平台包与正式发布仍待完成。
-
-Build source / 构建源码：`ce12779156b2327ffa97af746db75d325aeb771f`。
-
-- `Pebrel-v2.3.2-windows-x64.zip`: `b0d892050c5e21c2c17d01332b312db4b3900a999d824a812cc5575425ed18b3`
-- `Pebrel-v2.3.2-windows-x64-setup.exe`: `284f10ce2bccf27c62bec9c9becc3f04f494d4fc9f1e72d0a5e705e5dbd96810`
+- `Pebrel-v2.4.0-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-windows-x64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.4.0-relay-manual.tar.gz`: `PENDING FINAL BUILD`
 
 ## 2.3.1 - 2026-10-27
 
