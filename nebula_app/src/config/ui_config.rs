@@ -49,6 +49,9 @@ pub const DEFAULT_HINT_REGEX: &str = "(?:\
 
 #[derive(ConfigDeserialize, Serialize, Default, Clone, Debug, PartialEq)]
 pub struct UiConfig {
+    /// Native UI defaults, below preferences explicitly saved in Settings.
+    pub ui: super::desktop::DesktopUi,
+
     /// Miscellaneous configuration options.
     pub general: General,
 

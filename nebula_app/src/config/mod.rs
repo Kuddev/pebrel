@@ -15,6 +15,7 @@ pub mod bell;
 pub mod color;
 pub mod cursor;
 pub mod debug;
+pub mod desktop;
 pub mod font;
 pub mod general;
 pub mod lua;

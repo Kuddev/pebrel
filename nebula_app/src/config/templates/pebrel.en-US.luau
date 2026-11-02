@@ -64,4 +64,27 @@ config.scrolling = {
 -- Unknown fields are strict by default. This can assist migration but should not stay disabled:
 -- config:set_strict_mode(false)
 
+-- Native UI defaults. Saved Settings values take priority; remove a saved key to inherit.
+-- Script edits take effect after restarting Pebrel. Sizes are logical pixels.
+-- config.ui = {
+--     theme = 'Nord',
+--     font_size = 16,
+--     ui_font_size = 13,
+--     tabs_position = 'sidebar',
+--     sidebar_width = 230,
+--     density = 'compact',
+--     opacity = 0.96,
+--     blur = 'none',
+--     tab_bar_opacity = 0.92,
+--     pane_card_radius = 10,
+--     pane_card_gutter = 6,
+--     pane_card_shadow = true,
+--     pane_card_divider = 1,
+--     cursor_motion = 'smooth',
+--     scroll_speed = 1.0,
+--     scrollbar_visibility = 'hover',
+--     background_image = 'wallpapers/background.png',
+--     background_image_opacity = 0.38,
+-- }
+
 return config

@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+mod config_defaults;
+pub use config_defaults::{UiValueKind, install_config_defaults, ui_value_kind};
 mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod app_icon;
@@ -62,22 +64,33 @@ pub use paths::{
 
 /// `nebula_settings.txt` 的键值视图。行格式 `key=value`；键大小写不敏感，
 /// 值两端修剪；空值视为未设置。
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RawSettings {
     values: HashMap<String, String>,
 }
 
 impl RawSettings {
     pub fn load() -> Self {
-        Self::try_load().unwrap_or_default()
+        Self::try_load().unwrap_or_else(|_| config_defaults::apply(Self::default()))
     }
 
     /// 安装/卸载等授权路径不能把读取失败当成默认开启。
     pub fn try_load() -> std::io::Result<Self> {
-        match std::fs::read_to_string(settings_path()) {
+        let saved = match std::fs::read_to_string(settings_path()) {
             Ok(text) => Ok(Self::from_text(&text)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error),
+        }?;
+        Ok(config_defaults::apply(saved))
+    }
+
+    /// Already-decoded scalar preferences from the application configuration adapter.
+    pub fn from_values(values: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self {
+            values: values
+                .into_iter()
+                .map(|(key, value)| (key.to_ascii_lowercase(), value))
+                .collect(),
         }
     }
 

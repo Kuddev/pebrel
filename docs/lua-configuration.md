@@ -61,6 +61,46 @@ Returning a plain table is also supported, but `config_builder()` is
 recommended because it validates top-level assignments as they are made.
 Unknown fields and invalid values are errors by default.
 
+## Native UI Defaults
+
+The GPUI shell reads `config.ui` from the same discovered entry at startup:
+
+```lua
+config.ui = {
+    theme = 'Nord',
+    font_size = 16,           -- logical pixels, unlike config.font.size in points
+    ui_font_size = 13,
+    tabs_position = 'sidebar',
+    sidebar_width = 230,
+    pane_card_radius = 10,
+    pane_card_gutter = 6,
+    pane_card_shadow = true,
+    opacity = 0.96,
+    tab_bar_opacity = 0.92,
+    cursor_motion = 'smooth',
+    scrollbar_visibility = 'hover',
+}
+```
+
+The supported field names and scalar shapes are defined by
+[`ui_value_kind`](../nebula_settings/src/config_defaults.rs). Numeric ranges,
+enum aliases and defaults continue to come from `RuntimeSettings::from_raw`;
+unknown fields and incorrect scalar types fail `config check`. Background-image
+paths in `config.ui` are relative to the entry configuration directory.
+
+Explicit keys in `pebrel_settings.txt`, including empty values, take priority over
+these defaults. Settings controls keep their current immediate-save behavior and
+do not rewrite user code. Removing a saved key reveals the script value; restoring
+Settings defaults removes known saved overrides and therefore reveals the script
+configuration too. Removing a script field restores its built-in/theme default
+when no saved override exists. Restart after editing the script. The startup
+adapter installs one immutable defaults snapshot for all runtime settings readers;
+rendering and Settings saves do not execute Luau.
+
+For Luau entries, customized `font`, `colors`, and `mouse` sections also reach the
+native presentation adapter. Window dimensions keep their existing startup-only
+semantics. The typed parser and `config check` are shared with other formats.
+
 ## Arrays And Modules
 
 Lua's `{}` does not distinguish an empty array from an empty object. Pebrel

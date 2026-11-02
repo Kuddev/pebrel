@@ -64,4 +64,27 @@ config.scrolling = {
 -- 配置默认严格检查未知字段。迁移旧配置时可临时关闭，但不建议长期使用：
 -- config:set_strict_mode(false)
 
+-- 原生 UI 配置。设置界面保存的值优先；删除相应的已保存键后使用这里的值。
+-- 修改脚本后重启生效。字体和布局尺寸使用逻辑像素。
+-- config.ui = {
+--     theme = 'Nord',
+--     font_size = 16,
+--     ui_font_size = 13,
+--     tabs_position = 'sidebar',
+--     sidebar_width = 230,
+--     density = 'compact',
+--     opacity = 0.96,
+--     blur = 'none',
+--     tab_bar_opacity = 0.92,
+--     pane_card_radius = 10,
+--     pane_card_gutter = 6,
+--     pane_card_shadow = true,
+--     pane_card_divider = 1,
+--     cursor_motion = 'smooth',
+--     scroll_speed = 1.0,
+--     scrollbar_visibility = 'hover',
+--     background_image = 'wallpapers/background.png',
+--     background_image_opacity = 0.38,
+-- }
+
 return config
