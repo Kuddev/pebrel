@@ -310,6 +310,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     Some(AiHookEvent {
         codex_hooks,
         remote_process: None,
+        remote_context: None,
         turn_id,
         session_compacted: kind == AiHookKind::SessionStart
             && payload.get("source").and_then(Value::as_str) == Some("compact"),
@@ -365,6 +366,11 @@ pub(crate) fn parse_remote_envelope(bytes: &[u8], pane: Option<u64>) -> Option<A
             && !key.is_empty()
             && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b':')))
         .then(|| key.to_owned())
+    });
+    event.remote_context = header.split_whitespace().find_map(|field| {
+        let context = field.strip_prefix("tmux=")?;
+        (context.len() == 64 && context.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then(|| context.to_owned())
     });
     event.pane = pane;
     if let Some(attention) = event.attention.as_mut() {
