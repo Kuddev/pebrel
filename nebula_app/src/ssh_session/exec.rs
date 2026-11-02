@@ -7,14 +7,29 @@ pub(super) async fn capture_private(
     channel: Channel<client::Msg>,
     command: &str,
 ) -> Result<Vec<u8>, SessionError> {
+    capture_private_input(channel, command, &[], 8192).await
+}
+
+pub(super) async fn capture_private_input(
+    channel: Channel<client::Msg>,
+    command: &str,
+    input: &[u8],
+    limit: usize,
+) -> Result<Vec<u8>, SessionError> {
     let mut channel = lifecycle::own_channel(channel);
     channel.exec(true, command).await?;
     let mut stdout = Vec::new();
     let mut exit = None;
+    let mut submitted = input.is_empty();
     while let Some(message) = channel.wait().await {
         match message {
+            ChannelMsg::Success if !submitted => {
+                channel.data_bytes(input.to_vec()).await?;
+                channel.eof().await?;
+                submitted = true;
+            },
             ChannelMsg::Data { data } => {
-                if stdout.len().saturating_add(data.len()) > 8192 {
+                if stdout.len().saturating_add(data.len()) > limit {
                     return Err("private_exec_output_limit".into());
                 }
                 stdout.extend_from_slice(&data);
