@@ -10,6 +10,24 @@ use crate::ai_hook::{AiHookEvent, AiHookKind};
 use super::{TerminalView, TerminalViewEvent, notifications};
 
 impl TerminalView {
+    pub(super) fn observe_agent_title(
+        &mut self,
+        observed_at: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) {
+        if self.exited.is_none()
+            && self.agent_activity.observe_native_title(
+                self.running_program.as_deref(),
+                &self.title,
+                observed_at,
+            )
+        {
+            self.confirmation.observe_waiting(self.agent_activity.status() == AgentStatus::Blocked);
+            cx.emit(TerminalViewEvent::TitleChanged);
+            cx.notify();
+        }
+    }
+
     pub fn handle_ai_hook(&mut self, event: &AiHookEvent, cx: &mut Context<Self>) -> bool {
         self.sync_remote_activity(cx);
         if self.ssh_destination.is_some() && event.remote_context != self.remote_activity.context {

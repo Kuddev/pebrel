@@ -55,6 +55,9 @@ pub(crate) struct AgentActivity {
     screen_armed: bool,
     command_ended: bool,
     native_codex: bool,
+    /// Fresh provider title evidence is separate from the underlying lifecycle.
+    /// Removing a title marker cannot manufacture a completion or approval.
+    native_title: Option<AgentStatus>,
     turn_id: Option<String>,
     last_remote_sequence: Option<u64>,
     /// 最近一次明确提交或被采纳的 hook 事件时刻。远端停滞对账必须给
@@ -81,6 +84,7 @@ impl Default for AgentActivity {
             screen_armed: true,
             command_ended: false,
             native_codex: false,
+            native_title: None,
             turn_id: None,
             last_remote_sequence: None,
             last_activity_at: None,
@@ -90,13 +94,17 @@ impl Default for AgentActivity {
 
 impl AgentActivity {
     pub fn status(&self) -> AgentStatus {
-        self.status
+        self.native_title.unwrap_or(self.status)
     }
     pub fn source(&self) -> AgentStatusSource {
-        self.source
+        if self.native_title.is_some() { AgentStatusSource::Title } else { self.source }
     }
     pub fn rule(&self) -> Option<&str> {
-        self.rule.as_deref()
+        match self.native_title {
+            Some(AgentStatus::Blocked) => Some("codex.title.action_required"),
+            Some(AgentStatus::Working) => Some("codex.title.working"),
+            _ => self.rule.as_deref(),
+        }
     }
     pub fn hook_seen(&self) -> bool {
         self.coverage != HookCoverage::None
@@ -105,7 +113,44 @@ impl AgentActivity {
         self.owner.as_ref().and_then(|owner| owner.pid)
     }
     pub fn allows_screen(&self) -> bool {
-        !self.command_ended && self.coverage != HookCoverage::Lifecycle
+        !self.command_ended
+            && self.native_title.is_none()
+            && self.coverage != HookCoverage::Lifecycle
+    }
+
+    /// The adapter supplies a real OSC update or a fresh authenticated tmux
+    /// sample from the already identified foreground Agent. Old snapshots must
+    /// not override a newer Hook/submission. Title evidence never owns requests,
+    /// session identity, results, or notifications.
+    pub fn observe_native_title(
+        &mut self,
+        program: Option<&str>,
+        title: &str,
+        observed_at: std::time::Instant,
+    ) -> bool {
+        if self.command_ended
+            || self.last_activity_at.is_some_and(|at| observed_at <= at)
+            || self.owner.as_ref().is_some_and(|owner| {
+                crate::ai_agents::AgentKind::parse(&owner.source)
+                    != program.and_then(crate::ai_agents::AgentKind::parse)
+            })
+        {
+            return false;
+        }
+        let signal = crate::ai_agents::native_title::activity(program, title);
+        if signal == self.native_title {
+            return false;
+        }
+        self.native_title = signal;
+        self.reset_screen_samples();
+        if signal.is_some() {
+            self.pending_submit = false;
+        }
+        if signal == Some(AgentStatus::Working) {
+            self.turn_observed = true;
+            self.screen_armed = true;
+        }
+        true
     }
 
     pub fn reset(&mut self) {
@@ -136,6 +181,7 @@ impl AgentActivity {
     /// A concrete runtime submission or accepted confirmation starts work. The
     /// previous input frame must not manufacture a completion before work starts.
     pub fn submitted(&mut self) {
+        self.native_title = None;
         self.status = AgentStatus::Working;
         self.source = AgentStatusSource::Process;
         self.rule = None;
@@ -178,7 +224,7 @@ impl AgentActivity {
             return false;
         }
         if event.legacy_attention
-            && !matches!(self.status, AgentStatus::Working | AgentStatus::Blocked)
+            && !matches!(self.status(), AgentStatus::Working | AgentStatus::Blocked)
         {
             return false;
         }
@@ -273,6 +319,7 @@ impl AgentActivity {
             return false;
         }
         self.record_owner(event);
+        self.native_title = None;
         self.native_codex |= event.codex_hooks.is_some();
         if event.remote_process.is_some() && event.bridge_sequence.is_some() {
             self.last_remote_sequence = event.bridge_sequence;
@@ -454,7 +501,7 @@ impl AgentActivity {
     /// 停滞未到、刚提交（`pending_submit`）、无匹配或两拍中途形态翻面都会归零
     /// 该方向的连续计数——误判的防线是「agent 自家的稳定屏幕形态」，不是纯计时。
     pub fn reconcile_stalled_turn(&mut self, detection: Option<&Detection>, stalled: bool) -> bool {
-        if self.allows_screen() {
+        if self.allows_screen() || self.command_ended || self.native_title.is_some() {
             return false;
         }
         if !stalled {
