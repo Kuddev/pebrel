@@ -38,6 +38,83 @@ jobs:
       - name: Prepare pinned Windows console runtime
         shell: pwsh
         run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+      - name: Compile GLSL examples through the production shader adapters
+        shell: python
+        run: |
+          import json, os, pathlib, shutil, subprocess
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          scratch = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pebrel-shader-direct'
+          (scratch / 'src').mkdir(parents=True, exist_ok=True)
+          manifest = '''[package]
+          name = "pebrel-shader-direct"
+          version = "0.0.0"
+          edition = "2024"
+          [dependencies]
+          anyhow = "=1.0.104"
+          naga = { version = "=29.0.4", features = ["wgsl-in", "glsl-in", "wgsl-out", "hlsl-out"] }
+          windows = { version = "=0.61.3", features = ["Win32_Graphics_Direct3D_Fxc"] }
+          nebula-settings = { path = __SETTINGS__ }
+          '''.replace('__SETTINGS__', json.dumps((root / 'nebula_settings').as_posix()))
+          (scratch / 'Cargo.toml').write_text(manifest, encoding='utf-8')
+          shutil.copyfile(root / 'Cargo.lock', scratch / 'Cargo.lock')
+          source = r'''
+          mod gpui_shell {
+              #[path = __SOURCE__]
+              mod shader_source;
+              #[path = __COMPILE__]
+              mod compile;
+              pub fn run(root: &std::path::Path) -> anyhow::Result<(usize, usize)> {
+                  let settings = nebula_settings::BackgroundEffects {
+                      wgsl: true,
+                      wgsl_path: Some(root.join("nebula_app/examples/shaders/background.glsl")
+                          .to_string_lossy().into_owned()),
+                      ..Default::default()
+                  };
+                  let background = compile::compile(&settings)?
+                      .ok_or_else(|| anyhow::anyhow!("enabled background was not compiled"))?;
+                  anyhow::ensure!(background.animated && !background.periodic,
+                      "unexpected custom background timing");
+                  anyhow::ensure!(background.bytecode.starts_with(b"DXBC")
+                      && background.bytecode.len() <= 64 * 1024, "invalid native bytecode");
+                  let source = std::fs::read_to_string(
+                      root.join("nebula_app/examples/shaders/scanlines.frag"))?;
+                  let abi = std::fs::read_to_string(
+                      root.join("nebula_app/src/gpui_shell/terminal/effects/abi.wgsl"))?;
+                  let wgsl = shader_source::terminal(&source, shader_source::Language::Glsl, &abi)?;
+                  let module = naga::front::wgsl::parse_str(&wgsl)
+                      .map_err(|error| anyhow::anyhow!(error.emit_to_string(&wgsl)))?;
+                  naga::valid::Validator::new(naga::valid::ValidationFlags::all(),
+                      naga::valid::Capabilities::empty()).validate(&module)?;
+                  anyhow::ensure!(module.entry_points.len() == 1
+                      && module.entry_points[0].stage == naga::ShaderStage::Fragment,
+                      "expected a terminal fragment entry");
+                  Ok((background.bytecode.len(), wgsl.len()))
+              }
+          }
+          fn main() -> anyhow::Result<()> {
+              let root = std::path::PathBuf::from(std::env::var("GITHUB_WORKSPACE")?);
+              let (background, terminal) = gpui_shell::run(&root)?;
+              println!("{background} {terminal}");
+              Ok(())
+          }
+          '''
+          source = source.replace('__SOURCE__', json.dumps((root / 'nebula_app/src/gpui_shell/shader_source.rs').as_posix()))
+          source = source.replace('__COMPILE__', json.dumps((root / 'nebula_app/src/gpui_shell/wallpaper/shader/compile.rs').as_posix()))
+          (scratch / 'src/main.rs').write_text(source, encoding='utf-8')
+          env = dict(os.environ, CARGO_TARGET_DIR=str(scratch / 'target'))
+          result = subprocess.run(['cargo', 'run', '--release', '--manifest-path', str(scratch / 'Cargo.toml')],
+                                  env=env, stdout=subprocess.PIPE, text=True, encoding='utf-8',
+                                  check=True, timeout=900)
+          background, terminal = map(int, result.stdout.strip().split())
+          subprocess.run(['git', 'diff', '--exit-code', '--', 'Cargo.lock'], cwd=root, check=True)
+          (root / 'dist').mkdir(exist_ok=True)
+          (root / 'dist/shader-checks.json').write_text(json.dumps({
+              'commit': os.environ['GITHUB_SHA'], 'background_glsl_to_dxbc': 'passed',
+              'background_bytecode_bytes': background, 'terminal_glsl_to_wgsl': 'passed',
+              'terminal_wgsl_bytes': terminal, 'native_ui_acceptance': 'not run',
+              'regression_tests': 'not run'
+          }, indent=2), encoding='utf-8')
+          print('Production GLSL translation and Windows native shader compilation passed.')
       - name: Build current GPUI product and portable package
         shell: pwsh
         run: |
@@ -131,6 +208,7 @@ jobs:
             dist/SHA256SUMS
             dist/build-metadata.json
             dist/configuration-checks.json
+            dist/shader-checks.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
