@@ -16,7 +16,7 @@ output with one terminal scroll path and no per-result vertical scroller.
 
 ## Evidence
 
-The retained Tern protocol documentation, `protocol-surfaces.md`, describes a
+The retained protocol reference, `protocol-surfaces.md`, describes a
 single grid anchor, natural-height surface layout, shared input/cursor geometry,
 content-based scroll anchoring and deferred offscreen layout. Extracted
 `surface-lens.css` confirms an absolute hover toolbar and a thin left boundary;
@@ -57,7 +57,7 @@ terminal; hover decorations do not participate in layout.
   cannot represent later wrapping or view changes reliably.
 - Reparse and rebuild each time a result becomes visible: repeats cold work
   during scrolling.
-- Claim full TSP or recovered Tern layout algorithms: neither is implemented or
+- Claim the full reference protocol or recovered layout algorithms: neither is implemented or
   established by the retained sources.
 
 ## Consequences
