@@ -83,7 +83,13 @@ impl TerminalView {
             .as_deref()
             .or_else(|| self.ai_session.as_ref().map(|session| session.source.as_str()))?;
         let agent = crate::ai_agents::AgentKind::parse(program)?;
-        let title = self.title.trim();
+        // Native Braille spinners duplicate the tab's own activity indicator.
+        let title = self
+            .title
+            .trim_start_matches(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '\u{2800}'..='\u{28ff}')
+            })
+            .trim_end();
         (!title.is_empty()
             && title != "shell"
             && title != program
