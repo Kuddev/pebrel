@@ -422,3 +422,7 @@ and license metadata are retained in the font; see licenses/LICENSE-PEBREL-SYMBO
 Source: https://github.com/subframe7536/maple-font
 Regeneration: python scripts/build_symbol_font.py (requires fontTools).
 The complete Maple face remains unchanged and separately selectable.
+
+nebula-waiting-hand.svg preserves the U+F256 outline from that bundled font,
+translated and flipped into a centered SVG viewBox without changing the outline.
+Copyright (c) 2022, subframe7536. See licenses/LICENSE-PEBREL-SYMBOLS (OFL 1.1).

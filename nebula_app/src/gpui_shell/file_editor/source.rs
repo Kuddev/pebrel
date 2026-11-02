@@ -31,20 +31,16 @@ impl DocumentSource {
         matches!(self, Self::Remote(_))
     }
 
-    pub(super) async fn load(self, operation: DocumentOperation) -> io::Result<LoadedDocument> {
+    pub(super) async fn load(
+        self,
+        operation: DocumentOperation,
+        progress: Option<tokio::sync::watch::Sender<crate::ssh_sftp::preview::ReadProgress>>,
+    ) -> io::Result<LoadedDocument> {
         match self {
             Self::Local(path) => Document::load(&path).map(LoadedDocument::Local),
-            Self::Remote(location) => on_network(async move {
-                RemoteDocument::load(location, operation)
-                    .await
-                    .map(LoadedDocument::Remote)
-                    .map_err(SaveError::Io)
-            })
-            .await
-            .map_err(|error| match error {
-                SaveError::Io(error) => error,
-                error => io::Error::other(error),
-            }),
+            Self::Remote(location) => RemoteDocument::load(location, operation, progress)
+                .await
+                .map(LoadedDocument::Remote),
         }
     }
 }

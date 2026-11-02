@@ -276,6 +276,9 @@ impl TerminalView {
                 crate::ai_agents::AgentStatusSource::Hook => {
                     crate::runtime_api::RuntimeAgentStateSource::Hook
                 },
+                crate::ai_agents::AgentStatusSource::Title => {
+                    crate::runtime_api::RuntimeAgentStateSource::Title
+                },
                 crate::ai_agents::AgentStatusSource::Screen => {
                     crate::runtime_api::RuntimeAgentStateSource::Screen
                 },

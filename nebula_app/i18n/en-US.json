@@ -857,6 +857,7 @@
     "edit_block": "Edit this paragraph",
     "right_sidebar": "Toggle right sidebar",
     "loading": "Loading file…",
+    "loading_progress": "Loading… {received} / {total}",
     "save": "Save",
     "saving": "Saving…",
     "saved": "Saved",
