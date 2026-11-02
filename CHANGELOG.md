@@ -110,8 +110,10 @@ Windows x64 candidate assets are listed below. Other platform packages and the f
 
 以下为 Windows x64 候选包；其他平台包与正式发布仍待完成。
 
-- `Pebrel-v2.3.2-windows-x64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+Build source / 构建源码：`ce12779156b2327ffa97af746db75d325aeb771f`。
+
+- `Pebrel-v2.3.2-windows-x64.zip`: `b0d892050c5e21c2c17d01332b312db4b3900a999d824a812cc5575425ed18b3`
+- `Pebrel-v2.3.2-windows-x64-setup.exe`: `284f10ce2bccf27c62bec9c9becc3f04f494d4fc9f1e72d0a5e705e5dbd96810`
 
 ## 2.3.1 - 2026-10-27
 
