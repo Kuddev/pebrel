@@ -1,0 +1,91 @@
+name: Windows SFTP candidate package
+
+on:
+  push:
+    branches: [build/windows-sftp-20261102]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-sftp-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONUTF8: "1"
+
+jobs:
+  package:
+    name: Windows x64 candidate
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: release
+          target: target/release
+          legacy-key: windows
+          save-if: "false"
+      - name: Prepare pinned Windows console runtime
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+      - name: Build current GPUI product and portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:GITHUB_SHA) { throw 'Unexpected source commit.' }
+          $version = (python scripts/preview_release.py --print-package-version nebula_app/Cargo.toml).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read the package version.' }
+          "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+          ./scripts/package-release.ps1 -Version $version -PackageBrand Pebrel -OutputDirectory dist -TargetDirectory target -Force
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/build-installer.ps1 -Version $env:PACKAGE_VERSION -PackageBrand Pebrel -OutputDirectory dist -TargetDirectory target -Force
+      - name: Record package identity and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            "dist/Pebrel-v$env:PACKAGE_VERSION-windows-x64.zip",
+            "dist/Pebrel-v$env:PACKAGE_VERSION-windows-x64-setup.exe"
+          )
+          $assets = foreach ($file in $files) {
+            $item = Get-Item -LiteralPath $file
+            if ($item.Length -le 0) { throw "Empty package: $file" }
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            [ordered]@{ name = $item.Name; bytes = $item.Length; sha256 = $hash }
+          }
+          $assets | ForEach-Object { "$($_.sha256)  $($_.name)" } | Set-Content dist/SHA256SUMS -Encoding utf8
+          [ordered]@{
+            commit = $env:GITHUB_SHA
+            version = $env:PACKAGE_VERSION
+            architecture = 'x64'
+            product = 'gpui'
+            regression_tests = 'not run, as requested'
+            native_ui_acceptance = 'not run'
+            assets = @($assets)
+          } | ConvertTo-Json -Depth 5 | Set-Content dist/build-metadata.json -Encoding utf8
+      - name: Upload candidate packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-sftp-candidate-x64
+          path: |
+            dist/Pebrel-*-windows-x64.zip
+            dist/Pebrel-*-windows-x64-setup.exe
+            dist/SHA256SUMS
+            dist/build-metadata.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
