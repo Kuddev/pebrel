@@ -43,6 +43,8 @@ pub mod session_restore;
 #[cfg(all(test, feature = "gpui-test-support"))]
 pub(crate) mod settings_fixture;
 pub mod settings_pane;
+#[cfg(feature = "shader-background")]
+mod shader_source;
 pub mod ssh_hosts;
 pub mod ssh_settings;
 pub mod terminal;

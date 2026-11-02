@@ -25,6 +25,7 @@ pub mod reload;
 pub mod scrolling;
 pub mod selection;
 pub mod serde_utils;
+pub mod shaders;
 pub mod source;
 pub mod template;
 pub mod terminal;

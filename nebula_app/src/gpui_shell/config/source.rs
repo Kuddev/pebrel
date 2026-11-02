@@ -18,15 +18,8 @@ pub(crate) fn initialize(config_file: Option<PathBuf>) -> StartupWindow {
     let mut window = StartupWindow::default();
     let mut snapshot = Snapshot { raw: toml::Value::Table(Default::default()), notice: None };
     match read(config_file) {
-        Ok(Some((config, raw))) => {
+        Ok(Some((config, raw, defaults))) => {
             window = StartupWindow::from_config(&config);
-            let config_dir = config
-                .config_paths
-                .first()
-                .and_then(|path| path.parent())
-                .unwrap_or_else(|| Path::new("."));
-            let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_owned());
-            let defaults = crate::config::desktop::defaults(&config, &config_dir);
             if nebula_settings::install_config_defaults(defaults).is_err() {
                 log::warn!("Desktop configuration was already initialized");
             }
@@ -51,7 +44,9 @@ pub(super) fn raw(notice: &mut Option<String>) -> Option<toml::Value> {
     Some(snapshot.raw.clone())
 }
 
-fn read(config_file: Option<PathBuf>) -> Result<Option<(UiConfig, toml::Value)>, String> {
+fn read(
+    config_file: Option<PathBuf>,
+) -> Result<Option<(UiConfig, toml::Value, nebula_settings::RawSettings)>, String> {
     let override_path = config_file.or_else(|| {
         ["PEBREL_GPUI_CONFIG", "NEBULA_GPUI_CONFIG"].into_iter().find_map(|name| {
             std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from)
@@ -75,7 +70,16 @@ fn read(config_file: Option<PathBuf>) -> Result<Option<(UiConfig, toml::Value)>,
     } else {
         presentation_values(&loaded.config).map_err(|error| error.to_string())?
     };
-    Ok(Some((loaded.config, raw)))
+    let config_dir = loaded
+        .config
+        .config_paths
+        .first()
+        .and_then(|path| path.parent())
+        .unwrap_or_else(|| Path::new("."));
+    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_owned());
+    let defaults =
+        crate::config::desktop::defaults(&loaded.config, &config_dir).map_err(str::to_owned)?;
+    Ok(Some((loaded.config, raw, defaults)))
 }
 
 fn presentation_values(config: &UiConfig) -> Result<toml::Value, toml::ser::Error> {

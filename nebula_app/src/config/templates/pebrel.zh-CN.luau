@@ -87,4 +87,14 @@ config.scrolling = {
 --     background_image_opacity = 0.38,
 -- }
 
+-- 着色器路径相对此配置文件；仅填写路径不会启用效果。
+-- 设置界面已保存的值优先；修改此文件后重启生效。
+-- config.shaders = {
+--     background = { enabled = true, path = 'shaders/background.glsl',
+--                    speed = 1.0, frame_rate = 20, parameter = 0.5 },
+--     terminal = { enabled = true, paths = { 'shaders/scanlines.frag' },
+--                  animation = 'focused', speed = 1.0, frame_rate = 20,
+--                  parameters = { 0.4, 0.0, 0.0, 0.0 } },
+-- }
+
 return config

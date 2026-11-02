@@ -27,6 +27,8 @@ mod background_effects;
 pub use background_effects::{BackgroundEffectRequest, BackgroundEffects};
 mod terminal_effects;
 pub use terminal_effects::{EffectAnimation, TerminalEffects};
+mod shader_parameters;
+pub use shader_parameters::ShaderTiming;
 mod tab_bar_material;
 pub use tab_bar_material::TabBarMaterial;
 mod cursor_motion;

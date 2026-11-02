@@ -162,7 +162,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha1 = "0.11.0"
 
 raw-window-handle = { version = "=0.6.2", optional = true }
-naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "hlsl-out"] }
+naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "glsl-in", "wgsl-out", "hlsl-out"] }
 gif = { version = "=0.14.2", optional = true }
 
 [build-dependencies]

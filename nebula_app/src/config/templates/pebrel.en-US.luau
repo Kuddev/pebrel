@@ -87,4 +87,14 @@ config.scrolling = {
 --     background_image_opacity = 0.38,
 -- }
 
+-- Shader files are relative to this config; paths alone do not enable execution.
+-- Saved Settings values take priority. Restart after editing this file.
+-- config.shaders = {
+--     background = { enabled = true, path = 'shaders/background.glsl',
+--                    speed = 1.0, frame_rate = 20, parameter = 0.5 },
+--     terminal = { enabled = true, paths = { 'shaders/scanlines.frag' },
+--                  animation = 'focused', speed = 1.0, frame_rate = 20,
+--                  parameters = { 0.4, 0.0, 0.0, 0.0 } },
+-- }
+
 return config

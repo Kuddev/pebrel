@@ -62,6 +62,11 @@ impl DesktopUi {
     }
 }
 
-pub(crate) fn defaults(config: &super::UiConfig, config_dir: &Path) -> RawSettings {
-    RawSettings::from_values(config.ui.values(config_dir))
+pub(crate) fn defaults(
+    config: &super::UiConfig,
+    config_dir: &Path,
+) -> Result<RawSettings, &'static str> {
+    let mut values = config.ui.values(config_dir);
+    values.extend(config.shaders.values(config_dir)?);
+    Ok(RawSettings::from_values(values))
 }

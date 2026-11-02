@@ -101,6 +101,68 @@ For Luau entries, customized `font`, `colors`, and `mouse` sections also reach t
 native presentation adapter. Window dimensions keep their existing startup-only
 semantics. The typed parser and `config check` are shared with other formats.
 
+## Shader Configuration
+
+Background and terminal effects use `config.shaders` from the same entry:
+
+```lua
+config.shaders = {
+    background = {
+        enabled = true,
+        path = 'shaders/background.glsl',
+        speed = 0.8,
+        frame_rate = 20,
+        parameter = 0.5,
+    },
+    terminal = {
+        enabled = true,
+        paths = { 'shaders/scanlines.frag' },
+        animation = 'focused',
+        speed = 1.0,
+        frame_rate = 20,
+        parameters = { 0.4, 0.0, 0.0, 0.0 },
+    },
+}
+```
+
+Paths are relative to `pebrel.luau`, including when its data directory is elsewhere.
+An omitted `enabled` is false: a path by itself never runs a shader. For an included
+background use `preset = 'neon_vortex'` instead of `path`; the existing grain,
+aurora ribbons and liquid silk presets are available too. Saved Settings values
+override these defaults, and script edits take effect after restarting.
+
+Both effects accept speed 0–10 (default 1) and frame rates 1–60 (default 20).
+Speed 0 stops animation wakeups. Frame rate controls animation requests; terminal
+output can still cause additional paints. Terminal animation accepts `off`,
+`focused` or `always`; the default is `focused`. Hidden views, reduced motion,
+renderer capabilities and existing resource limits continue to govern playback.
+Background shaders currently use the Windows backend; terminal effects use the
+current window's postprocessing capability.
+
+Files ending in `.glsl` or `.frag` are compiled as GLSL. Existing `.wgsl` sources
+remain supported and may be mixed with GLSL in an ordered terminal chain of up to
+eight files/eight total passes. Each file is UTF-8 and at most 64 KiB. A complete
+GLSL 450 fragment provides its own declarations and must fit Pebrel's resource
+ABI. A versionless snippet defines `void mainImage(out vec4 color, in vec2 pixel)`;
+Pebrel supplies its entry, `iResolution` and `iTime`. Coordinates use the surface's
+top-left origin. This does not implement Shadertoy texture channels or includes.
+
+Background snippets receive `iParameter` from `background.parameter`. Full
+background fragments may declare one 16-byte uniform at set 0/binding 0 containing
+width, height, scaled seconds and that parameter. Terminal snippets receive the
+[`GLSL frame ABI`](../nebula_app/src/gpui_shell/terminal/effects/abi.glsl), including
+`load_surface`, `sample_surface`, the palette/cursor data and `iParameters`.
+The four values are also available as `frame.parameters` in WGSL. Frame ABI version
+2 appends those values after the palette, preserving every earlier field offset.
+Other textures, storage and resource bindings are rejected by the renderer's
+existing validation. Shader reads and compilation stay on background workers.
+
+Start with the [background example](../nebula_app/examples/shaders/background.glsl)
+and [terminal example](../nebula_app/examples/shaders/scanlines.frag). The complete
+configuration shape is defined in [`config/shaders.rs`](../nebula_app/src/config/shaders.rs).
+`config check` validates configuration values and paths' syntax; actual shader
+compilation occurs when an effect is enabled in a supported window.
+
 ## Arrays And Modules
 
 Lua's `{}` does not distinguish an empty array from an empty object. Pebrel

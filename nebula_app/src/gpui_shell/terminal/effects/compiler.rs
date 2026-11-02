@@ -1,7 +1,8 @@
+use crate::gpui_shell::shader_source::{self, Language};
 use anyhow::{Context, Result, ensure};
 use std::{io::Read, path::Path, sync::Arc};
 
-pub const UNIFORM_BYTES: usize = (13 + 256) * 16;
+pub const UNIFORM_BYTES: usize = (14 + 256) * 16;
 pub const ABI: &str = include_str!("abi.wgsl");
 
 pub struct Program {
@@ -27,17 +28,24 @@ pub fn load_chain(paths: &[std::path::PathBuf]) -> Result<Program> {
 }
 
 pub fn load(path: &Path) -> Result<Program> {
-    let file = std::fs::File::open(path).context("open terminal effect WGSL")?;
+    let file = std::fs::File::open(path).context("open terminal effect shader")?;
     ensure!(file.metadata()?.is_file(), "effect source is not a regular file");
     let mut bytes = Vec::new();
     file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 64 * 1024, "effect source exceeds 64 KiB");
-    compile(&String::from_utf8(bytes).context("effect source must be UTF-8")?)
+    compile_source(
+        &String::from_utf8(bytes).context("effect source must be UTF-8")?,
+        Language::for_path(path),
+    )
 }
 
+#[cfg(test)]
 pub fn compile(source: &str) -> Result<Program> {
-    ensure!(source.len() <= 64 * 1024, "effect source exceeds 64 KiB");
-    let input: Arc<str> = format!("{ABI}\n{source}").into();
+    compile_source(source, Language::Wgsl)
+}
+
+fn compile_source(source: &str, language: Language) -> Result<Program> {
+    let input: Arc<str> = shader_source::terminal(source, language, ABI)?.into();
     let (module, _) = gpui::validate_postprocess_wgsl_module(&input, UNIFORM_BYTES)?;
     // 通用 ABI 由渲染器统一校验；这里只保留产品自己的变量名称合同。
     for (_, global) in module.global_variables.iter() {
