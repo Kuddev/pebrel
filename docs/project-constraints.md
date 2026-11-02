@@ -7,7 +7,7 @@ local thresholds. See [architecture](architecture.md) for module responsibilitie
 ## 1. File size: a safety limit, not a design score
 
 - Keep the existing **2000 physical-line hard limit**. Apply it to first-party
-  Rust and maintained `.py`, `.ps1`, `.mjs`, `.js`, `.sh`, `.lua` sources in the
+  Rust and maintained `.py`, `.ps1`, `.mjs`, `.js`, `.sh`, `.lua`, `.luau` sources in the
   declared roots. No maintained script exceeded this limit at adoption.
 - **800 lines is advisory only**. Review cohesion and consider extraction; a
   cohesive 801-line module is not automatically worse than fragmented wrappers.

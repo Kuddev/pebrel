@@ -1,9 +1,10 @@
-# Pebrel Lua Configuration
+# Pebrel Luau Configuration
 
-Pebrel uses vendored Lua 5.4 for programmable configuration. Load its API with
+Pebrel uses vendored [Luau](https://luau.org/) for programmable configuration. Load its API with
 `require 'pebrel'` and generate a configuration with `pebrel config init`.
-Existing `require 'nebula'` calls resolve to the same API table, so old Lua
-configurations continue to work.
+Existing `require 'nebula'` calls resolve to the same API table. Legacy `.lua`
+filenames remain discoverable, but scripts use Luau syntax and libraries: Lua 5.4-only
+features such as `<close>`, integer bitwise operators, `io`, and `package` are not supported.
 
 Lua configuration is executable local code. Only use configuration files and
 modules that you trust. Pebrel does not download or execute remote
@@ -26,7 +27,7 @@ Validate a configuration without opening a window:
 
 ```text
 pebrel config check
-pebrel config check --config-file D:/configs/pebrel.lua
+pebrel config check --config-file D:/configs/pebrel.luau
 ```
 
 ## Basic Configuration
@@ -84,7 +85,7 @@ Sparse arrays and tables mixing integer and string keys are rejected.
 Split large configurations into sibling modules:
 
 ```lua
--- theme.lua
+-- theme.luau
 return {
     primary = {
         foreground = '#d8dee9',
@@ -94,7 +95,7 @@ return {
 ```
 
 ```lua
--- pebrel.lua
+-- pebrel.luau
 local pebrel = require 'pebrel'
 local config = pebrel.config_builder()
 config.colors = require 'theme'
@@ -104,6 +105,15 @@ return config
 Files successfully loaded through `require` are added to the live-reload watch
 list. Extra local files can be registered with
 `pebrel.add_to_config_reload_watch_list(path)`.
+
+`require 'theme'` and `require './theme'` resolve from the entry configuration's
+directory. Dotted module names still map to subdirectories. The loader tries
+`.luau`, `.lua`, `init.luau`, then `init.lua`, caches successful results, and rejects
+cycles and paths/links escaping that directory. Native module loading and
+`package.path` are not available. A config generation allows a 1 MiB entry,
+128 module loads, depth 32, 256 KiB per module and 4 MiB total module source.
+The VM has a 32 MiB allocator limit, 1000000 safe-point interrupts and a two-second
+execution deadline; these are not a process-memory or exact CPU-time guarantee.
 
 ## Shell IDs And Config Profiles
 
@@ -185,10 +195,10 @@ end
 
 An explicit `--config-file` wins, followed by `PEBREL_CONFIG_FILE` and then the
 legacy `NEBULA_CONFIG_FILE` alias. Empty environment values are ignored. Explicit
-paths must end in `.lua`, `.toml`, `.yml`, or `.yaml`.
+paths must end in `.luau`, `.lua`, `.toml`, `.yml`, or `.yaml`.
 
 Without an explicit path, Pebrel searches its own filenames before legacy
-`nebula.*` names. Within each name, the format order is Lua, TOML, YML, then YAML.
+`nebula.*` names. Within each name, the format order is Luau, legacy Lua filename, TOML, YML, then YAML.
 For example, `pebrel.toml` takes precedence over `nebula.lua`. An existing but
 invalid chosen file reports an error; Pebrel does not silently load another file.
 
@@ -203,26 +213,26 @@ The default data directories are:
 `PEBREL_CONFIG_DIR` overrides the data directory, with `NEBULA_CONFIG_DIR` as a
 fallback alias. When either nonempty override is set, automatic discovery stays
 inside that directory; it does not read configuration from the executable,
-home, or system directories. `pebrel config init` writes `pebrel.lua` into the
+home, or system directories. `pebrel config init` writes `pebrel.luau` into the
 active data directory.
 
-Windows Lua locations:
+Windows Luau locations:
 
-1. `pebrel.lua` beside `pebrel.exe` for portable installations.
-2. `%APPDATA%/Pebrel/pebrel.lua`.
-3. `%USERPROFILE%/.pebrel.lua`.
+1. `pebrel.luau` beside `pebrel.exe` for portable installations.
+2. `%APPDATA%/Pebrel/pebrel.luau`.
+3. `%USERPROFILE%/.pebrel.luau`.
 
-Linux Lua locations:
+Linux Luau locations:
 
-1. `$XDG_CONFIG_HOME/pebrel/pebrel.lua`.
-2. `$XDG_CONFIG_HOME/pebrel.lua`.
-3. `$HOME/.config/pebrel/pebrel.lua`.
-4. `$HOME/.pebrel.lua`.
-5. `/etc/pebrel/pebrel.lua`.
+1. `$XDG_CONFIG_HOME/pebrel/pebrel.luau`.
+2. `$XDG_CONFIG_HOME/pebrel.luau`.
+3. `$HOME/.config/pebrel/pebrel.luau`.
+4. `$HOME/.pebrel.luau`.
+5. `/etc/pebrel/pebrel.luau`.
 
 On macOS, the data-directory location is checked before the Linux-style XDG,
 home, and system locations listed above. The same location order applies to
-`.toml`, `.yml`, and `.yaml`, followed by legacy `nebula.*` names and locations.
+`.lua`, `.toml`, `.yml`, and `.yaml`, followed by legacy `nebula.*` names and locations.
 Existing TOML configurations remain supported; YAML is a deprecated transition
 format.
 
@@ -230,19 +240,19 @@ format.
 
 On first startup, Pebrel copies legacy data into its data directory without
 overwriting existing Pebrel files. Preferences use `pebrel_settings.txt`; new
-main configuration files use `pebrel.lua`, `pebrel.toml`, `pebrel.yml`, or
+main configuration files use `pebrel.luau`, `pebrel.toml`, `pebrel.yml`, or
 `pebrel.yaml`. Session, SSH, and other files whose names do not contain the old
 brand retain their names.
 
 The source directory and old configuration names remain available for recovery
-and for modules that import an absolute legacy path. The migration records
+and for manual migration of existing modules. The migration records
 completion only after all copies succeed, and can retry after an error. Once
 complete, later launches do not copy old data back over deliberately removed
 files. Existing newer files remain authoritative throughout the migration.
 
 ## Transactional Reload
 
-Configuration parsing and Lua execution run on one serial worker. Rapid file
+In the legacy shell, configuration parsing and Luau execution run on one serial worker. Rapid file
 saves are coalesced, and only the latest successful generation is published.
 If Lua syntax, module loading, conversion, or validation fails, Pebrel keeps
 the last-known-good `UiConfig` and Lua VM alive. Fixing and saving the file
@@ -257,10 +267,10 @@ evidence that a native package has passed its runtime checks.
 `pebrel config init --language zh-CN` 会生成活动代码与英文模板完全一致、
 但说明全部为简体中文的 UTF-8 配置。切换 Pebrel 界面语言不会改写已经存在的
 Lua 文件。普通空表 `{}` 表示对象；空数组必须写成 `pebrel.array()`。保存配置
-后若出现语法或字段错误，Pebrel 会保留上一份可用配置，修正并再次保存即可恢复
-自动重载。
+后，旧壳会保留上一份可用配置并在修复错误后恢复自动重载。GPUI 的脚本配置在启动时
+读取；修改后重启生效，设置界面的即时更新沿用原有路径。
 
 旧的 `require 'nebula'` 与新的 `require 'pebrel'` 指向同一 API。显式配置文件优先，
 其次为 `PEBREL_CONFIG_FILE`、兼容的 `NEBULA_CONFIG_FILE`，然后依次查找 Pebrel 与
-Nebula 文件；每种名称内按 Lua、TOML、YML、YAML 排序。首次迁移会非覆盖复制旧数据，
-保留旧目录与文件供恢复及绝对路径导入使用，不删除来源，也不覆盖已有的新配置。
+Nebula 文件；每种名称内按 Luau、兼容 Lua 文件名、TOML、YML、YAML 排序。首次迁移会非覆盖复制旧数据，
+保留旧目录与文件供恢复使用，不删除来源，也不覆盖已有的新配置。

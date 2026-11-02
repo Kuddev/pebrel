@@ -1,22 +1,22 @@
 local pebrel = require 'pebrel'
 local config = pebrel.config_builder()
 
--- Pebrel Lua 配置文件。修改后可运行 `pebrel config check` 检查语法和字段。
--- 字段名和枚举值使用稳定的英文标识；注释使用简体中文，方便直接修改。
+-- Pebrel Luau configuration. Run `pebrel config check` after editing to validate syntax and fields.
+-- Field names and enum values use stable English identifiers; comments explain safe edits.
 
--- 保留的滚动历史行数。较大的值会占用更多内存。
+-- Number of scrollback lines to retain. Larger values consume more memory.
 config.scrolling = {
     history = 10000,
 }
 
--- 字体示例。取消下面各行开头的 `--` 即可启用。
+-- Font example. Remove the leading `--` from each line below to enable it.
 -- config.font = {
 --     normal = { family = 'Maple Mono Normal NF CN', style = 'Regular' },
 --     size = 13.0,
 --     builtin_box_drawing = true,
 -- }
 
--- 窗口示例。opacity 范围为 0.0 到 1.0。
+-- Window example. opacity ranges from 0.0 to 1.0.
 -- config.window = {
 --     opacity = 0.96,
 --     decorations = 'Full',
@@ -24,44 +24,44 @@ config.scrolling = {
 --     padding = { x = 8, y = 8 },
 -- }
 
--- 光标示例。
+-- Cursor example.
 -- config.cursor = {
 --     style = { shape = 'Beam', blinking = 'On' },
 --     unfocused_hollow = true,
 -- }
 
--- 终端前景色、背景色与 ANSI 调色板可以分别覆盖。
+-- Terminal foreground, background, and the ANSI palette can be overridden independently.
 -- config.colors = {
 --     primary = { foreground = '#d8dee9', background = '#16181d' },
 -- }
 
--- 默认 Shell 可以是程序字符串，也可以带参数。
+-- The default shell can be a program string or a program with arguments.
 -- config.terminal = {
 --     shell = { program = 'pwsh.exe', args = { '-NoLogo' } },
 -- }
 
--- Linux 示例：根据运行平台选择 Shell。此段可以和 Windows 共用同一份配置。
+-- Linux example: select a shell for the current platform while sharing this file with Windows.
 -- if pebrel.platform.os == 'linux' then
 --     config.terminal = { shell = '/bin/bash' }
 -- end
 
--- 注入到所有新终端进程的环境变量。
+-- Environment variables injected into every new terminal process.
 -- config.env = {
 --     EDITOR = 'nvim',
 -- }
 
--- 快速启动配置。空列表必须写成 pebrel.array()，不能写普通空表 {}。
+-- Quick-launch profiles. An empty list must use pebrel.array(), not a plain empty table {}.
 -- config.profiles = pebrel.array {
 --     { name = 'Production SSH', command = 'ssh', args = { 'user@server' } },
 --     { name = 'Project', command = 'pwsh.exe', args = { '-NoLogo' }, cwd = 'D:/src/project' },
 -- }
 
--- 大型配置可拆分到同目录模块，例如 theme.lua 返回一个 colors 表：
+-- Large configurations can use sibling modules; for example, theme.luau can return a colors table:
 -- local theme = require 'theme'
 -- config.colors = theme
--- 被 require 的 Lua 文件会自动加入热重载监视列表。
+-- Required Luau files are automatically added to the live-reload watch list.
 
--- 配置默认严格检查未知字段。迁移旧配置时可临时关闭，但不建议长期使用：
+-- Unknown fields are strict by default. This can assist migration but should not stay disabled:
 -- config:set_strict_mode(false)
 
 return config

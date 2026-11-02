@@ -82,6 +82,7 @@ mod input;
 #[path = "i18n/outcomes.rs"]
 mod localized_status;
 mod logging;
+mod luau;
 #[cfg(target_os = "macos")]
 mod macos;
 mod markdown;

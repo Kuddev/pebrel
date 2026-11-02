@@ -4863,6 +4863,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "luau0-src"
+version = "0.18.3+luau709"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e73f7d752fe2ef0a41f132b83d0be154c6ae0ed84967b4df80a16901866be075"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "lyon"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5186,6 +5195,7 @@ dependencies = [
  "libc",
  "lua-src",
  "luajit-src",
+ "luau0-src",
  "pkg-config",
 ]
 
