@@ -1,0 +1,136 @@
+name: Windows configuration candidate package
+
+on:
+  push:
+    branches: [build/windows-configuration-20261102]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-configuration-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONUTF8: "1"
+
+jobs:
+  package:
+    name: Windows x64 candidate
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: release
+          target: target/release
+          legacy-key: windows
+          save-if: "false"
+      - name: Prepare pinned Windows console runtime
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+      - name: Build current GPUI product and portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:GITHUB_SHA) { throw 'Unexpected source commit.' }
+          $version = (python scripts/preview_release.py --print-package-version nebula_app/Cargo.toml).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read the package version.' }
+          "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+          ./scripts/package-release.ps1 -Version $version -PackageBrand Pebrel -OutputDirectory dist -TargetDirectory target -Force
+      - name: Check built configuration and Luau command entry points
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          scratch = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pebrel-config-direct'
+          scratch.mkdir(exist_ok=True)
+          env = dict(os.environ, PEBREL_CONFIG_DIR=str(scratch))
+          exe = root / 'target/release/pebrel.exe'
+          def invoke(*args, failure=False):
+              result = subprocess.run([str(exe), *map(str, args)], env=env,
+                                      capture_output=True, text=True, encoding='utf-8',
+                                      errors='replace', timeout=15)
+              if (result.returncode == 0) == failure:
+                  raise RuntimeError(f'{args}: exit {result.returncode}\n{result.stdout}\n{result.stderr}')
+              return result.stdout + result.stderr
+          generated = scratch / 'pebrel.luau'
+          invoke('config', 'init', '--language', 'en-US', '--config-file', generated)
+          invoke('config', 'check', '--config-file', generated)
+          generated.write_text("local p = require 'pebrel'\nlocal c = p.config_builder()\nlocal n: number = 17\nc.ui = { font_size = n, sidebar_width = 224 }\nc.shaders = { background = { enabled = false, path = 'background.glsl', speed = 0.8, frame_rate = 30, parameter = 0.5 }, terminal = { enabled = false, paths = { 'scanlines.frag' }, parameters = { 0.4, 0, 0, 0 } } }\nreturn c\n", encoding='utf-8')
+          invoke('config', 'check', '--config-file', generated)
+          generated.write_text("local p = require 'pebrel'\nlocal c = p.config_builder()\nc.ui = { unknown_key = true }\nreturn c\n", encoding='utf-8')
+          invalid = invoke('config', 'check', '--config-file', generated, failure=True)
+          if 'unknown_key' not in invalid:
+              raise RuntimeError('Invalid UI key did not produce its configuration error: ' + invalid)
+          generated.write_text('while true do pcall(function() while true do end end) end\n', encoding='utf-8')
+          limited = invoke('config', 'check', '--config-file', generated, failure=True)
+          if not any(word in limited.lower() for word in ('budget', 'deadline')):
+              raise RuntimeError('Luau quota did not produce its bounded-execution error: ' + limited)
+          plugin = scratch / 'plugin'
+          plugin.mkdir(exist_ok=True)
+          (plugin / 'plugin.toml').write_text('manifest_version = 1\napi_version = 1\nid = "example.validation"\nname = "Luau Validation"\nversion = "0.1.0"\nentry = "init.luau"\npermissions = []\n[[commands]]\nid = "value"\ntitle = "Value"\nhandler = "value"\n', encoding='utf-8')
+          (plugin / 'init.luau').write_text('return { value = function(_ctx, _args) local value: number = 42; return { value = value } end }\n', encoding='utf-8')
+          response = json.loads(invoke('plugin', 'run', plugin, 'value'))
+          execution = response['result']['execution']
+          if not response['ok'] or execution['engine'] != 'luau' or execution['result']['value'] != 42:
+              raise RuntimeError(response)
+          (root / 'dist/configuration-checks.json').write_text(json.dumps({
+              'commit': os.environ['GITHUB_SHA'], 'configuration_entry': 'passed',
+              'ui_and_shader_values': 'passed', 'invalid_ui_key': 'rejected',
+              'protected_infinite_loop': 'bounded', 'luau_plugin_command': 'passed',
+              'regression_tests': 'not run'
+          }, indent=2), encoding='utf-8')
+          print('Built configuration entry and Luau plugin command checks passed.')
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/build-installer.ps1 -Version $env:PACKAGE_VERSION -PackageBrand Pebrel -OutputDirectory dist -TargetDirectory target -Force
+      - name: Record package identity and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            "dist/Pebrel-v$env:PACKAGE_VERSION-windows-x64.zip",
+            "dist/Pebrel-v$env:PACKAGE_VERSION-windows-x64-setup.exe"
+          )
+          $assets = foreach ($file in $files) {
+            $item = Get-Item -LiteralPath $file
+            if ($item.Length -le 0) { throw "Empty package: $file" }
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            [ordered]@{ name = $item.Name; bytes = $item.Length; sha256 = $hash }
+          }
+          $assets | ForEach-Object { "$($_.sha256)  $($_.name)" } | Set-Content dist/SHA256SUMS -Encoding utf8
+          [ordered]@{
+            commit = $env:GITHUB_SHA
+            version = $env:PACKAGE_VERSION
+            architecture = 'x64'
+            product = 'gpui'
+            regression_tests = 'not run, as requested'
+            native_ui_acceptance = 'not run'
+            assets = @($assets)
+          } | ConvertTo-Json -Depth 5 | Set-Content dist/build-metadata.json -Encoding utf8
+      - name: Upload candidate packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-configuration-candidate-x64
+          path: |
+            dist/Pebrel-*-windows-x64.zip
+            dist/Pebrel-*-windows-x64-setup.exe
+            dist/SHA256SUMS
+            dist/build-metadata.json
+            dist/configuration-checks.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
