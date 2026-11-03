@@ -124,17 +124,20 @@ Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/A
 感谢 [Kuddev](https://github.com/Kuddev)、[Aschenbath](https://github.com/Aschenbath)、[M1nt-Ch0c0](https://github.com/M1nt-Ch0c0)、[galact-byte](https://github.com/galact-byte)、[glitch-cmyk658](https://github.com/glitch-cmyk658)、[Tettu0530](https://github.com/Tettu0530)、[MeshedPoto](https://github.com/MeshedPoto) 和 [GeekMr](https://github.com/WilliamWang1721) 参与 2.3.1 之后纳入本版的功能、修复、翻译与发布整合。
 
 ### SHA256
-- `Pebrel-v2.4.0-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-linux-x64-preview.deb`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-windows-x64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-windows-x64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-windows-arm64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-android-universal-preview.apk`: `PENDING FINAL BUILD`
-- `Pebrel-v2.4.0-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+
+```text
+cbe20caf54c1a4afc24ddd2b104ac58852ea6d77f8d78357032820c490bcd606  Pebrel-v2.4.0-android-universal-preview.apk
+f8e6d5e1cb600b9a11773f77675c1fae6af5c9e906444675d35dc4681e299dfe  Pebrel-v2.4.0-linux-x64-preview.AppImage
+a46302426ec8bce9f50215cb2c27c18afdc768d0c71c41652a5125ac26609666  Pebrel-v2.4.0-linux-x64-preview.deb
+45306ba9fa5487421a4ca9662e0650f1e7863376ecc6377bbe98a85d779c5c3c  Pebrel-v2.4.0-linux-x64-preview.tar.gz
+0c8a423d14db87851a8f9ffb38b05b576a941d02bb9ce3d90a42344663ef02eb  Pebrel-v2.4.0-macos-arm64-preview.dmg
+35ddd24b24767875d3ee272b221eb8c4d0216018fd4e09be5a835d3bbb391dac  Pebrel-v2.4.0-macos-x64-preview.dmg
+70719726207b8328c20277bd30aa24ae58b7cc718cbc98826d39e414e765609c  Pebrel-v2.4.0-relay-manual.tar.gz
+ef65aee0f03f9fe60fecf495fdbe4ef1b7603800262ef41708286b5cee5cf49e  Pebrel-v2.4.0-windows-arm64-setup.exe
+14e22a37b1cfab797c964468d336508745c1a16ca4853e6e540e42ec5c7ec01d  Pebrel-v2.4.0-windows-arm64.zip
+95f967e2a6e3d6f5fcfcc89abe248ce81e6c260a2ec66fc52f67b894d1626736  Pebrel-v2.4.0-windows-x64-setup.exe
+c3d88a428db402aff27af3a45e2550c8e3b8a5a77a079e580687ed56445c3dc7  Pebrel-v2.4.0-windows-x64.zip
+```
 
 ## 2.3.1 - 2026-10-27
 
