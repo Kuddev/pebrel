@@ -212,12 +212,6 @@ discover candidates from the current environment without matching prior commands
   <img src="docs/screenshots/themes.png" alt="Application themes" width="1040" />
 </p>
 
-## Development Partners
-
-Thanks to our partners for providing extra support for Pebrel's development.
-
-<p><a href="https://molchuan.com/"><img src="extra/logo/partner_1molchuan.jpg" width="24" height="24" align="middle" alt="" /> 1molchuan</a></p>
-
 ## Download
 
 Choose a package from the **[latest release](https://github.com/Kuddev/pebrel/releases/latest)**.
@@ -310,6 +304,8 @@ Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 Pebrel includes third-party terminal, interface and font components. Their
 provenance, copyright and license notices are preserved in
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
+
+Thanks to [1molchuan](https://molchuan.com/) for providing extra support for Pebrel's development.
 
 ## Community
 

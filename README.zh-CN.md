@@ -188,12 +188,6 @@ WSL 发行版，以及 `cat` 读取带空格的文件名。使用内置 Powerlin
   <img src="docs/screenshots/themes.png" alt="应用主题" width="1040" />
 </p>
 
-## 合作伙伴
-
-感谢为 Pebrel 的开发提供额外支持的伙伴。
-
-<p><a href="https://molchuan.com/"><img src="extra/logo/partner_1molchuan.jpg" width="24" height="24" align="middle" alt="" /> 1molchuan</a></p>
-
 ## 下载
 
 从 **[最新发布](https://github.com/Kuddev/pebrel/releases/latest)** 选择对应安装包。
@@ -272,6 +266,8 @@ Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 Pebrel 使用了第三方终端、界面和字体组件。组件来源、版权与许可证声明统一保留在
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) 和 [licenses/](licenses/) 中。
+
+感谢 [1molchuan](https://molchuan.com/) 为 Pebrel 的开发提供额外支持。
 
 ## 友情链接
 
