@@ -267,6 +267,8 @@ Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 Pebrel 使用了第三方终端、界面和字体组件。组件来源、版权与许可证声明统一保留在
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) 和 [licenses/](licenses/) 中。
 
+感谢 [1molchuan](https://molchuan.com/) 为 Pebrel 的开发提供额外支持。
+
 ## 友情链接
 
 - **[linux.do](https://linux.do)** - 新的理想型社区。
