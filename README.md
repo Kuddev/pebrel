@@ -212,6 +212,12 @@ discover candidates from the current environment without matching prior commands
   <img src="docs/screenshots/themes.png" alt="Application themes" width="1040" />
 </p>
 
+## Development Partners
+
+Thanks to our partners for providing extra support for Pebrel's development.
+
+<p><a href="https://molchuan.com/"><img src="extra/logo/partner_1molchuan.jpg" width="24" height="24" align="middle" alt="" /> 1molchuan</a></p>
+
 ## Download
 
 Choose a package from the **[latest release](https://github.com/Kuddev/pebrel/releases/latest)**.
