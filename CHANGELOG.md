@@ -21,8 +21,6 @@ macOS, Linux, and Android downloads are Preview builds.
 - Add shader controls for animation speed, frame rate, and parameters.
 - Add opt-in next-message suggestions for supported local Claude Code, Pi, and OpenCode sessions.
 - Add a separate provider and model for next-message suggestions.
-- Add Tab to fill a suggested message without sending it.
-- Add the prediction model name while Pi or OpenCode waits for a suggestion.
 - Add native click-to-place and drag selection in supported Bash, Zsh, and PowerShell input.
 - Add directly transmitted, uncompressed RGB/RGBA images via the Kitty graphics protocol. ([#767](https://github.com/Kuddev/pebrel/pull/767))
 - Add SFTP Name and Size columns, a full-height file list, and a status bar.
@@ -78,8 +76,6 @@ macOS、Linux 和 Android 下载包为预览版。
 - 新增着色器的动画速度、帧率和参数设置。
 - 新增受支持的本地 Claude Code、Pi 和 OpenCode 会话的下一句建议，默认关闭。
 - 新增下一句建议专用的服务商和模型设置。
-- 新增 Tab 填入建议消息，不自动发送。
-- 新增 Pi 和 OpenCode 等待建议时的预测模型名称。
 - 新增受支持的 Bash、Zsh 和 PowerShell 原生输入点击定位和拖选。
 - 新增 Kitty 图形协议直接传输未压缩 RGB/RGBA 图片的支持。 ([#767](https://github.com/Kuddev/pebrel/pull/767))
 - 新增 SFTP 名称和大小列、全高文件列表及底部状态栏。
