@@ -305,6 +305,8 @@ Pebrel includes third-party terminal, interface and font components. Their
 provenance, copyright and license notices are preserved in
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
 
+Thanks to [1molchuan](https://molchuan.com/) for providing extra support for Pebrel's development.
+
 ## Community
 
 - **[linux.do](https://linux.do)** - A thriving developer community.
