@@ -177,6 +177,7 @@ impl TerminalView {
         suggest::commit_line(&mut self.suggest);
         if confirmed_submission {
             self.mark_submitted_command(native_submission);
+            self.classify_submitted_command();
             cx.notify();
         }
         if let Some(agent) =
