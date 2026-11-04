@@ -50,9 +50,9 @@ fn run_init(options: ConfigInitOptions) -> i32 {
             return 1;
         },
     };
-    if !matches!(source::source_for_path(path.clone(), true), Ok(source) if source.format == ConfigFormat::Lua)
+    if !matches!(source::source_for_path(path.clone(), true), Ok(source) if source.format == ConfigFormat::Luau)
     {
-        eprintln!("Lua configuration path must end in .lua: {}", path.display());
+        eprintln!("Luau configuration path must end in .luau (or legacy .lua): {}", path.display());
         return 1;
     }
 
@@ -71,14 +71,14 @@ fn run_init(options: ConfigInitOptions) -> i32 {
 
     match template::write_template(&path, language, options.force) {
         Ok(written) => {
-            println!("Wrote Lua configuration: {}", written.path.display());
+            println!("Wrote Luau configuration: {}", written.path.display());
             if let Some(backup) = written.backup {
                 println!("Backed up previous configuration: {}", backup.display());
             }
             0
         },
         Err(error) => {
-            eprintln!("Unable to write Lua configuration: {error}");
+            eprintln!("Unable to write Luau configuration: {error}");
             1
         },
     }

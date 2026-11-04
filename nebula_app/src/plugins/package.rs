@@ -1,4 +1,4 @@
-//! 只读取显式声明的文件；不扫描插件目录树，也不根据 Lua 内容发现元数据。
+//! 只读取显式声明的文件；不扫描插件目录树，也不根据 Luau 内容发现元数据。
 
 use std::fs::{self, File};
 use std::io::Read;
@@ -73,7 +73,7 @@ impl Package {
             let path = package_file(&package.root, entry)?;
             let size = fs::metadata(&path).map_err(|error| Error::new("package_io", error))?.len();
             if size > MAX_SOURCE_BYTES as u64 {
-                return Err(Error::new("source_too_large", "Lua entry exceeds 256 KiB"));
+                return Err(Error::new("source_too_large", "Luau entry exceeds 256 KiB"));
             }
         }
         Ok(package)
@@ -84,7 +84,7 @@ impl Package {
             .manifest
             .entry
             .as_deref()
-            .ok_or_else(|| Error::new("missing_entry", "Lua commands require an entry"))?;
+            .ok_or_else(|| Error::new("missing_entry", "Luau commands require an entry"))?;
         read_file(&self.root, entry, MAX_SOURCE_BYTES)
     }
 
@@ -148,7 +148,7 @@ impl Manifest {
                 _ => {
                     return Err(Error::new(
                         "invalid_command",
-                        "declare exactly one permitted method or Lua handler",
+                        "declare exactly one permitted method or Luau handler",
                     ));
                 },
             }
@@ -160,13 +160,16 @@ impl Manifest {
         if has_lua != self.entry.is_some() {
             return Err(Error::new(
                 "invalid_entry",
-                "entry must be present exactly when Lua handlers are declared",
+                "entry must be present exactly when Luau handlers are declared",
             ));
         }
         if let Some(entry) = &self.entry {
             valid_relative_path(entry)?;
-            if !entry.ends_with(".lua") {
-                return Err(Error::new("invalid_entry", "entry must end in .lua"));
+            if !entry.ends_with(".luau") && !entry.ends_with(".lua") {
+                return Err(Error::new(
+                    "invalid_entry",
+                    "entry must end in .luau (or legacy .lua)",
+                ));
             }
         }
         Ok(())

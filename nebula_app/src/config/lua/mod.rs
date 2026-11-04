@@ -1,4 +1,5 @@
 use std::fmt::{self, Display, Formatter};
+#[cfg(test)]
 use std::fs;
 use std::path::Path;
 
@@ -9,6 +10,7 @@ use serde::Deserialize;
 use crate::config::UiConfig;
 
 pub mod convert;
+mod modules;
 pub mod runtime;
 
 use convert::{LuaValueError, lua_value_to_toml};
@@ -74,10 +76,10 @@ impl From<LuaValueError> for LuaConfigError {
 }
 
 pub fn load_lua_file(path: &Path, reload: ReloadSignal) -> Result<LoadedLuaConfig, LuaConfigError> {
-    let source = fs::read_to_string(path)?;
+    let source = modules::read_source(path, 1024 * 1024)?;
     let source = source.strip_prefix('\u{feff}').unwrap_or(&source);
     let runtime = LuaRuntime::new(path, reload)?;
-    let value: LuaValue = runtime.lua().load(source).set_name(path.to_string_lossy()).eval()?;
+    let value: LuaValue = runtime.evaluate(source, path)?;
     let strict = builder_strict(&value);
     let (mut config, diagnostics) = validate_config_value(runtime.lua(), value, strict)?;
     let mut watched_paths = vec![path.canonicalize().unwrap_or_else(|_| path.to_owned())];
