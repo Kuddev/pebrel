@@ -76,14 +76,14 @@ impl Drop for PreparedExport {
 impl SftpController {
     pub(crate) fn prepare_export(
         &self,
-        entry: SftpEntry,
+        entries: Vec<SftpEntry>,
         source_entries: Vec<SftpEntry>,
     ) -> tokio::sync::oneshot::Receiver<Result<Arc<PreparedExport>, String>> {
         let snapshot = self.snapshot();
         let (ready, receive) = tokio::sync::oneshot::channel();
         self.start_job(
             SftpPhase::Working,
-            Some(TransferProgress::new(entry.name.clone(), 0)),
+            Some(TransferProgress::new(entries_label(&entries), 0)),
             move |context| async move {
                 let prepare = async {
                     context.check_cancelled()?;
@@ -91,7 +91,7 @@ impl SftpController {
                         Arc::new(tempfile::Builder::new().prefix("pebrel-drag-").tempdir()?);
                     let sftp = crate::ssh_session::open_sftp(&snapshot.destination).await?;
                     let plan =
-                        build_download_plan(&sftp, entry, directory.path().to_owned(), &context)
+                        build_download_plan(&sftp, entries, directory.path().to_owned(), &context)
                             .await?;
                     context.set_total(plan.total);
                     let files = export_manifest(&plan, directory.path())?;
