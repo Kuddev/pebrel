@@ -1,10 +1,18 @@
 package io.github.kuddev.pebrel.mobile.connection
 
+import kotlinx.coroutines.*
+import kotlinx.coroutines.test.*
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.util.Base64
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
+@OptIn(ExperimentalCoroutinesApi::class)
 class RelayRoutesTest {
     private fun key(value: Int) = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { value.toByte() })
     private fun profile(mode: String, room: String = mode, host: Int = 1, invitation: Boolean = false) = RelayProfile(
@@ -96,5 +104,56 @@ class RelayRoutesTest {
             assertSame(requested, attempt.next())
             assertNull(attempt.next(DesktopFailureKind.NETWORK))
         }
+    }
+
+    @Test fun aLanDeadlineClosesEachStalledHandshakeBeforeAllowingFallback() = runTest {
+        for (stage in 0..3) {
+            val closed = CompletableDeferred<Unit>()
+            val failures = mutableListOf<DesktopFailureKind>()
+            val transport = object : DesktopTransport {
+                lateinit var receive: (JSONObject) -> Unit
+                override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit,
+                                          disconnected: (Throwable?) -> Unit) {
+                    this.receive = receive
+                    if (stage == 0) awaitCancellation()
+                    if (stage >= 2) receive(JSONObject().put("type", "mobile.ready")
+                        .put("protocol", "pebrel.mobile.relay").put("version", 1))
+                }
+                override fun send(frame: JSONObject) {
+                    if (stage == 3) receive(JSONObject().put("id", frame.getString("id"))
+                        .put("ok", true).put("result", JSONObject()))
+                }
+                override fun close() { closed.complete(Unit) }
+            }
+            val client = DesktopRuntimeClient(transport, { fail("a stalled route is not ready") }, failures::add)
+            val started = currentTime
+            val result = runCatching { withTimeout(5_000) { client.connect(true) } }
+            assertTrue("stage $stage", result.exceptionOrNull() is DesktopConnectionFailure)
+            assertEquals(5_000L, currentTime - started)
+            assertEquals(1, failures.size)
+            assertTrue(DesktopReconnect.retryable(failures.single()))
+            closed.await()
+            val attempt = RelayRouteAttempt(listOf(profile("lan"), profile("relay")))
+            assertEquals("lan", attempt.next()!!.mode)
+            assertEquals("relay", attempt.next(failures.single())!!.mode)
+            assertNull(attempt.next())
+        }
+    }
+
+    @Test fun cancellingAnAttemptClosesItWithoutReportingARetryableFailure() = runTest {
+        val closed = CompletableDeferred<Unit>()
+        val failures = mutableListOf<DesktopFailureKind>()
+        val transport = object : DesktopTransport {
+            override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit,
+                                      disconnected: (Throwable?) -> Unit) { awaitCancellation() }
+            override fun send(frame: JSONObject) { fail("cancelled handshake cannot send") }
+            override fun close() { closed.complete(Unit) }
+        }
+        val client = DesktopRuntimeClient(transport, {}, failures::add)
+        val attempt = launch { client.connect(true) }
+        runCurrent()
+        attempt.cancelAndJoin()
+        closed.await()
+        assertTrue(failures.isEmpty())
     }
 }
