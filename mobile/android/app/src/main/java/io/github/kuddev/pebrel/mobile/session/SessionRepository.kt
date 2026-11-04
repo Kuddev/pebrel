@@ -72,7 +72,7 @@ class SessionRepository(private val context: Context,
     private val savedCredentialIds = MutableStateFlow<Set<String>>(emptySet())
     val savedCredentials = savedCredentialIds.asStateFlow()
     val backgroundActive = MutableStateFlow(false)
-    val theme = MutableStateFlow(preferences.getString("theme", "system") ?: "system")
+    val theme = MutableStateFlow(preferences.getString("theme", "MintLight") ?: "MintLight")
     fun selectTheme(value: String) {
         theme.value = value
         scope.launch { preferences.edit().putString("theme", theme.value).apply() }
