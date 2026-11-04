@@ -365,7 +365,11 @@ impl NebulaWorkspace {
             .relative()
             .w(px(width))
             .h_full()
-            .pb(px(crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom))
+            .pb(px(if remote && matches!(self.side_panel.view, PanelView::Files) {
+                0.0
+            } else {
+                crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom
+            }))
             .child(self.render_details_header(width, window, cx))
             .child(div().flex_1().min_h_0().w_full().child(panel).with_animation(
                 ("details-content", self.details_panel.transition),
