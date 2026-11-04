@@ -8,6 +8,7 @@ use gpui_component::{
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod application_mouse;
 mod shell_pointer;
 
 struct Probe {
