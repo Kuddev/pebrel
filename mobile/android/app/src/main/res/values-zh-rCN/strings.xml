@@ -201,6 +201,7 @@
     <string name="reader_image_failed">图片解码失败，请检查电脑上的图片文件和格式。</string>
     <string name="reader_link_failed">链接未打开，请使用 HTTP 链接或本地文件路径。</string>
     <string name="chat_title">对话视图</string>
+    <string name="chat_compose">给助手发消息…</string>
     <string name="chat_terminal">终端视图</string>
     <string name="chat_you">你</string>
     <string name="chat_tool">工具</string>

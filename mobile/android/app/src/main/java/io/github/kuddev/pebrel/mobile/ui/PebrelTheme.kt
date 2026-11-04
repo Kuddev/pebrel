@@ -39,7 +39,7 @@ fun PebrelTheme(content: @Composable () -> Unit) {
     }
     val choice by application.sessions.theme.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
-    val name = if (catalog.has(choice)) choice else if (systemDark) "Nord" else "Paper"
+    val name = if (catalog.has(choice)) choice else if (systemDark) "Nord" else "MintLight"
     val palette = remember(name) { catalog.getJSONObject(name) }
     val background = palette.color("background")
     val dark = background.luminance() < 0.5f
