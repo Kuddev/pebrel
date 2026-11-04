@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <strong>简体中文</strong>
+  <a href="README.md">English</a> · <strong>简体中文</strong> · <a href="README.ja.md">日本語</a>
 </p>
 
 ---
@@ -79,11 +79,11 @@
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-04.jpg"><img src="extra/community/wechat-group-2026-11-04.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 4 日前有效" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-11.jpg"><img src="extra/community/wechat-group-2026-11-11.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 11 日前有效" width="300" /></a>
 </p>
 
 <p align="center">
-  微信扫码加入，2026 年 11 月 4 日前有效。点击图片可查看原图。
+  微信扫码加入，2026 年 11 月 11 日前有效。点击图片可查看原图。
 </p>
 
 ## 一个工作区
