@@ -305,7 +305,10 @@ Pebrel includes third-party terminal, interface and font components. Their
 provenance, copyright and license notices are preserved in
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
 
-Thanks to [1molchuan](https://molchuan.com/) for providing extra support for Pebrel's development.
+<p>Thanks to <a href="https://molchuan.com/"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="extra/logo/acknowledgement_1molchuan_dark.png">
+  <img alt="1molchuan" src="extra/logo/acknowledgement_1molchuan_light.png" width="120">
+</picture></a> for providing extra support for Pebrel's development.</p>
 
 ## Community
 
