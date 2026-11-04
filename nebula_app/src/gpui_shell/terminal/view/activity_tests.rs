@@ -680,3 +680,96 @@ fn a_known_remote_pane_without_a_current_observation_keeps_outer_evidence(cx: &m
         assert_eq!(view.agent_activity.source(), AgentStatusSource::Screen);
     });
 }
+
+#[gpui::test]
+fn interactive_ssh_login_keeps_running_without_a_permanent_spinner(cx: &mut TestAppContext) {
+    use crate::runtime_api::RuntimeTaskState;
+
+    for command in [
+        "ssh user@example.test",
+        "ssh -p 2222 user@example.test",
+        r"C:\Windows\System32\OpenSSH\ssh.exe user@example.test",
+        "pebrel ssh user@example.test",
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.last_committed = command.into();
+            view.on_command_start(cx);
+            // 停在主屏的远端 shell（#857）：仍是运行中且关闭需确认，但不转圈。
+            assert!(!view.term_mode().contains(TermMode::ALT_SCREEN));
+            assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running, "{command}");
+            assert!(view.busy_process().is_some(), "{command}");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle, "{command}");
+
+            view.progress = crate::taskbar::TaskProgress::Indeterminate;
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.progress = crate::taskbar::TaskProgress::None;
+            view.ssh_stage = Some(crate::ssh_session::SshStage::Authenticate);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.ssh_stage = None;
+
+            // A remote program reported by shell integration owns its own activity.
+            view.running_program = Some("make".into());
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.running_program = Some("claude".into());
+            view.agent_activity.begin_command(true);
+            view.agent_activity.submitted();
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+
+            view.finish_foreground_command(Some(0), cx);
+            view.suggest.last_committed = "cargo test".into();
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        });
+    }
+}
+
+#[gpui::test]
+fn ssh_remote_commands_and_noninteractive_modes_keep_their_spinner(cx: &mut TestAppContext) {
+    for command in [
+        "ssh example.test make",
+        "ssh -T example.test",
+        "ssh -N -L 8000:localhost:80 example.test",
+        "ssh -G example.test",
+        "ssh example.test && cargo test",
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.last_committed = command.into();
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running, "{command}");
+        });
+    }
+}
+
+#[gpui::test]
+fn ssh_login_classification_does_not_leak_into_the_next_pasted_command(cx: &mut TestAppContext) {
+    for runtime_prompt in [false, true] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            if runtime_prompt {
+                view.runtime_prompt("ssh user@example.test".into(), true, cx).unwrap();
+            } else {
+                // cmd.exe 没有 133;C：只有 Enter 这一个提交边界，也不能永久转圈。
+                feed(view, b"C:\\work>ssh user@example.test");
+                view.suggest.line_buf = "ssh user@example.test".into();
+                view.commit_line(cx);
+            }
+            assert_eq!(view.suggest.last_committed, "ssh user@example.test");
+            assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Running);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+
+            view.finish_foreground_command(Some(0), cx);
+            feed(view, b"\x1b[?2004h");
+            view.runtime_paste("cargo test".into(), true, InputOrigin::Program, cx).unwrap();
+            // 粘贴不刷新 `last_committed`；随后的 133;C 不能借旧行把新命令判成登录。
+            assert_eq!(view.suggest.last_committed, "ssh user@example.test");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        });
+    }
+}
