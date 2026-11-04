@@ -210,6 +210,22 @@ class ProhibitedNamesTests(unittest.TestCase):
         self.assertFalse(check_prohibited_names.prohibited_source_line("Cargo.toml", dependency))
         self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", dependency))
 
+    def test_desktop_hook_wire_references_preserve_only_the_exact_interface(self) -> None:
+        cases = (
+            ("nebula_app/res/hooks/remote_bridge.py", 'if os.environ.get("TMUX"):'),
+            ("nebula_app/res/hooks/remote_tmux.py", 'environment = os.environ.get("TMUX", "").rsplit(",", 2)'),
+            ("nebula_app/res/hooks/remote_tmux.py", 'root = Path(__file__).absolute().parent / "tmux-routes"'),
+            ("nebula_app/res/hooks/remote_bridge.py", 'header += " tmux=" + route["context"]'),
+            ("nebula_app/src/ai_hook/protocol.rs", 'let context = field.strip_prefix("tmux=")?;'),
+        )
+        for path, text in cases:
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + ' # compare with Otty'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + ' # tmux design'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'label = "tmux"'))
+
     def test_mobile_build_and_session_references_preserve_their_interfaces(self) -> None:
         cases = (
             ("mobile/android/third_party/reader-build/package-lock.json", '"node_modules/@types/d3-contour": {'),

@@ -96,14 +96,24 @@ const PebrelNotify = async ({ directory, worktree }) => {
           turn.active = true
           send({ kind: "prompt" })
         }
-      } else if (t === "session.idle") {
+      } else if (t === "session.status" && ["busy", "retry"].includes(props.status?.type)) {
+        if (!turn.active) { turn.active = true; send({ kind: "prompt" }) }
+      } else if (t === "session.finished" || t === "session.error") {
+        turn.active = false
+        const outcome = t === "session.error"
+          ? (props.error?.name === "MessageAbortedError" ? "cancelled" : "failed")
+          : props.outcome
+        send({ kind: "done", outcome })
+      } else if (t === "session.idle" || (t === "session.status" && props.status?.type === "idle")) {
         // Dedupe opencode's spurious idles (startup/cancel): only a turn
         // that actually started reports done.
         if (turn.active) { turn.active = false; send({ kind: "done" }) }
-      } else if (t === "permission.updated" || t === "permission.ask") {
+      } else if (["permission.updated", "permission.ask", "permission.asked", "question.asked"].includes(t)) {
         // Compatibility path for OpenCode builds that also publish permission
         // changes on the generic event bus.
         reportPermission(props)
+      } else if (["permission.replied", "question.replied", "question.rejected"].includes(t)) {
+        send({ kind: "tool-complete" })
       } else if (t === "tool.execute.after") {
         send({ kind: "tool-complete" })
       } else if (t === "session.deleted") {
@@ -146,10 +156,18 @@ export default {
           case "session.execution.succeeded":
           case "session.execution.failed":
           case "session.execution.interrupted":
-            type = "session.idle"
+            type = "session.finished"
+            properties = { ...data, outcome: event.type === "session.execution.succeeded"
+              ? "succeeded" : event.type === "session.execution.failed" ? "failed" : "cancelled" }
             break
           case "permission.asked":
+          case "question.asked":
             type = "permission.ask"
+            break
+          case "permission.replied":
+          case "question.replied":
+          case "question.rejected":
+            type = "permission.replied"
             break
           case "session.tool.success":
           case "session.tool.failed":

@@ -24,6 +24,7 @@ impl AiHookEvent {
             pane,
             agent_pid: self.agent_pid,
             remote_process: self.remote_process.clone(),
+            remote_context: self.remote_context.clone(),
         }
     }
 }
@@ -37,6 +38,7 @@ struct AiHookStreamKey {
     /// 流：两者的 session id 也不同，但那个值可能缺失，pid 不会。
     agent_pid: Option<u32>,
     remote_process: Option<String>,
+    remote_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

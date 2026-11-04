@@ -1,7 +1,7 @@
 //! Explicit local authorization for background effects. Renderers own capabilities.
-use crate::RawSettings;
+use crate::{RawSettings, ShaderTiming};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BackgroundEffects {
     pub grain: bool,
     pub neon_vortex: bool,
@@ -9,6 +9,8 @@ pub struct BackgroundEffects {
     pub liquid_silk: bool,
     pub wgsl: bool,
     pub wgsl_path: Option<String>,
+    pub timing: ShaderTiming,
+    pub parameter: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +31,9 @@ impl BackgroundEffects {
         "background_effect_liquid_silk",
         "background_wgsl_enabled",
         "background_wgsl_path",
+        "background_shader_speed",
+        "background_shader_frame_rate",
+        "background_shader_parameter",
     ];
     pub const PRESETS: &'static [&'static str] =
         &["off", "grain", "neon_vortex", "aurora_ribbons", "liquid_silk", "wgsl"];
@@ -41,10 +46,12 @@ impl BackgroundEffects {
             liquid_silk: raw.bool_on("background_effect_liquid_silk").unwrap_or(false),
             wgsl: raw.bool_on("background_wgsl_enabled").unwrap_or(false),
             wgsl_path: raw.value("background_wgsl_path").map(str::to_owned),
+            timing: ShaderTiming::from_raw(raw, "background_shader"),
+            parameter: crate::shader_parameters::parameter(raw, "background_shader_parameter"),
         }
     }
 
-    /// A path alone never enables execution. Explicit WGSL wins over controlled grain.
+    /// A path alone never enables execution. Explicit custom code wins over built-ins.
     /// This performs no I/O, starts no compiler and subscribes to no playback tick.
     pub fn request(&self) -> Result<BackgroundEffectRequest<'_>, &'static str> {
         if self.wgsl {

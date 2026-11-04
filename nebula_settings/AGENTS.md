@@ -5,3 +5,5 @@
 - 新设置必须定义默认值、合法范围、序列化/反序列化、旧配置兼容、重置和往返测试；开放会话是否即时生效必须明确。
 - 语言和消息注册保持单一权威；普通翻译查询的既有零分配合同不能被格式化或冷路径逻辑悄悄改变。
 - 持久化格式、兼容迁移或共享设置所有权的非平凡变化写入 `architecture/notes/nebula_settings/<capability>/`。
+
+- 原生 UI 的 Luau 默认值与界面保存优先级见 [脚本默认值](../architecture/notes/nebula_settings/config_defaults/2026-11-02-script-ui-defaults.md)；设置核心不执行脚本。

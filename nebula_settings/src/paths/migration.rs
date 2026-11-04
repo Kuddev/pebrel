@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const LOCK_FILE: &str = ".pebrel-migration.lock";
 const COMPLETE_FILE: &str = ".pebrel-migration-v1";
-const CONFIG_FILES: &[&str] = &["pebrel.lua", "pebrel.toml", "pebrel.yml", "pebrel.yaml"];
+const CONFIG_FILES: &[&str] =
+    &["pebrel.luau", "pebrel.lua", "pebrel.toml", "pebrel.yml", "pebrel.yaml"];
 static COPY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const DATA_FILES: &[(&str, &str)] = &[
@@ -21,6 +22,7 @@ const DATA_FILES: &[(&str, &str)] = &[
     ("nebula_history_ssh.jsonl", "pebrel_history_ssh.jsonl"),
     ("nebula_debug.log", "pebrel_debug.log"),
     ("nebula-panic.log", "pebrel-panic.log"),
+    ("nebula.luau", "pebrel.luau"),
     ("nebula.lua", "pebrel.lua"),
     ("nebula.toml", "pebrel.toml"),
     ("nebula.yml", "pebrel.yml"),

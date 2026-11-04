@@ -9,7 +9,7 @@ use super::{AiHookEvent, AiHookKind};
 
 /// A stop from these sources proves nothing about the answer unless it carries a result, so
 /// an unclassified one returns the pane to idle instead of announcing completion.
-const UNPROVEN_STOP: [&str; 5] = ["pi", "omp", "cursor", "copilot", "antigravity"];
+const UNPROVEN_STOP: [&str; 6] = ["pi", "omp", "cursor", "copilot", "antigravity", "opencode"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum HookCoverage {
@@ -37,29 +37,23 @@ pub(crate) struct AgentActivity {
     rule: Option<String>,
     coverage: HookCoverage,
     owner: Option<Owner>,
-    /// 停滞对账的连续形态计数：idle 拍（收敛）与 working 拍（点火）各一份，
-    /// 任一拍出现对方形态即归零——交替出现的证据不构成「稳定形态」。
     idle_samples: u8,
-    working_samples: u8,
     unmatched_samples: u8,
     /// Only a preceding Working state may survive a screen form's expiry.
     screen_blocked_fallback: Option<(AgentStatusSource, Option<String>)>,
     turn_observed: bool,
     pending_submit: bool,
-    /// 屏幕停滞对账推断的完成（Done/Idle）标记。推断不是权威：同 turn 的
-    /// 迟到真 TurnDone 仍要被采纳（补真实的成败与通知），去重护栏只拦
-    /// 权威完成的重放。任何被采纳的 hook 事件与命令边界都会清掉它。
-    inferred_done: bool,
     /// A completion-only hook latches its result until an idle screen or an
     /// explicit submission separates the old frame from a new turn.
     screen_armed: bool,
     command_ended: bool,
     native_codex: bool,
+    /// Fresh provider title evidence is separate from the underlying lifecycle.
+    /// Removing a title marker cannot manufacture a completion or approval.
+    native_title: Option<AgentStatus>,
     turn_id: Option<String>,
     last_remote_sequence: Option<u64>,
-    /// 最近一次明确提交或被采纳的 hook 事件时刻。远端停滞对账必须给
-    /// 每次新提交完整等待期限，不沿用上一回合的空闲时间。
-    /// （见 [`AgentActivity::reconcile_stalled_turn`]）。
+    /// Reject title snapshots captured before a newer submission or Hook.
     last_activity_at: Option<std::time::Instant>,
 }
 
@@ -72,15 +66,14 @@ impl Default for AgentActivity {
             coverage: HookCoverage::None,
             owner: None,
             idle_samples: 0,
-            working_samples: 0,
             unmatched_samples: 0,
             screen_blocked_fallback: None,
             turn_observed: false,
             pending_submit: false,
-            inferred_done: false,
             screen_armed: true,
             command_ended: false,
             native_codex: false,
+            native_title: None,
             turn_id: None,
             last_remote_sequence: None,
             last_activity_at: None,
@@ -90,13 +83,17 @@ impl Default for AgentActivity {
 
 impl AgentActivity {
     pub fn status(&self) -> AgentStatus {
-        self.status
+        self.native_title.unwrap_or(self.status)
     }
     pub fn source(&self) -> AgentStatusSource {
-        self.source
+        if self.native_title.is_some() { AgentStatusSource::Title } else { self.source }
     }
     pub fn rule(&self) -> Option<&str> {
-        self.rule.as_deref()
+        match self.native_title {
+            Some(AgentStatus::Blocked) => Some("codex.title.action_required"),
+            Some(AgentStatus::Working) => Some("codex.title.working"),
+            _ => self.rule.as_deref(),
+        }
     }
     pub fn hook_seen(&self) -> bool {
         self.coverage != HookCoverage::None
@@ -105,7 +102,44 @@ impl AgentActivity {
         self.owner.as_ref().and_then(|owner| owner.pid)
     }
     pub fn allows_screen(&self) -> bool {
-        !self.command_ended && self.coverage != HookCoverage::Lifecycle
+        !self.command_ended
+            && self.native_title.is_none()
+            && self.coverage != HookCoverage::Lifecycle
+    }
+
+    /// The adapter supplies a real OSC update or a fresh authenticated remote pane
+    /// sample from the already identified foreground Agent. Old snapshots must
+    /// not override a newer Hook/submission. Title evidence never owns requests,
+    /// session identity, results, or notifications.
+    pub fn observe_native_title(
+        &mut self,
+        program: Option<&str>,
+        title: &str,
+        observed_at: std::time::Instant,
+    ) -> bool {
+        if self.command_ended
+            || self.last_activity_at.is_some_and(|at| observed_at <= at)
+            || self.owner.as_ref().is_some_and(|owner| {
+                crate::ai_agents::AgentKind::parse(&owner.source)
+                    != program.and_then(crate::ai_agents::AgentKind::parse)
+            })
+        {
+            return false;
+        }
+        let signal = crate::ai_agents::native_title::activity(program, title);
+        if signal == self.native_title {
+            return false;
+        }
+        self.native_title = signal;
+        self.reset_screen_samples();
+        if signal.is_some() {
+            self.pending_submit = false;
+        }
+        if signal == Some(AgentStatus::Working) {
+            self.turn_observed = true;
+            self.screen_armed = true;
+        }
+        true
     }
 
     pub fn reset(&mut self) {
@@ -136,6 +170,7 @@ impl AgentActivity {
     /// A concrete runtime submission or accepted confirmation starts work. The
     /// previous input frame must not manufacture a completion before work starts.
     pub fn submitted(&mut self) {
+        self.native_title = None;
         self.status = AgentStatus::Working;
         self.source = AgentStatusSource::Process;
         self.rule = None;
@@ -168,7 +203,6 @@ impl AgentActivity {
     pub fn reset_screen_samples(&mut self) {
         self.idle_samples = 0;
         self.unmatched_samples = 0;
-        self.working_samples = 0;
     }
 
     /// Check ownership before the ordering gate records this event. An ignored
@@ -177,9 +211,7 @@ impl AgentActivity {
         if self.command_ended && event.kind != AiHookKind::SessionStart {
             return false;
         }
-        if event.legacy_attention
-            && !matches!(self.status, AgentStatus::Working | AgentStatus::Blocked)
-        {
+        if event.legacy_attention {
             return false;
         }
         // Both bridges stay installed for old clients and pending hook trust.
@@ -200,7 +232,6 @@ impl AgentActivity {
             && self.status == AgentStatus::Done
             && event.turn_id.is_some()
             && event.turn_id == self.turn_id
-            && !self.inferred_done
         {
             return false;
         }
@@ -273,6 +304,7 @@ impl AgentActivity {
             return false;
         }
         self.record_owner(event);
+        self.native_title = None;
         self.native_codex |= event.codex_hooks.is_some();
         if event.remote_process.is_some() && event.bridge_sequence.is_some() {
             self.last_remote_sequence = event.bridge_sequence;
@@ -283,7 +315,6 @@ impl AgentActivity {
             self.turn_id = event.turn_id.clone();
         }
         self.command_ended = false;
-        self.inferred_done = false;
         if event.kind == AiHookKind::SessionEnd {
             self.command_finished();
             return true;
@@ -428,94 +459,6 @@ impl AgentActivity {
         self.status = next;
         self.source = AgentStatusSource::Screen;
         self.rule = Some(detection.rule_id);
-        true
-    }
-
-    /// Whether the latest explicit submission or accepted hook has been quiet
-    /// for `threshold`. Screen samples, plain Enter and rejected hooks do not
-    /// move this boundary. The caller separately requires hook ownership.
-    pub fn turn_quiet_for(&self, threshold: std::time::Duration) -> bool {
-        self.last_activity_at.is_none_or(|at| at.elapsed() >= threshold)
-    }
-
-    /// 远端回合停滞对账（双向）：屏幕证据的第二重用途，语义对齐本地进程树对账
-    /// （`apply_activity_evidence`）的「进程消失 ≠ 失败，只收边」，以及它的镜像
-    /// ——「屏幕持续转圈 ≠ 回合没开始」。前置 `!allows_screen()`——正常路径（无
-    /// hook 权威）仍走 [`Self::observe_screen`]。SSH/WSL 的 hook 有真实丢失路径
-    /// （远端 bridge 通道锁 0.3s busy 即丢、hook 超时、envelope 超限）：丢 Stop
-    /// 把回合永久钉在 Working；丢 UserPromptSubmit/权限答复则把它钉在上一回合的
-    /// Done/Blocked。这里在「hook 已静默超阈值 + 屏幕连续两拍同形态」同时成立时
-    /// 双向收敛：idle 提示符两拍 → Done/Idle（`turn_observed` 语义与
-    /// `observe_screen` 的 idle 分支一致）；working 转圈两拍 → 重新点火 Working
-    /// 并补记 `turn_observed`（迟到的 Stop 能正确收敛）。只改状态，不清身份：
-    /// 远端 CLI 还活着，`running_program`/会话身份归命令边界（133;D /
-    /// SessionEnd）管。
-    ///
-    /// 停滞未到、刚提交（`pending_submit`）、无匹配或两拍中途形态翻面都会归零
-    /// 该方向的连续计数——误判的防线是「agent 自家的稳定屏幕形态」，不是纯计时。
-    pub fn reconcile_stalled_turn(&mut self, detection: Option<&Detection>, stalled: bool) -> bool {
-        if self.allows_screen() {
-            return false;
-        }
-        if !stalled {
-            self.idle_samples = 0;
-            self.working_samples = 0;
-            return false;
-        }
-        if self.pending_submit {
-            // 提交屏障防的是「上一帧的 idle 屏幕把刚提交的回合立刻判完成」，
-            // 它只活到停滞阈值：提交后 hook 全程静默超过阈值（PromptSubmit
-            // 与后续事件在 bridge 上全部丢失）时屏障过期，屏幕证据恢复话语
-            // 权。本拍只过期屏障并把两向计数归零——收敛/点火仍需其后连续
-            // 两拍稳定形态，不因过期而即时定论。
-            self.pending_submit = false;
-            self.idle_samples = 0;
-            self.working_samples = 0;
-            return false;
-        }
-        let Some(detection) = detection else {
-            self.idle_samples = 0;
-            self.working_samples = 0;
-            return false;
-        };
-        let next = match detection.status {
-            AgentStatus::Idle => {
-                self.working_samples = 0;
-                self.idle_samples = self.idle_samples.saturating_add(1);
-                if self.idle_samples < 2 {
-                    return false;
-                }
-                if self.turn_observed { AgentStatus::Done } else { AgentStatus::Idle }
-            },
-            AgentStatus::Working => {
-                self.idle_samples = 0;
-                self.working_samples = self.working_samples.saturating_add(1);
-                if self.working_samples < 2 {
-                    return false;
-                }
-                // 点火即观测到回合：迟到的 Stop 依此收敛为 Done 而非 Idle。
-                self.turn_observed = true;
-                AgentStatus::Working
-            },
-            // 权限等待（Blocked）是 attention 语义，归 Notification hook 与
-            // `observe_screen` 的权威判定管；Done/Unknown 无形态可依。
-            AgentStatus::Blocked | AgentStatus::Done | AgentStatus::Unknown => {
-                self.idle_samples = 0;
-                self.working_samples = 0;
-                return false;
-            },
-        };
-        if next == self.status {
-            return false;
-        }
-        self.status = next;
-        self.source = AgentStatusSource::Screen;
-        self.rule = Some(detection.rule_id.clone());
-        // 收敛为 Done/Idle 是**推断**完成（点火 Working 则推翻旧推断）：
-        // 迟到的同 turn 真 TurnDone 不受去重护栏拦截（见 `accepts_hook`）。
-        self.inferred_done = matches!(next, AgentStatus::Done | AgentStatus::Idle);
-        self.idle_samples = 0;
-        self.working_samples = 0;
         true
     }
 

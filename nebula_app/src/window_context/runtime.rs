@@ -729,6 +729,7 @@ fn runtime_agent(pane: &super::Pane) -> Option<RuntimeAgent> {
     let kind = crate::ai_agents::AgentKind::parse(raw)?;
     let state_source = match state.agent_activity.source() {
         crate::ai_agents::AgentStatusSource::Hook => RuntimeAgentStateSource::Hook,
+        crate::ai_agents::AgentStatusSource::Title => RuntimeAgentStateSource::Title,
         crate::ai_agents::AgentStatusSource::Screen => RuntimeAgentStateSource::Screen,
         crate::ai_agents::AgentStatusSource::Process
         | crate::ai_agents::AgentStatusSource::Unknown => RuntimeAgentStateSource::Process,
