@@ -66,6 +66,23 @@ pub(super) fn gpui_binding_combo(combo: &str) -> String {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub(super) fn init(cx: &mut App) {
     cx.bind_keys(default_workspace_bindings());
+    let modifier = if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    cx.bind_keys([
+        KeyBinding::new(
+            &format!("{modifier}-shift-u"),
+            remote_files::UploadFiles,
+            Some(remote_files::KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{modifier}-shift-d"),
+            remote_files::DownloadSelection,
+            Some(remote_files::KEY_CONTEXT),
+        ),
+    ]);
     // 平台判定复用已有入口；共享表不意味着给其他平台注册 ⌘ 快捷键。
     if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
         bind_macos_command_keys(cx);

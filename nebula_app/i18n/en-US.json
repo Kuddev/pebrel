@@ -1111,7 +1111,9 @@
     "choose_files": "Choose files to upload",
     "choose_upload_directory": "Choose a folder to upload",
     "choose_download_directory": "Choose the download folder",
-    "drag_hint": "Drop files here to upload; drag an item to File Explorer to download."
+    "drag_hint": "Drop files here to upload; drag an item to File Explorer to download.",
+    "completed": "Transfer completed",
+    "copied_items": "Copied {count} remote items"
   },
   "hosts": {
     "copied": "Created host copy: {name}",
@@ -1658,7 +1660,10 @@
     "reading": "Reading the remote directory…",
     "empty": "This directory is empty.",
     "error_retry": "{error} (click Reload in the top-right to retry)",
-    "busy_other": "Another host is transferring: {destination}"
+    "busy_other": "Another host is transferring: {destination}",
+    "items": "{count} items",
+    "selected_items": "{count} items selected",
+    "clear_selection": "Clear selection (Esc)"
   },
   "backup_flow": {
     "password_notice": "Pebrel keeps this password in memory only for the current run and never writes it to disk. You will be asked again for the first backup after restarting. If you forget it, existing backups cannot be unlocked.",
