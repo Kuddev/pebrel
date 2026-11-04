@@ -614,3 +614,69 @@ fn fullscreen_multiplexer_keeps_spinning_for_hook_owned_work(cx: &mut TestAppCon
         });
     }
 }
+
+/// A restored Codex form ends with its live model footer; the multiplexer's
+/// status line below it hides that anchor from whole-screen identity.
+const CODEX_RESTORED_SCREEN: &str =
+    "› Ask Codex to do anything\n\n  gpt-5.5 high · 74% left · ~/projects/nebula";
+const MULTIPLEXER_STATUS: &str =
+    "[cl2] 0:bash*                                   \"Issue\" 20:22 04-Nov-26";
+
+fn launcher_pane(view: &mut TerminalView) {
+    view.ssh_destination = Some("ops@example.test".into());
+    view.suggest.suggest_env =
+        crate::display::SuggestEnv::Ssh { destination: "ops@example.test".into() };
+    // A launcher script exec'd the multiplexer; its name is not a known client.
+    view.running_program = Some("mydev".into());
+}
+
+#[gpui::test]
+fn an_unobserved_multiplexer_client_relays_the_agent_identity_on_screen(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        launcher_pane(view);
+        screen(view, &format!("{CODEX_RESTORED_SCREEN}\n{MULTIPLEXER_STATUS}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("mydev"), "no process evidence yet");
+
+        // The remote PTY is owned by a multiplexer client whose server this
+        // account cannot query, so no pane-scoped observation will arrive.
+        view.session.as_ref().unwrap().multiplexer_client.store(true, Ordering::Relaxed);
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"));
+
+        screen(view, &format!("dev@host:~/projects/nebula$\n{MULTIPLEXER_STATUS}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"), "a redraw keeps the Agent");
+
+        view.remote_activity.passthrough_missing =
+            Some(std::time::Instant::now() - super::remote_activity::PASSTHROUGH_RELEASE);
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("mydev"), "the Agent left the pane");
+        assert!(view.ai_session.is_none());
+
+        screen(view, &format!("{CODEX_RESTORED_SCREEN}\n{MULTIPLEXER_STATUS}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"), "a later Agent is identified");
+    });
+}
+
+#[gpui::test]
+fn a_known_remote_pane_without_a_current_observation_keeps_outer_evidence(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        launcher_pane(view);
+        let session = view.session.as_ref().unwrap();
+        session.multiplexer_client.store(true, Ordering::Relaxed);
+        *session.resume_target.lock().unwrap() = Some(crate::ssh_session::ResumeTarget::sample());
+        assert!(!view.observing_tmux(), "a target alone is not an observation");
+        screen(view, &format!("{MULTIPLEXER_STATUS}\n{CODEX_RESTORED_SCREEN}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"));
+        assert_eq!(view.agent_activity.source(), AgentStatusSource::Screen);
+    });
+}
