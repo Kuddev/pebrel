@@ -8,6 +8,7 @@
 - 本地启动失败的诊断保留与显式 Shell 选择见 [`terminal/view`](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-24-failed-local-session-retention.md)。
 - 独立本地草稿写入的 canonical target 并发合同见 [`file_editor writers`](../architecture/notes/nebula_app/gpui_shell/file_editor/2026-10-11-canonical-target-writers.md)。
 - GPUI 图片解码帧与 zoom/pan 几何一致性见 [`doc_tabs`](../architecture/notes/nebula_app/gpui_shell/doc_tabs/)。
+- SFTP 图片/文本的分段预览、取消、来源身份与可写快照边界见 [`streamed previews`](../architecture/notes/nebula_app/ssh_sftp/2026-11-02-streamed-file-previews.md)。
 - Linux 静默启动、关窗守卫、桌面身份与 portal 激活令牌见 [`原生生命周期`](../architecture/notes/nebula_app/platform/2026-10-14-linux-desktop-lifecycle.md)。
 - 操作形成“触发 → 执行 → 可感知结果”的闭环。成功只能在操作真实完成或底层接口明确接受后显示，不能把回调触发当成平台级成功。
 - 异步工作必须有所有者、取消/过期策略和视图销毁清理；旧结果不得覆盖新状态。渲染回调不得同步等待磁盘、网络、子进程或长锁。

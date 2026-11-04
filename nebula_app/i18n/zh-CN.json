@@ -857,6 +857,7 @@
     "edit_block": "编辑此段落",
     "right_sidebar": "展开或收起右侧栏",
     "loading": "正在读取文件…",
+    "loading_progress": "正在加载… {received} / {total}",
     "save": "保存",
     "saving": "正在保存…",
     "saved": "已保存",

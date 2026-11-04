@@ -423,16 +423,18 @@ fn ordinary_idle_reminders_are_not_blocking_requests() {
 }
 
 #[test]
-fn untyped_legacy_notifications_cannot_reopen_an_idle_or_finished_turn() {
+fn untyped_legacy_notifications_cannot_override_any_explicit_state() {
     let wire = b"nebula-hook/1 source=claude\n{\"hook_event_name\":\"Notification\",\"session_id\":\"s\",\"message\":\"waiting for input\"}";
-    let notification = parse_remote_envelope(wire, Some(1)).unwrap();
+    assert!(parse_remote_envelope(wire, Some(1)).is_none());
+    let mut notification = event("claude", "s", "PermissionRequest");
+    notification.legacy_attention = true;
     let mut activity = AgentActivity::default();
     activity.apply_hook(&event("claude", "s", "SessionStart"));
     assert!(!activity.apply_hook(&notification));
     assert_eq!(activity.status(), AgentStatus::Idle);
     activity.apply_hook(&event("claude", "s", "UserPromptSubmit"));
-    assert!(activity.apply_hook(&notification));
-    assert_eq!(activity.status(), AgentStatus::Blocked);
+    assert!(!activity.apply_hook(&notification));
+    assert_eq!(activity.status(), AgentStatus::Working);
     activity.apply_hook(&event("claude", "s", "Stop"));
     assert!(!activity.apply_hook(&notification));
     assert_eq!(activity.status(), AgentStatus::Done);
