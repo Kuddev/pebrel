@@ -487,6 +487,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.shell_pointer.invalidate();
+        self.cancel_pointer_gesture();
         window.focus(&self.focus_handle, cx);
         self.pending_link_open = false;
         cx.emit(TerminalViewEvent::FocusRequested);
@@ -547,12 +548,7 @@ impl TerminalView {
             }
         }
         if self.mouse_mode_active(&event.modifiers) {
-            self.send_mouse_report(
-                event.position,
-                mouse_protocol::BUTTON_LEFT,
-                true,
-                &event.modifiers,
-            );
+            self.begin_application_mouse(event, cx);
             return;
         }
         self.begin_shell_pointer(event);
@@ -590,6 +586,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.move_application_mouse(event) {
+            return;
+        }
         self.update_output_hover(event, cx);
         self.update_scrollbar_hover(event.position, cx);
         // Retain the pressed link until release; dragging must not retarget it
@@ -664,6 +663,11 @@ impl TerminalView {
             }
         }
         if self.mouse_mode_active(&event.modifiers) {
+            // A press from another pane, toolbar or a consumed popup click
+            // cannot start an application's drag just by entering its hitbox.
+            if event.pressed_button == Some(MouseButton::Left) {
+                return;
+            }
             self.clear_link_hover(cx);
             // 鼠标模式的移动上报：拖动 = 按钮码+32（需 DRAG 或 MOTION 任一），
             // 无按键纯移动 = 35（仅 MOTION）；同一单元格内的移动不重报。
@@ -704,6 +708,10 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.finish_application_mouse(Some(event)) {
+            cx.stop_propagation();
+            return;
+        }
         if self.finish_completion_popup_scrollbar(event.position, cx) {
             cx.stop_propagation();
             return;
@@ -715,13 +723,7 @@ impl TerminalView {
             return;
         }
         let pending_link_open = std::mem::take(&mut self.pending_link_open);
-        if !pending_link_open && !self.selecting && self.mouse_mode_active(&event.modifiers) {
-            self.send_mouse_report(
-                event.position,
-                mouse_protocol::BUTTON_LEFT,
-                false,
-                &event.modifiers,
-            );
+        if !pending_link_open && !self.selecting {
             return;
         }
         if self.selecting && !pending_link_open {
@@ -751,6 +753,10 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.shell_pointer.invalidate();
+        if self.finish_application_mouse(Some(event)) {
+            cx.stop_propagation();
+            return;
+        }
         if self.finish_completion_popup_scrollbar(event.position, cx) {
             cx.stop_propagation();
             return;

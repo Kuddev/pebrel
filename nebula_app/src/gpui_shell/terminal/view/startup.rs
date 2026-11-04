@@ -268,6 +268,7 @@ impl TerminalView {
                 let active = window.is_window_active();
                 if !active {
                     view.shell_pointer.invalidate();
+                    view.cancel_pointer_gesture();
                 }
                 if view.cursor_window_active != active {
                     view.cursor_window_active = active;
@@ -282,6 +283,7 @@ impl TerminalView {
             }),
             cx.on_focus_out(&focus_handle, window, |view, _event, _window, cx| {
                 view.shell_pointer.invalidate();
+                view.cancel_pointer_gesture();
                 view.path_drop.invalidate();
                 if view.cursor_pane_focused {
                     view.cursor_pane_focused = false;
@@ -401,6 +403,7 @@ impl TerminalView {
             pending_link_open: false,
             copy_on_select,
             last_report_point: None,
+            application_mouse: None,
             cursor_visible: true,
             cursor_animation: Default::default(),
             cursor_blink_epoch: 0,
