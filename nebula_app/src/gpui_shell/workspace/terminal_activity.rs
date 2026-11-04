@@ -195,7 +195,7 @@ mod tests {
     ) -> (Entity<NebulaWorkspace>, Vec<Entity<TerminalView>>, Vec<Receiver<Msg>>, VisualTestContext)
     {
         cx.update(|cx| {
-            crate::gpui_shell::init(cx, None);
+            crate::gpui_shell::init(cx, Default::default());
             windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
             cx.set_reduce_motion(true);
             snapshot_probe::enable(cx);
@@ -619,7 +619,7 @@ mod tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
-            crate::gpui_shell::init(cx, None);
+            crate::gpui_shell::init(cx, Default::default());
             windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
             cx.set_reduce_motion(true);
         });
