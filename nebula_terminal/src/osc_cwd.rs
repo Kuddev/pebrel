@@ -293,11 +293,18 @@ impl CwdSniffer {
             None => (body, &body[body.len()..]),
         };
         if !payload.is_empty()
-            && !payload.iter().all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(b))
+            && !payload
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(b) || b.is_ascii_whitespace())
         {
             return None;
         }
-        Some(OscEvent::KittyGraphic { control: control.to_vec(), payload: payload.to_vec() })
+        // Clients that pipe `base64` output straight into the payload leave line
+        // breaks behind; they are formatting, not data, so drop them instead of
+        // discarding a transfer the reader would otherwise wait for forever.
+        let payload: Vec<u8> =
+            payload.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect();
+        Some(OscEvent::KittyGraphic { control: control.to_vec(), payload })
     }
 
     fn reset_to_ground(&mut self) {

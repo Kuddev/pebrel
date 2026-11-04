@@ -1530,3 +1530,7 @@ mod sync_tests;
 #[cfg(test)]
 #[path = "event_loop/kitty_tests.rs"]
 mod kitty_tests;
+
+#[cfg(test)]
+#[path = "event_loop/graphics_matrix.rs"]
+mod graphics_matrix;

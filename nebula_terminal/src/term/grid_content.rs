@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::index::{Column, Line, Point};
-use crate::inline_image::{ImageCell, ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement};
+use crate::inline_image::{
+    ImageCell, ImageFormat, ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement,
+};
 
 impl<T> Term<T> {
     /// Mutable access to the raw grid data structure.
@@ -60,7 +62,19 @@ impl<T: EventListener> Term<T> {
         self.grid.cursor.point.column = Column(end_column.min(self.columns() - 1));
         self.grid.cursor.input_needs_wrap = end_column == self.columns();
         self.mark_fully_damaged();
-        ImagePlacement { id: image.id, lifetime: Arc::downgrade(&image), layout }
+        ImagePlacement {
+            id: image.id,
+            lifetime: Arc::downgrade(&image),
+            layout,
+            format: ImageFormat::Raw,
+        }
+    }
+
+    /// Cursor cell as `(column, screen line)`, clamped to the visible grid.
+    /// Graphics code needs it to anchor a placement and to answer `d=c`/`d=x`.
+    pub(crate) fn nebula_cursor_cell(&self) -> (usize, usize) {
+        let point = self.grid.cursor.point;
+        (point.column.0, usize::try_from(point.line.0).unwrap_or(0))
     }
 
     /// Write one tile of an externally placed image at the cursor without

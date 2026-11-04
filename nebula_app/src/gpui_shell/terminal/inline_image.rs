@@ -13,9 +13,17 @@ use nebula_terminal::inline_image::{ImageLayout, ImagePlacement, ImageRun};
 
 const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_IMAGE_ENCODED_BYTES: usize = 12 * 1024 * 1024;
+/// An `f=100` transfer is a container, not pixels: the terminal buffers the
+/// file as sent, so the bound follows what a 4K screenshot can weigh instead of
+/// the much smaller budget an in-memory raw transfer needs.
+const MAX_IMAGE_CONTAINER_BYTES: usize = 64 * 1024 * 1024;
 const MAX_IMAGE_DECODED_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CACHED_IMAGES: usize = 16;
-const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
+// A full-page reader uploads the pages around the cursor before the user gets
+// there, and a decoded page costs several MB. Keep enough of them that the page
+// on screen is not evicted while it is visible: the terminal de-dupes an
+// identical re-place, so an evicted page would not come back on its own.
+const MAX_CACHED_IMAGES: usize = 32;
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_QUEUED_IMAGES: usize = 16;
 const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
 
@@ -82,8 +90,40 @@ impl InlineImageStore {
         data: Arc<Vec<u8>>,
         placement: ImagePlacement,
     ) -> Result<(), &'static str> {
-        if data.len() > MAX_IMAGE_ENCODED_BYTES {
-            return Err("encoded terminal image exceeds 12 MiB");
+        self.push_encoded(
+            data,
+            placement,
+            MAX_IMAGE_ENCODED_BYTES,
+            "encoded terminal image exceeds 12 MiB",
+        )
+    }
+
+    /// Queue a transfer that carries a container (PNG) instead of raw
+    /// pixels. The terminal keeps the container and reads only its header, so the
+    /// inflation happens here, on the decode thread rather than the input thread.
+    pub fn enqueue_container(
+        &mut self,
+        data: Weak<Vec<u8>>,
+        placement: ImagePlacement,
+    ) -> Result<(), &'static str> {
+        let Some(data) = data.upgrade() else { return Ok(()) };
+        self.push_encoded(
+            data,
+            placement,
+            MAX_IMAGE_CONTAINER_BYTES,
+            "terminal image container exceeds 64 MiB",
+        )
+    }
+
+    fn push_encoded(
+        &mut self,
+        data: Arc<Vec<u8>>,
+        placement: ImagePlacement,
+        limit: usize,
+        message: &'static str,
+    ) -> Result<(), &'static str> {
+        if data.len() > limit {
+            return Err(message);
         }
         if !placement.layout.width.is_finite()
             || !placement.layout.height.is_finite()
@@ -513,12 +553,15 @@ fn decode_rgba(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nebula_terminal::inline_image::{ImageIdentity, ImageLayout};
+    use nebula_terminal::inline_image::{
+        ImageFormat as TransferFormat, ImageIdentity, ImageLayout,
+    };
 
     fn placement(image: &Arc<ImageIdentity>) -> ImagePlacement {
         ImagePlacement {
             id: image.id,
             lifetime: Arc::downgrade(image),
+            format: TransferFormat::Raw,
             layout: ImageLayout {
                 width: 2.0,
                 height: 1.0,
@@ -636,6 +679,8 @@ mod tests {
             height_cells: 1.0,
             offset_x_cells: 0.0,
             offset_y_cells: 0.0,
+            column: 0,
+            row: 0,
             columns: 2,
             rows: 1,
         });
@@ -687,6 +732,7 @@ mod tests {
             placement: ImagePlacement {
                 id: resource.id,
                 lifetime: Arc::downgrade(&resource),
+                format: TransferFormat::Raw,
                 layout,
             },
         }];
@@ -707,6 +753,8 @@ mod tests {
                     height_cells: 1.0,
                     offset_x_cells: 0.0,
                     offset_y_cells: 0.0,
+                    column: usize::from(column),
+                    row: usize::from(row),
                     columns: 1,
                     rows: 1,
                 });

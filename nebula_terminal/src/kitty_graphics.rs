@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 use crate::event::{Event, EventListener, WindowSize};
 use crate::grid::Dimensions;
 use crate::inline_image::{
-    ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement, MAX_IMAGE_CELLS,
+    ImageFormat, ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement, MAX_IMAGE_CELLS,
 };
 use crate::term::{Term, TermMode};
 
@@ -17,17 +17,29 @@ mod control;
 use control::{Control, Reply, Result};
 
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
-const MAX_ENCODED_BYTES: usize = 24 * 1024 * 1024;
+// A whole 4K page is 33 MiB of base64 while it streams in; the buffer is only a
+// staging area, so the cap follows the largest screen a reader may draw on
+// rather than the much smaller decoded-pixel budget above.
+const MAX_ENCODED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_IMAGES: usize = 16;
 const MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const ALT_KEY: u64 = 1 << 63;
 const ANONYMOUS_KEY: u64 = 1 << 32;
+
+/// Accepts base64 with or without the canonical `=` padding; clients that split
+/// a stream by hand or strip the tail never round-trip through it exactly.
+const BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
 
 struct Bitmap {
     pixels: Arc<Vec<u8>>,
     width: u32,
     height: u32,
     channels: u8,
+    format: ImageFormat,
     cost: usize,
     delete_when_unplaced: bool,
 }
@@ -70,7 +82,16 @@ impl KittyGraphics {
     }
 
     fn send<U: EventListener>(terminal: &Term<U>, reply: Reply, result: Result<()>) {
-        if let Some(message) = reply.message(result) {
+        Self::send_features(terminal, reply, None, result);
+    }
+
+    fn send_features<U: EventListener>(
+        terminal: &Term<U>,
+        reply: Reply,
+        features: Option<&str>,
+        result: Result<()>,
+    ) {
+        if let Some(message) = reply.message(features, result) {
             terminal.nebula_kitty_reply(message);
         }
     }
@@ -90,10 +111,31 @@ impl KittyGraphics {
             return false;
         }
         let reply = Reply::read(bytes);
-        let result =
-            Control::parse(bytes).and_then(|control| Self::decode(&control, data).map(|_| ()));
-        Self::send(terminal, reply, result);
+        let control = match Control::parse(bytes) {
+            Ok(control) => control,
+            Err(error) => {
+                Self::send(terminal, reply, Err(error));
+                return true;
+            },
+        };
+        if control.feature.is_some() {
+            self.answer_features(terminal, &control);
+            return true;
+        }
+        Self::send(terminal, reply, Self::decode(&control, data).map(|_| ()));
         true
+    }
+
+    /// Replies to an `a=q,e=<action>` probe: a supported action echoes the query
+    /// keys it honours, an unsupported one reports `ENOTSUP` without naming `e`.
+    fn answer_features<U: EventListener>(&self, terminal: &Term<U>, control: &Control) {
+        match control.queried_action() {
+            Some(action) => {
+                let features = control.features(action);
+                Self::send_features(terminal, control.reply, Some(&features), Ok(()));
+            },
+            None => Self::send(terminal, control.reply, Err("ENOTSUP")),
+        }
     }
 
     pub fn graphic<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8], data: &[u8]) {
@@ -133,9 +175,13 @@ impl KittyGraphics {
                 // 新头终止旧半包，但旧的完整图片保留到新数据校验成功，避免加载中闪白。
                 self.current = None;
                 let reply = control.reply;
-                if let Err(error) = control.dimensions() {
-                    Self::send(terminal, reply, Err(error));
-                    return;
+                // A container carries its own geometry; asking it for `s`/`v`
+                // would refuse every PNG a client sends.
+                if control.format != ImageFormat::Png {
+                    if let Err(error) = control.dimensions() {
+                        Self::send(terminal, reply, Err(error));
+                        return;
+                    }
                 }
                 let id = match reply.id {
                     Some(id) => u64::from(id),
@@ -173,12 +219,35 @@ impl KittyGraphics {
         if encoded.len() > maximum {
             return Err("E2BIG");
         }
-        let pixels =
-            base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "EINVAL")?;
+        let pixels = BASE64.decode(encoded).map_err(|_| "EINVAL")?;
         if pixels.len() != needed {
             return Err("EINVAL");
         }
         Ok(pixels)
+    }
+
+    /// Decodes a PNG transfer and reads its geometry from the mandatory `IHDR`
+    /// chunk, which is all the terminal needs in order to place it on the grid.
+    fn decode_png(encoded: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+        if encoded.len() > MAX_ENCODED_BYTES {
+            return Err("E2BIG");
+        }
+        let png = BASE64.decode(encoded).map_err(|_| "EINVAL")?;
+        let (width, height) = Self::png_size(&png).ok_or("EINVAL")?;
+        if u64::from(width) * u64::from(height) > MAX_PIXELS as u64 {
+            return Err("E2BIG");
+        }
+        Ok((png, width, height))
+    }
+
+    fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+        const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        if png.len() < 24 || png[..8] != SIGNATURE || &png[12..16] != b"IHDR" {
+            return None;
+        }
+        let width = u32::from_be_bytes(png[16..20].try_into().ok()?);
+        let height = u32::from_be_bytes(png[20..24].try_into().ok()?);
+        (width != 0 && height != 0).then_some((width, height))
     }
 
     fn receive<U: EventListener>(
@@ -188,11 +257,18 @@ impl KittyGraphics {
         data: &[u8],
     ) {
         let control = &transfer.control;
-        let (width, height, pixels) = control.dimensions().unwrap();
-        let maximum = (pixels * usize::from(control.channels))
-            .div_ceil(3)
-            .saturating_mul(4)
-            .min(MAX_ENCODED_BYTES);
+        let maximum = match control.format {
+            // A container is bounded by the staging budget alone; its pixel
+            // budget is checked once the header names a size.
+            ImageFormat::Png => MAX_ENCODED_BYTES,
+            ImageFormat::Raw => {
+                let (_, _, pixels) = control.dimensions().unwrap();
+                (pixels * usize::from(control.channels))
+                    .div_ceil(3)
+                    .saturating_mul(4)
+                    .min(MAX_ENCODED_BYTES)
+            },
+        };
         if data.len() > maximum.saturating_sub(transfer.encoded.len()) {
             Self::send(terminal, control.reply, Err("E2BIG"));
             return;
@@ -207,11 +283,23 @@ impl KittyGraphics {
             self.current = Some(transfer);
             return;
         }
-        let decoded = match Self::decode(control, &transfer.encoded) {
-            Ok(decoded) => decoded,
-            Err(error) => {
-                Self::send(terminal, control.reply, Err(error));
-                return;
+        let (decoded, width, height) = match control.format {
+            ImageFormat::Png => match Self::decode_png(&transfer.encoded) {
+                Ok((png, width, height)) => (png, width, height),
+                Err(error) => {
+                    Self::send(terminal, control.reply, Err(error));
+                    return;
+                },
+            },
+            ImageFormat::Raw => match Self::decode(control, &transfer.encoded) {
+                Ok(decoded) => {
+                    let (width, height, _) = control.dimensions().unwrap();
+                    (decoded, width, height)
+                },
+                Err(error) => {
+                    Self::send(terminal, control.reply, Err(error));
+                    return;
+                },
             },
         };
         if control.action == Some(b'q') {
@@ -220,7 +308,15 @@ impl KittyGraphics {
         }
         self.forget(transfer.key);
         // 用最终 BGRA 成本约束原始仓库；RGB 不应在前端扩张后突破同一图片预算。
-        let cost = pixels * 4;
+        let cost = match control.format {
+            // A container is what stays resident; its decoded texture is budgeted
+            // by the frontend, which is the only side that inflates it.
+            ImageFormat::Png => decoded.len(),
+            ImageFormat::Raw => {
+                let (_, _, pixels) = control.dimensions().unwrap();
+                pixels * 4
+            },
+        };
         while self.images.len() >= MAX_IMAGES || self.image_bytes + cost > MAX_IMAGE_BYTES {
             let candidate = self
                 .image_order
@@ -240,6 +336,7 @@ impl KittyGraphics {
                 width,
                 height,
                 channels: control.channels,
+                format: control.format,
                 cost,
                 delete_when_unplaced: false,
             },
@@ -277,12 +374,14 @@ impl KittyGraphics {
             .filter(|id| id.is_alive())
             .unwrap_or_else(ImageIdentity::new);
         let identity = ImageIdentity::new();
+        let origin = terminal.nebula_cursor_cell();
         let placement = control.placement(
             bitmap.width,
             bitmap.height,
             viewport,
             resource.clone(),
             &identity,
+            origin,
         )?;
         let slot = control.reply.placement.map(u64::from).unwrap_or(ALT_KEY | identity.id);
         if !self.placements.contains_key(&(key, slot)) && self.placements.len() >= MAX_IMAGE_CELLS {
@@ -310,25 +409,60 @@ impl KittyGraphics {
 
     fn delete<U: EventListener>(&mut self, terminal: &mut Term<U>, control: &Control) {
         let screen = Self::screen(terminal);
-        let selected = match control.selector.to_ascii_lowercase() {
-            b'a' => None,
+        let selector = control.selector.to_ascii_lowercase();
+        let (cursor_column, cursor_row) = terminal.nebula_cursor_cell();
+        let range =
+            (selector == b'r').then(|| (control.x.min(control.y), control.x.max(control.y)));
+        let newest: HashSet<u64> = if selector == b'n' {
+            self.image_order.iter().rev().take(control.count as usize).copied().collect()
+        } else {
+            HashSet::new()
+        };
+        let selected = match selector {
+            b'a' | b'c' | b'x' | b'y' | b'r' | b'n' => None,
             b'i' => match control.reply.id {
                 Some(id) => Some(screen | u64::from(id)),
-                None => return,
+                None => {
+                    Self::send(terminal, control.reply, Err("EINVAL"));
+                    return;
+                },
+            },
+            b'p' => {
+                if control.reply.placement.is_none() {
+                    Self::send(terminal, control.reply, Err("EINVAL"));
+                    return;
+                }
+                None
             },
             _ => {
                 Self::send(terminal, control.reply, Err("ENOTSUP"));
                 return;
             },
         };
-        let visible = (selected.is_none()).then(|| terminal.nebula_visible_kitty_placements());
+        if selector == b'n' && control.count == 0 {
+            Self::send(terminal, control.reply, Ok(()));
+            return;
+        }
+        let visible = self.visible(terminal, selector);
         let free = control.selector.is_ascii_uppercase();
         let mut affected = HashSet::new();
         self.placements.retain(|(key, slot), weak| {
             let Some(placement) = weak.upgrade() else { return false };
-            let matches = *key & ALT_KEY == screen
-                && selected.is_none_or(|selected| *key == selected)
-                && control.reply.placement.is_none_or(|id| *slot == u64::from(id))
+            if *key & ALT_KEY != screen {
+                return placement.is_alive();
+            }
+            let matches = match selector {
+                b'i' => selected == Some(*key),
+                b'p' => true,
+                b'r' => range.is_some_and(|(low, high)| {
+                    *key >= screen | u64::from(low) && *key <= screen | u64::from(high)
+                }),
+                b'n' => newest.contains(key),
+                b'c' => placement.contains_cell(cursor_column, cursor_row),
+                b'x' => placement.has_column(control.x as usize),
+                b'y' => placement.has_row(control.y as usize),
+                _ => true,
+            } && control.reply.placement.is_none_or(|id| *slot == u64::from(id))
                 && visible.as_ref().is_none_or(|visible| visible.contains(&placement.id));
             if matches {
                 placement.invalidate();
@@ -349,6 +483,14 @@ impl KittyGraphics {
             }
         }
         terminal.nebula_images_changed();
+        Self::send(terminal, control.reply, Ok(()));
+    }
+
+    /// Which placements a cell-based delete selector may touch; the identity
+    /// selectors (`i`, `r`, `n`, `p`) reach placements off screen as well.
+    fn visible<U: EventListener>(&self, terminal: &Term<U>, selector: u8) -> Option<HashSet<u64>> {
+        matches!(selector, b'a' | b'c' | b'x' | b'y')
+            .then(|| terminal.nebula_visible_kitty_placements())
     }
 
     fn forget(&mut self, key: u64) {
@@ -429,6 +571,7 @@ impl KittyGraphics {
                     id: identity.id,
                     lifetime: Arc::downgrade(&identity),
                     layout,
+                    format: bitmap.format,
                 },
             });
         }
@@ -569,6 +712,23 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_hint_in_the_compression_field_does_not_reject_the_transfer() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // A page reader marks "nothing to undo" with z=-1 and then describes the
+        // crop inside the same header. Rejecting the key drops the whole page.
+        gfx.graphic(
+            &mut term,
+            b"a=T,t=d,f=24,s=2,v=1,i=1,p=1,C=1,q=1,x=0,y=0,w=2,h=1,z=-1",
+            b"AAAAAAAA",
+        );
+        assert!(gfx.current.is_none());
+        assert_eq!(gfx.images[&1].width, 2);
+        assert_eq!(gfx.images[&1].channels, 3);
+        assert!(gfx.has_placements(1));
+    }
+
+    #[test]
     fn chunked_transmit_and_place_preserves_the_first_headers_action() {
         let mut gfx = KittyGraphics::default();
         let mut term = terminal();
@@ -576,5 +736,159 @@ mod tests {
         gfx.graphic(&mut term, b"m=0", b"BA==");
         assert_eq!(gfx.identities[&7].strong_count(), 1);
         assert!(gfx.current.is_none());
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        png.extend_from_slice(&13u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&width.to_be_bytes());
+        png.extend_from_slice(&height.to_be_bytes());
+        png.extend_from_slice(&[8, 2, 0, 0, 0, 0, 0, 0, 0]);
+        png.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
+        png
+    }
+
+    /// The wire carries the container base64-encoded, like every other payload.
+    fn encoded_png(width: u32, height: u32) -> Vec<u8> {
+        use base64::Engine as _;
+        BASE64.encode(png(width, height)).into_bytes()
+    }
+
+    #[test]
+    fn a_container_transfer_is_read_from_its_own_header() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        let payload = encoded_png(3, 2);
+        gfx.graphic(&mut term, b"a=T,f=100,i=5,c=1,r=1", &payload);
+        assert!(gfx.current.is_none());
+        let image = &gfx.images[&5];
+        assert_eq!((image.width, image.height), (3, 2));
+        assert_eq!(image.format, ImageFormat::Png);
+        assert_eq!(image.cost, png(3, 2).len());
+        assert!(gfx.has_placements(5));
+    }
+
+    #[test]
+    fn a_container_that_is_not_a_png_is_refused() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,f=100,i=5,c=1,r=1", b"not a png at all");
+        assert!(gfx.images.is_empty());
+        assert!(gfx.placements.is_empty());
+        assert_eq!(gfx.image_bytes, 0);
+    }
+
+    #[test]
+    fn a_payload_without_canonical_padding_is_still_decoded() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // 1x1 RGBA needs 4 bytes; "AQIDBA" is the unpadded spelling of them.
+        gfx.graphic(&mut term, b"a=T,i=3,s=1,v=1,f=32", b"AQIDBA");
+        assert_eq!(gfx.images[&3].pixels.len(), 4);
+    }
+
+    #[test]
+    fn a_feature_query_reports_only_the_keys_this_terminal_honours() {
+        let control = control::Control::parse(b"a=q,i=41,e=T,U=1,C=0,r=1").unwrap();
+        assert_eq!(control.feature, Some(b'T'));
+        assert_eq!(control.queried_action(), Some(b'T'));
+        assert_eq!(control.features(b'T'), "e=T,C=0,r=1");
+
+        // A field this terminal does not implement stays out of the answer.
+        let control = control::Control::parse(b"a=q,i=42,e=f,r=1").unwrap();
+        assert_eq!(control.features(b'f'), "e=f,r=1");
+
+        // Answers are single key/value pairs per comma, never a fake value.
+        let control = control::Control::parse(b"a=q,i=43,e=p,c=2,r=2,x=0,y=0").unwrap();
+        assert_eq!(control.features(b'p'), "e=p,c=2,r=2,x=0,y=0");
+    }
+
+    #[test]
+    fn a_feature_query_for_an_unimplemented_action_is_refused() {
+        let control = control::Control::parse(b"a=q,i=42,e=f,r=1").unwrap();
+        assert_eq!(control.queried_action(), None);
+    }
+
+    #[test]
+    fn a_feature_query_on_a_transfer_action_is_refused() {
+        // The marker is only defined for queries; `f=100` would otherwise be
+        // silently downgraded to RGBA by the lenient branch.
+        assert!(control::Control::parse(b"a=T,e=T,f=100").is_err());
+        assert!(control::Control::parse(b"a=T,e=T").is_err());
+        assert!(control::Control::parse(b"a=q,e=T").is_ok());
+    }
+
+    #[test]
+    fn a_png_payload_is_accepted_without_a_pixel_size_in_the_header() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,f=100,i=6,c=1,r=1", &encoded_png(4, 3));
+        assert_eq!(gfx.images[&6].width, 4);
+        assert_eq!(gfx.images[&6].height, 3);
+    }
+
+    #[test]
+    fn delete_by_placement_leaves_the_other_placements_alone() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,p=1", b"AQIDBA==");
+        gfx.graphic(&mut term, b"a=p,i=7,c=1,r=1,p=2", b"");
+        assert_eq!(gfx.placements.len(), 2);
+        gfx.graphic(&mut term, b"a=d,d=p,i=7,p=1", b"");
+        assert_eq!(gfx.placements.len(), 1);
+        assert!(gfx.placements.keys().all(|(image, placement)| *image == 7 && *placement == 2));
+    }
+
+    #[test]
+    fn delete_by_id_range_removes_the_placements_inside_it() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        for id in 8..=10 {
+            gfx.graphic(&mut term, format!("a=T,i={id},s=1,v=1,c=1,r=1").as_bytes(), b"AQIDBA==");
+        }
+        assert_eq!(gfx.placements.len(), 3);
+        gfx.graphic(&mut term, b"a=d,d=r,x=8,y=9", b"");
+        assert_eq!(gfx.placements.len(), 1);
+        assert!(gfx.placements.keys().any(|(image, _)| *image == 10));
+        assert_eq!(gfx.image_bytes, 4 * 3);
+    }
+
+    #[test]
+    fn delete_by_cursor_cell_removes_only_the_placement_under_it() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // `C=1` keeps the cursor on the image, which is the cell `d=c` names.
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,C=1", b"AQIDBA==");
+        assert!(gfx.has_placements(7));
+        gfx.graphic(&mut term, b"a=d,d=c", b"");
+        assert!(!gfx.has_placements(7));
+        assert_eq!(gfx.image_bytes, 4);
+    }
+
+    #[test]
+    fn delete_by_newest_count_removes_only_the_tail() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        for id in 8..=11 {
+            gfx.graphic(&mut term, format!("a=T,i={id},s=1,v=1,c=1,r=1").as_bytes(), b"AQIDBA==");
+        }
+        gfx.graphic(&mut term, b"a=d,d=n,I=2", b"");
+        assert_eq!(gfx.placements.len(), 2);
+        assert!(gfx.placements.keys().any(|(image, _)| *image == 8));
+        assert!(gfx.placements.keys().any(|(image, _)| *image == 9));
+    }
+
+    #[test]
+    fn delete_sources_never_reach_the_grid() {
+        // Image identities reach cells off screen; only the selectors that name
+        // visible cells may be filtered by them.
+        for selector in [b'c', b'x', b'y'] {
+            let mut gfx = KittyGraphics::default();
+            let mut term = terminal();
+            gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,C=1", b"AQIDBA==");
+            gfx.graphic(&mut term, format!("a=d,d={}", selector as char).as_bytes(), b"");
+            assert!(!gfx.has_placements(7), "selector {:?}", selector as char);
+        }
     }
 }
