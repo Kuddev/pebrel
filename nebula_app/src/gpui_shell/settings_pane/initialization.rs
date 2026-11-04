@@ -43,6 +43,10 @@ impl SettingsPane {
                                 this.set_shader_preset(value, window, cx);
                                 return;
                             }
+                            if key == "font_weight" {
+                                this.set_font_weight(value, window, cx);
+                                return;
+                            }
                             if key == "cursor_motion" {
                                 this.set_cursor_motion(value, window, cx);
                                 return;
@@ -154,6 +158,13 @@ impl SettingsPane {
             "vcs_display",
             &["auto", "git", "svn"],
             runtime.vcs_display.settings_value(),
+            window,
+            cx,
+        );
+        add_select(
+            "font_weight",
+            nebula_settings::TerminalFontWeight::VALUES,
+            runtime.font_weight.settings_value(),
             window,
             cx,
         );

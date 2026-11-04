@@ -132,6 +132,7 @@ impl SettingsPane {
         let reset = dirty.then(|| {
             div()
                 .id(SharedString::from(format!("setting-reset-{label}")))
+                .debug_selector(move || format!("setting-reset-{label}"))
                 .size(px(32.0))
                 .rounded_md()
                 .flex()

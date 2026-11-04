@@ -8,13 +8,16 @@ use gpui::{
     App, Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, SharedString, TextRun, Window,
     WindowTextSystem, px,
 };
-use nebula_settings::CellWidthModeName;
+use nebula_settings::{CellWidthModeName, TerminalFontWeight};
 
 use super::Settings;
 use crate::font_install::{REQUIRED_FONT_FAMILY, gpui_font_with_fallbacks};
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod native_tests;
+
+#[cfg(test)]
+mod tests;
 
 /// Set every ligature feature explicitly, including the off case: platform
 /// defaults differ, and the Windows backend ignores an empty feature list.
@@ -36,6 +39,22 @@ pub(super) fn mono_font(
         ])),
         ..gpui_font_with_fallbacks(family)
     }
+}
+
+/// Startup and live updates use the same four faces and ANSI bold policy.
+pub(super) fn terminal_fonts(
+    families: &[String; 4],
+    weight: TerminalFontWeight,
+    ligatures: bool,
+) -> [Font; 4] {
+    let normal = FontWeight(f32::from(weight.value()));
+    let bold = FontWeight(f32::from(weight.bold_weight()));
+    [
+        mono_font(&families[0], normal, FontStyle::Normal, ligatures),
+        mono_font(&families[1], bold, FontStyle::Normal, ligatures),
+        mono_font(&families[2], normal, FontStyle::Italic, ligatures),
+        mono_font(&families[3], bold, FontStyle::Italic, ligatures),
+    ]
 }
 
 /// Apply the legacy device-pixel rounding contract to one shaped cell width.
@@ -95,12 +114,14 @@ fn measure_cell_metrics(
     scale: f32,
     family: &str,
     font_size: Pixels,
+    font_weight: TerminalFontWeight,
     mode: CellWidthModeName,
     offset_x: f32,
     offset_y: f32,
     line_height_multiplier: Option<f32>,
 ) -> (Pixels, Pixels) {
-    let font = mono_font(family, FontWeight::NORMAL, FontStyle::Normal, false);
+    let font =
+        mono_font(family, FontWeight(f32::from(font_weight.value())), FontStyle::Normal, false);
     let sample = text_system.shape_line(
         SharedString::new_static("M"),
         font_size,
@@ -127,23 +148,33 @@ fn measure_cell_metrics(
 }
 
 pub(super) fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
-    let (family, font_size, mode, offset_x, offset_y, line_height_multiplier) =
+    let (family, font_size, font_weight, mode, offset_x, offset_y, line_height_multiplier) =
         match cx.try_global::<Settings>() {
             Some(settings) => (
                 settings.font_family.as_str(),
                 settings.font_size_px,
+                settings.font_weight,
                 settings.cell_width_mode,
                 settings.font_offset_x,
                 settings.font_offset_y,
                 settings.theme_line_height,
             ),
-            None => (REQUIRED_FONT_FAMILY, 15.0, CellWidthModeName::Compact, 0.0, 0.0, None),
+            None => (
+                REQUIRED_FONT_FAMILY,
+                15.0,
+                TerminalFontWeight::default(),
+                CellWidthModeName::Compact,
+                0.0,
+                0.0,
+                None,
+            ),
         };
     measure_cell_metrics(
         window.text_system(),
         window.scale_factor(),
         family,
         px(font_size),
+        font_weight,
         mode,
         offset_x,
         offset_y,
@@ -168,23 +199,33 @@ fn measure_startup_cell_metrics(
     scale: f32,
     cx: &App,
 ) -> (Pixels, Pixels) {
-    let (family, font_size, mode, offset_x, offset_y, line_height_multiplier) =
+    let (family, font_size, font_weight, mode, offset_x, offset_y, line_height_multiplier) =
         match cx.try_global::<Settings>() {
             Some(settings) => (
                 settings.font_family.as_str(),
                 settings.base_font_size_px,
+                settings.font_weight,
                 settings.cell_width_mode,
                 settings.font_offset_x,
                 settings.font_offset_y,
                 settings.theme_line_height,
             ),
-            None => (REQUIRED_FONT_FAMILY, 15.0, CellWidthModeName::Compact, 0.0, 0.0, None),
+            None => (
+                REQUIRED_FONT_FAMILY,
+                15.0,
+                TerminalFontWeight::default(),
+                CellWidthModeName::Compact,
+                0.0,
+                0.0,
+                None,
+            ),
         };
     measure_cell_metrics(
         text_system,
         scale,
         family,
         px(font_size),
+        font_weight,
         mode,
         offset_x,
         offset_y,

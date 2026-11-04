@@ -86,6 +86,10 @@ impl TerminalView {
         };
         let ligatures =
             cx.try_global::<Settings>().map(|settings| settings.ligatures).unwrap_or(true);
+        let font_weight =
+            cx.try_global::<Settings>().map(|settings| settings.font_weight).unwrap_or_default();
+        let [font, font_bold, font_italic, font_bold_italic] =
+            typography::terminal_fonts(&families, font_weight, ligatures);
         let default_cursor_style = term_config.default_cursor_style;
         let (cell_w, line_h) = Self::cell_metrics(window, cx);
         // 像素口径与 viewport 上报一致（设备 px），避免首帧一次像素级差异。
@@ -307,15 +311,10 @@ impl TerminalView {
             answer_reader: None,
             reading: super::super::reading::ReadingState::default(),
             confirmation: super::super::confirmation::ConfirmationState::default(),
-            font: mono_font(&families[0], FontWeight::NORMAL, FontStyle::Normal, ligatures),
-            font_bold: mono_font(&families[1], FontWeight::BOLD, FontStyle::Normal, ligatures),
-            font_italic: mono_font(&families[2], FontWeight::NORMAL, FontStyle::Italic, ligatures),
-            font_bold_italic: mono_font(
-                &families[3],
-                FontWeight::BOLD,
-                FontStyle::Italic,
-                ligatures,
-            ),
+            font,
+            font_bold,
+            font_italic,
+            font_bold_italic,
             font_size,
             ligatures,
             cell_width_mode,

@@ -142,6 +142,12 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.font_size_row(false, cx))
+            .child(self.select_row(
+                "font_weight",
+                language.text(crate::i18n::Message::SettingsFontWeight),
+                language.text(crate::i18n::Message::SettingsFontWeightDescription),
+                cx,
+            ))
             .child(self.switch_row(
                 "ctrl_wheel_font_zoom",
                 language.text(crate::i18n::Message::SettingsFontCtrlWheelZoom),

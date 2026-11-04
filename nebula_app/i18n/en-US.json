@@ -201,7 +201,7 @@
     "search": {
       "terms": {
         "application": "application app update version github support",
-        "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
+        "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom font weight thickness bold",
         "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
         "providers": "providers provider ai api prediction prompt suggestions",
         "ssh": "ssh host remote connection",
@@ -395,6 +395,17 @@
       }
     },
     "font": {
+      "weight": "Terminal font weight",
+      "weight_description": "Applies immediately to terminal text only, using the closest available font weight. If unchanged, choose a font with more weights.",
+      "weight_thin": "100 · Thin",
+      "weight_extra_light": "200 · Extra light",
+      "weight_light": "300 · Light",
+      "weight_normal": "400 · Normal (default)",
+      "weight_medium": "500 · Medium",
+      "weight_semi_bold": "600 · Semi bold",
+      "weight_bold": "700 · Bold",
+      "weight_extra_bold": "800 · Extra bold",
+      "weight_black": "900 · Black",
       "ligatures": "Font ligatures",
       "ligatures_description": "Combine characters such as -> and != when supported by the font. Applies immediately to open terminals.",
       "ligatures_on": "On",
