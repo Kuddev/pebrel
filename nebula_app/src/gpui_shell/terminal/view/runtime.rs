@@ -140,6 +140,11 @@ impl TerminalView {
         self.answers.close();
         let program_changed = self.running_program.take().is_some();
         let title_changed = self.ai_session.take().is_some() || program_changed;
+        if title_changed {
+            // A later agent must not inherit the preceding task before its
+            // first native title arrives.
+            self.title = "shell".to_owned();
+        }
         if !self.recovery.preparing() {
             self.invalidate_ai_session_probe();
         }
