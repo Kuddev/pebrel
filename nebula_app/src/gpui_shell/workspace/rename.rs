@@ -119,6 +119,67 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
+    /// The same editor follows the pane into either chrome layout; editing/history
+    /// remain owned here rather than by the place where the name is displayed.
+    pub(super) fn render_pane_name_editor(
+        &self,
+        pane_id: u64,
+        font_size: f32,
+        height: f32,
+        family: SharedString,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let input = self.pane_rename.as_ref().filter(|edit| edit.pane_id == pane_id)?.input.clone();
+        let (accent, background, ink) =
+            (cx.theme().primary, cx.theme().background, cx.theme().foreground);
+        Some(
+            div()
+                .id(("pane-title-editor", pane_id as usize))
+                .debug_selector(move || format!("pane-title-editor-{pane_id}"))
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                    if this.pane_rename.as_ref().is_some_and(|edit| edit.pane_id == pane_id) {
+                        this.commit_pane_rename(false, window, cx);
+                    }
+                }))
+                .on_double_click(|_, _, cx| cx.stop_propagation())
+                .capture_action(cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                    this.restore_pane_name(false, window, cx);
+                }))
+                .capture_action(cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                    this.restore_pane_name(true, window, cx);
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        cx.stop_propagation();
+                        this.cancel_pane_rename(true, window, cx);
+                    }
+                }))
+                .child(gpui::Styled::h(
+                    Input::new(&input)
+                        .small()
+                        .w_full()
+                        .py_0()
+                        .focus_bordered(false)
+                        .border_1()
+                        .border_color(accent)
+                        .bg(background)
+                        .rounded(px(3.0))
+                        .text_color(ink)
+                        .text_size(px(font_size))
+                        .font_family(family),
+                    px(height),
+                ))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn begin_pane_rename(
         &mut self,
         pane_id: u64,
