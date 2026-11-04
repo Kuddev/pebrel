@@ -26,6 +26,7 @@ mod path_drop;
 mod pointer;
 mod program_status;
 mod reading;
+mod remote_activity;
 mod runtime;
 mod session_failure;
 mod shell_pointer;
@@ -392,6 +393,7 @@ pub struct TerminalView {
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
     agent_activity: crate::ai_hook::lifecycle::AgentActivity,
+    remote_activity: remote_activity::RemoteActivity,
     program_status: Option<program_status::ProgramStatus>,
     program_status_seen: bool,
     pty_failed: bool,
@@ -677,6 +679,10 @@ impl TerminalView {
             },
             TermEvent::CursorBlinkingChange => self.restart_cursor_blink(cx),
             TermEvent::Title(title) => {
+                if self.observing_tmux() {
+                    self.sync_remote_activity(cx);
+                    return;
+                }
                 // `NEBULA|cwd|branch|program` 标题协议（与旧壳 event.rs 的
                 // 解析同构）：shell 集成把 cwd/分支塞在标题里喂玻璃 powerline
                 // 与 tab 标签，而不是真拿来当窗口标题。
@@ -698,6 +704,9 @@ impl TerminalView {
                 cx.notify();
             },
             TermEvent::ResetTitle => {
+                if self.observing_tmux() {
+                    return;
+                }
                 self.title = String::from("shell");
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();

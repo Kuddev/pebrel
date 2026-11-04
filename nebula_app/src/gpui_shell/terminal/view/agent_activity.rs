@@ -11,6 +11,12 @@ use super::{TerminalView, TerminalViewEvent, notifications};
 
 impl TerminalView {
     pub fn handle_ai_hook(&mut self, event: &AiHookEvent, cx: &mut Context<Self>) -> bool {
+        self.sync_remote_activity(cx);
+        if self.ssh_destination.is_some() && event.remote_context != self.remote_activity.context {
+            // Reject queued events from a previous pane/job/connection before
+            // they can claim lifecycle ownership or advance the ordering gate.
+            return false;
+        }
         if let Some(client_pid) = event.client_pid
             && event.pane == Some(self.pane_id)
             && let Some(session) = &self.session
@@ -150,8 +156,18 @@ impl TerminalView {
         {
             return;
         }
+        let remote_activity = self.sync_remote_activity(cx);
         self.flush_pending_runtime_submit(cx);
         self.flush_pending_shell_command(cx);
+        if self.observing_tmux() {
+            if let Some(observation) = remote_activity
+                && self.remote_activity.sample_at != Some(observation.observed_at)
+            {
+                self.remote_activity.sample_at = Some(observation.observed_at);
+                self.observe_agent_screen(&observation.screen, cx);
+            }
+            return;
+        }
         self.reconcile_shell_activity(cx);
         self.on_native_cmd_prompt(cx);
         self.probe_missing_codex_session(cx);
@@ -206,8 +222,14 @@ impl TerminalView {
             return;
         }
         let Some(screen) = screen else { return };
+        self.observe_agent_screen(&screen, cx);
+    }
+
+    fn observe_agent_screen(&mut self, screen: &str, cx: &mut Context<Self>) {
+        let reconcile_remote =
+            !self.suggest.suggest_env.is_this_machine() && self.agent_activity.hook_seen();
         let detected = notifications::screen_identity_allowed(self.running_program.as_deref())
-            .then(|| crate::ai_agents::identify(&screen))
+            .then(|| crate::ai_agents::identify(screen))
             .flatten();
         let Some(program) =
             notifications::screen_program(self.running_program.as_deref(), detected)
@@ -231,7 +253,7 @@ impl TerminalView {
             let previous = self.agent_activity.status();
             if reconcile_remote
                 && self.agent_activity.reconcile_stalled_turn(
-                    crate::ai_agents::detect(&program, &screen).as_ref(),
+                    crate::ai_agents::detect(&program, screen).as_ref(),
                     self.agent_activity.turn_quiet_for(super::REMOTE_TURN_STALL),
                 )
             {
@@ -246,7 +268,7 @@ impl TerminalView {
             return;
         }
         let previous = self.agent_activity.status();
-        if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, &screen)) {
+        if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, screen)) {
             return;
         }
         let next = self.agent_activity.status();

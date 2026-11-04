@@ -343,6 +343,7 @@ impl TerminalView {
             active_run: None,
             last_run: None,
             agent_activity: Default::default(),
+            remote_activity: Default::default(),
             program_status: None,
             program_status_seen: false,
             pty_failed: false,
