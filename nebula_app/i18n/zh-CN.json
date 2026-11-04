@@ -1137,6 +1137,11 @@
     "title": "SSH 主机",
     "subtitle": "整理已保存的主机、管理登录方式，直接打开终端会话。",
     "add": "添加主机",
+    "quick_add_title": "添加 SSH 主机",
+    "quick_add_save_and_connect": "保存并连接",
+    "quick_add_address_required": "请填写主机地址",
+    "quick_add_port_invalid": "端口必须是 1–65535",
+    "add_and_connect": "添加并连接 {destination}",
     "connect": "连接",
     "exchange": "导入 / 导出",
     "pinned": "置顶",
@@ -1159,7 +1164,8 @@
     "via": "经 {host}",
     "connection_time_unknown": "这台主机尚无已记录的连接时间。",
     "key_file": "私钥 {name}",
-    "search_placeholder": "名称、地址、标签"
+    "search_placeholder": "名称、地址、标签",
+    "quick_add_keys_advanced": "私钥文件请在完整编辑器（更多设置）中添加"
   },
   "vcs": {
     "changes": "变更",
