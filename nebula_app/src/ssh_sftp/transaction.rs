@@ -4,6 +4,7 @@
 //! 用户可见目标。把这两层分开，上传、下载和跨主机复制才能共享同一套备份、
 //! 回滚与符号链接语义。
 
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -169,6 +170,7 @@ pub(super) fn duplicate_name(name: &str, is_directory: bool, index: usize) -> St
 pub(super) async fn duplicate_local_path(
     destination: &Path,
     is_directory: bool,
+    reserved: &HashSet<PathBuf>,
 ) -> io::Result<PathBuf> {
     let name = destination
         .file_name()
@@ -176,6 +178,9 @@ pub(super) async fn duplicate_local_path(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "目标路径缺少有效文件名"))?;
     for index in 1..1000 {
         let candidate = destination.with_file_name(duplicate_name(name, is_directory, index));
+        if reserved.contains(&candidate) {
+            continue;
+        }
         match tokio::fs::symlink_metadata(&candidate).await {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(candidate),
             Ok(_) => {},

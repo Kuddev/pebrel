@@ -1111,7 +1111,9 @@
     "choose_files": "选择要上传的文件",
     "choose_upload_directory": "选择要上传的文件夹",
     "choose_download_directory": "选择下载位置",
-    "drag_hint": "拖入文件即可上传；拖到资源管理器即可下载。"
+    "drag_hint": "拖入文件即可上传；拖到资源管理器即可下载。",
+    "completed": "传输完成",
+    "copied_items": "已复制 {count} 个远端项目"
   },
   "hosts": {
     "copied": "已创建主机副本：{name}",
@@ -1652,7 +1654,10 @@
     "reading": "正在读取远端目录…",
     "empty": "此目录为空。",
     "error_retry": "{error}（点右上角重新读取）",
-    "busy_other": "另一主机正在传输：{destination}"
+    "busy_other": "另一主机正在传输：{destination}",
+    "items": "{count} 项",
+    "selected_items": "已选 {count} 项",
+    "clear_selection": "清空选择（Esc）"
   },
   "backup_flow": {
     "password_notice": "Pebrel 不把这个密码写到磁盘，只在本次运行期间留在内存里，下次启动后第一次备份时再问。忘了它，已有的备份就解不开了。",
