@@ -716,3 +716,88 @@ fn fullscreen_multiplexer_keeps_spinning_for_hook_owned_work(cx: &mut TestAppCon
         });
     }
 }
+
+#[gpui::test]
+fn interactive_ssh_login_keeps_running_without_a_permanent_spinner(cx: &mut TestAppContext) {
+    use crate::runtime_api::RuntimeTaskState;
+
+    for command in [
+        "ssh user@example.test",
+        "ssh -p 2222 user@example.test",
+        r"C:\Windows\System32\OpenSSH\ssh.exe user@example.test",
+        "pebrel ssh user@example.test",
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.last_committed = command.into();
+            view.on_command_start(cx);
+            assert!(!view.term_mode().contains(TermMode::ALT_SCREEN));
+            assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running, "{command}");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle, "{command}");
+
+            view.progress = crate::taskbar::TaskProgress::Indeterminate;
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.progress = crate::taskbar::TaskProgress::None;
+            view.ssh_stage = Some(crate::ssh_session::SshStage::Authenticate);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.ssh_stage = None;
+
+            // A remote program reported by shell integration owns its own activity.
+            view.running_program = Some("make".into());
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.running_program = Some("claude".into());
+            view.agent_activity.begin_command(true);
+            view.agent_activity.submitted();
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+
+            view.finish_foreground_command(Some(0), cx);
+            view.suggest.last_committed = "cargo test".into();
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        });
+    }
+}
+
+#[gpui::test]
+fn ssh_remote_commands_and_noninteractive_modes_keep_their_spinner(cx: &mut TestAppContext) {
+    for command in [
+        "ssh example.test make",
+        "ssh -T example.test",
+        "ssh -N -L 8000:localhost:80 example.test",
+        "ssh -G example.test",
+        "ssh example.test && cargo test",
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.last_committed = command.into();
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running, "{command}");
+        });
+    }
+}
+
+#[gpui::test]
+fn ssh_submission_activity_does_not_leak_into_the_next_pasted_command(cx: &mut TestAppContext) {
+    for runtime_prompt in [false, true] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            feed(view, b"\x1b]133;A\x07PS C:\\repo> \x1b]133;B\x07");
+            if runtime_prompt {
+                view.runtime_prompt("ssh user@example.test".into(), true, cx).unwrap();
+            } else {
+                feed(view, b"ssh user@example.test");
+                view.commit_line(cx);
+            }
+            assert_eq!(view.suggest.last_committed, "ssh user@example.test");
+            assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Running);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+
+            view.finish_foreground_command(Some(0), cx);
+            feed(view, b"\x1b[?2004h");
+            view.runtime_paste("cargo test".into(), true, InputOrigin::Program, cx).unwrap();
+            assert_eq!(view.suggest.last_committed, "ssh user@example.test");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        });
+    }
+}
