@@ -200,6 +200,9 @@ fn denied_lua_call_inside_pcall_never_reaches_runtime() {
     assert_eq!(error.code, "permission_denied");
     // 前一次违规不污染独立调用，更不需要重置宿主终端状态。
     assert_eq!(run_lua("return {describe=function() return 'ok' end}").unwrap().result, "ok");
+    // 插件用 pcall 接住的普通错误不是越权，仍由插件自己处理。
+    let source = "return {describe=function() return pcall(error, 'x') and 'bad' or 'ok' end}";
+    assert_eq!(run_lua(source).unwrap().result, "ok");
 }
 
 #[test]

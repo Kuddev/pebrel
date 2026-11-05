@@ -1,5 +1,6 @@
 //! 托管协程把宿主调用让出到 Rust；读取 Runtime 时不持有 Luau 的执行栈。
 
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use mlua::{
@@ -63,22 +64,45 @@ pub(super) fn execute(
             MAX_LUA_MEMORY,
         )
         .map_err(lua_error)?;
+    // Luau 的 pcall 内不能 yield，驱动侧的拒绝会被插件吞掉；让出前先按同一规则判定，
+    // 并记下第一次拒绝：无论处理函数怎样处理这个 Lua 错误，本次调用都失败，请求也到不了 Runtime。
+    let denied = std::sync::Arc::new(std::sync::Mutex::new(None::<Error>));
+    let authorize = {
+        let denied = denied.clone();
+        let permissions = package.manifest.permissions.clone();
+        lua.create_function(move |_, method: LuaValue| {
+            let LuaValue::String(method) = method else { return Ok(()) };
+            let Ok(method) = method.to_str() else { return Ok(()) };
+            match super::package::allow_method(&permissions, &method) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let message = error.to_string();
+                    denied.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert(error);
+                    Err(mlua::Error::runtime(message))
+                },
+            }
+        })
+        .map_err(lua_error)?
+    };
     let request: Function = budget
         .vm
         .run(|| {
             lua.load(
                 r#"
         local yield, raise = coroutine.yield, error
+        local authorize = ...
         return function(method, params)
+            authorize(method)
             local ok, result = yield('pebrel.runtime.request', method, params or {})
             if not ok then raise(result, 0) end
             return result
         end
     "#,
             )
-            .eval()
+            .call(authorize)
         })
         .map_err(lua_error)?;
+    let refused = || denied.lock().unwrap_or_else(PoisonError::into_inner).take();
     let globals = lua.globals();
     // 不留绕过宿主的文件入口，也不让非托管 coroutine 绕过指令分片。
     for name in [
@@ -104,7 +128,11 @@ pub(super) fn execute(
         .set_name(package.manifest.entry.as_deref().unwrap_or("plugin"))
         .into_function()
         .map_err(lua_error)?;
-    let exports = drive(&lua, entry, MultiValue::new(), package, &mut budget, call)?;
+    let exports = drive(&lua, entry, MultiValue::new(), package, &mut budget, call);
+    let exports = match refused() {
+        Some(error) => return Err(error),
+        None => exports?,
+    };
     let LuaValue::Table(exports) = exports else {
         return Err(Error::new(
             "invalid_luau_entry",
@@ -134,7 +162,11 @@ pub(super) fn execute(
         .map_err(lua_error)?;
     let arguments = lua.to_value(&arguments).map_err(lua_error)?;
     let args = MultiValue::from_vec(vec![LuaValue::Table(context), arguments]);
-    let result = drive(&lua, function, args, package, &mut budget, call)?;
+    let result = drive(&lua, function, args, package, &mut budget, call);
+    let result = match refused() {
+        Some(error) => return Err(error),
+        None => result?,
+    };
     let result = json::from_lua(&lua, result)?;
     Ok(Execution {
         result,

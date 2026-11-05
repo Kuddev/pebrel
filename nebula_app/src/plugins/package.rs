@@ -89,21 +89,23 @@ impl Package {
     }
 
     pub(super) fn allow_method(&self, method: &str) -> Result<()> {
-        if method == "events.subscribe" {
-            return Err(Error::new(
-                "stream_not_supported",
-                "this entry supports one-shot requests",
-            ));
-        }
-        if !self.manifest.permissions.iter().any(|allowed| allowed == method) {
-            return Err(Error::new(
-                "permission_denied",
-                format!("undeclared runtime method: {method}"),
-            ));
-        }
-        // 清单只声明需求；即使声明了方法，也不得扩大宿主公开的能力边界。
-        boundary::require_runtime_method(method)
+        allow_method(&self.manifest.permissions, method)
     }
+}
+
+/// 单个方法的派发规则；Luau 让出前也用它预先判定。
+pub(super) fn allow_method(permissions: &[String], method: &str) -> Result<()> {
+    if method == "events.subscribe" {
+        return Err(Error::new("stream_not_supported", "this entry supports one-shot requests"));
+    }
+    if !permissions.iter().any(|allowed| allowed == method) {
+        return Err(Error::new(
+            "permission_denied",
+            format!("undeclared runtime method: {method}"),
+        ));
+    }
+    // 清单只声明需求；即使声明了方法，也不得扩大宿主公开的能力边界。
+    boundary::require_runtime_method(method)
 }
 
 impl Manifest {
