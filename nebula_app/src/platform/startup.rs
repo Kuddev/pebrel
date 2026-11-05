@@ -29,10 +29,10 @@ pub(crate) fn resident_launch_directory(
 mod console;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod first_frame;
-#[cfg(feature = "gpui-shell")]
-pub(crate) mod restored_window;
 #[cfg(any(unix, test))]
 mod login;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod restored_window;
 
 /// Match GPUI's primary-monitor DPI query before a native window is created.
 /// Other platforms retain post-creation sizing until their display API exposes scale.
