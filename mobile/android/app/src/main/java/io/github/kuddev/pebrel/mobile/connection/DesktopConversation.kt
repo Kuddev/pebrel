@@ -13,8 +13,10 @@ data class ConversationIdentity(val kind: String, val session: String, val epoch
     fun json() = JSONObject().put("kind", kind).put("session_id", session).apply { epoch?.let { put("epoch", it) } }
 }
 
+/** [error] is set only when the provider marked a tool result as failed; older computers omit it. */
 data class ConversationMessage(val id: String, val role: String, val text: String, val name: String?,
-                               val detail: String?, val complete: Boolean, val truncated: Boolean)
+                               val detail: String?, val complete: Boolean, val truncated: Boolean,
+                               val error: Boolean = false)
 data class ConversationPrompt(val id: String, val text: String, val options: List<String>, val selected: Int, val binary: Boolean = false)
 data class ConversationPage(val identity: ConversationIdentity, val messages: List<ConversationMessage> = emptyList(),
                             val revision: String? = null, val before: Long? = null, val cwd: String = "",
@@ -48,19 +50,20 @@ class DesktopConversation internal constructor(
     private val mutationVersion = AtomicLong()
     private fun available(write: Boolean) { availability(write)?.let { throw DesktopRpcFailure(it) } }
 
-    suspend fun refresh(older: Boolean = false) = reads.withLock {
+    /** Returns whether the page changed, so the caller can poll sooner while output is arriving. */
+    suspend fun refresh(older: Boolean = false): Boolean = reads.withLock {
         available(false)
         val version = mutationVersion.get()
-        if (version % 2L != 0L) return@withLock
+        if (version % 2L != 0L) return@withLock false
         val old = current.value
-        if (older && old.before == null) return@withLock
+        if (older && old.before == null) return@withLock false
         val params = JSONObject().put("identity", old.identity.json())
         if (older) params.put("before", old.before) else old.revision?.let { params.put("revision", it) }
         val response = request("conversation.read", params)
         currentCoroutineContext().ensureActive()
         available(false)
         // 发送前开始的慢读取不可重新启用旧选项/发送按钮；提交中的轮询也只等下一轮。
-        if (version != mutationVersion.get()) return@withLock
+        if (version != mutationVersion.get()) return@withLock false
         val native = response.getJSONObject("identity")
         val identity = ConversationIdentity(native.getString("kind"), native.getString("session_id"), native.getLong("epoch"))
         check(identity.kind == old.identity.kind && identity.session == old.identity.session)
@@ -70,7 +73,8 @@ class DesktopConversation internal constructor(
             (0 until rows.length()).map { i -> rows.getJSONObject(i).let { row ->
                 ConversationMessage(row.getString("id"), row.getString("role"), row.getString("text"),
                     if (row.isNull("name")) null else row.getString("name"),
-                    if (row.isNull("detail")) null else row.getString("detail"), row.getBoolean("complete"), row.getBoolean("truncated"))
+                    if (row.isNull("detail")) null else row.getString("detail"), row.getBoolean("complete"), row.getBoolean("truncated"),
+                    row.optBoolean("error"))
             } }
         }
         val messages = when {
@@ -96,6 +100,7 @@ class DesktopConversation internal constructor(
             truncated = old.truncated || response.optBoolean("truncated"))
         current.value = next
         cache.put(key, next)
+        next != old
     }
 
     suspend fun send(text: String) = mutations.withLock {

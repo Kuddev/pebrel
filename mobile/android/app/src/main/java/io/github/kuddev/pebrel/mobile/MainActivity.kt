@@ -213,8 +213,11 @@ class MainActivity : ComponentActivity() {
         val paneFrame = desktopOutput.frame.takeIf {
             page == "pane" && desktopOutput.target == "$desktopId:$windowId:$paneId"
         }
+        // Sheets open in their own window; they blur this recorded window, never their own content.
+        val overlay = rememberGlassOverlay()
+        CompositionLocalProvider(LocalGlassOverlay provides overlay) {
         DesktopTerminalTheme(paneFrame, systemBars = true) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(Modifier.fillMaxSize().glassOverlaySource(overlay), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                 AnimatedContent(
                     modifier = Modifier.fillMaxSize(),
@@ -235,15 +238,17 @@ class MainActivity : ComponentActivity() {
                             if (enabled) SessionService.start(this@MainActivity) else SessionService.stop(this@MainActivity)
                         }, settingsInitial)
                     }
-                    "hosts" -> {
+                    "hosts" -> GlassPage(topBar = {
                         PageHeader(stringResource(R.string.ssh_hosts), ::back) {
                             GlyphButton(R.drawable.ic_plus, stringResource(R.string.add_ssh), { editHost = null; hostForm = true })
                         }
-                        HostsScreen(hosts, { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it })
+                    }) { padding, source ->
+                        HostsScreen(hosts, { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it },
+                            Modifier.fillMaxSize().then(source), padding.calculateTopPadding())
                     }
-                    "computers" -> {
-                        PageHeader(stringResource(R.string.computers), ::back)
-                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp)) {
+                    "computers" -> GlassPage(topBar = { PageHeader(stringResource(R.string.computers), ::back) }) { padding, source ->
+                        Column(Modifier.fillMaxSize().then(source).verticalScroll(rememberScrollState())
+                            .padding(top = padding.calculateTopPadding()).padding(22.dp)) {
                             ComputerRows(desktops, relays, ::openDesktop, { openDesktop(repository.connectRelay(it)) },
                                 onAddRelay = { addRelay = true }, onForget = repository::forgetRelay)
                             HelperText(stringResource(R.string.connection_boundary), Modifier.padding(top = 20.dp))
@@ -323,55 +328,52 @@ class MainActivity : ComponentActivity() {
                             onRetry = profile?.let { saved -> { openDesktop(repository.connectRelay(saved)) } },
                         ) { repository.closeDesktop(desktopId); back() }
                     }
-                    else -> {
-                        HomeHeader({ settingsInitial = ""; showPage("settings") }, { settingsInitial = "notices"; showPage("settings") },
-                            showNotices = !isHomeEmpty(sessions, hosts, desktops, relays))
-                        HomeScreen(sessions, hosts, desktops, relays, ::openSession, { switcher = true }, { showPage("hosts") },
-                            { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it }, { editHost = null; hostForm = true },
-                            ::openDesktop, { openDesktop(repository.connectRelay(it)) }, { showPage("computers") }, { addRelay = true },
-                            openLocal, { deployRelay = true }, ::openPane, ::openTab)
-                    }
+                    else -> HomeScreen(sessions, hosts, desktops, relays, ::openSession, { switcher = true }, { showPage("hosts") },
+                        { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it }, { editHost = null; hostForm = true },
+                        ::openDesktop, { openDesktop(repository.connectRelay(it)) }, { showPage("computers") }, { addRelay = true },
+                        openLocal, { deployRelay = true }, ::openPane, ::openTab, header = {
+                            HomeHeader({ settingsInitial = ""; showPage("settings") }, { settingsInitial = "notices"; showPage("settings") },
+                                showNotices = !isHomeEmpty(sessions, hosts, desktops, relays))
+                        })
                 }
                 }
                 }
             }
         }
         }
-        if (switcher) AlertDialog(onDismissRequest = { switcher = false }, title = { Text(stringResource(R.string.all_sessions)) }, text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                val current = sessions.find { it.id == selected }
-                if (current?.host != null) NavigationRow(R.drawable.ic_plus,
-                    stringResource(R.string.tab_new_terminal), current.host.name) { newSshTab(current.id) }
-                NavigationRow(R.drawable.ic_server, stringResource(R.string.ssh_hosts),
-                    stringResource(R.string.ssh_new_tab_host_hint)) { switcher = false; showPage("hosts") }
-                NavigationRow(R.drawable.ic_terminal, stringResource(R.string.local_terminal),
-                    stringResource(R.string.local_device)) { switcher = false; openLocal() }
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                val cards = sessionCards(sessions, desktops)
-                if (cards.isEmpty()) HelperText(stringResource(R.string.no_sessions))
-                cards.forEach { card ->
-                    val local = card.local
-                    if (local != null) {
-                        NavigationRow(R.drawable.ic_terminal, local.title, statusLabel(local.status)) { openSession(local.id) }
-                        sftpTabs.filter { it.session == local.id }.forEach { file ->
-                            SftpTabRow(file, local.host?.name ?: local.title, page == "sftp_file" && sftpTabId == file.id,
-                                { openSftpTab(file) }, { closeSftpTab(file) })
-                        }
-                    }
-                    else card.desktop?.let { computer ->
-                        NavigationRow(card.tab?.let(::tabIcon) ?: R.drawable.ic_monitor,
-                            card.tab?.displayTitle ?: card.pane?.displayTitle ?: computer.host.name,
-                            "${computer.host.name} · ${statusLabel(computer.status)}") {
-                            card.tab?.let { openTab(computer.id, it) }
-                                ?: card.pane?.let { openPane(computer.id, it) } ?: openDesktop(computer.id)
-                        }
+        if (switcher) SessionSwitcherSheet({ switcher = false }) {
+            val current = sessions.find { it.id == selected }
+            if (current?.host != null) NavigationRow(R.drawable.ic_plus,
+                stringResource(R.string.tab_new_terminal), current.host.name) { newSshTab(current.id) }
+            NavigationRow(R.drawable.ic_server, stringResource(R.string.ssh_hosts),
+                stringResource(R.string.ssh_new_tab_host_hint)) { switcher = false; showPage("hosts") }
+            NavigationRow(R.drawable.ic_terminal, stringResource(R.string.local_terminal),
+                stringResource(R.string.local_device)) { switcher = false; openLocal() }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            val cards = sessionCards(sessions, desktops)
+            if (cards.isEmpty()) HelperText(stringResource(R.string.no_sessions))
+            cards.forEach { card ->
+                val local = card.local
+                if (local != null) {
+                    NavigationRow(R.drawable.ic_terminal, local.title, statusLabel(local.status)) { openSession(local.id) }
+                    sftpTabs.filter { it.session == local.id }.forEach { file ->
+                        SftpTabRow(file, local.host?.name ?: local.title, page == "sftp_file" && sftpTabId == file.id,
+                            { openSftpTab(file) }, { closeSftpTab(file) })
                     }
                 }
-                desktop?.let { computer ->
-                    NavigationRow(R.drawable.ic_plus, stringResource(R.string.tab_manage), computer.host.name) { openDesktop(computer.id) }
+                else card.desktop?.let { computer ->
+                    NavigationRow(card.tab?.let(::tabIcon) ?: R.drawable.ic_monitor,
+                        card.tab?.displayTitle ?: card.pane?.displayTitle ?: computer.host.name,
+                        "${computer.host.name} · ${statusLabel(computer.status)}") {
+                        card.tab?.let { openTab(computer.id, it) }
+                            ?: card.pane?.let { openPane(computer.id, it) } ?: openDesktop(computer.id)
+                    }
                 }
             }
-        }, confirmButton = { TextButton({ switcher = false }) { Text(stringResource(R.string.close)) } })
+            desktop?.let { computer ->
+                NavigationRow(R.drawable.ic_plus, stringResource(R.string.tab_manage), computer.host.name) { openDesktop(computer.id) }
+            }
+        }
         if (hostForm) HostForm(
             initial = editHost,
             onCancel = { hostForm = false },
@@ -457,5 +459,6 @@ class MainActivity : ComponentActivity() {
         }
         error?.let { AlertDialog(onDismissRequest = { repository.error.value = null }, title = { Text(stringResource(R.string.operation_failed)) },
             text = { Text(operationErrorText(it)) }, confirmButton = { TextButton({ repository.error.value = null }) { Text(stringResource(R.string.close)) } }) }
+        }
     }
 }
