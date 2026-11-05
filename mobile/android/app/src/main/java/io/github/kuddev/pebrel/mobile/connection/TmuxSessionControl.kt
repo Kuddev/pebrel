@@ -111,6 +111,16 @@ internal class TmuxSessionControl(
         if (query(RemoteSessions.posixWithPath(guard + command)).getInt("status") != 0) throw IOException("tmux_history_failed")
     }
 
+    /** The PTY of the pane this connection's client shows, or null when no multiplexer client is attached here. */
+    @Synchronized
+    fun paneTerminal(): String? {
+        val (attachment, _) = current() ?: return null
+        val response = query(RemoteSessions.posixWithPath(
+            "${attachment.session.endpoint.command()} display-message -p -t '${target(attachment)}' '#{pane_tty}'"))
+        if (response.getInt("status") != 0) return null
+        return response.getString("stdout").trim().takeIf { it.matches(Regex("/dev/(?:pts/[0-9]+|tty[a-zA-Z0-9]+)")) }
+    }
+
     private fun target(attachment: RemoteAttachment) = "${attachment.session.id}:${attachment.window!!.id}.${attachment.window.pane}"
 
     companion object {

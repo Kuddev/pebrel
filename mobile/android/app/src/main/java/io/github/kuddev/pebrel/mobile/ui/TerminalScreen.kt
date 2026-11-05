@@ -38,7 +38,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
                         onRetry: () -> Unit, onEdit: () -> Unit, onClose: () -> Unit, onFiles: (() -> Unit)? = null,
-                        onAttachRemote: ((RemoteAttachment) -> Unit)? = null, active: Boolean = true) {
+                        onAttachRemote: ((RemoteAttachment) -> Unit)? = null, active: Boolean = true,
+                        onConversation: ((String) -> Unit)? = null) {
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     var direct by rememberSaveable(session.id, prefs.directInput) { mutableStateOf(prefs.directInput) }
     val attachments = rememberTerminalAttachmentAction(session, repository) { direct = false }
@@ -51,6 +52,7 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
     var focused by rememberSaveable(session.id) { mutableStateOf(false) }
     var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
     val trust by repository.trust.collectAsStateWithLifecycle()
+    val agent = rememberSshAgent(session, repository, enabled = onConversation != null && active)
     // Header and body stack in this screen's own column: the bar is raised for its shadow and must not overlap the body.
     Column(Modifier.fillMaxSize()) {
     if (!focused) TerminalHeader(session.title,
@@ -58,6 +60,7 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
         session.status, onBack, onSessions, { closing = true }, onFiles = onFiles,
         onRemoteSessions = if (onAttachRemote != null && session.host != null && session.status == "ready") ({ remoteSessions = true }) else null)
     Column(Modifier.fillMaxSize()) {
+        if (!focused && agent != null && onConversation != null) SessionModeTabs(conversation = false) { onConversation(agent) }
         if (session.status == "ended" || (session.hasConnected && session.status != "ready"))
             TerminalDisconnected(session, if (session.host != null) retry else null)
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -207,7 +210,8 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
                            onClose: (() -> Unit)? = null, onGit: (() -> Unit)? = null, gitEnabled: Boolean = true,
                            onDetails: (() -> Unit)? = null, onConversation: (() -> Unit)? = null, conversationActive: Boolean = false,
                            onFiles: (() -> Unit)? = null, wrapLines: Boolean = false, onToggleWrap: (() -> Unit)? = null,
-                           onRemoteSessions: (() -> Unit)? = null, standalone: Boolean = true) {
+                           onRemoteSessions: (() -> Unit)? = null, standalone: Boolean = true,
+                           onImmersive: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     val connection = "$endpoint · ${statusLabel(status)}"
     // Standalone it is its own bar; inside a larger glass bar it adds no second surface.
@@ -234,6 +238,7 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
             if (onGit != null) TerminalHeaderAction(R.drawable.ic_github, stringResource(R.string.git_title), onGit, enabled = gitEnabled)
             if (onConversation != null) TerminalHeaderAction(if (conversationActive) R.drawable.ic_terminal else R.drawable.ic_chat,
                 stringResource(if (conversationActive) R.string.chat_terminal else R.string.chat_title), onConversation)
+            if (onImmersive != null) TerminalHeaderAction(R.drawable.ic_expand, stringResource(R.string.chat_immersive), onImmersive)
             if (onFiles != null) TerminalHeaderAction(R.drawable.ic_git_folder, stringResource(R.string.sftp_title), onFiles, enabled = status == "ready")
             if (onClose != null || onDetails != null || onToggleWrap != null || onRemoteSessions != null) Box {
                 TerminalHeaderAction(R.drawable.ic_more, stringResource(R.string.more_actions), { menu = true })

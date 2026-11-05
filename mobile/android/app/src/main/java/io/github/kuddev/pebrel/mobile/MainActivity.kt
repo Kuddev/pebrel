@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
         fun back() {
             val destination = when {
                 page == "sftp_file" -> "sftp"
-                page == "sftp" -> "terminal"
+                page in setOf("sftp", "ssh_chat") -> "terminal"
                 page in setOf("git", "conversation") && desktop != null -> "pane"
                 page in setOf("pane", "file") && desktop != null -> "desktop"
                 else -> "home"
@@ -265,8 +265,15 @@ class MainActivity : ComponentActivity() {
                             onClose = { repository.closeTerminal(session.id); back() },
                             onFiles = session.files?.let { { showPage("sftp") } },
                             active = page == route,
-                            onAttachRemote = { entry -> newSshTab(session.id, entry) })
+                            onAttachRemote = { entry -> newSshTab(session.id, entry) },
+                            onConversation = { kind -> chatKind = kind; showPage("ssh_chat") })
                         else LaunchedEffect(selected) { showPage("home") }
+                    }
+                    "ssh_chat" -> {
+                        val session = sessions.find { it.id == selected }
+                        if (session?.host != null && chatKind.isNotEmpty()) key(selected, chatKind) {
+                            SshConversationScreen(session, chatKind, repository, ::back) { switcher = true }
+                        } else LaunchedEffect(selected) { showPage("home") }
                     }
                     "sftp" -> {
                         val session = sessions.find { it.id == selected }

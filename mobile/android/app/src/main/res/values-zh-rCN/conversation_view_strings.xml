@@ -21,4 +21,8 @@
     <string name="chat_new_messages">新消息</string>
     <string name="chat_rich_hint">公式和图表在此以源码显示。</string>
     <string name="chat_rich_reader">在阅读器中查看</string>
+    <string name="chat_immersive">沉浸阅读</string>
+    <string name="chat_exit_immersive">退出沉浸阅读</string>
+    <string name="chat_python_missing">对话视图需要服务器上有 python3。</string>
+    <string name="chat_terminal_unknown">无法在服务器上确认这个连接的终端。</string>
 </resources>

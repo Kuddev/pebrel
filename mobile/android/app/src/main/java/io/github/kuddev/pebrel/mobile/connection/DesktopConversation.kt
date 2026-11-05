@@ -3,6 +3,7 @@ package io.github.kuddev.pebrel.mobile.connection
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -42,16 +43,16 @@ class DesktopConversation internal constructor(
     private val cache: ConversationCache,
     private val request: suspend (String, JSONObject) -> JSONObject,
     private val availability: (Boolean) -> String?,
-) {
+) : ConversationSource {
     private val current = MutableStateFlow(cache.get(key) ?: ConversationPage(initial))
-    val state = current.asStateFlow()
+    override val state: StateFlow<ConversationPage> = current.asStateFlow()
     private val reads = Mutex()
     private val mutations = Mutex()
     private val mutationVersion = AtomicLong()
     private fun available(write: Boolean) { availability(write)?.let { throw DesktopRpcFailure(it) } }
 
     /** Returns whether the page changed, so the caller can poll sooner while output is arriving. */
-    suspend fun refresh(older: Boolean = false): Boolean = reads.withLock {
+    override suspend fun refresh(older: Boolean): Boolean = reads.withLock {
         available(false)
         val version = mutationVersion.get()
         if (version % 2L != 0L) return@withLock false
@@ -103,14 +104,14 @@ class DesktopConversation internal constructor(
         next != old
     }
 
-    suspend fun send(text: String) = mutations.withLock {
+    override suspend fun send(text: String) = mutations.withLock {
         available(true)
         val page = current.value
         if (!page.canSend || page.identity.epoch == null) throw DesktopRpcFailure("agent_busy")
         mutate("conversation.send", JSONObject().put("identity", page.identity.json()).put("text", text))
     }
 
-    suspend fun choose(prompt: ConversationPrompt, index: Int) = mutations.withLock {
+    override suspend fun choose(prompt: ConversationPrompt, index: Int) = mutations.withLock {
         available(true)
         val page = current.value
         if (page.prompt?.id != prompt.id || page.identity.epoch == null) throw DesktopRpcFailure("prompt_changed")
@@ -118,7 +119,7 @@ class DesktopConversation internal constructor(
             .put("prompt_id", prompt.id).put("option", index))
     }
 
-    suspend fun key(key: String) = mutations.withLock {
+    override suspend fun key(key: String) = mutations.withLock {
         available(true)
         val page = current.value
         if (page.identity.epoch == null) throw DesktopRpcFailure("conversation_unavailable")
