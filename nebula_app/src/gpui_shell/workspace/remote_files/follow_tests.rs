@@ -108,11 +108,7 @@ impl russh_sftp::server::Handler for Peer {
         // filter must work over exactly what one listing returned.
         Ok(Name {
             id,
-            files: vec![
-                File::dummy("listing.txt"),
-                File::dummy("notes.md"),
-                File::dummy("photos"),
-            ],
+            files: vec![File::dummy("listing.txt"), File::dummy("notes.md"), File::dummy("photos")],
         })
     }
 
@@ -472,9 +468,7 @@ fn mirrored_query(fixture: &Fixture) -> Option<String> {
 }
 
 #[gpui::test]
-fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(
-    cx: &mut TestAppContext,
-) {
+fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mut TestAppContext) {
     let mut fixture = open(cx);
     listed(&mut fixture, "/srv/Alpha 中");
 

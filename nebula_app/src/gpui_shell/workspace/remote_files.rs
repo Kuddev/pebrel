@@ -954,9 +954,11 @@ impl NebulaWorkspace {
                                             language.text(Message::FilesMatchCase),
                                             (muted, theme.primary, hover_ink),
                                         )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.toggle_remote_search_match_case(cx);
-                                        })),
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_remote_search_match_case(cx);
+                                            }),
+                                        ),
                                     )
                                     .child(
                                         remote_search_toggle(
@@ -966,9 +968,11 @@ impl NebulaWorkspace {
                                             language.text(Message::FilesMatchWholeWord),
                                             (muted, theme.primary, hover_ink),
                                         )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.toggle_remote_search_whole_word(cx);
-                                        })),
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_remote_search_whole_word(cx);
+                                            }),
+                                        ),
                                     )
                                     .child(
                                         remote_search_toggle(
@@ -978,9 +982,11 @@ impl NebulaWorkspace {
                                             language.text(Message::FilesUseRegex),
                                             (muted, theme.primary, hover_ink),
                                         )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.toggle_remote_search_regex(cx);
-                                        })),
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_remote_search_regex(cx);
+                                            }),
+                                        ),
                                     ),
                             ),
                     )
@@ -1690,7 +1696,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{FileSearchOptions, RemoteBrowser, SftpEntry, SftpEntryKind, format_transfer_bytes};
+    use super::{
+        FileSearchOptions, RemoteBrowser, SftpEntry, SftpEntryKind, format_transfer_bytes,
+    };
 
     fn entry(name: &str, path: &str) -> SftpEntry {
         SftpEntry {
@@ -1850,10 +1858,12 @@ mod tests {
     fn invalid_regex_reports_an_error_and_hides_every_entry() {
         let mut browser = RemoteBrowser::default();
         browser.entries = vec![entry("notes.txt", "/srv/notes.txt")];
-        assert!(browser.set_search_options(FileSearchOptions {
-            regex: true,
-            ..FileSearchOptions::default()
-        }));
+        assert!(
+            browser.set_search_options(FileSearchOptions {
+                regex: true,
+                ..FileSearchOptions::default()
+            })
+        );
         assert!(browser.set_search_query("("));
         assert!(browser.search_error.is_some());
         assert!(browser.visible_entries().is_empty());
