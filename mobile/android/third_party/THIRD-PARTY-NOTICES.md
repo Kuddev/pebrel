@@ -35,6 +35,8 @@ notices remain applicable; inclusion does not relicense upstream sources.
   dependency provenance are included under assets/licenses/Russh.
 - OkHttp / Okio: https://github.com/square/okhttp and https://github.com/square/okio,
   Apache License 2.0.
+- Haze 1.6.10: https://github.com/chrisbanes/haze, Apache License 2.0.
+  Backdrop blur for floating surfaces, used unmodified from Maven Central.
 
 Dependency coordinates and versions are recorded in Gradle files. CI publishes
 the runtime dependency report with the build evidence. Dependencies may include
