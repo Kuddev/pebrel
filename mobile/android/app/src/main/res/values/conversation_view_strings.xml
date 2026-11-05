@@ -21,4 +21,8 @@
     <string name="chat_new_messages">New messages</string>
     <string name="chat_rich_hint">Formulas and diagrams appear here as source.</string>
     <string name="chat_rich_reader">Open in reader</string>
+    <string name="chat_immersive">Immersive reading</string>
+    <string name="chat_exit_immersive">Exit immersive reading</string>
+    <string name="chat_python_missing">Conversation view needs python3 on the server.</string>
+    <string name="chat_terminal_unknown">This connection\'s terminal could not be identified on the server.</string>
 </resources>
