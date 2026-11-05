@@ -465,14 +465,30 @@ fn open_runtime_window(
 }
 
 pub(crate) fn mark_active(runtime_window_id: u64, window: &Window, cx: &mut App) {
-    if let Some(entry) = cx
+    let first_activation = cx
         .global_mut::<WindowRegistry>()
         .entries
         .iter_mut()
         .find(|entry| entry.runtime_window_id == runtime_window_id)
-        && std::mem::take(&mut entry.configured_position_pending)
-    {
+        .is_some_and(|entry| std::mem::take(&mut entry.configured_position_pending));
+    if first_activation {
         startup_geometry::apply_configured_position(window, cx);
+        if let Some(target) = startup_geometry::restore_target(runtime_window_id, cx) {
+            // The Windows backend applies GPUI's pending placement inside the
+            // activation task. Correct the mixed-DPI conversion after that
+            // task has run and outside this render pass, so the native resize
+            // does not re-enter the window's size callbacks.
+            let handle = window.window_handle();
+            cx.spawn(async move |cx| {
+                let settled = handle.update(cx, |_, window, _| {
+                    startup_geometry::settle_restored_placement(window, target)
+                });
+                if matches!(settled, Ok(false)) {
+                    log::warn!("Could not re-apply the restored window placement");
+                }
+            })
+            .detach();
+        }
     }
     let registry = cx.global_mut::<WindowRegistry>();
     if !registry.entries.iter().any(|entry| {
