@@ -104,7 +104,16 @@ impl russh_sftp::server::Handler for Peer {
         if !self.listed.insert(handle) {
             return Err(StatusCode::Eof);
         }
-        Ok(Name { id, files: vec![File::dummy("listing.txt")] })
+        // Sorted by name with directories first, like `sort_entries`; the name
+        // filter must work over exactly what one listing returned.
+        Ok(Name {
+            id,
+            files: vec![
+                File::dummy("listing.txt"),
+                File::dummy("notes.md"),
+                File::dummy("photos"),
+            ],
+        })
     }
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, StatusCode> {
@@ -442,4 +451,105 @@ fn failed_follow_keeps_the_old_listing_and_refresh_retries_the_failed_target(
     });
     listed(&mut fixture, "/denied");
     assert_eq!(fixture.stores[0].lock().unwrap().requested, ["/denied"]);
+}
+
+fn draw(fixture: &mut Fixture) {
+    fixture.window.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    fixture.window.run_until_parked();
+}
+
+fn mirrored_query(fixture: &Fixture) -> Option<String> {
+    fixture.workspace.read_with(&fixture.window, |workspace, cx| {
+        workspace
+            .remote_browser
+            .search_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+    })
+}
+
+#[gpui::test]
+fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = open(cx);
+    listed(&mut fixture, "/srv/Alpha 中");
+
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.remote_browser.selection.select_only("/srv/Alpha 中/notes.md");
+        workspace.set_remote_search_query("NOTES".into(), cx);
+    });
+    fixture.window.run_until_parked();
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        let rows = workspace.remote_rows();
+        assert!(rows[0].is_parent, "the parent row must stay reachable while filtering");
+        let names: Vec<_> =
+            rows.iter().filter(|row| !row.is_parent).map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["notes.md"], "matching must ignore case by default");
+        assert!(workspace.remote_browser.selection.contains("/srv/Alpha 中/notes.md"));
+        assert!(!workspace.remote_browser.search_matches_none());
+    });
+
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.set_remote_search_query("missing".into(), cx);
+    });
+    fixture.window.run_until_parked();
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert_eq!(workspace.remote_browser.visible_count(), 0);
+        assert!(workspace.remote_browser.search_matches_none());
+        assert_eq!(workspace.remote_browser.selection.focus(), None);
+    });
+
+    // Refreshing the directory on screen keeps the query; only a directory
+    // change starts the listing over.
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.set_remote_search_query("notes".into(), cx);
+        workspace.remote_refresh(cx);
+    });
+    listed(&mut fixture, "/srv/Alpha 中");
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert!(workspace.remote_browser.search_active());
+        assert_eq!(workspace.remote_browser.visible_count(), 1);
+    });
+
+    // Escape in the list reveals every row again and leaves the selection
+    // alone; the input entity must mirror the cleared query.
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.set_remote_search_query("notes".into(), cx);
+        workspace.remote_browser.selection.select_only("/srv/Alpha 中/notes.md");
+    });
+    let workspace = fixture.workspace.clone();
+    fixture.window.update(move |window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let focus = workspace
+                .remote_browser
+                .focus_handle
+                .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+                .clone();
+            focus.focus(window, cx);
+        });
+    });
+    draw(&mut fixture);
+    fixture.window.simulate_keystrokes("escape");
+    // The cleared query reaches the input entity through a deferred mirror.
+    wait(&mut fixture, |fixture| mirrored_query(fixture).as_deref() == Some(""));
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert!(!workspace.remote_browser.search_active());
+        assert_eq!(workspace.remote_browser.visible_count(), 3);
+        assert!(workspace.remote_browser.selection.contains("/srv/Alpha 中/notes.md"));
+    });
+
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.set_remote_search_query("photos".into(), cx);
+        workspace.navigate_remote("/srv/filtered".into(), cx);
+    });
+    listed(&mut fixture, "/srv/filtered");
+    wait(&mut fixture, |fixture| mirrored_query(fixture).as_deref() == Some(""));
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert!(!workspace.remote_browser.search_active());
+        assert_eq!(workspace.remote_browser.visible_count(), 3);
+    });
 }

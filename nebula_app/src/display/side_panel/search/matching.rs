@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[derive(Clone)]
 pub(super) enum QueryMatcher {
     Plain { terms: Vec<String>, whole_word: bool, match_case: bool },
     Regex(regex::Regex),
@@ -34,10 +35,17 @@ impl QueryMatcher {
     }
 
     pub(super) fn matches(&self, entry: &IndexedPath) -> bool {
+        self.matches_text(&entry.key, &entry.key_folded)
+    }
+
+    /// Match one display name against the compiled query. Callers outside the
+    /// local index (for example the SFTP listing) pass the name and its folded
+    /// form, so both surfaces share one matching authority.
+    pub(super) fn matches_text(&self, text: &str, folded: &str) -> bool {
         match self {
-            Self::Regex(regex) => regex.is_match(&entry.key),
+            Self::Regex(regex) => regex.is_match(text),
             Self::Plain { terms, whole_word, match_case } => {
-                let haystack = if *match_case { &entry.key } else { &entry.key_folded };
+                let haystack = if *match_case { text } else { folded };
                 terms.iter().all(|term| {
                     if *whole_word {
                         contains_whole_word(haystack, term)

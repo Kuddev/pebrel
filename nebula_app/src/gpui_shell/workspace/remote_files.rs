@@ -37,10 +37,13 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, Context, ExternalPaths, InteractiveElement as _, IntoElement as _, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px, uniform_list,
+    App, Context, Entity, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Window, div, px, uniform_list,
 };
 
+use crate::display::side_panel::{FileSearchOptions, NameMatcher};
+use crate::display::ui::tokens::{control, radius};
 use crate::gpui_shell::prelude::*;
 use crate::i18n::Message;
 use crate::ssh_sftp::{
@@ -48,6 +51,7 @@ use crate::ssh_sftp::{
     SftpSnapshot, SftpTransferOptions,
 };
 
+use super::file_tree::{color_feedback_button, hover_text_color};
 use super::{NebulaWorkspace, workspace_ui_language};
 
 const TEXT_INSET: f32 = 12.0;
@@ -115,6 +119,21 @@ pub(super) struct RemoteBrowser {
     last_outcome: Option<crate::i18n::Message>,
     /// 远端复制载荷必须带稳定的源 destination，不能从当前标题反推源主机。
     clipboard: Option<RemoteClipboard>,
+    /// Client-side name filter over the listing already on screen. Files and
+    /// directories match the same way; nothing is fetched from the remote host.
+    search: String,
+    search_options: FileSearchOptions,
+    /// Compiled when the query or a toggle changes, never per frame, so a
+    /// regex is not rebuilt on every render.
+    search_matcher: Option<NameMatcher>,
+    search_error: Option<String>,
+    /// Created on the first remote render: `InputState::new` needs a window,
+    /// and a `RemoteBrowser` also exists while the drawer shows the local tree.
+    search_input: Option<Entity<InputState>>,
+    _search_subscription: Option<Subscription>,
+    /// `bind` and `navigate_remote` clear the query without a window at hand;
+    /// the next render mirrors `search` back into the input entity.
+    sync_search_input: bool,
 }
 
 #[derive(Clone)]
@@ -173,6 +192,10 @@ impl RemoteBrowser {
     /// 绑定 pane。返回 `true` 表示已有完整快照，调用方不得再列目录。
     fn bind(&mut self, pane: u64, destination: String) -> bool {
         self.last_outcome = None;
+        // The filter belongs to the listing on screen. A pane switch brings a
+        // different directory, so the query starts over instead of silently
+        // hiding entries of the new host.
+        self.clear_search();
         self.park_active();
         self.navigation = None;
         self.pending_path = None;
@@ -271,6 +294,84 @@ impl RemoteBrowser {
             .get(&pane)
             .filter(|snapshot| snapshot.destination == destination && !snapshot.path.is_empty())
             .map(|snapshot| snapshot.path.as_str())
+    }
+
+    /// Whether a query is narrowing the current listing.
+    fn search_active(&self) -> bool {
+        !self.search.trim().is_empty()
+    }
+
+    /// Apply a query typed in the filter box. Returns `false` when the query
+    /// did not change, so callers skip selection retention and scrolling.
+    fn set_search_query(&mut self, query: &str) -> bool {
+        // A pasted line break would turn a single-line filter into a query the
+        // user cannot see or edit.
+        let query = query.replace(['\r', '\n'], "");
+        if query == self.search {
+            return false;
+        }
+        self.search = query;
+        self.recompile_search();
+        true
+    }
+
+    /// Apply the case / whole-word / regex toggles to the same query.
+    fn set_search_options(&mut self, options: FileSearchOptions) -> bool {
+        if options == self.search_options {
+            return false;
+        }
+        self.search_options = options;
+        self.recompile_search();
+        true
+    }
+
+    fn recompile_search(&mut self) {
+        self.search_error = None;
+        self.search_matcher = None;
+        if !self.search_active() {
+            return;
+        }
+        match NameMatcher::compile(&self.search, self.search_options) {
+            Ok(matcher) => self.search_matcher = Some(matcher),
+            Err(error) => self.search_error = Some(error),
+        }
+    }
+
+    /// Start over on a new directory or pane. The caller must mirror the
+    /// cleared query into the input entity once a window is available.
+    fn clear_search(&mut self) {
+        if self.search.is_empty() && self.search_matcher.is_none() && self.search_error.is_none() {
+            return;
+        }
+        self.search.clear();
+        self.search_matcher = None;
+        self.search_error = None;
+        self.sync_search_input = true;
+    }
+
+    /// Entries that survive the current query. Files and directories share the
+    /// same name-only rule, matching the local tree's filter semantics.
+    fn visible_entries(&self) -> Vec<SftpEntry> {
+        if !self.search_active() {
+            return self.entries.clone();
+        }
+        let Some(matcher) = &self.search_matcher else { return Vec::new() };
+        self.entries.iter().filter(|entry| matcher.matches(&entry.name)).cloned().collect()
+    }
+
+    fn visible_count(&self) -> usize {
+        if !self.search_active() {
+            return self.entries.len();
+        }
+        self.search_matcher.as_ref().map_or(0, |matcher| {
+            self.entries.iter().filter(|entry| matcher.matches(&entry.name)).count()
+        })
+    }
+
+    /// A non-empty directory where the query matched nothing. A failed query
+    /// is reported through `search_error` instead.
+    fn search_matches_none(&self) -> bool {
+        self.search_active() && !self.entries.is_empty() && self.visible_count() == 0
     }
 }
 
@@ -401,6 +502,12 @@ impl NebulaWorkspace {
     pub(super) fn navigate_remote(&mut self, path: String, cx: &mut Context<'_, Self>) {
         self.remote_browser.last_outcome = None;
         self.remote_browser.following_cwd = false;
+        // Entering another directory starts from its full listing; a filter
+        // kept across navigation would make a valid target look missing. A
+        // refresh of the directory on screen keeps the query.
+        if path != self.remote_browser.path {
+            self.remote_browser.clear_search();
+        }
         let Some(pane) = self.remote_browser.pane else { return };
         let Some(session) = self.remote_browser.browse_sessions.get(&pane).cloned() else {
             self.remote_browser.loading = false;
@@ -493,7 +600,8 @@ impl NebulaWorkspace {
     }
 
     fn remote_rows(&self) -> Vec<SftpEntry> {
-        let mut rows = Vec::with_capacity(self.remote_browser.entries.len() + 1);
+        let entries = self.remote_browser.visible_entries();
+        let mut rows = Vec::with_capacity(entries.len() + 1);
         if self.remote_browser.path != "/" {
             rows.push(SftpEntry {
                 name: "..".to_owned(),
@@ -505,8 +613,126 @@ impl NebulaWorkspace {
                 is_parent: true,
             });
         }
-        rows.extend(self.remote_browser.entries.iter().cloned());
+        rows.extend(entries);
         rows
+    }
+
+    /// The filter input is created on first remote render: `InputState::new`
+    /// needs a window, and the drawer also mounts before any SSH pane is ready.
+    fn ensure_remote_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.remote_browser.search_input {
+            return input.clone();
+        }
+        let placeholder =
+            crate::gpui_shell::config::ui_language(cx).text(Message::FilesFilterPlaceholder);
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        self.remote_browser._search_subscription =
+            Some(cx.subscribe_in(&input, window, Self::on_remote_search_event));
+        self.remote_browser.search_input = Some(input.clone());
+        // A query set before the first render still has to reach the new input.
+        if !self.remote_browser.search.is_empty() {
+            self.remote_browser.sync_search_input = true;
+        }
+        input
+    }
+
+    /// Mirror a query cleared without a window (`bind`, `navigate_remote`) back
+    /// into the input entity. The input owns the caret, so it is never recreated
+    /// just to show an empty string.
+    fn sync_remote_search_input(
+        &mut self,
+        input: &Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if !std::mem::take(&mut self.remote_browser.sync_search_input) {
+            return;
+        }
+        let query = self.remote_browser.search.clone();
+        if input.read(cx).value() == query.as_str() {
+            return;
+        }
+        // `set_value` emits `Change`, and the handler updates this workspace.
+        // Running it inside the draw would re-enter an entity under render, so
+        // the mirror lands at the end of the frame.
+        let input = input.clone();
+        window.defer(cx, move |window, cx| {
+            input.update(cx, |input, cx| input.set_value(query, window, cx));
+        });
+    }
+
+    pub(super) fn on_remote_search_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if matches!(event, InputEvent::Change) {
+            self.set_remote_search_query(input.read(cx).value().to_string(), cx);
+        }
+    }
+
+    /// Apply a query typed in the filter box. Selection survives only for rows
+    /// that stay visible, so bulk actions cannot target a hidden entry.
+    pub(super) fn set_remote_search_query(&mut self, query: String, cx: &mut Context<'_, Self>) {
+        if !self.remote_browser.set_search_query(&query) {
+            return;
+        }
+        self.retain_remote_visible_selection();
+        self.remote_files_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn set_remote_search_options(
+        &mut self,
+        options: FileSearchOptions,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if !self.remote_browser.set_search_options(options) {
+            return;
+        }
+        self.retain_remote_visible_selection();
+        self.remote_files_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn toggle_remote_search_match_case(&mut self, cx: &mut Context<'_, Self>) {
+        let mut options = self.remote_browser.search_options;
+        options.match_case = !options.match_case;
+        self.set_remote_search_options(options, cx);
+    }
+
+    fn toggle_remote_search_whole_word(&mut self, cx: &mut Context<'_, Self>) {
+        let mut options = self.remote_browser.search_options;
+        options.whole_word = !options.whole_word;
+        self.set_remote_search_options(options, cx);
+    }
+
+    fn toggle_remote_search_regex(&mut self, cx: &mut Context<'_, Self>) {
+        let mut options = self.remote_browser.search_options;
+        options.regex = !options.regex;
+        self.set_remote_search_options(options, cx);
+    }
+
+    /// Escape in the list clears the filter before it clears the selection.
+    fn clear_remote_search(&mut self, cx: &mut Context<'_, Self>) {
+        if !self.remote_browser.search_active() {
+            return;
+        }
+        self.remote_browser.clear_search();
+        self.remote_files_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn retain_remote_visible_selection(&mut self) {
+        let rows = self.remote_rows();
+        let paths: Vec<_> = rows.iter().map(|row| row.path.as_str()).collect();
+        self.remote_browser.selection.retain(&paths);
     }
 
     /// 单击选中，双击目录进入。
@@ -535,7 +761,13 @@ impl NebulaWorkspace {
     }
 
     /// The list fills the drawer between the compact toolbar and the transfer dock.
-    pub(super) fn render_remote_files(&mut self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
+    pub(super) fn render_remote_files(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
+        let search_input = self.ensure_remote_search_input(window, cx);
+        self.sync_remote_search_input(&search_input, window, cx);
         let transfer_status = self.render_remote_transfer_status(cx);
         let focus = self
             .remote_browser
@@ -590,9 +822,21 @@ impl NebulaWorkspace {
             });
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let hover_ink = hover_text_color(cx);
         let drop_highlight = theme.accent.opacity(0.18);
         let location_background = theme.background.darken(0.035);
         let rows = self.remote_rows();
+        let search_active = self.remote_browser.search_active();
+        let search_options = self.remote_browser.search_options;
+        let search_error = self.remote_browser.search_error.clone();
+        let search_count = rows.iter().filter(|row| !row.is_parent).count();
+        let search_status = search_active.then(|| {
+            if search_error.is_some() {
+                language.text(Message::FilesSearchFailed).to_owned()
+            } else {
+                language.format(Message::FilesSearchCount, &[("count", &search_count.to_string())])
+            }
+        });
         let path = if self.remote_browser.path.is_empty() {
             language.text(Message::RemoteLocating).to_owned()
         } else {
@@ -658,6 +902,105 @@ impl NebulaWorkspace {
                         .h(px(28.0))
                         .on_click(cx.listener(|this, _, _, cx| this.remote_refresh(cx))),
                     ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .px(px(TEXT_INSET))
+                    .pt(px(8.0))
+                    .gap(px(4.0))
+                    .flex_shrink_0()
+                    .child(
+                        h_flex()
+                            .id("remote-files-filter")
+                            .debug_selector(|| "remote-files-filter".into())
+                            .w_full()
+                            .h(px(control::MIN_HIT_TARGET))
+                            .flex_shrink_0()
+                            .rounded(px(radius::CONTROL))
+                            .border_1()
+                            .border_color(if search_error.is_some() {
+                                theme.danger
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .bg(theme.muted.opacity(theme.muted.a * 0.35))
+                            .focus(|field| field.border_color(theme.ring).bg(theme.sidebar))
+                            .overflow_hidden()
+                            .track_focus(&search_input.focus_handle(cx))
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&search_input)
+                                        .w_full()
+                                        .appearance(false)
+                                        .focus_bordered(false)
+                                        .cleanable(true)
+                                        .prefix(
+                                            Icon::new(IconName::Search).xsmall().text_color(muted),
+                                        )
+                                        .text_size(px(13.0)),
+                                ),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_shrink_0()
+                                    .pr_1()
+                                    .gap(px(2.0))
+                                    .child(
+                                        remote_search_toggle(
+                                            "remote-search-match-case",
+                                            "Aa",
+                                            search_options.match_case,
+                                            language.text(Message::FilesMatchCase),
+                                            (muted, theme.primary, hover_ink),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_remote_search_match_case(cx);
+                                        })),
+                                    )
+                                    .child(
+                                        remote_search_toggle(
+                                            "remote-search-whole-word",
+                                            "ab",
+                                            search_options.whole_word,
+                                            language.text(Message::FilesMatchWholeWord),
+                                            (muted, theme.primary, hover_ink),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_remote_search_whole_word(cx);
+                                        })),
+                                    )
+                                    .child(
+                                        remote_search_toggle(
+                                            "remote-search-regex",
+                                            ".*",
+                                            search_options.regex,
+                                            language.text(Message::FilesUseRegex),
+                                            (muted, theme.primary, hover_ink),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_remote_search_regex(cx);
+                                        })),
+                                    ),
+                            ),
+                    )
+                    .when_some(search_status, |field, status| {
+                        let error = search_error.clone();
+                        field.child(
+                            div()
+                                .id("remote-files-search-status")
+                                .h(px(18.0))
+                                .text_xs()
+                                .text_color(if error.is_some() { theme.danger } else { muted })
+                                .truncate()
+                                .when_some(error, |line, error| {
+                                    line.tooltip(move |window, cx| {
+                                        Tooltip::new(error.clone()).build(window, cx)
+                                    })
+                                })
+                                .child(status),
+                        )
+                    }),
             )
             .child(
                 h_flex()
@@ -830,7 +1173,7 @@ impl NebulaWorkspace {
         } else {
             language.format(
                 Message::RemoteItems,
-                &[("count", &self.remote_browser.entries.len().to_string())],
+                &[("count", &self.remote_browser.visible_count().to_string())],
             )
         };
         let detail = snapshot.as_ref().and_then(|snapshot| snapshot.error.clone()).or_else(|| {
@@ -1225,6 +1568,14 @@ impl NebulaWorkspace {
         if let Some(outcome) = self.remote_browser.last_outcome {
             return Some(language.text(outcome).to_owned());
         }
+        // A query that cannot compile hides every row; saying "this folder is
+        // empty" here would send the user looking for a server-side cause.
+        if self.remote_browser.search_error.is_some() {
+            return Some(language.text(Message::FilesSearchFailed).to_owned());
+        }
+        if self.remote_browser.search_matches_none() {
+            return Some(language.text(Message::FilesSearchEmpty).to_owned());
+        }
         self.remote_browser
             .entries
             .is_empty()
@@ -1243,6 +1594,27 @@ fn remote_button(id: impl Into<gpui::ElementId>, icon: IconName, label: &'static
         .rounded(px(6.0))
         .tooltip(label)
         .aria_label(label)
+}
+
+/// One case / whole-word / regex toggle for the remote filter. It reuses the
+/// local tree's hover feedback so both drawers read the same pressed state.
+fn remote_search_toggle(
+    id: &'static str,
+    content: &'static str,
+    active: bool,
+    label: &'static str,
+    colors: (gpui::Hsla, gpui::Hsla, gpui::Hsla),
+) -> Button {
+    let (muted, primary, hover) = colors;
+    color_feedback_button(id, content, if active { primary } else { muted }, hover)
+        .debug_selector(move || id.into())
+        .xsmall()
+        .h_5()
+        .px_1()
+        .selected(active)
+        .toggled(active)
+        .aria_label(label)
+        .tooltip(label)
 }
 
 async fn probe_remote_shell_cwd(destination: String) -> crate::ssh_sftp::remote_cwd::RemoteCwd {
@@ -1318,7 +1690,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{RemoteBrowser, SftpEntry, SftpEntryKind, format_transfer_bytes};
+    use super::{FileSearchOptions, RemoteBrowser, SftpEntry, SftpEntryKind, format_transfer_bytes};
 
     fn entry(name: &str, path: &str) -> SftpEntry {
         SftpEntry {
@@ -1330,6 +1702,14 @@ mod tests {
             permissions: "rw-r--r--".to_owned(),
             is_parent: false,
         }
+    }
+
+    fn directory(name: &str) -> SftpEntry {
+        SftpEntry { kind: SftpEntryKind::Directory, ..entry(name, &format!("/srv/{name}")) }
+    }
+
+    fn names(browser: &RemoteBrowser) -> Vec<String> {
+        browser.visible_entries().into_iter().map(|entry| entry.name).collect()
     }
 
     #[test]
@@ -1405,5 +1785,97 @@ mod tests {
         assert_eq!(format_transfer_bytes(1024), "1.0 KiB");
         assert_eq!(format_transfer_bytes(10 * 1024), "10 KiB");
         assert_eq!(format_transfer_bytes(3 * 1024 * 1024), "3.0 MiB");
+    }
+
+    #[test]
+    fn search_filters_files_and_directories_by_name_ignoring_case_by_default() {
+        let mut browser = RemoteBrowser::default();
+        browser.entries = vec![
+            directory("Readme Assets"),
+            entry("README.md", "/srv/README.md"),
+            entry("notes.txt", "/srv/notes.txt"),
+        ];
+
+        assert!(browser.set_search_query("readme"));
+        assert_eq!(names(&browser), ["Readme Assets", "README.md"]);
+        assert_eq!(browser.visible_count(), 2);
+        assert!(browser.search_error.is_none());
+
+        assert!(browser.set_search_query(""));
+        assert_eq!(names(&browser), ["Readme Assets", "README.md", "notes.txt"]);
+    }
+
+    #[test]
+    fn search_toggles_switch_case_whole_word_and_regex_semantics() {
+        let mut browser = RemoteBrowser::default();
+        browser.entries = vec![
+            entry("read", "/srv/read"),
+            entry("Reader.md", "/srv/Reader.md"),
+            directory("README"),
+        ];
+        assert!(browser.set_search_query("read"));
+        assert_eq!(browser.visible_count(), 3);
+
+        assert!(browser.set_search_options(FileSearchOptions {
+            match_case: true,
+            whole_word: false,
+            regex: false,
+        }));
+        assert_eq!(names(&browser), ["read"]);
+
+        assert!(browser.set_search_options(FileSearchOptions {
+            match_case: false,
+            whole_word: true,
+            regex: false,
+        }));
+        assert_eq!(names(&browser), ["read"]);
+
+        assert!(browser.set_search_options(FileSearchOptions {
+            match_case: false,
+            whole_word: false,
+            regex: true,
+        }));
+        assert_eq!(names(&browser), ["read", "Reader.md", "README"]);
+        // A case-sensitive regex separates the all-caps name from the rest.
+        assert!(browser.set_search_options(FileSearchOptions {
+            match_case: true,
+            whole_word: false,
+            regex: true,
+        }));
+        assert!(browser.set_search_query("^RE.*$"));
+        assert_eq!(names(&browser), ["README"]);
+    }
+
+    #[test]
+    fn invalid_regex_reports_an_error_and_hides_every_entry() {
+        let mut browser = RemoteBrowser::default();
+        browser.entries = vec![entry("notes.txt", "/srv/notes.txt")];
+        assert!(browser.set_search_options(FileSearchOptions {
+            regex: true,
+            ..FileSearchOptions::default()
+        }));
+        assert!(browser.set_search_query("("));
+        assert!(browser.search_error.is_some());
+        assert!(browser.visible_entries().is_empty());
+        assert!(browser.search_matches_none());
+
+        assert!(browser.set_search_query("notes"));
+        assert!(browser.search_error.is_none());
+        assert_eq!(browser.visible_count(), 1);
+    }
+
+    #[test]
+    fn clearing_the_search_restores_every_entry_and_requests_input_sync() {
+        let mut browser = RemoteBrowser::default();
+        browser.entries = vec![entry("notes.txt", "/srv/notes.txt")];
+        assert!(browser.set_search_query("missing"));
+        assert!(browser.search_matches_none());
+
+        browser.clear_search();
+        assert!(!browser.search_active());
+        assert!(browser.search_matcher.is_none());
+        assert!(browser.search_error.is_none());
+        assert!(browser.sync_search_input);
+        assert_eq!(browser.visible_count(), 1);
     }
 }
