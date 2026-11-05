@@ -135,15 +135,19 @@ impl RenameFixture {
         });
     }
 
-    fn edit(&self, index: usize, cx: &mut VisualTestContext) {
+    /// Sidebar grips stay hidden until the top edge of their pane is hovered.
+    fn grip(&self, index: usize, cx: &mut VisualTestContext) -> gpui::Point<gpui::Pixels> {
         let position = self.workspace.read_with(cx, |workspace, _| {
             let bounds = *workspace.pane_bounds.borrow().get(&self.ids[index]).unwrap();
             gpui::point(bounds.center().x, bounds.top() + px(14.0))
         });
         cx.simulate_mouse_move(position, None, Modifiers::default());
         settle(cx);
-        let position =
-            cx.debug_bounds(self.headers[index]).expect("pane title is visible").center();
+        cx.debug_bounds(self.headers[index]).expect("pane title is visible").center()
+    }
+
+    fn edit(&self, index: usize, cx: &mut VisualTestContext) {
+        let position = self.grip(index, cx);
         cx.simulate_click(position, Modifiers::default());
         cx.simulate_event(gpui::MouseDownEvent {
             position,
@@ -231,7 +235,7 @@ fn automatic_task_titles_follow_clicked_panes_and_preserve_manual_tab_names(
         cx.notify();
     });
     settle(&mut cx);
-    let target = cx.debug_bounds(fixture.headers[1]).unwrap().center();
+    let target = fixture.grip(1, &mut cx);
     cx.simulate_click(target, Modifiers::default());
     settle(&mut cx);
     fixture.workspace.update(&mut cx, |workspace, cx| {
