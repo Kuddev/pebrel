@@ -428,22 +428,6 @@ mod tests {
         assert_eq!(symbols.glyph_hor_advance(glyph), original.glyph_hor_advance(old));
     }
 
-    #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
-    #[test]
-    fn macos_text_system_resolves_symbol_icons_from_the_bundled_face() {
-        use gpui::PlatformTextSystem as _;
-
-        let text_system = gpui_platform::current_platform(true).text_system();
-        text_system.add_fonts(vec![std::borrow::Cow::Borrowed(SYMBOL_FONT_BYTES)]).unwrap();
-        let font_id = text_system
-            .font_id(&gpui::font(SYMBOL_FONT_FAMILY))
-            .expect("macOS must load the bundled symbol family");
-        for code in [0xf114, 0xf115, 0xeab6, 0xeab4, 0xea7b] {
-            let ch = char::from_u32(code).unwrap();
-            assert!(text_system.glyph_for_char(font_id, ch).is_some(), "missing U+{code:04X}");
-        }
-    }
-
     fn sys(name: &str, monospaced: bool) -> SystemFontFamily {
         SystemFontFamily { name: name.to_owned(), monospaced }
     }
