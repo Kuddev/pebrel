@@ -992,6 +992,40 @@ class SessionRepository(private val context: Context,
         }
     }
     private fun target(pane: DesktopPane) = JSONObject().put("window_id", pane.window).put("pane_id", pane.id)
+
+    private val sshChatScript by lazy {
+        context.resources.openRawResource(io.github.kuddev.pebrel.mobile.R.raw.ssh_agent_chat).use { it.readBytes() }
+    }
+    private val sshChats = mutableMapOf<SshConnection, SshAgentChat>()
+
+    private fun sshChat(id: String): SshAgentChat? {
+        val connection = sshConnections[id] ?: return null
+        return synchronized(sshChats) {
+            sshChats.keys.retainAll(sshConnections.values.toSet())
+            sshChats.getOrPut(connection) {
+                SshAgentChat(sshChatScript, { command ->
+                    withContext(Dispatchers.IO) {
+                        check(sshConnections[id] === connection) { "SSH connection replaced" }
+                        connection.query(command)
+                    }
+                }, paneTerminal = {
+                    withContext(Dispatchers.IO) { runCatching { tmuxControls[id]?.paneTerminal() }.getOrNull() }
+                })
+            }
+        }
+    }
+
+    /** The Agent kind in the foreground of this SSH tab's terminal, or of the multiplexer pane it shows. */
+    suspend fun sshAgent(id: String): String? {
+        val chat = sshChat(id) ?: return null
+        if (live.value.none { it.id == id && it.status == "ready" }) return null
+        return chat.call(JSONObject().put("mode", "detect")).optString("agent").takeIf { it.isNotEmpty() && it != "null" }
+    }
+
+    fun sshConversation(id: String, kind: String): ConversationSource? {
+        val chat = sshChat(id) ?: return null
+        return SshConversation(kind, chat) { live.value.find { it.id == id && it.status == "ready" }?.terminal }
+    }
     fun closeAll() {
         sshReconnect.clear()
         sshRetryJobs.values.forEach(Job::cancel); sshRetryJobs.clear()

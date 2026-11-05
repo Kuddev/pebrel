@@ -5,11 +5,13 @@ import android.net.Uri
 import android.os.SystemClock
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -39,6 +41,42 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
     val client = remember(desktop.id, desktop.connectionGeneration, desktop.runtimeProcess, pane.window, pane.id, identity) {
         repository.desktopConversation(desktop.id, pane, identity)
     }
+    val host = ConversationHost(
+        title = pane.displayTitle, agentName = pane.agent?.name?.ifBlank { identity.kind } ?: identity.kind,
+        ready = desktop.status == "ready", allowInput = desktop.allowInput, signal = "${pane.state}:${pane.sequence}",
+        draftKey = "${desktop.id}:${pane.window}:${pane.id}:chat:${identity.session}",
+        notice = when {
+            desktop.status != "ready" -> R.string.reader_offline
+            !desktop.allowInput -> R.string.composer_pc_read_only_short
+            else -> null
+        },
+        openFile = { path -> onFile(repository.desktopTabs(desktop.id).openFile(pane.window, path)) },
+    )
+    ConversationView(client, host, repository, onTerminal) { onImmersive ->
+        TerminalHeader(pane.displayTitle, "${desktop.host.name} · ${desktop.transport}", desktop.status,
+            onTerminal, onTabs, conversationActive = true, standalone = false, onImmersive = onImmersive)
+    }
+}
+
+/** What a conversation view needs from the connection that owns the Agent. */
+internal class ConversationHost(
+    val title: String,
+    val agentName: String,
+    /** Reads run only while the transport is up. */
+    val ready: Boolean,
+    val allowInput: Boolean,
+    /** Changes when the owner observes new Agent activity, so the reader wakes at once. */
+    val signal: String,
+    val draftKey: String,
+    @androidx.annotation.StringRes val notice: Int? = null,
+    /** Opens a file the transcript links to; null when the connection cannot open files. */
+    val openFile: (suspend (String) -> Unit)? = null,
+    val attach: TerminalAttachmentAction? = null,
+)
+
+@Composable
+internal fun ConversationView(client: ConversationSource, host: ConversationHost, repository: SessionRepository,
+                              onTerminal: () -> Unit, header: @Composable (onImmersive: () -> Unit) -> Unit) {
     val page by client.state.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -49,9 +87,11 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
     var refresh by remember(client) { mutableIntStateOf(0) }
     var reader by remember(client) { mutableStateOf<String?>(null) }
     val wake = remember(client) { Channel<Unit>(Channel.CONFLATED) }
-    val clipboard = rememberReaderClipboard(pane.displayTitle) { failure = "clipboard_failed" }
-    val allowed = desktop.status == "ready" && desktop.allowInput
-    val agentName = pane.agent?.name?.ifBlank { identity.kind } ?: identity.kind
+    val clipboard = rememberReaderClipboard(host.title) { failure = "clipboard_failed" }
+    val allowed = host.ready && host.allowInput
+    val agentName = host.agentName
+    var immersive by rememberSaveable(host.draftKey) { mutableStateOf(false) }
+    ImmersiveSystemBars(immersive)
 
     val colors = MaterialTheme.colorScheme
     val terminalFont = LocalTerminalFont.current
@@ -67,7 +107,7 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
     val working = showsWorking(items, page.state)
 
     // Snapshot pushes carry task-state changes; read at once instead of waiting for the next poll.
-    val signal = "${pane.state}:${pane.sequence}"
+    val signal = host.signal
     var seenSignal by remember(client) { mutableStateOf(signal) }
     LaunchedEffect(signal) {
         if (signal != seenSignal) {
@@ -75,8 +115,8 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
             wake.trySend(Unit)
         }
     }
-    LaunchedEffect(client, desktop.status, refresh) {
-        if (desktop.status != "ready") return@LaunchedEffect
+    LaunchedEffect(client, host.ready, refresh) {
+        if (!host.ready) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
                 var changed = false
@@ -116,9 +156,10 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
         }
         val base = DesktopFile("${page.cwd.replace('\\', '/').trimEnd('/')}/conversation.md", false, false, false, true, null)
         val path = resolveReaderLink(base, link)
-        if (path == null) { failure = "link_open_failed"; return }
+        val open = host.openFile
+        if (path == null || open == null) { failure = "link_open_failed"; return }
         scope.launch {
-            try { onFile(repository.desktopTabs(desktop.id).openFile(pane.window, path)) }
+            try { open(path) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { failure = conversationFailureCode(error) }
         }
@@ -154,9 +195,12 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
 
     GlassPage(
         topBar = {
-            Column(Modifier.fillMaxWidth().glassBar()) {
-                TerminalHeader(pane.displayTitle, "${desktop.host.name} · ${desktop.transport}", desktop.status,
-                    onTerminal, onTabs, conversationActive = true, standalone = false)
+            // Immersive reading keeps only a way back; the system bars are hidden too.
+            if (immersive) Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.End) {
+                GlyphButton(R.drawable.ic_focus, stringResource(R.string.chat_exit_immersive), { immersive = false },
+                    modifier = Modifier.glass(CircleShape, GlassTier.Light, GlassLift.Raised))
+            } else Column(Modifier.fillMaxWidth().glassBar()) {
+                header { immersive = true }
                 SessionModeTabs(conversation = true, onSwitch = onTerminal)
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp)) else Spacer(Modifier.height(2.dp))
             }
@@ -169,8 +213,7 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
                     unseen = false
                     scope.launch { listState.scrollToEnd() }
                 }, Modifier.align(Alignment.End))
-                if (desktop.status != "ready") ConversationNotice(stringResource(R.string.reader_offline))
-                else if (!desktop.allowInput) ConversationNotice(stringResource(R.string.composer_pc_read_only_short))
+                host.notice?.let { ConversationNotice(stringResource(it)) }
                 failure?.let { code ->
                     val replaced = code in replacedCodes
                     ConversationNotice(conversationFailureText(code), error = true,
@@ -202,9 +245,10 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
                         onInterrupt = { mutate { client.key("Esc") } })
                 }
             }
-            CommandComposer("${desktop.id}:${pane.window}:${pane.id}:chat:${identity.session}", repository,
+            CommandComposer(host.draftKey, repository,
                 allowed && page.canSend && !choosing, false, null, { label -> mutate { client.key(label) } },
-                shortcutsEnabled = allowed && page.identity.epoch != null && !choosing, conversation = true, send = { text ->
+                shortcutsEnabled = allowed && page.identity.epoch != null && !choosing, conversation = true,
+                onAttach = host.attach?.pick, attachmentBusy = host.attach?.busy == true, send = { text ->
                     try { client.send(text); failure = null; true }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (error: Exception) {
@@ -231,7 +275,7 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
         CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalTextToolbar provides toolbar) {
             Box(Modifier.fillMaxSize()) {
                 ChatTimeline(items, working, agentName, listState, contentPadding,
-                    hasOlder = page.before != null, olderEnabled = !loading && desktop.status == "ready", onOlder = {
+                    hasOlder = page.before != null, olderEnabled = !loading && host.ready, onOlder = {
                         if (!loading) {
                             loading = true
                             scope.launch {
@@ -247,7 +291,7 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
             }
         }
     }
-    reader?.let { source -> MessageReaderSheet(source, pane.displayTitle, clipboard, ::openLink) { reader = null } }
+    reader?.let { source -> MessageReaderSheet(source, host.title, clipboard, ::openLink) { reader = null } }
 }
 
 /** The rich reader typesets formulas and diagrams the native timeline shows as source. */
@@ -288,5 +332,7 @@ private fun conversationFailureText(code: String): String = when (code) {
     "prompt_changed" -> stringResource(R.string.chat_prompt_changed)
     "agent_busy", "input_in_progress" -> stringResource(R.string.chat_busy)
     "delivery_unknown" -> stringResource(R.string.chat_delivery_unknown)
+    "python_missing" -> stringResource(R.string.chat_python_missing)
+    "terminal_unknown" -> stringResource(R.string.chat_terminal_unknown)
     else -> tabFailureText(code)
 }
