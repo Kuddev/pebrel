@@ -491,7 +491,12 @@ fn ignored_idle_notification_does_not_reopen_the_hook_ordering_gate(cx: &mut Tes
     view.update(window, |view, cx| {
         for name in ["UserPromptSubmit", "Stop", "Notification", "PostToolUse"] {
             let wire = format!("nebula-hook/1 source=claude\n{{\"hook_event_name\":\"{name}\",\"session_id\":\"idle-notification-order\"}}");
-            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42)).unwrap();
+            let Some(event) = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42))
+            else {
+                // An untyped notification is not a waiting signal and never reaches the view.
+                assert_eq!(name, "Notification");
+                continue;
+            };
             view.handle_ai_hook(&event, cx);
             if name != "UserPromptSubmit" {
                 assert_eq!(view.agent_activity.status(), AgentStatus::Done, "{name}");

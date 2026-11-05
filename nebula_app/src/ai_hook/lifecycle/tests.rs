@@ -35,14 +35,15 @@ fn screen(status: AgentStatus) -> Option<Detection> {
 
 #[test]
 fn complete_hooks_own_every_state_even_when_screen_disagrees() {
-    for provider in ["claude", "opencode"] {
+    // An opencode stop without a classified outcome proves nothing about the answer.
+    for (provider, stopped) in [("claude", AgentStatus::Done), ("opencode", AgentStatus::Idle)] {
         let mut activity = AgentActivity::default();
         for (name, status) in [
             ("SessionStart", AgentStatus::Idle),
             ("UserPromptSubmit", AgentStatus::Working),
             ("PermissionRequest", AgentStatus::Blocked),
             ("PostToolUse", AgentStatus::Working),
-            ("Stop", AgentStatus::Done),
+            ("Stop", stopped),
         ] {
             assert!(activity.apply_hook(&event(provider, "primary", name)));
             for candidate in [AgentStatus::Idle, AgentStatus::Blocked, AgentStatus::Working] {
