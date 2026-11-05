@@ -65,9 +65,9 @@ fn settle_native(
     work: WorkArea,
 ) -> bool {
     use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        ClientToScreen, GetClientRect, GetWindowRect, IsZoomed, SWP_NOACTIVATE, SWP_NOZORDER,
-        SetWindowPos,
+        GetClientRect, GetWindowRect, IsZoomed, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
     };
 
     let hwnd = hwnd as *mut core::ffi::c_void;
