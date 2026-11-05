@@ -23,6 +23,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.kuddev.pebrel.mobile.R
@@ -36,16 +38,15 @@ import io.github.kuddev.pebrel.mobile.session.LocalSession
 
 @Composable
 fun HomeHeader(onSettings: () -> Unit, onNotices: () -> Unit, showNotices: Boolean = true) {
-    Row(Modifier.fillMaxWidth().height(67.dp).background(MaterialTheme.colorScheme.surface).padding(horizontal = 17.dp),
+    Row(Modifier.fillMaxWidth().glassBar().height(60.dp).padding(horizontal = 17.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Image(painterResource(R.drawable.ic_pebrel), null, Modifier.size(24.dp))
-        Text("Pebrel", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 9.dp))
+        Text("Pebrel", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(start = 9.dp))
         if (showNotices) GlyphButton(R.drawable.ic_bell, stringResource(R.string.notifications), onNotices)
         GlyphButton(R.drawable.ic_settings, stringResource(R.string.settings), onSettings)
     }
 }
 
-@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun HomeScreen(
     sessions: List<LocalSession>, hosts: List<HostProfile>, desktops: List<DesktopWorkspace>, relays: List<RelayProfile>,
@@ -55,19 +56,55 @@ fun HomeScreen(
     onAddRelay: () -> Unit, onLocal: () -> Unit, onDeployRelay: () -> Unit,
     onPane: ((String, DesktopPane) -> Unit)? = null,
     onTab: ((String, DesktopTab) -> Unit)? = null,
+    header: @Composable () -> Unit = {},
 ) {
-    if (isHomeEmpty(sessions, hosts, desktops, relays)) {
-        EmptyHomeScreen(onAddRelay, onAddHost, onLocal)
-        return
+    val empty = isHomeEmpty(sessions, hosts, desktops, relays)
+    var newConnection by rememberSaveable { mutableStateOf(false) }
+    GlassPage(topBar = header, floatingActionButton = {
+        if (!empty) NewConnectionButton { newConnection = true }
+    }) { padding, source ->
+        if (empty) Box(Modifier.padding(top = padding.calculateTopPadding())) { EmptyHomeScreen(onAddRelay, onAddHost, onLocal) }
+        else HomeContent(sessions, hosts, desktops, relays, onSession, onSessions, onHosts, onLogin, onEditHost,
+            onDeleteHost, onDesktop, onRelay, onComputers, onAddRelay, onLocal, onPane, onTab,
+            Modifier.fillMaxSize().then(source), padding.calculateTopPadding())
     }
+    if (newConnection) NewConnectionSheet(
+        onDismiss = { newConnection = false },
+        onComputer = onAddRelay,
+        onSshHost = onAddHost,
+        onLocal = onLocal,
+        onDeployRelay = onDeployRelay,
+    )
+}
+
+/** The page's one primary action: accent glass, lifted above the content it floats over. */
+@Composable
+private fun NewConnectionButton(onClick: () -> Unit) {
+    val label = stringResource(R.string.new_connection)
+    Box(Modifier.padding(end = 6.dp, bottom = 7.dp).size(58.dp)
+        .glass(CircleShape, lift = GlassLift.Floating, accent = MaterialTheme.colorScheme.primary)
+        .pressClickable(role = Role.Button, onClickLabel = label, onClick = onClick)
+        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        Icon(painterResource(R.drawable.ic_plus), null, Modifier.size(27.dp), tint = MaterialTheme.colorScheme.onPrimary)
+    }
+}
+
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+private fun HomeContent(
+    sessions: List<LocalSession>, hosts: List<HostProfile>, desktops: List<DesktopWorkspace>, relays: List<RelayProfile>,
+    onSession: (String) -> Unit, onSessions: () -> Unit, onHosts: () -> Unit, onLogin: (HostProfile) -> Unit,
+    onEditHost: (HostProfile) -> Unit, onDeleteHost: (HostProfile) -> Unit, onDesktop: (String) -> Unit,
+    onRelay: (RelayProfile) -> Unit, onComputers: () -> Unit, onAddRelay: () -> Unit, onLocal: () -> Unit,
+    onPane: ((String, DesktopPane) -> Unit)?, onTab: ((String, DesktopTab) -> Unit)?, modifier: Modifier, top: Dp,
+) {
     val motion = rememberPebrelMotion()
     val cards = sessionCards(sessions, desktops)
-    var newConnection by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val thumbnailWidth = ((maxWidth - 44.dp) * .45f).coerceAtLeast(133.dp)
         // 按 fontScale 留高；大字号 sp 的非线性换算会让卡片高度不随小标签一起放大。
         val thumbnailHeight = 180.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 8.dp, bottom = 105.dp)) {
+        LazyColumn(modifier, contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = top + 8.dp, bottom = 105.dp)) {
             item {
                 GroupHeading(stringResource(R.string.sessions), cards.size, stringResource(R.string.all_sessions), onSessions)
                 Spacer(Modifier.height(8.dp))
@@ -129,19 +166,7 @@ fun HomeScreen(
                 NavigationRow(R.drawable.ic_terminal, stringResource(R.string.local_terminal), onClick = onLocal)
             }
         }
-        FloatingActionButton({ newConnection = true }, shape = CircleShape, containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 23.dp).size(58.dp)) {
-            Icon(painterResource(R.drawable.ic_plus), stringResource(R.string.new_connection), Modifier.size(27.dp))
-        }
     }
-    if (newConnection) NewConnectionSheet(
-        onDismiss = { newConnection = false },
-        onComputer = onAddRelay,
-        onSshHost = onAddHost,
-        onLocal = onLocal,
-        onDeployRelay = onDeployRelay,
-    )
 }
 
 internal fun isHomeEmpty(sessions: List<LocalSession>, hosts: List<HostProfile>,
@@ -169,7 +194,7 @@ internal fun sessionCards(sessions: List<LocalSession>, desktops: List<DesktopWo
 private fun DesktopSessionThumbnail(desktop: DesktopWorkspace, pane: DesktopPane?, modifier: Modifier, tab: DesktopTab? = null, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val status = statusLabel(desktop.status)
-    Column(modifier.workspaceFrame().clickable(role = Role.Button, onClick = onClick)) {
+    Column(modifier.pressFeedbackFrame(onClick)) {
         Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Glyph(tab?.let(::tabIcon) ?: R.drawable.ic_monitor, Modifier.size(14.dp))
@@ -198,7 +223,7 @@ private fun SessionThumbnail(session: LocalSession, modifier: Modifier, onClick:
     val colors = MaterialTheme.colorScheme
     val source = if (session.source == "Local") stringResource(R.string.local_device) else session.source
     val status = statusLabel(session.status)
-    Column(modifier.workspaceFrame().clickable(role = Role.Button, onClick = onClick)) {
+    Column(modifier.pressFeedbackFrame(onClick)) {
         Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).semantics { stateDescription = status }, contentAlignment = Alignment.Center) {
@@ -233,7 +258,7 @@ fun HostRow(host: HostProfile, onLogin: () -> Unit, onEdit: () -> Unit, onDelete
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).workspaceFrame().heightIn(min = 83.dp).padding(start = 13.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.weight(1f).clickable(onClick = onLogin).padding(vertical = 15.dp),
+        Row(Modifier.weight(1f).pressClickable(onClick = onLogin).padding(vertical = 15.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             WorkspaceSymbol { HostSymbol(host.icon, Modifier.size(23.dp)) }
             Column(Modifier.weight(1f)) {
@@ -316,7 +341,7 @@ private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<Rel
 private fun ComputerRow(title: String, status: String? = null, transport: String = "", address: String = "", icon: String = "term",
                         onForget: (() -> Unit)? = null, onClick: () -> Unit) {
     // 电脑和添加入口属于同一级；共用图标列与行高，点击留白也有完整的按压反馈。
-    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
+    Row(Modifier.fillMaxWidth().pressClickable(role = Role.Button, onClick = onClick)
         .heightIn(min = 72.dp).padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         if (status == null) Glyph(R.drawable.ic_plus, Modifier.size(24.dp)) else HostSymbol(icon, Modifier.size(24.dp))
@@ -341,11 +366,12 @@ private fun ComputerRow(title: String, status: String? = null, transport: String
 }
 
 @Composable
-fun HostsScreen(hosts: List<HostProfile>, onLogin: (HostProfile) -> Unit, onEdit: (HostProfile) -> Unit, onDelete: (HostProfile) -> Unit) {
+fun HostsScreen(hosts: List<HostProfile>, onLogin: (HostProfile) -> Unit, onEdit: (HostProfile) -> Unit, onDelete: (HostProfile) -> Unit,
+                modifier: Modifier = Modifier, top: Dp = 0.dp) {
     var query by remember { mutableStateOf("") }
     var group by remember { mutableStateOf("all") }
     val found = hosts.filter { (group == "all" || it.group == group) && "${it.name} ${it.address} ${it.user}".contains(query, ignoreCase = true) }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)) {
+    LazyColumn(modifier, contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = top + 12.dp, bottom = 12.dp)) {
         item {
             ConnectionSearchField(query, { query = it }, Modifier.fillMaxWidth().padding(bottom = 10.dp))
         }
