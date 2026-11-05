@@ -23,8 +23,11 @@
 mod drag;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod follow_tests;
+mod interaction;
+mod selection;
 mod target;
 mod transfers;
+use selection::Selection;
 use target::RemoteTransferTarget;
 
 use gpui::AppContext as _;
@@ -45,11 +48,11 @@ use crate::ssh_sftp::{
     SftpSnapshot, SftpTransferOptions,
 };
 
-use super::file_tree::{DRAWER_TEXT_INSET, ROW_PITCH, ROW_WASH_H, ROW_WASH_INSET};
 use super::{NebulaWorkspace, workspace_ui_language};
 
-/// 工具栏与说明文字沿用本地树的抽屉内边距。
-const TEXT_INSET: f32 = DRAWER_TEXT_INSET;
+const TEXT_INSET: f32 = 12.0;
+pub(super) const KEY_CONTEXT: &str = "RemoteFiles";
+gpui::actions!(remote_files, [UploadFiles, DownloadSelection]);
 
 #[derive(Clone)]
 struct RemoteDirectorySnapshot {
@@ -57,7 +60,7 @@ struct RemoteDirectorySnapshot {
     path: String,
     entries: Vec<SftpEntry>,
     error: Option<String>,
-    selected: Option<String>,
+    selection: Selection,
     shell_cwd: Option<String>,
     retry_path: Option<String>,
 }
@@ -99,7 +102,8 @@ pub(super) struct RemoteBrowser {
     error: Option<String>,
     /// 导航世代号。晚发早到的响应靠它被丢弃。
     generation: u64,
-    selected: Option<String>,
+    selection: Selection,
+    focus_handle: Option<gpui::FocusHandle>,
     /// 当前唯一的传输控制器。任务可以跨 pane 切换继续跑，但只有目的地与当前
     /// pane 一致时才把完成结果写回列表，避免 A 主机的结果覆盖 B 主机。
     transfer: Option<SftpController>,
@@ -116,13 +120,13 @@ pub(super) struct RemoteBrowser {
 #[derive(Clone)]
 struct RemoteClipboard {
     source_destination: String,
-    entry: SftpEntry,
+    entries: Vec<SftpEntry>,
 }
 
 #[derive(Clone)]
 enum PendingRemoteTransfer {
     Upload(Vec<PathBuf>),
-    Download { entry: SftpEntry, local_directory: PathBuf },
+    Download { entries: Vec<SftpEntry>, local_directory: PathBuf },
     Copy(RemoteClipboard),
 }
 
@@ -152,7 +156,7 @@ impl RemoteBrowser {
                 path: self.path.clone(),
                 entries: self.entries.clone(),
                 error: self.error.clone(),
-                selected: self.selected.clone(),
+                selection: self.selection.clone(),
                 // A switch cancels unfinished navigation. Reobserve the pane
                 // cwd when it returns rather than treating its old listing as
                 // already synchronized with the cancelled target.
@@ -195,7 +199,7 @@ impl RemoteBrowser {
             self.path = snapshot.path;
             self.entries = snapshot.entries;
             self.error = snapshot.error;
-            self.selected = snapshot.selected;
+            self.selection = snapshot.selection;
             self.shell_cwd = snapshot.shell_cwd;
             self.retry_path = snapshot.retry_path;
             return true;
@@ -206,7 +210,7 @@ impl RemoteBrowser {
         self.path.clear();
         self.entries.clear();
         self.error = None;
-        self.selected = None;
+        self.selection.clear();
         self.shell_cwd = None;
         self.retry_path = None;
         false
@@ -227,7 +231,7 @@ impl RemoteBrowser {
             self.entries.clear();
             self.error = None;
             self.loading = false;
-            self.selected = None;
+            self.selection.clear();
             self.shell_cwd = None;
             self.retry_path = None;
             self.pending_path = None;
@@ -247,7 +251,7 @@ impl RemoteBrowser {
         self.entries.clear();
         self.error = None;
         self.loading = false;
-        self.selected = None;
+        self.selection.clear();
         self.shell_cwd = None;
         self.retry_path = None;
         self.pending_path = None;
@@ -429,10 +433,20 @@ impl NebulaWorkspace {
                 workspace.remote_browser.following_cwd = false;
                 match listed {
                     Some(Ok(entries)) => {
+                        let same_directory = workspace.remote_browser.path == path;
                         workspace.remote_browser.entries = entries;
                         workspace.remote_browser.path = path.clone();
                         workspace.remote_browser.error = None;
-                        workspace.remote_browser.selected = None;
+                        if same_directory {
+                            let rows = workspace.remote_rows();
+                            let paths: Vec<_> = rows.iter().map(|row| row.path.as_str()).collect();
+                            workspace.remote_browser.selection.retain(&paths);
+                        } else {
+                            workspace.remote_browser.selection.clear();
+                            workspace
+                                .remote_files_scroll
+                                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                        }
                         workspace.remote_browser.retry_path = None;
                     },
                     Some(Err(message)) => {
@@ -469,9 +483,13 @@ impl NebulaWorkspace {
         self.navigate_remote(path, cx);
     }
 
-    fn selected_remote_entry(&self) -> Option<SftpEntry> {
-        let selected = self.remote_browser.selected.as_deref()?;
-        self.remote_browser.entries.iter().find(|entry| entry.path == selected).cloned()
+    fn selected_remote_entries(&self) -> Vec<SftpEntry> {
+        self.remote_browser
+            .entries
+            .iter()
+            .filter(|entry| !entry.is_parent && self.remote_browser.selection.contains(&entry.path))
+            .cloned()
+            .collect()
     }
 
     fn remote_rows(&self) -> Vec<SftpEntry> {
@@ -512,209 +530,264 @@ impl NebulaWorkspace {
             );
             return;
         }
-        self.remote_browser.selected = Some(row.path);
+        self.remote_browser.selection.select_only(&row.path);
         cx.notify();
     }
 
-    /// 抽屉的远端形态。几何与本地文件树共用同一套行距和留白。
+    /// The list fills the drawer between the compact toolbar and the transfer dock.
     pub(super) fn render_remote_files(&mut self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
-        // 视图切换条先建：它要可变借 `cx`，而下面取的主题色是从 `cx` 借出来的
-        // 不可变引用。顺序颠倒的话两个借用会重叠。
         let transfer_status = self.render_remote_transfer_status(cx);
-        let skip_unchanged = self.remote_browser.skip_unchanged;
-        let transfer_working = self.remote_transfer_working();
-        let has_selection = self.selected_remote_entry().is_some();
+        let focus = self
+            .remote_browser
+            .focus_handle
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        let busy = self.remote_transfer_working() || self.remote_browser.preflighting;
+        let ready = self.current_remote_transfer_target().is_some();
+        let has_selection = !self.selected_remote_entries().is_empty();
         let has_clipboard = self.remote_browser.clipboard.is_some();
         let skip_toggle = crate::gpui_shell::widgets::NebulaSwitch::new("sftp-skip-unchanged")
-            .checked(skip_unchanged)
-            .disabled(transfer_working)
+            .small()
+            .checked(self.remote_browser.skip_unchanged)
+            .disabled(busy)
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.remote_browser.skip_unchanged = *checked;
                 cx.notify();
             }));
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let modifier = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+        let weak = cx.entity().downgrade();
+        let upload = Button::new("remote-files-upload")
+            .icon(Icon::new(IconName::ArrowUp).size(px(16.0)))
+            .label(language.text(Message::CommonUpload))
+            .small()
+            .h(px(32.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .dropdown_caret(true)
+            .disabled(!ready || busy)
+            .tooltip(format!("{} ({modifier}+Shift+U)", language.text(Message::RemoteUploadFiles)))
+            .dropdown_menu(move |mut menu, _, _| {
+                for (label, directory) in
+                    [(Message::RemoteUploadFiles, false), (Message::RemoteUploadFolder, true)]
+                {
+                    let owner = weak.clone();
+                    menu = menu.item(
+                        gpui_component::menu::PopupMenuItem::new(language.text(label)).on_click(
+                            move |_, window, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    if directory {
+                                        this.remote_pick_upload_directory(window, cx);
+                                    } else {
+                                        this.remote_pick_upload_files(window, cx);
+                                    }
+                                });
+                            },
+                        ),
+                    );
+                }
+                menu
+            });
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let foreground = theme.foreground;
         let drop_highlight = theme.accent.opacity(0.18);
-        let language = crate::gpui_shell::config::ui_language(cx);
+        let location_background = theme.background.darken(0.035);
         let rows = self.remote_rows();
-        let row_count = rows.len();
-        let destination = self.remote_browser.destination.clone();
         let path = if self.remote_browser.path.is_empty() {
             language.text(Message::RemoteLocating).to_owned()
         } else {
             self.remote_browser.path.clone()
         };
+        let location_tip = format!("{} · {}", self.remote_browser.destination, path);
         let at_root = self.remote_browser.path == "/" || self.remote_browser.path.is_empty();
-        let notice = self.remote_notice(language);
 
         v_flex()
-            .h_full()
-            .w_full()
+            .id("remote-files-panel")
+            .size_full()
+            .min_h_0()
             .min_w_0()
-            .flex_shrink_0()
-            .p_2()
-            .gap_2()
+            .overflow_hidden()
             .occlude()
             .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_highlight))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 cx.stop_propagation();
                 this.drop_upload_paths(paths.paths().to_owned(), None, window, cx);
             }))
-            .drag_over::<crate::gpui_shell::file_drop::FileTreeDrag>(move |style, _, _, _| style.bg(drop_highlight))
-            .on_drop(cx.listener(|this, file: &crate::gpui_shell::file_drop::FileTreeDrag, window, cx| {
-                cx.stop_propagation();
-                this.drop_upload_paths(vec![file.local_path.clone()], None, window, cx);
-            }))
-            .child(div().px(px(TEXT_INSET)).text_xs().text_color(muted)
-                .child(language.text(if crate::platform::file_drag::supported() {
-                    crate::i18n::Message::TransferDragHint
-                } else { crate::i18n::Message::TransferUploadHint })))
-            // 主机名单独一行：远端浏览器最危险的误操作是"以为在另一台机器上"，
-            // 所以目的地必须一直在视野里，而不是只在标题栏或 tab 上。
-            .child(
-                h_flex().px(px(TEXT_INSET)).items_center().gap_1().child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(foreground)
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(destination),
-                ),
-            )
+            .drag_over::<crate::gpui_shell::file_drop::FileTreeDrag>(move |style, _, _, _| {
+                style.bg(drop_highlight)
+            })
+            .on_drop(cx.listener(
+                |this, file: &crate::gpui_shell::file_drop::FileTreeDrag, window, cx| {
+                    cx.stop_propagation();
+                    this.drop_upload_paths(vec![file.local_path.clone()], None, window, cx);
+                },
+            ))
             .child(
                 h_flex()
-                    .h(px(30.0))
-                    .px(px(TEXT_INSET))
-                    .items_center()
-                    .gap_1()
+                    .id("remote-files-location")
+                    .h(px(32.0))
+                    .mx(px(TEXT_INSET))
+                    .mt(px(8.0))
+                    .pl(px(8.0))
+                    .pr(px(2.0))
+                    .gap(px(4.0))
+                    .flex_shrink_0()
+                    .rounded(px(8.0))
+                    .bg(location_background)
+                    .tooltip(move |window, cx| Tooltip::new(location_tip.clone()).build(window, cx))
+                    .child(div().text_xs().text_color(muted).pr(px(6.0)).child("SFTP"))
+                    .child(div().flex_1().min_w_0().text_xs().truncate().child(path))
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .child(path),
+                        remote_button(
+                            "remote-files-up",
+                            IconName::ArrowUp,
+                            language.text(Message::RemoteParent),
+                        )
+                        .w(px(28.0))
+                        .h(px(28.0))
+                        .disabled(at_root || self.remote_browser.loading)
+                        .on_click(cx.listener(|this, _, _, cx| this.remote_parent(cx))),
                     )
                     .child(
-                        Button::new("remote-files-up")
-                            .icon(IconName::ArrowUp)
-                            .ghost()
-                            .xsmall()
-                            .disabled(at_root)
-                            .tooltip(language.text(Message::RemoteParent))
-                            .on_click(cx.listener(|this, _, _, cx| this.remote_parent(cx))),
-                    )
-                    .child(
-                        Button::new("remote-files-refresh")
-                            // 与本地树的"重新跟随"同一个字位：两个列表的刷新
-                            // 动作长得不一样会让用户以为它们干的不是同一件事。
-                            .icon(IconName::Redo2)
-                            .ghost()
-                            .xsmall()
-                            .tooltip(language.text(Message::RemoteReread))
-                            .on_click(cx.listener(|this, _, _, cx| this.remote_refresh(cx))),
+                        remote_button(
+                            "remote-files-refresh",
+                            IconName::Redo2,
+                            language.text(Message::RemoteReread),
+                        )
+                        .w(px(28.0))
+                        .h(px(28.0))
+                        .on_click(cx.listener(|this, _, _, cx| this.remote_refresh(cx))),
                     ),
             )
             .child(
                 h_flex()
-                    .h(px(30.0))
                     .px(px(TEXT_INSET))
-                    .items_center()
-                    .gap_1()
+                    .py(px(8.0))
+                    .gap(px(2.0))
+                    .flex_shrink_0()
+                    .child(upload)
                     .child(
-                        Button::new("remote-files-upload-files")
-                            .icon(IconName::ArrowUp)
-                            .ghost()
-                            .xsmall()
-                            .disabled(transfer_working)
-                            .tooltip(language.text(Message::RemoteUploadFiles))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.remote_pick_upload_files(window, cx);
-                            })),
+                        remote_button(
+                            "remote-files-download",
+                            IconName::ArrowDown,
+                            language.text(Message::RemoteDownload),
+                        )
+                        .disabled(!ready || !has_selection || busy)
+                        .tooltip(format!(
+                            "{} ({modifier}+Shift+D)",
+                            language.text(Message::RemoteDownload)
+                        ))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.remote_pick_download_directory(window, cx)
+                        })),
                     )
                     .child(
-                        Button::new("remote-files-upload-directory")
-                            .icon(IconName::FolderOpen)
-                            .ghost()
-                            .xsmall()
-                            .disabled(transfer_working)
-                            .tooltip(language.text(Message::RemoteUploadFolder))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.remote_pick_upload_directory(window, cx);
-                            })),
+                        remote_button(
+                            "remote-files-copy",
+                            IconName::Copy,
+                            language.text(Message::RemoteCopyItem),
+                        )
+                        .disabled(!has_selection)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.remote_copy_selected(window, cx)
+                            }),
+                        ),
                     )
                     .child(
-                        Button::new("remote-files-download")
-                            .icon(IconName::ArrowDown)
-                            .ghost()
-                            .xsmall()
-                            .disabled(!has_selection || transfer_working)
-                            .tooltip(language.text(Message::RemoteDownload))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.remote_pick_download_directory(window, cx);
-                            })),
+                        remote_button(
+                            "remote-files-paste",
+                            IconName::Inbox,
+                            language.text(Message::RemotePasteHere),
+                        )
+                        .disabled(!ready || !has_clipboard || busy)
+                        .on_click(cx.listener(|this, _, window, cx| this.remote_paste(window, cx))),
                     )
                     .child(
-                        Button::new("remote-files-copy")
-                            .icon(IconName::Copy)
-                            .ghost()
-                            .xsmall()
-                            .disabled(!has_selection)
-                            .tooltip(language.text(Message::RemoteCopyItem))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.remote_copy_selected(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("remote-files-paste")
-                            .icon(IconName::Inbox)
-                            .ghost()
-                            .xsmall()
-                            .disabled(!has_clipboard || transfer_working)
-                            .tooltip(language.text(Message::RemotePasteHere))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.remote_paste(window, cx);
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(div().text_xs().text_color(muted).child(language.text(Message::RemoteSkipUnchanged)))
-                    .child(skip_toggle),
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .justify_end()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .truncate()
+                                    .child(language.text(Message::RemoteSkipUnchanged)),
+                            )
+                            .child(skip_toggle),
+                    ),
             )
-            .when_some(notice, |panel, text| {
-                panel.child(
-                    div()
-                        .px(px(TEXT_INSET))
-                        .text_xs()
-                        .text_color(muted)
-                        .whitespace_normal()
-                        .child(text),
-                )
-            })
+            .child(
+                h_flex()
+                    .h(px(24.0))
+                    .px(px(16.0))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(div().flex_1().child(language.text(Message::CommonName)))
+                    .child(language.text(Message::CommonSize)),
+            )
             .child(
                 div()
+                    .id("remote-files-list")
+                    .key_context(KEY_CONTEXT)
+                    .track_focus(&focus)
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    // 必须裁：虚拟列表会把行画到自己的 bounds 之外，没有这层
-                    // 末行会压过抽屉的下内边距一直画到底边，把留白和下两角的
-                    // 圆角都盖掉。
                     .overflow_hidden()
+                    .on_key_down(cx.listener(Self::remote_files_key_down))
+                    .on_action(cx.listener(|this, _: &UploadFiles, window, cx| {
+                        cx.stop_propagation();
+                        this.remote_pick_upload_files(window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &DownloadSelection, window, cx| {
+                        cx.stop_propagation();
+                        this.remote_pick_download_directory(window, cx);
+                    }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.remote_browser.selection.clear();
+                            this.remote_browser.last_outcome = None;
+                            if let Some(focus) = &this.remote_browser.focus_handle {
+                                focus.focus(window, cx);
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .child(
-                        uniform_list("remote-files-rows", row_count, {
-                            let rows = rows.clone();
-                            cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                        uniform_list(
+                            "remote-files-rows",
+                            rows.len(),
+                            cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                                 range
-                                    .filter_map(|index| rows.get(index).cloned())
-                                    .map(|row| this.render_remote_row(row, cx))
+                                    .filter_map(|index| {
+                                        let row = rows.get(index)?.clone();
+                                        let joined = (
+                                            index
+                                                .checked_sub(1)
+                                                .and_then(|i| rows.get(i))
+                                                .is_some_and(|row| {
+                                                    this.remote_browser
+                                                        .selection
+                                                        .contains(&row.path)
+                                                }),
+                                            rows.get(index + 1).is_some_and(|row| {
+                                                this.remote_browser.selection.contains(&row.path)
+                                            }),
+                                        );
+                                        Some(this.render_remote_row(row, joined, window, cx))
+                                    })
                                     .collect()
-                            })
-                        })
-                        .w_full()
+                            }),
+                        )
+                        .absolute()
+                        .inset_0()
                         .size_full()
                         .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
                         .track_scroll(&self.remote_files_scroll),
@@ -724,162 +797,347 @@ impl NebulaWorkspace {
             .into_any_element()
     }
 
-    /// 固定高度的传输状态区。预留空间后，开始/结束传输不会挤动文件列表。
+    /// Idle occupies one visible status line; only a running transfer expands the dock.
     fn render_remote_transfer_status(&mut self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
-        const STATUS_HEIGHT: f32 = 50.0;
-        let Some(snapshot) = self.remote_transfer_snapshot().filter(|snapshot| {
+        let snapshot = self.remote_transfer_snapshot().filter(|snapshot| {
             snapshot.destination == self.remote_browser.destination
                 && matches!(snapshot.phase, SftpPhase::Working | SftpPhase::Error)
-        }) else {
-            return div().h(px(STATUS_HEIGHT)).w_full().flex_shrink_0().into_any_element();
+        });
+        let selected = self.selected_remote_entries();
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let is_working =
+            snapshot.as_ref().is_some_and(|snapshot| snapshot.phase == SftpPhase::Working);
+        let progress = snapshot.as_ref().and_then(|snapshot| snapshot.progress.as_ref());
+        let label = if let Some(snapshot) = &snapshot {
+            if snapshot.phase == SftpPhase::Error {
+                language.text(Message::TransferFailed).to_owned()
+            } else {
+                progress
+                    .map(|p| p.label.clone())
+                    .unwrap_or_else(|| language.text(Message::RemotePreparing).to_owned())
+            }
+        } else if let Some(notice) = self.remote_notice(language) {
+            notice
+        } else if !selected.is_empty() {
+            let mut label = language
+                .format(Message::RemoteSelectedItems, &[("count", &selected.len().to_string())]);
+            if selected.iter().all(|entry| entry.kind == SftpEntryKind::File) {
+                let bytes =
+                    selected.iter().fold(0u64, |total, entry| total.saturating_add(entry.size));
+                label.push_str(&format!(" · {}", format_transfer_bytes(bytes)));
+            }
+            label
+        } else {
+            language.format(
+                Message::RemoteItems,
+                &[("count", &self.remote_browser.entries.len().to_string())],
+            )
         };
-
+        let detail = snapshot.as_ref().and_then(|snapshot| snapshot.error.clone()).or_else(|| {
+            progress.map(|p| {
+                format!(
+                    "{} / {}",
+                    format_transfer_bytes(p.transferred),
+                    format_transfer_bytes(p.total)
+                )
+            })
+        });
+        let percent = progress.map(|progress| progress.fraction() * 100.0).unwrap_or(0.0);
+        let loading = progress.is_none_or(|progress| progress.total == 0);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let is_working = snapshot.phase == SftpPhase::Working;
-        let progress = snapshot.progress.clone();
-        let label = progress.as_ref().map(|progress| progress.label.clone()).unwrap_or_else(|| {
-            if is_working {
-                language.text(Message::RemotePreparing).to_owned()
-            } else {
-                language.text(Message::TransferFailed).to_owned()
-            }
-        });
-        let detail = if let Some(progress) = progress.as_ref() {
-            format!(
-                "{} / {}",
-                format_transfer_bytes(progress.transferred),
-                format_transfer_bytes(progress.total)
-            )
-        } else {
-            snapshot.error.clone().unwrap_or_default()
-        };
-        let loading = progress.as_ref().is_none_or(|progress| progress.total == 0);
-        let percent = progress.as_ref().map(|progress| progress.fraction() * 100.0).unwrap_or(0.0);
-
+        let has_error = self.remote_browser.error.is_some();
+        let tip = label.clone();
+        let can_download = self.current_remote_transfer_target().is_some()
+            && !self.remote_transfer_working()
+            && !self.remote_browser.preflighting;
         v_flex()
-            .h(px(STATUS_HEIGHT))
             .w_full()
             .flex_shrink_0()
-            .px(px(TEXT_INSET))
-            .gap_1()
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.background.darken(0.025))
+            .when(is_working, |dock| {
+                dock.child(
+                    gpui_component::progress::Progress::new("remote-files-transfer-progress")
+                        .small()
+                        .loading(loading)
+                        .value(percent),
+                )
+            })
             .child(
                 h_flex()
-                    .h(px(22.0))
-                    .items_center()
-                    .gap_1()
+                    .h(px(40.0))
+                    .px(px(TEXT_INSET))
+                    .gap(px(4.0))
                     .child(
                         div()
+                            .id("remote-files-status")
                             .flex_1()
                             .min_w_0()
                             .text_xs()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
+                            .text_color(if has_error { theme.danger } else { muted })
+                            .truncate()
+                            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                             .child(label),
                     )
-                    .child(div().text_xs().text_color(muted).whitespace_nowrap().child(detail))
-                    .when(is_working, |row| {
-                        row.child(
-                            Button::new("remote-files-cancel-transfer")
-                                .icon(IconName::CircleX)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(language.text(Message::RemoteCancel))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.remote_cancel_transfer(cx);
-                                })),
+                    .when(is_working, |line| {
+                        line.child(
+                            remote_button(
+                                "remote-files-cancel-transfer",
+                                IconName::CircleX,
+                                language.text(Message::RemoteCancel),
+                            )
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.remote_cancel_transfer(cx)),
+                            ),
+                        )
+                    })
+                    .when(!is_working && !selected.is_empty(), |line| {
+                        line.child(
+                            remote_button(
+                                "remote-files-download-selection",
+                                IconName::ArrowDown,
+                                language.text(Message::RemoteDownload),
+                            )
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .disabled(!can_download)
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.remote_pick_download_directory(window, cx)
+                                },
+                            )),
+                        )
+                        .child(
+                            remote_button(
+                                "remote-files-clear-selection",
+                                IconName::Close,
+                                language.text(Message::RemoteClearSelection),
+                            )
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.remote_browser.selection.clear();
+                                this.remote_browser.last_outcome = None;
+                                cx.notify();
+                            })),
                         )
                     }),
             )
-            .child(
-                gpui_component::progress::Progress::new("remote-files-transfer-progress")
-                    .small()
-                    .loading(is_working && loading)
-                    .value(percent),
-            )
+            .when_some(detail, |dock, detail| {
+                let tip = detail.clone();
+                dock.child(
+                    div()
+                        .id("remote-files-transfer-detail")
+                        .px(px(TEXT_INSET))
+                        .pb(px(8.0))
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                        .child(detail),
+                )
+            })
             .into_any_element()
     }
 
-    /// 一行远端条目。
-    fn render_remote_row(&self, row: SftpEntry, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
+    fn render_remote_row(
+        &self,
+        row: SftpEntry,
+        joined: (bool, bool),
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
         let theme = cx.theme();
-        let selected = self.remote_browser.selected.as_deref() == Some(row.path.as_str());
-        // 图标和颜色与本地树同源：同一个"文件"入口不该在本地和远端看起来
-        // 像两套产品。
+        let selected = self.remote_browser.selection.contains(&row.path);
+        let focused = self.remote_browser.selection.focus() == Some(row.path.as_str())
+            && self
+                .remote_browser
+                .focus_handle
+                .as_ref()
+                .is_some_and(|f| f.contains_focused(window, cx));
         let (icon, ink) = match row.kind {
             SftpEntryKind::Directory => {
-                (crate::display::side_panel::folder_icon(false), theme.foreground)
+                (crate::display::side_panel::folder_icon(false), theme.accent)
             },
             SftpEntryKind::Symlink => ("\u{ea71}", theme.muted_foreground),
             SftpEntryKind::File => {
                 (crate::display::side_panel::file_type_icon(&row.name), theme.muted_foreground)
             },
         };
-        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
-        let label = row.name.clone();
+        let group = SharedString::from(format!("remote-row-{}", row.path));
+        let label = if row.kind == SftpEntryKind::Directory && !row.is_parent {
+            format!("{}/", row.name)
+        } else {
+            row.name.clone()
+        };
+        let size = if row.kind == SftpEntryKind::File {
+            format_transfer_bytes(row.size)
+        } else {
+            "—".to_owned()
+        };
         let activate = row.clone();
-        let source = (!row.is_parent).then(|| self.current_remote_transfer_target()).flatten();
-        let native_drag = source.map(|source| drag::RemoteFileDrag { source, entry: row.clone() });
+        let press = row.clone();
+        let download = row.clone();
+        let copy = row.clone();
+        let busy = self.remote_transfer_working() || self.remote_browser.preflighting;
+        let ready = self.current_remote_transfer_target().is_some();
+        let native_drag = (!row.is_parent && !busy)
+            .then(|| self.current_remote_transfer_target())
+            .flatten()
+            .map(|source| drag::RemoteFileDrag { source, entry: row.clone() });
         let weak = cx.entity().downgrade();
         let directory = (row.kind == SftpEntryKind::Directory).then(|| row.path.clone());
         let upload_directory = directory.clone();
         let highlight = theme.accent.opacity(0.18);
+        let language = crate::gpui_shell::config::ui_language(cx);
 
         h_flex()
-            .h(px(ROW_PITCH))
+            .h(px(28.0))
             .w_full()
-            .px(px(ROW_WASH_INSET))
+            .px(px(8.0))
             .child(
                 h_flex()
-                    .id(SharedString::from(format!("remote-row-{}", row.path)))
-                    .h(px(ROW_WASH_H))
+                    .id(group.clone())
+                    .group(group.clone())
+                    .relative()
+                    .h(px(28.0))
                     .flex_1()
                     .min_w_0()
-                    .items_center()
-                    .pr_2()
-                    .pl(px(8.0))
-                    .gap_1()
-                    .rounded(px(crate::display::UI_CORNER_RADIUS_LOGICAL))
+                    .px(px(7.0))
+                    .gap(px(8.0))
+                    .rounded(px(6.0))
                     .border_1()
-                    .border_color(gpui::transparent_black())
-                    .when(selected, |row| {
-                        row.bg(theme.tab_active).border_color(theme.ring.opacity(0.16))
+                    .border_color(if focused {
+                        theme.ring.opacity(0.6)
+                    } else {
+                        gpui::transparent_black()
                     })
-                    .hover(|row| row.bg(theme.list_hover))
-                    .child(div().w(px(12.0)).flex_shrink_0())
+                    .when(selected, |item| {
+                        item.bg(theme.tab_active)
+                            .when(joined.0, |item| item.rounded_t(px(0.0)))
+                            .when(joined.1, |item| item.rounded_b(px(0.0)))
+                    })
+                    .when(!selected, |item| item.hover(|item| item.bg(theme.list_hover)))
                     .child(
                         div()
                             .w(px(16.0))
-                            .font_family(symbol_family)
-                            .text_color(ink)
                             .flex_shrink_0()
+                            .font_family(SharedString::from(
+                                crate::font_install::SYMBOL_FONT_FAMILY,
+                            ))
+                            .text_size(px(16.0))
+                            .text_color(ink)
                             .child(icon),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_sm()
+                            .text_size(px(13.0))
                             .text_color(theme.foreground)
-                            .overflow_hidden()
-                            .whitespace_nowrap()
+                            .truncate()
                             .child(label),
                     )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground)
+                            .flex_shrink_0()
+                            .child(size),
+                    )
+                    .when(!row.is_parent, |item| {
+                        item.child(
+                            h_flex()
+                                .id(SharedString::from(format!("remote-actions-{}", row.path)))
+                                .absolute()
+                                .right(px(3.0))
+                                .top_0()
+                                .h(px(26.0))
+                                .pl(px(8.0))
+                                .bg(if selected {
+                                    theme.tab_active
+                                } else {
+                                    theme.background.blend(theme.list_hover)
+                                })
+                                .invisible()
+                                .group_hover(group.clone(), |actions| actions.visible())
+                                .when(focused, |actions| actions.visible())
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .on_key_down(|event, _, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        cx.stop_propagation();
+                                    }
+                                })
+                                .child(
+                                    remote_button(
+                                        SharedString::from(format!("remote-download-{}", row.path)),
+                                        IconName::ArrowDown,
+                                        language.text(Message::RemoteDownload),
+                                    )
+                                    .w(px(28.0))
+                                    .h(px(26.0))
+                                    .tab_stop(focused)
+                                    .disabled(!ready || busy)
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.remote_action_selection(&download);
+                                            this.remote_pick_download_directory(window, cx);
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    remote_button(
+                                        SharedString::from(format!("remote-copy-{}", row.path)),
+                                        IconName::Copy,
+                                        language.text(Message::RemoteCopyItem),
+                                    )
+                                    .w(px(28.0))
+                                    .h(px(26.0))
+                                    .tab_stop(focused)
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.remote_action_selection(&copy);
+                                            this.remote_copy_selected(window, cx);
+                                        },
+                                    )),
+                                ),
+                        )
+                    })
                     .when_some(
                         native_drag.filter(|_| crate::platform::file_drag::supported()),
                         |item, drag| {
                             item.on_drag(drag, move |drag, _, window, cx| {
+                                let label = weak
+                                    .update(cx, |this, _| {
+                                        this.remote_browser.selection.drag_started();
+                                        let count = this.selected_remote_entries().len();
+                                        if count > 1 {
+                                            language.format(
+                                                Message::RemoteItems,
+                                                &[("count", &count.to_string())],
+                                            )
+                                        } else {
+                                            drag.entry.name.clone()
+                                        }
+                                    })
+                                    .unwrap_or_else(|_| drag.entry.name.clone());
                                 let preview = cx.new(|_| {
-                                    crate::gpui_shell::file_drop::FileDragGhost::new(
-                                        drag.entry.name.clone(),
-                                    )
+                                    crate::gpui_shell::file_drop::FileDragGhost::new(label)
                                 });
                                 let owner = weak.clone();
                                 let drag = drag.clone();
                                 window.defer(cx, move |window, cx| {
-                                    let _ = owner.update(cx, |workspace, cx| {
-                                        workspace.begin_native_download_drag(drag, window, cx)
+                                    let _ = owner.update(cx, |this, cx| {
+                                        this.begin_native_download_drag(drag, window, cx)
                                     });
                                 });
                                 preview
@@ -917,19 +1175,31 @@ impl NebulaWorkspace {
                             },
                         ))
                     })
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, event, window, cx| {
+                            this.remote_row_press(&press, event, window, cx);
+                        }),
+                    )
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                        this.remote_activate(
-                            activate.clone(),
-                            event.click_count() >= 2,
-                            window,
-                            cx,
-                        );
+                        cx.stop_propagation();
+                        let modifiers = event.modifiers();
+                        if event.click_count() >= 2
+                            && !modifiers.control
+                            && !modifiers.platform
+                            && !modifiers.shift
+                        {
+                            this.remote_activate(activate.clone(), true, window, cx);
+                        } else {
+                            this.remote_browser.selection.click(&activate.path);
+                            cx.notify();
+                        }
                     })),
             )
             .into_any_element()
     }
 
-    /// 列表上方那行说明：正在读、读失败、或者目录确实是空的。
+    /// 底栏的浏览状态：正在读、读失败、或者目录确实是空的。
     ///
     /// 三种情况必须分开说。"读不到"和"是空的"混为一谈，用户就不知道该重试
     /// 还是该换目录——这是空态里最常见也最误导人的一处偷懒。
@@ -960,6 +1230,19 @@ impl NebulaWorkspace {
             .is_empty()
             .then(|| language.text(Message::RemoteEmpty).to_owned())
     }
+}
+
+fn remote_button(id: impl Into<gpui::ElementId>, icon: IconName, label: &'static str) -> Button {
+    Button::new(id)
+        .icon(Icon::new(icon).size(px(16.0)))
+        .ghost()
+        .small()
+        .w(px(32.0))
+        .h(px(32.0))
+        .px_0()
+        .rounded(px(6.0))
+        .tooltip(label)
+        .aria_label(label)
 }
 
 async fn probe_remote_shell_cwd(destination: String) -> crate::ssh_sftp::remote_cwd::RemoteCwd {
@@ -1087,7 +1370,7 @@ mod tests {
         assert!(!browser.bind(11, "alice@alpha".to_owned()));
         browser.path = "/srv/alpha".to_owned();
         browser.entries = vec![entry("alpha.txt", "/srv/alpha/alpha.txt")];
-        browser.selected = Some("/srv/alpha/alpha.txt".to_owned());
+        browser.selection.select_only("/srv/alpha/alpha.txt");
 
         assert!(!browser.bind(22, "bob@beta".to_owned()));
         browser.path = "/home/bob".to_owned();
@@ -1097,7 +1380,7 @@ mod tests {
         assert!(browser.bind(11, "alice@alpha".to_owned()));
         assert_eq!(browser.path, "/srv/alpha");
         assert_eq!(browser.entries, vec![entry("alpha.txt", "/srv/alpha/alpha.txt")]);
-        assert_eq!(browser.selected.as_deref(), Some("/srv/alpha/alpha.txt"));
+        assert!(browser.selection.contains("/srv/alpha/alpha.txt"));
         assert_eq!(browser.path_for(11, "alice@alpha"), Some("/srv/alpha"));
         assert!(!browser.loading);
     }
@@ -1112,7 +1395,7 @@ mod tests {
         assert!(!browser.bind(7, "root@new-host".to_owned()));
         assert!(browser.path.is_empty());
         assert!(browser.entries.is_empty());
-        assert!(browser.selected.is_none());
+        assert_eq!(browser.selection.focus(), None);
         assert_eq!(browser.path_for(7, "root@old-host"), None);
     }
 

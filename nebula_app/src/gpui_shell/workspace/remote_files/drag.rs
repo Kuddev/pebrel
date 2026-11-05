@@ -99,7 +99,9 @@ impl NebulaWorkspace {
                 return;
             },
         };
-        let ready = controller.prepare_export(drag.entry, self.remote_browser.entries.clone());
+        self.remote_action_selection(&drag.entry);
+        let entries = self.selected_remote_entries();
+        let ready = controller.prepare_export(entries, self.remote_browser.entries.clone());
         crate::platform::file_drag::release_pointer();
         let (done, receive) = futures::channel::oneshot::channel();
         let cancel = controller.cancellation_probe();
