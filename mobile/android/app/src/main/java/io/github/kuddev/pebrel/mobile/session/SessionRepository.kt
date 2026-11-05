@@ -141,7 +141,8 @@ class SessionRepository(private val context: Context,
         }
     }
 
-    private fun probeSshOnResume(session: LocalSession) {
+    /** Reconnects only when the old connection fails a round trip; [always] also acts in the background. */
+    private fun probeSshOnResume(session: LocalSession, always: Boolean = false) {
         val connection = sshConnections[session.id] ?: return
         resumeChecks[session.id] = scope.launch(Dispatchers.Main.immediate) {
             // The JNI query is blocking. Await it separately so the deadline can close a dead socket.
@@ -150,7 +151,7 @@ class SessionRepository(private val context: Context,
             catch (failure: Exception) {
                 if (failure is CancellationException && failure !is TimeoutCancellationException) throw failure
                 val transient = failure is TimeoutCancellationException || SshReconnect.retryable(classifySshFailure(failure))
-                if (foreground && transient && sshConnections[session.id] === connection &&
+                if ((foreground || always) && transient && sshConnections[session.id] === connection &&
                     live.value.any { it.id == session.id && it.terminal === session.terminal && it.status == "ready" }) {
                     session.terminal.finishIfRunning()
                     update(session.id) { it.copy(status = "reconnecting", failure = SshFailureKind.NETWORK) }
@@ -166,18 +167,19 @@ class SessionRepository(private val context: Context,
     }
 
     internal fun networkChanged() {
-        // Route changes invalidate the old TCP connection, including background SSH tabs.
+        // A new default network often leaves the old route working (VPN, Wi-Fi roaming, a second SIM).
+        // Probe each SSH tab and reconnect only those whose connection no longer answers.
         for (session in live.value.filter { it.host != null && it.hasConnected &&
             it.status in setOf("ready", "reconnecting") }) {
             if (session.status == "ready") {
-                session.terminal.finishIfRunning()
-                update(session.id) { it.copy(status = "reconnecting", failure = SshFailureKind.NETWORK) }
-            }
-            sshReconnect.schedule(session.id, immediate = true)
+                resumeChecks.remove(session.id)?.cancel()
+                probeSshOnResume(session, always = true)
+            } else sshReconnect.schedule(session.id, immediate = true)
         }
         if (!foreground) return
-        resumeChecks.values.forEach(Job::cancel)
-        resumeChecks.clear()
+        // Desktop checks are replaced below; the SSH probes just started must keep running.
+        val sshTabs = live.value.map { it.id }.toSet()
+        resumeChecks.keys.filter { it !in sshTabs }.forEach { resumeChecks.remove(it)?.cancel() }
         for (desktop in computers.value.filter {
             it.hasConnected && it.relayProfile != null && it.status != "approval" && DesktopReconnect.retryable(it.failure)
         }) {
