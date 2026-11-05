@@ -147,6 +147,15 @@ fn start(
                         record("ancestor-start");
                         event.agent_pid = crate::process_tree::nearest_agent_ancestor(client_pid)
                             .map(|(pid, _)| pid);
+                        #[cfg(target_os = "linux")]
+                        if event.source == "codex"
+                            && let Some(agent) = event.agent_pid
+                        {
+                            event.shared_app_server =
+                                crate::platform::ai_session_identity::codex_app_server_is_shared(
+                                    agent,
+                                );
+                        }
                         #[cfg(test)]
                         record("ancestor-returned");
                         match tx.try_send(event) {

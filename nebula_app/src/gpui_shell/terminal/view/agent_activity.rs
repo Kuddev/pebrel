@@ -28,6 +28,13 @@ impl TerminalView {
         }
     }
 
+    /// The conversation already confirmed for this pane, or the one it resumed.
+    fn owns_agent_session(&self, id: &str) -> bool {
+        self.ai_session.as_ref().is_some_and(|identity| identity.session_id == id)
+            || self.recovery.target.as_ref().and_then(|target| target.session_id.as_deref())
+                == Some(id)
+    }
+
     pub fn handle_ai_hook(&mut self, event: &AiHookEvent, cx: &mut Context<Self>) -> bool {
         self.sync_remote_activity(cx);
         if self.ssh_destination.is_some() && event.remote_context != self.remote_activity.context {
@@ -41,6 +48,17 @@ impl TerminalView {
             && crate::process_tree::is_within_tree(client_pid, session.shell_pid) == Some(false)
         {
             log::warn!("ai_hook: pane={} rejected foreign client pid={client_pid}", self.pane_id);
+            return false;
+        }
+        // A shared Codex app-server reports its launching pane for every client's
+        // thread. Only the conversation this pane already owns stays attributable.
+        if event.shared_app_server
+            && !event.session_id.as_deref().is_some_and(|id| self.owns_agent_session(id))
+        {
+            log::debug!(
+                "ai_hook: pane={} ignored an unattributable shared Codex hook",
+                self.pane_id
+            );
             return false;
         }
         if !self.agent_activity.accepts_hook(event) {

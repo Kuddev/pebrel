@@ -348,6 +348,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         // 只有命名管道的服务端能从内核问出来；解析阶段一律留空。
         client_pid: None,
         agent_pid: None,
+        shared_app_server: false,
         permission_mode,
         background_tasks,
         attention,

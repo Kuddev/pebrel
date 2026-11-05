@@ -64,12 +64,21 @@ for proc in /proc/[0-9]*; do
     esac
     [ -r "$proc/environ" ] || continue
     environment=$(tr "\0" "\n" < "$proc/environ" 2>/dev/null || true)
+    daemon=0
+    if tr "\0" "\n" < "$proc/cmdline" 2>/dev/null | sed 1d | grep -qx "app-server"; then
+        daemon=1
+    fi
     pane_id=$(printf '%s\n' "$environment" | sed -n "s/^PEBREL_PANE_ID=//p" | head -n 1)
     if [ "$pane_id" != "$pane" ]; then
         pane_id=$(printf '%s\n' "$environment" | sed -n "s/^NEBULA_PANE_ID=//p" | head -n 1)
     fi
     process_id=$(printf '%s\n' "$environment" | sed -n "s/^PEBREL_PROCESS_ID=//p" | head -n 1)
-    [ "$pane_id" = "$pane" ] && [ "$process_id" = "$instance" ] || continue
+    owned=0
+    if [ "$pane_id" = "$pane" ] && [ "$process_id" = "$instance" ]; then
+        owned=1
+    fi
+    # Another pane's or terminal's client can share this pane's app-server.
+    [ "$owned" = 1 ] || [ "$daemon" = 0 ] || continue
     codex_root=$(printf '%s\n' "$environment" | sed -n "s/^CODEX_HOME=//p" | head -n 1)
     if [ -z "$codex_root" ]; then
         guest_home=$(printf '%s\n' "$environment" | sed -n "s/^HOME=//p" | head -n 1)
@@ -82,6 +91,13 @@ for proc in /proc/[0-9]*; do
     esac
     # fd 返回真实路径；每个已匹配进程只解析一次目录，避免逐句柄重复 I/O。
     sessions_root=$(CDPATH= cd -P "$codex_root/sessions" 2>/dev/null && pwd -P) || continue
+    if [ "$owned" = 0 ]; then
+        printf 'foreign\t%s\n' "$sessions_root"
+        continue
+    fi
+    if [ "$daemon" = 1 ]; then
+        printf 'daemon\t%s\t%s\n' "$pid" "$sessions_root"
+    fi
     for fd in "$proc"/fd/*; do
         link=$(readlink "$fd" 2>/dev/null || true)
         case "$link" in
@@ -97,7 +113,7 @@ done
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProbeRecord {
-    _pid: u32,
+    pid: u32,
     _fd: u32,
     link: String,
     first_line: String,
@@ -147,9 +163,46 @@ pub(crate) fn probe_codex_session(
     }
 }
 
+/// Whether a probe can recognize Codex's shared app-server holder. That daemon
+/// writes `source=vscode` metadata for TUI threads and serves every client that
+/// uses the same Codex home, so its environment alone does not identify a pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppServerThreads {
+    /// The probe cannot tell the shared daemon from the pane's own process.
+    Rejected,
+    /// The probe reported daemon holders and clients outside the pane.
+    Attributed,
+}
+
 fn parse_probe_context(output: &str) -> Option<CodexSession> {
+    parse_probe_output(output, AppServerThreads::Rejected)
+}
+
+fn parse_attributed_probe(output: &str) -> Option<CodexSession> {
+    parse_probe_output(output, AppServerThreads::Attributed)
+}
+
+fn parse_probe_output(output: &str, app_server: AppServerThreads) -> Option<CodexSession> {
+    // `daemon\t<pid>\t<sessions>` marks this pane's app-server; `foreign\t<sessions>`
+    // is a Codex client outside the pane. Its threads are then indistinguishable.
+    let mut daemons = std::collections::HashMap::new();
+    let mut foreign = std::collections::HashSet::new();
+    for line in output.lines() {
+        if let Some(rest) = line.strip_prefix("daemon\t") {
+            if let Some((pid, root)) = rest.split_once('\t')
+                && let Ok(pid) = pid.parse::<u32>()
+            {
+                daemons.insert(pid, root);
+            }
+        } else if let Some(root) = line.strip_prefix("foreign\t") {
+            foreign.insert(root);
+        }
+    }
     let mut candidate = None;
     for record in output.lines().filter_map(parse_probe_record) {
+        if daemons.get(&record.pid).is_some_and(|root| foreign.contains(root)) {
+            continue;
+        }
         let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.first_line) else {
             continue;
         };
@@ -163,12 +216,7 @@ fn parse_probe_context(output: &str) -> Option<CodexSession> {
         if !valid_uuid(id) {
             continue;
         }
-        // Codex's main interactive thread is marked as a CLI/user thread.
-        // Keep accepting older session_meta lines that lack these fields, but
-        // reject an explicit guardian/sub-agent marker.
-        if !matches_optional_string(payload, &meta, "source", "cli")
-            || !matches_optional_string(payload, &meta, "thread_source", "user")
-        {
+        if !is_main_thread(payload, &meta, app_server) {
             continue;
         }
         let Some(filename_id) = rollout_id(Path::new(&record.link)) else { continue };
@@ -195,6 +243,31 @@ fn parse_probe_context(output: &str) -> Option<CodexSession> {
     candidate
 }
 
+/// Codex's main interactive thread is a CLI/user thread. Keep accepting older
+/// session_meta lines that lack these fields, but reject explicit guardian,
+/// sub-agent, exec and other client markers. A TUI served by the shared
+/// app-server is recorded as `vscode`/`codex-tui`/`user` instead (#633).
+fn is_main_thread(
+    payload: &serde_json::Value,
+    root: &serde_json::Value,
+    app_server: AppServerThreads,
+) -> bool {
+    let field =
+        |key: &str| payload.get(key).or_else(|| root.get(key)).map(serde_json::Value::as_str);
+    if !matches_optional_string(payload, root, "thread_source", "user") {
+        return false;
+    }
+    match field("source") {
+        None | Some(Some("cli")) => true,
+        Some(Some("vscode")) => {
+            app_server == AppServerThreads::Attributed
+                && field("originator") == Some(Some("codex-tui"))
+                && field("thread_source") == Some(Some("user"))
+        },
+        Some(_) => false,
+    }
+}
+
 fn valid_cwd(cwd: &str) -> bool {
     !cwd.chars().any(char::is_control)
         && (cwd.starts_with('/')
@@ -212,7 +285,7 @@ fn parse_probe_records(output: &str) -> Option<String> {
 fn parse_probe_record(line: &str) -> Option<ProbeRecord> {
     let mut fields = line.splitn(4, '\t');
     Some(ProbeRecord {
-        _pid: fields.next()?.parse().ok()?,
+        pid: fields.next()?.parse().ok()?,
         _fd: fields.next()?.parse().ok()?,
         link: fields.next()?.to_owned(),
         first_line: fields.next()?.to_owned(),
@@ -282,7 +355,7 @@ fn wsl_probe_args(
 /// Bound the guest lookup by time and output size. A temporary file avoids a
 /// reader thread surviving when a descendant keeps the output handle open.
 fn run_probe_command(command: Command) -> Option<CodexSession> {
-    parse_probe_context(&String::from_utf8_lossy(&run_probe_output(command)?))
+    parse_attributed_probe(&String::from_utf8_lossy(&run_probe_output(command)?))
 }
 
 fn run_probe_output(command: Command) -> Option<Vec<u8>> {
@@ -310,6 +383,7 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut output = String::new();
     let mut records = 0;
+    let mut foreign = std::collections::HashSet::new();
     for entry in std::fs::read_dir("/proc").ok()?.flatten() {
         if Instant::now() >= deadline {
             return None;
@@ -324,16 +398,17 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             continue;
         }
         let Ok(environment) = std::fs::read(proc_dir.join("environ")) else { continue };
-        if !environment_has_value(&environment, b"PEBREL_PANE_ID", pane_id.as_bytes())
-            && !environment_has_value(&environment, b"NEBULA_PANE_ID", pane_id.as_bytes())
-        {
-            continue;
-        }
-        if !environment_has_value(
-            &environment,
-            crate::agent_env::PROCESS_ENV.as_bytes(),
-            instance.as_bytes(),
-        ) {
+        let daemon = std::fs::read(proc_dir.join("cmdline"))
+            .is_ok_and(|arguments| is_app_server_arguments(&arguments));
+        let owned = (environment_has_value(&environment, b"PEBREL_PANE_ID", pane_id.as_bytes())
+            || environment_has_value(&environment, b"NEBULA_PANE_ID", pane_id.as_bytes()))
+            && environment_has_value(
+                &environment,
+                crate::agent_env::PROCESS_ENV.as_bytes(),
+                instance.as_bytes(),
+            );
+        // Another pane's or terminal's client can share this pane's app-server.
+        if !owned && daemon {
             continue;
         }
         let Some(codex_home) = codex_home_from_environment(&environment) else {
@@ -345,6 +420,19 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
         else {
             continue;
         };
+        use std::fmt::Write as _;
+        if !owned {
+            if foreign.insert(sessions_root.clone()) {
+                let _ = writeln!(output, "foreign\t{}", sessions_root.display());
+            }
+            continue;
+        }
+        if daemon {
+            let _ = writeln!(output, "daemon\t{pid}\t{}", sessions_root.display());
+        }
+        if output.len() >= MAX_PROBE_OUTPUT {
+            return None;
+        }
         let Ok(fds) = std::fs::read_dir(proc_dir.join("fd")) else { continue };
         for fd in fds.flatten() {
             let fd_path = fd.path();
@@ -355,7 +443,6 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             let Ok(first_line) = read_first_line(&fd_path) else { continue };
             let fd_number = fd.file_name().to_string_lossy().parse::<u32>().ok();
             let Some(fd_number) = fd_number else { continue };
-            use std::fmt::Write as _;
             let _ = writeln!(output, "{pid}\t{fd_number}\t{}\t{first_line}", link.display());
             records += 1;
             if records >= MAX_PROBE_RECORDS || output.len() >= MAX_PROBE_OUTPUT {
@@ -363,7 +450,73 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             }
         }
     }
-    parse_probe_context(&output)
+    parse_attributed_probe(&output)
+}
+
+/// `codex app-server` is the shared daemon, not a pane's own client process.
+#[cfg(target_os = "linux")]
+fn is_app_server_arguments(arguments: &[u8]) -> bool {
+    arguments.split(|byte| *byte == 0).skip(1).any(|argument| argument == b"app-server")
+}
+
+/// Whether a Codex hook whose nearest Agent ancestor is `agent_pid` runs under
+/// the shared app-server while a client outside the daemon's launching pane
+/// uses the same Codex home. Such a hook inherits that pane's environment, so
+/// its pane field cannot identify the conversation (#633). An in-process TUI,
+/// or a daemon serving only its own pane, keeps environment routing. Anything
+/// that cannot be read is treated as shared.
+#[cfg(target_os = "linux")]
+pub(crate) fn codex_app_server_is_shared(agent_pid: u32) -> bool {
+    codex_app_server_is_shared_in(Path::new("/proc"), agent_pid)
+}
+
+#[cfg(target_os = "linux")]
+fn codex_app_server_is_shared_in(proc_root: &Path, agent_pid: u32) -> bool {
+    let daemon = proc_root.join(agent_pid.to_string());
+    match std::fs::read(daemon.join("cmdline")) {
+        Ok(arguments) if is_app_server_arguments(&arguments) => {},
+        _ => return false,
+    }
+    let owner = |environment: &[u8]| {
+        let value = |key: &[u8]| environment_value(environment, key).map(<[u8]>::to_vec);
+        (
+            value(b"PEBREL_PANE_ID").or_else(|| value(b"NEBULA_PANE_ID")),
+            value(crate::agent_env::PROCESS_ENV.as_bytes()),
+        )
+    };
+    let sessions = |process: &Path, environment: &[u8]| {
+        let home = codex_home_from_environment(environment)?;
+        process.join("cwd").join(home).join("sessions").canonicalize().ok()
+    };
+    let Ok(environment) = std::fs::read(daemon.join("environ")) else { return true };
+    let Some(root) = sessions(&daemon, &environment) else { return true };
+    let launched_by = owner(&environment);
+    let Ok(entries) = std::fs::read_dir(proc_root) else { return true };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+            .is_none_or(|pid| pid == agent_pid)
+        {
+            continue;
+        }
+        let process = entry.path();
+        let Ok(comm) = std::fs::read_to_string(process.join("comm")) else { continue };
+        if !is_codex_process_name(comm.trim())
+            || std::fs::read(process.join("cmdline"))
+                .is_ok_and(|arguments| is_app_server_arguments(&arguments))
+        {
+            continue;
+        }
+        let Ok(environment) = std::fs::read(process.join("environ")) else { return true };
+        if owner(&environment) != launched_by
+            && sessions(&process, &environment).is_none_or(|other| other == root)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(unix)]
@@ -500,6 +653,175 @@ mod tests {
             "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ROOT_ID}\"}}}}\n"
         );
         assert_eq!(parse_probe_records(&output).as_deref(), Some(ROOT_ID));
+    }
+
+    fn tui_thread(payload: serde_json::Value) -> String {
+        let meta = serde_json::json!({"type":"session_meta", "payload": payload});
+        format!(
+            "1996\t47\t/home/hello/.codex/sessions/2026/11/04/rollout-x-{ROOT_ID}.jsonl\t{meta}\n"
+        )
+    }
+
+    #[test]
+    fn app_server_tui_threads_are_accepted_only_with_daemon_evidence() {
+        // Codex 0.160+ TUI threads are written by the shared app-server (#633).
+        let record = tui_thread(serde_json::json!({
+            "id": ROOT_ID, "originator": "codex-tui", "source": "vscode", "thread_source": "user",
+        }));
+        assert_eq!(
+            parse_attributed_probe(&record).map(|found| found.session_id).as_deref(),
+            Some(ROOT_ID)
+        );
+        // Probes that cannot recognize the shared daemon keep rejecting them.
+        assert_eq!(parse_probe_context(&record), None);
+        for payload in [
+            serde_json::json!({"id": ROOT_ID, "originator": "codex_vscode", "source": "vscode", "thread_source": "user"}),
+            serde_json::json!({"id": ROOT_ID, "source": "vscode", "thread_source": "user"}),
+            serde_json::json!({"id": ROOT_ID, "originator": "codex-tui", "source": "vscode"}),
+            serde_json::json!({"id": ROOT_ID, "originator": "codex-tui", "source": "vscode", "thread_source": "subagent"}),
+            serde_json::json!({"id": ROOT_ID, "originator": "codex-tui", "source": "vscode", "thread_source": "guardian"}),
+            serde_json::json!({"id": ROOT_ID, "originator": "codex_exec", "source": "exec", "thread_source": "user"}),
+            serde_json::json!({"id": ROOT_ID, "originator": "codex-tui", "source": {"subagent": "review"}}),
+        ] {
+            assert_eq!(parse_attributed_probe(&tui_thread(payload.clone())), None, "{payload}");
+        }
+    }
+
+    #[test]
+    fn shared_app_server_threads_are_ambiguous_while_another_client_uses_its_home() {
+        let root = "/home/hello/.codex/sessions";
+        let record = tui_thread(serde_json::json!({
+            "id": ROOT_ID, "originator": "codex-tui", "source": "vscode", "thread_source": "user",
+        }));
+        let daemon = format!("daemon\t1996\t{root}\n");
+        let found = |output: String| parse_attributed_probe(&output).map(|found| found.session_id);
+        assert_eq!(found(format!("{daemon}{record}")).as_deref(), Some(ROOT_ID));
+        // Another pane's client may be the one showing this thread.
+        assert_eq!(found(format!("{daemon}{record}foreign\t{root}\n")), None);
+        assert_eq!(found(format!("foreign\t{root}\n{daemon}{record}")), None);
+        // Clients of another Codex home use another daemon.
+        assert_eq!(
+            found(format!("{daemon}foreign\t/srv/other/sessions\n{record}")).as_deref(),
+            Some(ROOT_ID)
+        );
+        // A pane's own in-process TUI remains authoritative for its rollout.
+        let own = tui_thread(
+            serde_json::json!({"id": ROOT_ID, "source": "cli", "thread_source": "user"}),
+        );
+        assert_eq!(found(format!("foreign\t{root}\n{own}")).as_deref(), Some(ROOT_ID));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_app_server_rollout_belongs_to_a_pane_only_without_other_clients() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::symlink;
+
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("shared home");
+        let other_home = root.path().join("other home");
+        let sessions = home.join(".codex/sessions/2026/11/04");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(other_home.join(".codex/sessions")).unwrap();
+        let rollout = sessions.join(format!("rollout-x-{ROOT_ID}.jsonl"));
+        let metadata = serde_json::json!({"type":"session_meta", "payload": {
+            "id": ROOT_ID, "originator": "codex-tui", "source": "vscode", "thread_source": "user",
+        }});
+        std::fs::write(&rollout, format!("{metadata}\n")).unwrap();
+        let program = root.path().join("codex");
+        symlink("/bin/sh", &program).unwrap();
+        let instance = std::process::id().to_string();
+        // `$0` becomes `app-server`, matching the daemon's argv without running Codex.
+        let spawn = |pane: &str, home: &Path, daemon: bool| {
+            let mut command = Command::new(&program);
+            command.args(["-c", "printf R; read -r _"]);
+            if daemon {
+                command.arg("app-server");
+            }
+            command
+                .current_dir(root.path())
+                .env_clear()
+                .env("HOME", home)
+                .env("PEBREL_PANE_ID", pane)
+                .env("NEBULA_PANE_ID", pane)
+                .env(crate::agent_env::PROCESS_ENV, &instance)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(if daemon {
+                    Stdio::from(std::fs::File::open(&rollout).unwrap())
+                } else {
+                    Stdio::null()
+                });
+            let mut child = OwnedChild(command.spawn().unwrap());
+            let mut ready = child.0.stdout.take().unwrap();
+            let mut event =
+                libc::pollfd { fd: ready.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: pollfd 在调用期间有效；只等待样本 exec 完成后的就绪字节。
+            let signaled =
+                unsafe { libc::poll(&mut event, 1, PROBE_TIMEOUT.as_millis() as libc::c_int) };
+            assert_eq!(signaled, 1, "fixture did not signal readiness");
+            let mut signal = [0];
+            ready.read_exact(&mut signal).unwrap();
+            assert_eq!(signal, [b'R']);
+            child
+        };
+        let mut daemon = spawn("pane-a", &home, true);
+        let fixture_cwd = root.path().canonicalize().unwrap();
+        let fixture_rollout = rollout.canonicalize().unwrap();
+        let first_line = metadata.to_string();
+        proc_fixture::wait_for_child(
+            &mut daemon.0,
+            &proc_fixture::Expected {
+                pane: "pane-a",
+                instance: &instance,
+                home: &home,
+                codex_home: None,
+                cwd: &fixture_cwd,
+                rollout: &fixture_rollout,
+                first_line: &first_line,
+            },
+        )
+        .unwrap();
+        let probe = |pane: &str| {
+            let local = probe_local_proc(pane, &instance).map(|found| found.session_id);
+            let mut guest = Command::new("/bin/sh");
+            guest.env_clear().env("PATH", "/usr/bin:/bin").args([
+                "-c",
+                PROBE_SCRIPT,
+                "probe",
+                pane,
+                &instance,
+            ]);
+            let guest = run_probe_command(guest).map(|found| found.session_id);
+            assert_eq!(local, guest, "local and guest probes disagree for {pane}");
+            local
+        };
+        let shared = || codex_app_server_is_shared(daemon.0.id());
+        // The pane whose client started the daemon owns it while no other client exists.
+        let own_client = spawn("pane-a", &home, false);
+        assert_eq!(probe("pane-a").as_deref(), Some(ROOT_ID));
+        assert_eq!(probe("pane-b"), None);
+        assert!(!shared(), "an exclusive daemon keeps environment routing");
+        assert!(!codex_app_server_is_shared(own_client.0.id()), "a TUI is not the daemon");
+        // A second pane's client shares the daemon: its environment no longer identifies a pane.
+        let shared_client = spawn("pane-b", &home, false);
+        assert_eq!(probe("pane-a"), None);
+        assert_eq!(probe("pane-b"), None);
+        assert!(shared(), "hooks for either pane now carry pane-a's environment");
+        drop(shared_client);
+        // A client of another Codex home uses another daemon.
+        let separate_client = spawn("pane-b", &other_home, false);
+        assert_eq!(probe("pane-a").as_deref(), Some(ROOT_ID));
+        assert!(!shared());
+        drop((separate_client, own_client, daemon));
     }
 
     #[test]

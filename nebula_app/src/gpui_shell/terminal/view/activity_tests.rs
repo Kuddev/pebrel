@@ -702,3 +702,45 @@ fn ssh_login_classification_does_not_leak_into_the_next_pasted_command(cx: &mut 
         });
     }
 }
+
+#[gpui::test]
+fn shared_codex_app_server_hooks_update_only_the_conversation_this_pane_owns(
+    cx: &mut TestAppContext,
+) {
+    const OWN: &str = "01a1a88c-1c48-7370-82e8-dbe97cbf0247";
+    const OTHER: &str = "01a1a88d-4971-7813-887f-be72c333232f";
+    let codex = |name: &str, session: &str, shared: bool| {
+        let payload = serde_json::json!({
+            "hook_event_name": name, "session_id": session, "turn_id": format!("turn-{session}"),
+        });
+        let wire = format!("nebula-hook/1 source=codex pane=42 codex_hooks=full\n{payload}");
+        let mut event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42)).unwrap();
+        event.shared_app_server = shared;
+        event
+    };
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        let session =
+            |view: &TerminalView| view.ai_session.as_ref().map(|id| id.session_id.clone());
+        // Another pane's thread arrives with this pane's id inherited by the shared daemon (#633).
+        assert!(!view.handle_ai_hook(&codex("SessionStart", OTHER, true), cx));
+        assert!(!view.handle_ai_hook(&codex("UserPromptSubmit", OTHER, true), cx));
+        assert_eq!(session(view), None);
+        assert!(!view.agent_activity.hook_seen());
+        assert_eq!(view.agent_activity.status(), AgentStatus::Unknown);
+
+        // A daemon used only by this pane's client still establishes its identity.
+        assert!(view.handle_ai_hook(&codex("SessionStart", OWN, false), cx));
+        assert_eq!(session(view).as_deref(), Some(OWN));
+        // After another client starts sharing it, the owned conversation keeps its events...
+        assert!(view.handle_ai_hook(&codex("UserPromptSubmit", OWN, true), cx));
+        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
+        // ...while a different thread can neither replace nor finish it.
+        assert!(!view.handle_ai_hook(&codex("SessionStart", OTHER, true), cx));
+        assert!(!view.handle_ai_hook(&codex("Stop", OTHER, true), cx));
+        assert_eq!(session(view).as_deref(), Some(OWN));
+        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
+        assert!(view.handle_ai_hook(&codex("Stop", OWN, true), cx));
+        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
+    });
+}

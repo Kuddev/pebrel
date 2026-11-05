@@ -307,6 +307,10 @@ pub struct AiHookEvent {
     /// 它的 session id 却是短命的——一旦被当成 pane 的会话身份，就会把真正活着
     /// 的那个顶掉。远端 SSH 没有本地进程，恒为 `None`。
     pub agent_pid: Option<u32>,
+    /// The nearest Agent process is Codex's shared app-server, and a client
+    /// outside the pane that launched it uses the same Codex home. The pane in
+    /// the envelope is then only that daemon's inherited environment.
+    pub shared_app_server: bool,
     /// Agent 自己声明的权限档位。与 [`AiHookKind::NeedsAttention`] 是两件事：
     /// 前者是持续状态，后者是瞬时事件。
     pub permission_mode: Option<AiPermissionMode>,
