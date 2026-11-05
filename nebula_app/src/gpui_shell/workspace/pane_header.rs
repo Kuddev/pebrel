@@ -1,11 +1,10 @@
-//! 分屏 pane 的 24px 标题条，外加 tab 上的布局缩略图。
+//! 分屏 pane 的标题、拖拽与广播，外加 tab 上的布局缩略图。
 //!
 //! # 为什么只在分屏时出现
 //!
-//! 单 pane 的终端本来就是"这个 tab 就是它"，再加一条标题栏只是白扣 24px 网格
-//! 高度。分屏之后情况反过来：四个 pane 长得一模一样，既分不清谁是谁，也没有
-//! per-pane 的关闭入口（旧路径只有 30% 黑 veil 表达失焦）。所以标题条的存在
-//! 判据就一条 [`header_visible`]：`pane_count > 1`。
+//! 顶部 Tab 模式在多 pane 时保留 24px 标题条；侧边 Tab 模式把当前 pane 名
+//! 放到窗口顶栏，只在 pane 悬停时露出浮动手柄。两种入口共享拖拽、重命名和
+//! 广播状态，浮动手柄不占用终端行高。单 pane 不提供无意义的分屏拖动入口。
 //!
 //! # 广播为什么不设"我是源"的标记位
 //!
@@ -37,6 +36,12 @@ use crate::gpui_shell::terminal::view::{TerminalInput, TerminalView};
 use crate::i18n::Message;
 
 use super::{NebulaWorkspace, WorkspaceTab};
+
+mod layout;
+mod sidebar;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod visual_tests;
 
 /// 标题条高度（逻辑 px）。终端网格自己会跟着变矮：`TerminalView` 用自身元素
 /// 的实测 bounds 驱动 `set_layout`，父层少 24px 就是少 24px。
@@ -267,7 +272,6 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let ink = if focused { theme.foreground } else { muted };
         let accent = theme.primary;
-        let editor_bg = theme.background;
         // 聚焦 pane 的标题条比正文亮一档，失焦的贴回卡底——veil 只盖终端区，
         // 标题条自己用色阶表达焦点（把标题也压暗 30% 会让四个 pane 的标题
         // 全都糊成一片灰）。
@@ -281,11 +285,13 @@ impl NebulaWorkspace {
         let PaneTitle { logo, logo_pending, glyph, text } = self.pane_title(view, cx, dark);
         let automatic_title = text.clone();
         let text = custom_name.map(SharedString::from).unwrap_or(text);
-        let renaming = self
-            .pane_rename
-            .as_ref()
-            .filter(|edit| edit.pane_id == pane_id)
-            .map(|edit| edit.input.clone());
+        let editor = self.render_pane_name_editor(
+            pane_id,
+            title_px,
+            PANE_HEADER_H - 4.0,
+            chrome_family.clone(),
+            cx,
+        );
         let group: SharedString = format!("pane-header-{pane_id}").into();
         let icon_ink = if focused { ink } else { muted };
 
@@ -366,42 +372,8 @@ impl NebulaWorkspace {
                                 .child(glyph),
                         )
                     })
-                    .child(match renaming {
-                        Some(input) => div()
-                            .id(("pane-title-editor", pane_id as usize))
-                            .debug_selector(move || format!("pane-title-editor-{pane_id}"))
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
-                                if this.pane_rename.as_ref().is_some_and(|edit| edit.pane_id == pane_id) {
-                                    this.commit_pane_rename(false, window, cx);
-                                }
-                            }))
-                            .on_double_click(|_, _, cx| cx.stop_propagation())
-                            .capture_action(cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
-                                this.restore_pane_name(false, window, cx);
-                            }))
-                            .capture_action(cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
-                                this.restore_pane_name(true, window, cx);
-                            }))
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                if event.keystroke.key == "escape" {
-                                    cx.stop_propagation();
-                                    this.cancel_pane_rename(true, window, cx);
-                                }
-                            }))
-                            .child(gpui::Styled::h(
-                                Input::new(&input).small().w_full().py_0()
-                                    .focus_bordered(false).border_1().border_color(accent)
-                                    .bg(editor_bg).rounded(px(3.0))
-                                    .text_color(ink).text_size(px(title_px)).font_family(chrome_family.clone()),
-                                px(PANE_HEADER_H - 4.0),
-                            ))
-                            .into_any_element(),
+                    .child(match editor {
+                        Some(editor) => editor,
                         None => div()
                             .id(("pane-title", pane_id as usize))
                             .flex_1()
