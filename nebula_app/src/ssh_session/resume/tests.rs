@@ -123,3 +123,51 @@ fn vanished_target_or_attach_failure_runs_default_shell_and_cwd_is_never_input()
         assert_eq!(output.contains("ATTACH_FAILED"), identity == "100:200" && reject == "0");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn startup_reports_a_named_terminal_and_sends_no_marker_without_one() {
+    use std::fs::File;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let directory = tempfile::tempdir().unwrap();
+    let shell = directory.path().join("default shell");
+    std::fs::write(&shell, "#!/bin/sh\nprintf 'DEFAULT\\n'\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (mut controller, mut terminal) = (0, 0);
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut controller,
+                &mut terminal,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+    let _controller = unsafe { File::from_raw_fd(controller) };
+    let terminal = unsafe { File::from_raw_fd(terminal) };
+    let mut name = [0; 1024];
+    assert_eq!(unsafe { libc::ttyname_r(terminal.as_raw_fd(), name.as_mut_ptr(), name.len()) }, 0);
+    let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str().unwrap().to_owned();
+    // The JumpServer report shows tty failing during startup; null stdin reproduces that.
+    for (stdin, tty) in [(Stdio::from(terminal), Some(name)), (Stdio::null(), None)] {
+        let output = Command::new("sh")
+            .args(["-c", &startup(TOKEN, None, None, None)])
+            .env("SHELL", &shell)
+            .stdin(stdin)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let identity = Arc::new(Mutex::new(None));
+        let mut filter = IdentityInput::new(TOKEN, identity.clone());
+        let mut visible = filter.feed(&output.stdout).into_owned();
+        visible.extend(filter.finish());
+        assert_eq!(String::from_utf8(visible).unwrap(), "DEFAULT\n");
+        assert_eq!(identity.lock().unwrap().as_ref().map(|value| value.tty.clone()), tty);
+    }
+}
