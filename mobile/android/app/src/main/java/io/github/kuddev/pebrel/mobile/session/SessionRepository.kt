@@ -580,9 +580,10 @@ class SessionRepository(private val context: Context,
                 // Inventory is for browsing, not proof that this PTY attached to a session.
                 // In particular, a vanished target must not be replaced by a reused name.
                 update(id) { it.copy(remote = inventory ?: it.remote, discovering = false, discoveryFailed = result.isFailure,
-                    host = if (inventory == null || inventory.os == "term") it.host else it.host?.copy(icon = inventory.os)) }
+                    host = if (inventory == null || inventory.os == "term" || it.host?.icon !in systemOsIcons) it.host
+                        else it.host?.copy(icon = inventory.os)) }
                 if (host != null && inventory != null && inventory.os != "term") {
-                    val next = savedHosts.value.map { if (sameSshLogin(it, host) && it.icon == host.icon) it.copy(icon = inventory.os) else it }
+                    val next = savedHosts.value.map { if (sameSshLogin(it, host) && it.icon == host.icon && it.icon in systemOsIcons) it.copy(icon = inventory.os) else it }
                     if (next != savedHosts.value) { savedHosts.value = next; persistHosts() }
                 }
             }

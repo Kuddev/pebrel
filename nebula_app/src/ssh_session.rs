@@ -33,6 +33,7 @@ mod forward;
 mod integration;
 mod lifecycle;
 mod pane_connection;
+mod remote_os;
 mod resume;
 mod route;
 mod sftp;

@@ -5,6 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 #[path = "ssh_profiles/connection.rs"]
 mod connection;
+#[path = "ssh_profiles/detected_os.rs"]
+pub(crate) mod detected_os;
 pub(crate) mod duplication;
 #[path = "ssh_profiles/exchange.rs"]
 pub(crate) mod exchange;
@@ -82,6 +84,9 @@ pub struct SshProfiles {
     targets: std::collections::BTreeMap<String, String>,
     #[serde(skip)]
     source_bytes: Option<Vec<u8>>,
+    /// Systems reported by servers after connecting; see [`detected_os`].
+    #[serde(skip)]
+    detected: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for SshProfiles {
@@ -93,6 +98,7 @@ impl Default for SshProfiles {
             organization: Default::default(),
             targets: Default::default(),
             source_bytes: None,
+            detected: Default::default(),
         }
     }
 }
@@ -118,6 +124,7 @@ impl SshProfiles {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         profiles.version = PROFILE_VERSION;
         profiles.source_bytes = Some(data);
+        profiles.detected = detected_os::load(path);
         Ok(profiles)
     }
 
@@ -182,8 +189,15 @@ impl SshProfiles {
         self.profiles
             .iter()
             .filter_map(|profile| {
-                let icon = profile.icon.as_deref()?.trim();
-                (!icon.is_empty()).then(|| (profile.destination.clone(), icon.to_owned()))
+                // "auto" (or no choice) follows the system the server last reported.
+                let chosen = profile
+                    .icon
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|icon| !icon.is_empty() && *icon != "auto");
+                let icon = chosen
+                    .or_else(|| self.detected.get(&profile.destination).map(String::as_str))?;
+                Some((profile.destination.clone(), icon.to_owned()))
             })
             .collect()
     }

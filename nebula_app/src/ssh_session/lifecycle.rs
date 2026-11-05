@@ -215,6 +215,7 @@ pub(super) async fn run<H: SshEventHost>(
             super::pane_connection::PaneConnectionScope::new(&acquired.session);
         event_proxy.ssh_pane_connection(Some(connection));
         super::report_stage(Some(&event_proxy), SshStage::Ready);
+        super::remote_os::learn(destination.clone(), acquired.session.clone());
         let identity = channel.identity.clone();
         let tmux_helper = channel.tmux_helper.clone();
         let result = tokio::select! {
