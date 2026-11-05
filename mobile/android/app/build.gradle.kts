@@ -15,6 +15,8 @@ android {
         targetSdk = 35
         versionCode = 27
         versionName = "2.4.0-preview"
+        providers.gradleProperty("pebrelVersionCode").orNull?.let { versionCode = it.toInt() }
+        providers.gradleProperty("pebrelVersionName").orNull?.let { versionName = it }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }

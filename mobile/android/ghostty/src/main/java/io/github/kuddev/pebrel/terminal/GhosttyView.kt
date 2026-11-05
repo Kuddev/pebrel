@@ -514,7 +514,16 @@ class GhosttyView(context: Context) : View(context) {
             override fun paste(text: String) = owner.paste(text).also(::accept)
         }
         return TerminalInputConnection(this, target,
-            { directInput && session === owner && inputGeneration == generation }, { composingText = it })
+            { directInput && session === owner && inputGeneration == generation }, {
+                composingText = it
+                if (it.isNotEmpty()) {
+                    // An already-open IME can begin preedit after a history gesture.
+                    stopScrolling()
+                    selection.clear()
+                    owner.prepareForInput()
+                    resetCursorBlink()
+                }
+            })
     }
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean = handleKey(code, event, if (event.repeatCount > 0) 2 else 1) || super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean = handleKey(code, event, 0) || super.onKeyUp(code, event)
