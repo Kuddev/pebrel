@@ -27,13 +27,22 @@ class ShortcutEditorTest {
         val preferences = ShortcutPreferences(context)
         var dismissed = false
         compose.setContent { MaterialTheme { ShortcutEditor(preferences) { dismissed = true } } }
-        val editor = compose.onNode(hasSetTextAction())
-        val save = compose.onNodeWithText(context.getString(R.string.save))
-        editor.performTextReplacement("Ctrl+Shift+Bad")
-        save.assertIsNotEnabled()
+        fun chip(label: String) = compose.onNodeWithText(label).performScrollTo().performClick()
+        fun add(label: String) = compose.onNodeWithText(context.getString(R.string.custom_shortcuts_add, label))
+        compose.onNodeWithText(context.getString(R.string.custom_shortcuts_pick)).performScrollTo().assertIsNotEnabled()
+        chip("Ctrl"); chip("Shift")
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextReplacement("x")
+        add("Ctrl+Shift+X").performScrollTo().assertIsEnabled().performClick()
         assertTrue(preferences.state.value.isEmpty())
-        editor.performTextReplacement("Ctrl+Shift+X\nAlt+Enter\nF5")
-        save.assertIsEnabled().performClick()
+        chip("Alt"); chip("Enter")
+        add("Alt+Enter").performScrollTo().performClick()
+        chip("F1–F12"); chip("F5")
+        add("F5").performScrollTo().performClick()
+        // The same combination cannot be added twice.
+        compose.onAllNodesWithText("F5").onLast().performScrollTo().performClick()
+        add("F5").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.custom_shortcuts_duplicate)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.save)).assertIsEnabled().performClick()
         assertTrue(dismissed)
         assertEquals(listOf("Ctrl+Shift+X", "Alt+Enter", "F5"), ShortcutPreferences(context).state.value)
     }

@@ -286,7 +286,7 @@ class HomeSessionsTest {
             }
         } }
         compose.onNodeWithText(context.getString(io.github.kuddev.pebrel.mobile.R.string.save_connect))
-            .performScrollTo().assertIsEnabled().performClick()
+            .assertIsEnabled().performClick()
         compose.runOnIdle { assertTrue(submitted) }
     }
 

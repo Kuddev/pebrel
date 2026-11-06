@@ -1,6 +1,9 @@
 package io.github.kuddev.pebrel.mobile.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -15,8 +18,10 @@ import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.kuddev.pebrel.mobile.R
@@ -80,102 +85,114 @@ fun HostForm(
     fun profile() = HostProfile(initial?.id ?: UUID.randomUUID().toString(), name.trim(), checkNotNull(endpoint).address, port.toInt(), endpoint.user,
         icon = icon, group = group, sessionMode = sessionMode, sessionName = sessionName,
         keyUri = if (auth == "key") keyUri else "", keyName = if (auth == "key") keyName else "")
-    ConnectionForm(stringResource(if (initial == null) R.string.add_ssh else R.string.edit_host), { if (!busy) onCancel() }) {
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                HostIconChoice(icon) { icon = it }
-                ConnectionField(name, { name = it }, R.string.host_name, Modifier.weight(1f),
-                    placeholder = stringResource(R.string.host_name), limit = 40, showLabel = false)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ConnectionField(address, { value ->
-                    address = value
-                    if ('@' in value) runCatching { parseSshEndpoint(value, user) }.onSuccess {
-                        address = it.address; user = it.user
-                    }
-                }, R.string.host_address, Modifier.weight(1f),
-                    keyboard = KeyboardType.Uri, placeholder = "server.example.com")
-                ConnectionField(port, { port = it }, R.string.port, Modifier.width(82.dp), KeyboardType.Number, limit = 5)
-            }
-            ConnectionField(user, { user = it }, R.string.username, limit = 40)
-            SegmentRow(R.string.ssh_terminal_mode) {
-                ConnectionSegments(SshSessionMode.entries.map { it.id to if (it == SshSessionMode.SHELL) "Shell" else it.id },
-                    sessionMode.id, { id -> sessionMode = SshSessionMode.entries.first { it.id == id } }, Modifier.testTag("ssh-session-mode"), compact = true)
-            }
-            if (sessionMode != SshSessionMode.SHELL) {
-                ConnectionField(sessionName, { sessionName = it }, R.string.ssh_persistent_session, limit = 64)
-                HelperText(stringResource(R.string.ssh_multiplexer_hint))
-                if (!validRemoteSessionName(sessionMode, sessionName)) Text(stringResource(R.string.ssh_session_name_invalid),
-                    color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-            }
-            SegmentRow(R.string.authentication) {
-                ConnectionSegments(listOf("auto" to stringResource(R.string.auth_auto), "key" to stringResource(R.string.auth_key)),
-                    auth, { if (!busy && auth != it) { password = ""; auth = it } }, Modifier.testTag("ssh-auth-mode"), compact = true)
-            }
-            if (auth == "key") {
-                OutlinedButton({ chooseKey.launch(arrayOf("*/*")) }, enabled = !busy && !picking, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                    Text(keyName.ifBlank { stringResource(R.string.ssh_choose_key) }, maxLines = 2)
-                }
-                if (picking) LinearProgressIndicator(Modifier.fillMaxWidth())
-                HelperText(stringResource(R.string.ssh_key_file_hint))
-                if (keyError) Text(stringResource(R.string.ssh_key_access_failed), color = MaterialTheme.colorScheme.error)
-            }
-            ConnectionField(password, { password = it }, if (auth == "key") R.string.ssh_key_passphrase else R.string.credential_password,
-                keyboard = KeyboardType.Password, placeholder = if (passwordIsSaved) stringResource(R.string.password_saved_placeholder) else "",
-                transformation = PasswordVisualTransformation(), limit = 1024)
-            HelperText(stringResource(if (auth == "key") R.string.ssh_key_passphrase_hint else R.string.ssh_password_optional_hint))
-            Column {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(rememberPassword, { rememberPassword = it }, enabled = !busy)
-                    Text(stringResource(if (auth == "key") R.string.ssh_save_passphrase else R.string.save_password), fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    if (passwordIsSaved) {
-                        TextButton({
-                            password = ""
-                            onClearPassword()
-                        }, enabled = !busy) { Text(stringResource(if (auth == "key") R.string.ssh_clear_saved_passphrase else R.string.clear_saved_password), fontSize = 12.sp) }
-                    }
-                }
-                HelperText(stringResource(
-                    when {
-                        auth == "key" && passwordIsSaved && rememberPassword -> R.string.ssh_passphrase_saved_hint
-                        auth == "key" && rememberPassword -> R.string.ssh_passphrase_will_save_hint
-                        auth == "key" -> R.string.ssh_passphrase_not_saved_hint
-                        passwordIsSaved && rememberPassword -> R.string.password_saved_hint
-                        rememberPassword -> R.string.password_will_save_hint
-                        else -> R.string.password_not_saved_hint
-                    },
-                ), Modifier.padding(start = 12.dp))
-            }
-            SegmentRow(R.string.host_group) {
-                ConnectionSegments(listOf("production" to stringResource(R.string.group_production), "development" to stringResource(R.string.group_development)),
-                    group, { group = it }, Modifier.testTag("ssh-host-group"), compact = true)
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-        fun submit(connect: Boolean) {
-            val secret = password.takeIf { it.isNotEmpty() }?.toCharArray()
-            onSave(profile(), secret, rememberPassword, connect)
-        }
+    fun submit(connect: Boolean) {
+        val secret = password.takeIf { it.isNotEmpty() }?.toCharArray()
+        onSave(profile(), secret, rememberPassword, connect)
+    }
+    ConnectionForm(stringResource(if (initial == null) R.string.add_ssh else R.string.edit_host), { if (!busy) onCancel() }, footer = {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton({ submit(false) }, enabled = valid && !busy,
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
-                Text(stringResource(R.string.save))
+                Text(stringResource(R.string.save), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (allowConnect) Button({ submit(true) }, enabled = valid && !busy,
                 modifier = Modifier.weight(1.6f).heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
-                Text(stringResource(R.string.save_connect))
+                Text(stringResource(R.string.save_connect), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }) {
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            FormSection(stringResource(R.string.ssh_section_server)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HostIconChoice(icon) { icon = it }
+                    ConnectionField(name, { name = it }, R.string.host_name, Modifier.weight(1f),
+                        placeholder = stringResource(R.string.host_name), limit = 40, showLabel = false)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ConnectionField(address, { value ->
+                        address = value
+                        if ('@' in value) runCatching { parseSshEndpoint(value, user) }.onSuccess {
+                            address = it.address; user = it.user
+                        }
+                    }, R.string.host_address, Modifier.weight(1f),
+                        keyboard = KeyboardType.Uri, placeholder = "server.example.com")
+                    ConnectionField(port, { port = it }, R.string.port, Modifier.width(82.dp), KeyboardType.Number, limit = 5)
+                }
+                ConnectionField(user, { user = it }, R.string.username, limit = 40)
+                ConnectionSegments(listOf("production" to stringResource(R.string.group_production), "development" to stringResource(R.string.group_development)),
+                    group, { group = it }, Modifier.fillMaxWidth().testTag("ssh-host-group"))
+            }
+            FormSection(stringResource(R.string.authentication)) {
+                ConnectionSegments(listOf("auto" to stringResource(R.string.auth_auto), "key" to stringResource(R.string.auth_key)),
+                    auth, { if (!busy && auth != it) { password = ""; auth = it } }, Modifier.fillMaxWidth().testTag("ssh-auth-mode"))
+                if (auth == "key") {
+                    OutlinedButton({ chooseKey.launch(arrayOf("*/*")) }, enabled = !busy && !picking, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Text(keyName.ifBlank { stringResource(R.string.ssh_choose_key) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (picking) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    HelperText(stringResource(R.string.ssh_key_file_hint))
+                    if (keyError) Text(stringResource(R.string.ssh_key_access_failed), color = MaterialTheme.colorScheme.error)
+                }
+                ConnectionField(password, { password = it }, if (auth == "key") R.string.ssh_key_passphrase else R.string.credential_password,
+                    keyboard = KeyboardType.Password, placeholder = if (passwordIsSaved) stringResource(R.string.password_saved_placeholder) else "",
+                    transformation = PasswordVisualTransformation(), limit = 1024)
+                HelperText(stringResource(if (auth == "key") R.string.ssh_key_passphrase_hint else R.string.ssh_password_optional_hint))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(if (auth == "key") R.string.ssh_save_passphrase else R.string.save_password), fontSize = 13.sp)
+                        HelperText(stringResource(
+                            when {
+                                auth == "key" && passwordIsSaved && rememberPassword -> R.string.ssh_passphrase_saved_hint
+                                auth == "key" && rememberPassword -> R.string.ssh_passphrase_will_save_hint
+                                auth == "key" -> R.string.ssh_passphrase_not_saved_hint
+                                passwordIsSaved && rememberPassword -> R.string.password_saved_hint
+                                rememberPassword -> R.string.password_will_save_hint
+                                else -> R.string.password_not_saved_hint
+                            },
+                        ))
+                    }
+                    Switch(rememberPassword, { rememberPassword = it }, enabled = !busy)
+                }
+                if (passwordIsSaved) TextButton({
+                    password = ""
+                    onClearPassword()
+                }, enabled = !busy) { Text(stringResource(if (auth == "key") R.string.ssh_clear_saved_passphrase else R.string.clear_saved_password), fontSize = 12.sp) }
+            }
+            FormSection(stringResource(R.string.ssh_terminal_mode)) {
+                Column(Modifier.selectableGroup().testTag("ssh-session-mode")) {
+                    SshSessionMode.entries.forEach { mode ->
+                        SessionModeRow(mode, mode == sessionMode) { sessionMode = mode }
+                    }
+                }
+                AnimatedVisibility(sessionMode != SshSessionMode.SHELL) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ConnectionField(sessionName, { sessionName = it }, R.string.ssh_persistent_session, limit = 64)
+                        HelperText(stringResource(R.string.ssh_multiplexer_hint))
+                        if (!validRemoteSessionName(sessionMode, sessionName)) Text(stringResource(R.string.ssh_session_name_invalid),
+                            color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
             }
         }
     }
 }
 
+/** The whole row is the target, and its description wraps instead of widening anything around it. */
 @Composable
-private fun SegmentRow(label: Int, content: @Composable RowScope.() -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(stringResource(label), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        content()
+private fun SessionModeRow(mode: SshSessionMode, selected: Boolean, onSelect: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected, role = Role.RadioButton, onClick = onSelect),
+        verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected, onClick = null, modifier = Modifier.padding(horizontal = 6.dp))
+        Column(Modifier.weight(1f).padding(start = 8.dp, top = 6.dp, bottom = 6.dp)) {
+            Text(if (mode == SshSessionMode.SHELL) "Shell" else mode.id, fontSize = 14.sp)
+            HelperText(stringResource(when (mode) {
+                SshSessionMode.SHELL -> R.string.ssh_mode_shell_hint
+                SshSessionMode.TMUX -> R.string.ssh_mode_tmux_hint
+                SshSessionMode.HERDR -> R.string.ssh_mode_herdr_hint
+            }))
+        }
     }
 }
 

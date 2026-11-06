@@ -69,13 +69,18 @@ class CommandComposerTest {
         compose.setContent {
             MaterialTheme { HostForm(HostProfile("key-form", "Key host", "127.0.0.1", 22, "test"), {}, false, false, {}, onSave = { _, _, _, _ -> }) }
         }
-        assertTrue(compose.onNodeWithTag("ssh-session-mode").fetchSemanticsNode().boundsInRoot.width <= 240 * context.resources.displayMetrics.density)
-        assertTrue(compose.onNodeWithTag("ssh-auth-mode").fetchSemanticsNode().boundsInRoot.width <= 220 * context.resources.displayMetrics.density)
+        // Choosing a session manager adds its fields below; it never resizes the choices themselves.
+        compose.onNodeWithText("herdr").performScrollTo()
+        val width = compose.onNodeWithTag("ssh-session-mode").fetchSemanticsNode().boundsInRoot.width
+        compose.onNodeWithText("herdr").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(width, compose.onNodeWithTag("ssh-session-mode").fetchSemanticsNode().boundsInRoot.width)
+        compose.onNodeWithText("Shell").performScrollTo().performClick()
         compose.onNodeWithText(context.getString(R.string.auth_key)).performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithText(context.getString(R.string.ssh_choose_key)).performScrollTo().assertIsDisplayed().assertIsEnabled()
-        compose.onNodeWithText(context.getString(R.string.save_connect)).performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).assertIsNotEnabled()
         compose.onNodeWithText(context.getString(R.string.auth_auto)).performScrollTo().performClick()
-        compose.onNodeWithText(context.getString(R.string.save_connect)).performScrollTo().assertIsEnabled()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).assertIsEnabled()
     }
 
     @Test fun savedKeyFormUsesPassphraseLabelsInsteadOfPasswordLabels() {
@@ -370,7 +375,7 @@ class CommandComposerTest {
         compose.onNodeWithText(context.getString(R.string.service_add_ssh_host)).performClick()
         compose.onNodeWithContentDescription(context.getString(R.string.host_name)).performTextInput("New relay")
         compose.onNodeWithContentDescription(context.getString(R.string.host_address)).performTextInput("192.0.2.2")
-        compose.onNodeWithText(context.getString(R.string.save)).performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText(context.getString(R.string.save)).assertIsEnabled().performClick()
         compose.waitUntil(10_000) {
             // 凭据事务在 IO 完成后投递 Android 主队列，需推进它而不只推进 Compose 时钟。
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
