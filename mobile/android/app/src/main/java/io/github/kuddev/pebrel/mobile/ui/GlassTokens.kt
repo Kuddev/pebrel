@@ -11,11 +11,15 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-internal val GlassBlurRadius = 20.dp
+// Wide enough that lines of text behind a surface melt together instead of showing as smudges.
+internal val GlassBlurRadius = 40.dp
 internal val GlassHairline = .5.dp
 
-/** Heavy carries text; light is for small controls that may show more of what is behind them. */
-internal enum class GlassTier { Heavy, Light }
+/**
+ * Heavy carries text; light is for small controls that may show more of what is behind them.
+ * Bar is tinted with the page itself, so a full-width bar never reads as a stripe of another color.
+ */
+internal enum class GlassTier { Heavy, Light, Bar }
 
 /** Two offset soft shadows, large and diffuse plus small and close. */
 internal enum class GlassLift(val nearBlur: Dp, val nearY: Dp, val contactBlur: Dp, val contactY: Dp) {
@@ -32,14 +36,25 @@ internal data class GlassPalette(
     val lightTint: Color,
     val heavySolid: Color,
     val lightSolid: Color,
+    val barTint: Color,
+    val barSolid: Color,
     val highlight: Color,
     val hairline: Color,
     val shadowNear: Color,
     val shadowContact: Color,
     val textTertiary: Color,
 ) {
-    fun tint(tier: GlassTier) = if (tier == GlassTier.Heavy) heavyTint else lightTint
-    fun solid(tier: GlassTier) = if (tier == GlassTier.Heavy) heavySolid else lightSolid
+    fun tint(tier: GlassTier) = when (tier) {
+        GlassTier.Heavy -> heavyTint
+        GlassTier.Light -> lightTint
+        GlassTier.Bar -> barTint
+    }
+
+    fun solid(tier: GlassTier) = when (tier) {
+        GlassTier.Heavy -> heavySolid
+        GlassTier.Light -> lightSolid
+        GlassTier.Bar -> barSolid
+    }
 }
 
 private const val BODY_CONTRAST = 4.5f
@@ -70,17 +85,21 @@ internal fun deriveGlassPalette(background: Color, foreground: Color, muted: Col
     val tint = if (dark) lerp(opaque, foreground, .05f) else lerp(opaque, Color.White, .72f)
     // Text behind a blur diffuses toward the page; a middle mix is the realistic worst case.
     val diffused = lerp(opaque, foreground, .5f)
-    val heavy = readableTintAlpha(tint, foreground, muted, diffused, if (dark) .80f else .70f)
+    val heavy = readableTintAlpha(tint, foreground, muted, diffused, if (dark) .84f else .82f)
     val light = readableTintAlpha(tint, foreground, muted, diffused, if (dark) .55f else .50f)
     // Without blur the strokes behind stay sharp, so the fallback has to cover them too.
     val solidHeavy = readableTintAlpha(tint, foreground, muted, foreground, SOLID_HEAVY_ALPHA)
     val solidLight = readableTintAlpha(tint, foreground, muted, foreground, SOLID_LIGHT_ALPHA)
+    val bar = readableTintAlpha(opaque, foreground, muted, diffused, .84f)
+    val solidBar = readableTintAlpha(opaque, foreground, muted, foreground, SOLID_HEAVY_ALPHA)
     return GlassPalette(
         dark = dark,
         heavyTint = tint.copy(alpha = heavy),
         lightTint = tint.copy(alpha = light),
         heavySolid = tint.copy(alpha = solidHeavy),
         lightSolid = tint.copy(alpha = solidLight),
+        barTint = opaque.copy(alpha = bar),
+        barSolid = opaque.copy(alpha = solidBar),
         highlight = Color.White.copy(alpha = if (dark) .06f else .60f),
         hairline = foreground.copy(alpha = if (dark) .16f else .12f),
         shadowNear = if (dark) Color.Black.copy(alpha = .30f) else foreground.copy(alpha = .07f),
