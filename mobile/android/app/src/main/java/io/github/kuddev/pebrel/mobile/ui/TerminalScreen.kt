@@ -52,12 +52,13 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
     var focused by rememberSaveable(session.id) { mutableStateOf(false) }
     var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
     val trust by repository.trust.collectAsStateWithLifecycle()
-    val agent = rememberSshAgent(session, repository, enabled = onConversation != null && active)
+    val agent = session.foreground?.agent?.takeIf { onConversation != null && active }
     // Header and body stack in this screen's own column: the bar is raised for its shadow and must not overlap the body.
     Column(Modifier.fillMaxSize()) {
     if (!focused) TerminalHeader(session.title,
         if (session.source == "Local") stringResource(R.string.local_device) else session.source,
         session.status, onBack, onSessions, { closing = true }, onFiles = onFiles,
+        detail = session.foreground?.label?.ifEmpty { null },
         onRemoteSessions = if (onAttachRemote != null && session.host != null && session.status == "ready") ({ remoteSessions = true }) else null)
     Column(Modifier.fillMaxSize()) {
         if (!focused && agent != null && onConversation != null) SessionModeTabs(conversation = false) { onConversation(agent) }
@@ -211,7 +212,7 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
                            onDetails: (() -> Unit)? = null, onConversation: (() -> Unit)? = null, conversationActive: Boolean = false,
                            onFiles: (() -> Unit)? = null, wrapLines: Boolean = false, onToggleWrap: (() -> Unit)? = null,
                            onRemoteSessions: (() -> Unit)? = null, standalone: Boolean = true,
-                           onImmersive: (() -> Unit)? = null) {
+                           onImmersive: (() -> Unit)? = null, detail: String? = null) {
     var menu by remember { mutableStateOf(false) }
     val connection = "$endpoint · ${statusLabel(status)}"
     // Standalone it is its own bar; inside a larger glass bar it adds no second surface.
@@ -230,6 +231,12 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(connection, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+            } else if (detail != null) Column(Modifier.weight(1f, fill = false)) {
+                // What runs in the terminal and where, as the server reports it.
+                Text(title, fontSize = 13.sp, lineHeight = 17.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                Text(detail, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else Text(title, fontSize = 13.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Glyph(R.drawable.ic_down, Modifier.size(12.dp))
