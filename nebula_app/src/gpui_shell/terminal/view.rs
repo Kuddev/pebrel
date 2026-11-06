@@ -42,10 +42,9 @@ pub use runtime::InputOrigin;
 
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
-    Font, FontStyle, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    ScrollWheelEvent, Size, StatefulInteractiveElement as _, Styled as _, UTF16Selection, Window,
-    div, point, px,
+    Font, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent,
+    Size, StatefulInteractiveElement as _, Styled as _, UTF16Selection, Window, div, point, px,
 };
 use gpui_component::Sizable as _;
 use nebula_settings::CellWidthModeName;
@@ -70,7 +69,6 @@ use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
 use crate::gpui_shell::config::Settings;
 use crate::gpui_shell::prelude::{ActiveTheme as _, Colorize as _};
 use crate::{config::UiConfig, font_install::REQUIRED_FONT_FAMILY};
-use typography::mono_font;
 
 /// Overlay 滚动条的拇指宽度、最小高度与命中放宽量（逻辑 px；旧壳
 /// `scrollbar_geometry` 的 4/24/8 设备 px 在同一 DPI 语义下等值）。4px 的细条
@@ -1157,14 +1155,8 @@ impl TerminalView {
         self.completion_editor.invalidate();
         self.editor_query_task = None;
 
-        self.font =
-            mono_font(&families[0], FontWeight::NORMAL, FontStyle::Normal, settings.ligatures);
-        self.font_bold =
-            mono_font(&families[1], FontWeight::BOLD, FontStyle::Normal, settings.ligatures);
-        self.font_italic =
-            mono_font(&families[2], FontWeight::NORMAL, FontStyle::Italic, settings.ligatures);
-        self.font_bold_italic =
-            mono_font(&families[3], FontWeight::BOLD, FontStyle::Italic, settings.ligatures);
+        [self.font, self.font_bold, self.font_italic, self.font_bold_italic] =
+            typography::terminal_fonts(&families, settings.font_weight, settings.ligatures);
         self.font_size = font_size;
         self.ligatures = settings.ligatures;
         self.cell_width_mode = settings.cell_width_mode;

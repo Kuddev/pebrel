@@ -15,6 +15,8 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
 #[path = "theme_background_tests.rs"]
 mod background_tests;
+#[path = "font_weight_tests.rs"]
+mod font_weight_tests;
 #[path = "theme_package_tests.rs"]
 mod package_tests;
 #[cfg(feature = "shader-background")]

@@ -49,6 +49,7 @@ mod command_history;
 mod cursor_motion;
 mod design;
 mod font_picker;
+mod font_weight;
 mod providers;
 mod reset;
 mod scrolling;
@@ -807,6 +808,7 @@ impl SettingsPane {
             "windowing_behavior" => pick!(windowing_behavior),
             "cell_width_mode" => pick!(cell_width_mode),
             "ligatures" => pick!(ligatures),
+            "font_weight" => pick!(font_weight),
             "scrollbar_visibility" => pick!(scrollbar_visibility),
             "scrollback_lines" => Some((
                 cur.scrollback_lines != def.scrollback_lines,
@@ -870,6 +872,10 @@ impl SettingsPane {
                     desc,
                     dirty,
                     move |this, window, cx| {
+                        if key == "font_weight" {
+                            this.set_font_weight(&factory, window, cx);
+                            return;
+                        }
                         if key == "scrollback_lines" {
                             this.commit_scrollback_lines(&factory, window, cx);
                             return;

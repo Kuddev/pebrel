@@ -17,6 +17,7 @@ const RESET_KEYS: &[&str] = &[
     "ui_font_family",
     "ui_font_size",
     "font_size",
+    "font_weight",
     "ctrl_wheel_font_zoom",
     "ligatures",
     "cursor_shape",
@@ -240,6 +241,18 @@ mod tests {
             let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
             assert_eq!(runtime.ligatures, crate::Ligatures::On);
             assert!(runtime.ligatures.enabled(Some(false)));
+        }
+    }
+
+    #[test]
+    fn reset_restores_regular_and_bold_font_weights_without_erasing_unrelated_data() {
+        for value in crate::TerminalFontWeight::VALUES {
+            let restored = default_settings_text(&format!("font_weight={value}\ncustom=keep\n"));
+            assert_eq!(restored, "custom=keep\n");
+            let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+            assert_eq!(runtime.font_weight, crate::TerminalFontWeight::default());
+            assert_eq!(runtime.font_weight.value(), 400);
+            assert_eq!(runtime.font_weight.bold_weight(), 700);
         }
     }
 

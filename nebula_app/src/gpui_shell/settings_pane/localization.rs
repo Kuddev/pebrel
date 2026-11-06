@@ -100,6 +100,17 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsOptionGitOnly),
             language.text(crate::i18n::Message::SettingsOptionSvnOnly),
         ],
+        "font_weight" => vec![
+            language.text(crate::i18n::Message::SettingsFontWeightThin),
+            language.text(crate::i18n::Message::SettingsFontWeightExtraLight),
+            language.text(crate::i18n::Message::SettingsFontWeightLight),
+            language.text(crate::i18n::Message::SettingsFontWeightNormal),
+            language.text(crate::i18n::Message::SettingsFontWeightMedium),
+            language.text(crate::i18n::Message::SettingsFontWeightSemiBold),
+            language.text(crate::i18n::Message::SettingsFontWeightBold),
+            language.text(crate::i18n::Message::SettingsFontWeightExtraBold),
+            language.text(crate::i18n::Message::SettingsFontWeightBlack),
+        ],
         "ligatures" => vec![
             language.text(crate::i18n::Message::SettingsFontLigaturesOn),
             language.text(crate::i18n::Message::SettingsFontLigaturesOff),

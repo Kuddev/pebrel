@@ -50,6 +50,7 @@ pub struct Settings {
     pub font_bold_italic_family: String,
     /// GPUI 逻辑像素（配置里是 pt，1pt = 4/3 px @96dpi）。
     pub font_size_px: f32,
+    pub font_weight: nebula_settings::TerminalFontWeight,
     pub ligatures: bool,
     /// 配置文件的基准字号，不含设置页/Ctrl+滚轮持久化的终端缩放。
     /// 启动窗口按它定形，和旧壳的 `window_size` 契约一致。
@@ -272,6 +273,7 @@ impl Settings {
             font_italic_family: secondary(&raw.font.italic),
             font_bold_italic_family: secondary(&raw.font.bold_italic),
             font_size_px,
+            font_weight: runtime.font_weight,
             ligatures: runtime
                 .ligatures
                 .enabled(resolved_theme.typography().map(|typography| typography.ligatures)),
@@ -317,11 +319,13 @@ impl Settings {
             // 未指定中文字体时沿用主字体及平台缺字回退，不隐式指定完整 Maple。
             font_cjk: runtime.font_family_cjk.as_deref().map(|family| {
                 use gpui::{FontStyle, FontWeight};
+                let normal = FontWeight(f32::from(runtime.font_weight.value()));
+                let bold = FontWeight(f32::from(runtime.font_weight.bold_weight()));
                 [
-                    (FontWeight::NORMAL, FontStyle::Normal),
-                    (FontWeight::BOLD, FontStyle::Normal),
-                    (FontWeight::NORMAL, FontStyle::Italic),
-                    (FontWeight::BOLD, FontStyle::Italic),
+                    (normal, FontStyle::Normal),
+                    (bold, FontStyle::Normal),
+                    (normal, FontStyle::Italic),
+                    (bold, FontStyle::Italic),
                 ]
                 .map(|(weight, style)| gpui::Font {
                     weight,

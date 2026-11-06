@@ -270,6 +270,14 @@ The generated Lua configuration uses `require 'pebrel'` and
 `pebrel.config_builder()`. Invalid reloads retain the last valid configuration.
 See the [Lua configuration guide](docs/lua-configuration.md) for settings and examples.
 
+In **Settings → Appearance**, **Terminal font weight** selects a weight
+from 100 to 900 in steps of 100. The default is 400 (Normal). Changes are saved
+and apply to open terminals immediately; interface text is unchanged. ANSI bold
+uses the selected weight plus 300, capped at 900, preserving the default 400/700
+pair. The available font faces determine the visible difference between weights.
+A font with only one available face may look unchanged; choose or install a
+font family with heavier faces in that case.
+
 In **Settings → Terminal → Alerts**, **Notification duration** selects **Use defaults**,
 5, 10, 30, or 90 seconds, or **Until dismissed**. The default preserves existing
 lifetimes: short toasts last 5 seconds, message banners 90 seconds, and update

@@ -35,7 +35,9 @@ pub use custom_theme::{
     ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, foreground_recommendations,
     meets_wcag_aa, wcag_contrast_ratio,
 };
+mod font_weight;
 mod language;
+pub use font_weight::TerminalFontWeight;
 mod ligatures;
 pub use ligatures::Ligatures;
 mod notifications;
@@ -1001,6 +1003,8 @@ pub struct RuntimeSettings {
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
     pub font_size_px: Option<f32>,
+    /// Terminal regular/italic weight; existing configurations retain 400.
+    pub font_weight: TerminalFontWeight,
     /// Ctrl+滚轮缩放终端字号。默认开启以保留既有行为；关闭时该手势被整体
     /// 消费：既不缩放，也不回落成普通滚动。不影响普通滚轮与键盘字号快捷键。
     pub ctrl_wheel_font_zoom: bool,
@@ -1197,6 +1201,10 @@ impl RuntimeSettings {
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            font_weight: raw
+                .value("font_weight")
+                .and_then(TerminalFontWeight::from_settings)
+                .unwrap_or_default(),
             scrollbar_visibility: raw
                 .value("scrollbar_visibility")
                 .and_then(ScrollbarVisibility::from_settings)

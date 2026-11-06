@@ -69,9 +69,18 @@ fn open_at(
     cx: &mut TestAppContext,
     cwd: Option<std::path::PathBuf>,
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
+    let settings = cx.update(|_| Settings::load(nebula_settings::ThemeName::Nord));
+    open_with_settings(cx, cwd, settings)
+}
+
+fn open_with_settings(
+    cx: &mut TestAppContext,
+    cwd: Option<std::path::PathBuf>,
+    settings: Settings,
+) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
+        cx.set_global(settings);
     });
     let mut result = None;
     let (_, window) = cx.add_window_view(|window, cx| {
@@ -879,6 +888,59 @@ fn ligature_changes_update_all_faces_without_replacing_the_open_session(cx: &mut
                 .c,
                 '-'
             );
+        }
+    });
+}
+
+#[gpui::test]
+fn font_weight_reaches_startup_cjk_and_live_faces_without_replacing_the_session(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{FontStyle, FontWeight};
+    use nebula_settings::{RawSettings, RuntimeSettings, ThemeName};
+
+    let settings = |weight: &str| {
+        Settings::load_with_runtime(
+            ThemeName::Nord,
+            RuntimeSettings::from_raw(&RawSettings::from_text(&format!(
+                "font_weight={weight}\nfont_family_cjk=Example CJK\nligatures=off\n"
+            ))),
+        )
+    };
+    let (view, window, _) = open_with_settings(cx, None, settings("600"));
+    view.update(window, |view, cx| {
+        feed(view, b"keep this session");
+        let term = view.session.as_ref().unwrap().term.clone();
+        for (value, normal, bold) in [
+            (None, 600.0, 900.0),
+            (Some("500"), 500.0, 800.0),
+            (Some("400"), 400.0, 700.0),
+            (Some("900"), 900.0, 900.0),
+        ] {
+            if let Some(value) = value {
+                cx.set_global(settings(value));
+                view.apply_settings(cx);
+            }
+            for (index, font) in
+                [&view.font, &view.font_bold, &view.font_italic, &view.font_bold_italic]
+                    .into_iter()
+                    .enumerate()
+            {
+                let expected = FontWeight(if index % 2 == 0 { normal } else { bold });
+                assert_eq!(font.weight, expected);
+                assert_eq!(
+                    font.style,
+                    if index < 2 { FontStyle::Normal } else { FontStyle::Italic }
+                );
+                assert_eq!(
+                    cx.global::<Settings>().font_cjk.as_ref().unwrap()[index].weight,
+                    expected
+                );
+            }
+            assert!(cx.global::<Settings>().cjk_bold_regular);
+            assert!(!view.ligatures);
+            assert!(Arc::ptr_eq(&term, &view.session.as_ref().unwrap().term));
+            assert_eq!(term.lock().grid()[Line(0)][Column(0)].c, 'k');
         }
     });
 }
