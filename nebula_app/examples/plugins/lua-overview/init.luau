@@ -1,5 +1,5 @@
 return {
-    summary = function(ctx, args)
+    summary = function(ctx, args: { label: string? })
         local runtime = ctx.runtime.call('runtime.describe', {})
         return {
             label = args.label or 'Pebrel',

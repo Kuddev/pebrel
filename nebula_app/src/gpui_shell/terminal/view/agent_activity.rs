@@ -10,7 +10,31 @@ use crate::ai_hook::{AiHookEvent, AiHookKind};
 use super::{TerminalView, TerminalViewEvent, notifications};
 
 impl TerminalView {
+    pub(super) fn observe_agent_title(
+        &mut self,
+        observed_at: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) {
+        if self.exited.is_none()
+            && self.agent_activity.observe_native_title(
+                self.running_program.as_deref(),
+                &self.title,
+                observed_at,
+            )
+        {
+            self.confirmation.observe_waiting(self.agent_activity.status() == AgentStatus::Blocked);
+            cx.emit(TerminalViewEvent::TitleChanged);
+            cx.notify();
+        }
+    }
+
     pub fn handle_ai_hook(&mut self, event: &AiHookEvent, cx: &mut Context<Self>) -> bool {
+        self.sync_remote_activity(cx);
+        if self.ssh_destination.is_some() && event.remote_context != self.remote_activity.context {
+            // Reject queued events from a previous pane/job/connection before
+            // they can claim lifecycle ownership or advance the ordering gate.
+            return false;
+        }
         if let Some(client_pid) = event.client_pid
             && event.pane == Some(self.pane_id)
             && let Some(session) = &self.session
@@ -150,17 +174,22 @@ impl TerminalView {
         {
             return;
         }
+        let remote_activity = self.sync_remote_activity(cx);
         self.flush_pending_runtime_submit(cx);
         self.flush_pending_shell_command(cx);
+        if self.observing_tmux() {
+            if let Some(observation) = remote_activity
+                && self.remote_activity.sample_at != Some(observation.observed_at)
+            {
+                self.remote_activity.sample_at = Some(observation.observed_at);
+                self.observe_agent_screen(&observation.screen, cx);
+            }
+            return;
+        }
         self.reconcile_shell_activity(cx);
         self.on_native_cmd_prompt(cx);
         self.probe_missing_codex_session(cx);
         let Some(session) = &self.session else { return };
-        // 远端（SSH/WSL）回合停滞对账也需要屏幕证据：hook 权威在场时
-        // `allows_screen()` 为 false，但远端没有进程树这第二重证据，丢一次
-        // Stop 就永久 Working（见 reconcile_stalled_turn 的合同说明）。
-        let reconcile_remote =
-            !self.suggest.suggest_env.is_this_machine() && self.agent_activity.hook_seen();
         let (prompt_restored, screen) = {
             let term = session.term.lock();
             let lines = term.screen_lines();
@@ -176,20 +205,14 @@ impl TerminalView {
                         &self.suggest.suggest_env,
                     )
                 });
-            // 上游：无程序状态时屏幕证据才进 observe 路径；本分支：停滞对账
-            // 需要 hook 持有回合的屏幕（reconcile 门内已自带权威判定），不受
-            // 该门限制。
-            let screen = ((self.effective_program_status().is_none()
+            let screen = (self.effective_program_status().is_none()
                 && self.agent_activity.allows_screen())
-                || reconcile_remote)
-                .then(|| {
-                    let start = Point::new(Line((lines - lines.min(24)) as i32), Column(0));
-                    let end = Point::new(
-                        Line(lines as i32 - 1),
-                        Column(term.columns().saturating_sub(1)),
-                    );
-                    term.bounds_to_string(start, end)
-                });
+            .then(|| {
+                let start = Point::new(Line((lines - lines.min(24)) as i32), Column(0));
+                let end =
+                    Point::new(Line(lines as i32 - 1), Column(term.columns().saturating_sub(1)));
+                term.bounds_to_string(start, end)
+            });
             (prompt_restored, screen)
         };
         if prompt_restored
@@ -206,8 +229,12 @@ impl TerminalView {
             return;
         }
         let Some(screen) = screen else { return };
+        self.observe_agent_screen(&screen, cx);
+    }
+
+    fn observe_agent_screen(&mut self, screen: &str, cx: &mut Context<Self>) {
         let detected = notifications::screen_identity_allowed(self.running_program.as_deref())
-            .then(|| crate::ai_agents::identify(&screen))
+            .then(|| crate::ai_agents::identify(screen))
             .flatten();
         let Some(program) =
             notifications::screen_program(self.running_program.as_deref(), detected)
@@ -221,32 +248,13 @@ impl TerminalView {
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
         }
-        // hook 权威在场（`allows_screen()` false）：正常屏幕观察退出，只留远端
-        // 停滞对账这一条通道。它双向收敛「hook 静默超阈值 + 屏幕连续两拍同一
-        // 形态」的回合：两拍 idle 收敛 Working→Done，两拍转圈把丢了点火事件
-        // （UserPromptSubmit/权限答复）的回合从 Done/Blocked 拉回 Working；不
-        // 重写身份、不发完成通知——迟到的真 hook 会照常到达并被同 turn 去重
-        // 兜住。
-        if !self.agent_activity.allows_screen() {
-            let previous = self.agent_activity.status();
-            if reconcile_remote
-                && self.agent_activity.reconcile_stalled_turn(
-                    crate::ai_agents::detect(&program, &screen).as_ref(),
-                    self.agent_activity.turn_quiet_for(super::REMOTE_TURN_STALL),
-                )
-            {
-                log::info!(
-                    "agent remote turn reconciled by screen: pane={} program={program} {previous:?} -> {:?}",
-                    self.pane_id,
-                    self.agent_activity.status()
-                );
-                cx.emit(TerminalViewEvent::TitleChanged);
-                cx.notify();
-            }
+        // Explicit lifecycle signals retain authority on local and remote panes.
+        // Silence or a familiar screen form cannot rewrite a reported state.
+        if self.effective_program_status().is_some() || !self.agent_activity.allows_screen() {
             return;
         }
         let previous = self.agent_activity.status();
-        if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, &screen)) {
+        if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, screen)) {
             return;
         }
         let next = self.agent_activity.status();

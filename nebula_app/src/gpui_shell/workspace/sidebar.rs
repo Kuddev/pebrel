@@ -5,11 +5,8 @@ use crate::i18n::Message;
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
 const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
 
-/// `SidebarActivity::WaitingInput` / `Attention` 共用的字位：Nerd Font
-/// `nf-fa-hand_paper_o`（开掌）。已核对打包字体
-/// `assets/fonts/MapleMonoNormal-NF-CN-Regular.ttf` 的 cmap 覆盖这个码位；换字体
-/// 前先核，否则会掉成豆腐块。
-const WAITING_INPUT_GLYPH: &str = "\u{f256}";
+/// 状态图形与 hover 关闭按钮共用的方形槽，中心不随图形宽度改变。
+const TAB_STATUS_ICON_SIDE: f32 = 24.0;
 
 /// 侧栏新建入口的生产命中区；鼠标测试直接复用，避免只验证一个近似按钮。
 pub(super) fn sidebar_new_tab_control(
@@ -75,9 +72,16 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn tab_status_slot(width: f32) -> gpui::Div {
-        // Nerd Font ink can extend beyond its advance. Keep the 1.7 slot
-        // unclipped; the enclosing tab still clips at its own outer boundary.
         div().relative().w(px(width)).h_full().flex_shrink_0()
+    }
+
+    pub(super) fn tab_status_icon(icon: impl IntoElement) -> gpui::Div {
+        h_flex()
+            .size(px(TAB_STATUS_ICON_SIDE))
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .child(icon)
     }
 
     /// Reserve the shaped shell label's width, capped to leave room for the title.
@@ -154,31 +158,15 @@ impl NebulaWorkspace {
         .size(px(11.0))
     }
 
-    /// 「有人在等你动手」的徽章：使用 Nerd Font 开掌 `nf-fa-hand_paper_o`
-    /// （U+F256）。`WaitingInput`（命令停在交互提示）与 `Attention`（agent 卡在
-    /// 授权/提问）共用这一个形状，因为它们要求用户做的事是同一件。
-    ///
-    /// 用**字体字形**而不是旧壳 `display::ui::icons::push_hand`：那一版是手推
-    /// quad、五指靠挖空撑形，小尺寸下指缝糊成一团读不出「手」，用户 08-02 判掉
-    /// 了（`display/chrome.rs` 里那段注释和被注掉的调用还留着）。这个码位在打包
-    /// 字体 `MapleMonoNormal-NF-CN-Regular.ttf` 里是字体设计师画的描边轮廓，
-    /// 指缝属于轮廓本身、有正经笔重，缩到徽章尺寸不塌——和被否掉的那版不是同
-    /// 一种东西。
-    ///
-    /// 形状表达语义、颜色表达严重度：停在 `[y/n]` 是常态，取 `primary`；agent
-    /// 卡在授权上会把整个回合堵住，取 `warning`。警示形状（⚠ 三角）留给失败，
-    /// 不能拿去表示「问你一句」。
-    pub(super) fn waiting_hand(
-        family: SharedString,
-        size_px: f32,
-        color: gpui::Hsla,
-    ) -> impl IntoElement {
-        div()
-            .font_family(family)
-            .text_size(px(size_px))
-            .font_weight(FontWeight::NORMAL)
+    /// 保留打包字体 U+F256 的开掌轮廓，用其墨迹边界居中。
+    /// 原字形宽 866 units、advance 600；按文字排版会向右溢出且受基线影响。
+    /// 等输入与授权/提问共用手掌，颜色继续表达严重度。
+    pub(super) fn waiting_hand(size_px: f32, color: gpui::Hsla) -> impl IntoElement {
+        gpui::svg()
+            .path("icons/nebula-waiting-hand.svg")
+            .size(px(size_px))
+            .flex_shrink_0()
             .text_color(color)
-            .child(WAITING_INPUT_GLYPH)
     }
 
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -297,7 +285,7 @@ impl NebulaWorkspace {
                     // 停在 [y/n]/口令/Press ENTER 上：也要你动手，但这是常态，
                     // 用 Attention 的警示形状去喊会把真正要紧的那个喊废。
                     SidebarActivity::WaitingInput => Some(
-                        Self::waiting_hand(symbol_family.clone(), label_px, theme.primary)
+                        Self::waiting_hand(label_px, theme.primary)
                             .into_any_element(),
                     ),
                     // 停在授权/提问上：同样是「有人在等你」，所以跟
@@ -305,7 +293,7 @@ impl NebulaWorkspace {
                     // 它会把整个回合卡住，值得 warning。⚠ 三角留给失败，拿它表
                     // 示「问你一句」会跟所有终端/编辑器的既有读法冲突。
                     SidebarActivity::Attention => Some(
-                        Self::waiting_hand(symbol_family.clone(), label_px, theme.warning)
+                        Self::waiting_hand(label_px, theme.warning)
                             .into_any_element(),
                     ),
                     SidebarActivity::Failed => Some(
@@ -572,7 +560,11 @@ impl NebulaWorkspace {
                                     .justify_end()
                                     .items_center()
                                     .group_hover(hover_group.clone(), |item| item.invisible())
-                                    .child(status),
+                                    .child(if matches!(activity, SidebarActivity::Idle) {
+                                        status
+                                    } else {
+                                        Self::tab_status_icon(status).into_any_element()
+                                    }),
                             )
                         })
                         .child(
@@ -586,7 +578,7 @@ impl NebulaWorkspace {
                                 .invisible()
                                 .group_hover(hover_group, |slot| slot.visible())
                                 .when(tab_close_visible, |slot| {
-                                        slot.child(
+                                        slot.child(Self::tab_status_icon(
                                             Button::new(("close-tab", ix))
                                                 .icon(IconName::Close)
                                                 .ghost()
@@ -597,7 +589,7 @@ impl NebulaWorkspace {
                                                         this.request_close_tab(ix, window, cx);
                                                     },
                                                 )),
-                                        )
+                                        ))
                                     }),
                         ),
                 )

@@ -178,7 +178,7 @@ pub struct TerminalOptions {
     /// Uses the same id as the `shell` setting: `powershell` (Windows PowerShell),
     /// `pwsh` (PowerShell 7, when detected), `cmd`, `wsl:Ubuntu`, or an imported
     /// profile's `profile:<shell-id>|<profile-id>` from terminal_profiles.json.
-    /// Lua config.profiles names and shell_id fields do not register ids here.
+    /// Luau config.profiles names and shell_id fields do not register ids here.
     /// To supply a program and custom arguments directly, use -e instead.
     ///
     /// An id that no longer resolves still starts `wsl.exe` for `wsl:<distro>`
@@ -883,9 +883,9 @@ pub struct ConfigOptions {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommand {
-    /// Validate a Lua, TOML, or YAML configuration without opening the GUI.
+    /// Validate a Luau, TOML, or YAML configuration without opening the GUI.
     Check(ConfigCheckOptions),
-    /// Create an annotated Lua configuration template.
+    /// Create an annotated Luau configuration template.
     Init(ConfigInitOptions),
 }
 
@@ -898,7 +898,7 @@ pub struct ConfigCheckOptions {
 
 #[derive(Args, Debug)]
 pub struct ConfigInitOptions {
-    /// Lua configuration path; otherwise use the platform user config directory.
+    /// Luau configuration path; otherwise use the platform user config directory.
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub config_file: Option<PathBuf>,
 

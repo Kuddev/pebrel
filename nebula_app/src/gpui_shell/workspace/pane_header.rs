@@ -240,7 +240,7 @@ impl NebulaWorkspace {
         let text = match (&program, &view.ssh_destination) {
             (Some(program), _) => SharedString::from(program.clone()),
             (None, Some(destination)) => SharedString::from(destination.clone()),
-            (None, None) => SharedString::from(view.tab_label()),
+            (None, None) => SharedString::from(view.tab_label(cx)),
         };
         PaneTitle { logo, logo_pending, glyph, text }
     }
