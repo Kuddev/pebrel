@@ -15,6 +15,18 @@
 use gpui::App;
 use std::path::Path;
 
+/// Direct commands use the same launch identity at startup and in a resident tab.
+pub(super) fn command_launch(
+    command: &crate::config::ui_config::Program,
+    cwd: Option<&Path>,
+) -> crate::session::LaunchSession {
+    let program = command.program().to_owned();
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
+    let launch =
+        crate::session::LaunchSession::Shell { name, program, args: command.args().to_vec() };
+    at_explicit_directory(launch, cwd)
+}
+
 /// Resolve one explicit request, applying its directory only to the launch snapshot.
 pub(super) fn resolve_shell_at(
     shell_id: &str,

@@ -1511,9 +1511,35 @@
             "string",
             "null"
           ]
+        },
+        "argv": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "string"
+          },
+          "description": "Direct PTY program argv, mutually exclusive with shell. No shell expansion; server validates a non-empty program, rejects NUL and enforces a 32768-byte aggregate limit."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "shell",
+          "argv"
+        ],
+        "properties": {
+          "shell": {
+            "type": "string"
+          },
+          "argv": {
+            "type": "array"
+          }
+        }
+      }
     },
     "tab_target_params": {
       "type": "object",
