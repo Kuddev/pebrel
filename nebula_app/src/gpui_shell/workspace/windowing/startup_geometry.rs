@@ -92,7 +92,7 @@ pub(super) fn load_restore(id: u64, startup: &WorkspaceStartup, role: WindowRole
     if id != 1
         || role != WindowRole::Regular
         || !matches!(startup, WorkspaceStartup::RestoreOrDefault)
-        || crate::platform::elevation::requires_isolation()
+        || crate::platform::startup::instance::is_private()
     {
         return;
     }

@@ -206,6 +206,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Load command line options.
     let options = Options::new();
+    #[cfg(feature = "gpui-shell")]
+    platform::startup::instance::initialize(options.new_instance);
     if let Err(error) = nebula_settings::migrate_legacy_data() {
         platform::startup::report_error(&error, options.subcommands.is_none());
         return Err(error.into());
@@ -576,7 +578,7 @@ fn wants_gpui_shell(options: &Options) -> bool {
 /// 驻留进程，再 `tab.new`。GPUI 与 winit 共用，避免第二份进程无声退出。
 #[cfg(windows)]
 fn try_hand_over_to_resident(options: &Options) -> bool {
-    if platform::elevation::requires_isolation() {
+    if platform::startup::instance::is_private() {
         return false;
     }
     let terminal_options = &options.window_options.terminal_options;

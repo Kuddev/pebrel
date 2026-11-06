@@ -1068,9 +1068,9 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Private administrator windows have no public resident discovery path.
+        // Private windows have no public resident discovery path.
         if self.window_role != super::windowing::WindowRole::Regular
-            || crate::platform::elevation::requires_isolation()
+            || crate::platform::startup::instance::is_private()
         {
             return false;
         }

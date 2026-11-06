@@ -30,6 +30,7 @@ _pebrel() {
 '(--daemon)--ref-test[Generates ref test]' \
 '--gpui[Launch the GPUI UI shell as the main window]' \
 '--launched-at-login[Identify a launch from the per-user login item]' \
+'(--daemon --ref-test --launched-at-login)--new-instance[Start a separate GPUI process with a fresh, unsaved workspace]' \
 '(-v)*-q[Reduces the level of verbosity (the min level is -qq)]' \
 '(-q)*-v[Increases the level of verbosity (the max level is -vvv)]' \
 '--daemon[Do not spawn an initial window]' \

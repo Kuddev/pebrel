@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_pebrel_global_optspecs
-	string join \n print-events ref-test embed= gpui launched-at-login config-file= socket= q v daemon working-directory= shell= hold e/command= T/title= class= o/option= h/help V/version
+	string join \n print-events ref-test embed= gpui launched-at-login new-instance config-file= socket= q v daemon working-directory= shell= hold e/command= T/title= class= o/option= h/help V/version
 end
 
 function __fish_pebrel_needs_command
@@ -37,6 +37,7 @@ complete -c pebrel -n "__fish_pebrel_needs_command" -l print-events -d 'Print al
 complete -c pebrel -n "__fish_pebrel_needs_command" -l ref-test -d 'Generates ref test'
 complete -c pebrel -n "__fish_pebrel_needs_command" -l gpui -d 'Launch the GPUI UI shell as the main window'
 complete -c pebrel -n "__fish_pebrel_needs_command" -l launched-at-login -d 'Identify a launch from the per-user login item'
+complete -c pebrel -n "__fish_pebrel_needs_command" -l new-instance -d 'Start a separate GPUI process with a fresh, unsaved workspace'
 complete -c pebrel -n "__fish_pebrel_needs_command" -s q -d 'Reduces the level of verbosity (the min level is -qq)'
 complete -c pebrel -n "__fish_pebrel_needs_command" -s v -d 'Increases the level of verbosity (the max level is -vvv)'
 complete -c pebrel -n "__fish_pebrel_needs_command" -l daemon -d 'Do not spawn an initial window'
