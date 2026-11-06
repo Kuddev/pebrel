@@ -744,6 +744,8 @@ fn runtime_agent(pane: &super::Pane) -> Option<RuntimeAgent> {
         state_source,
         state_rule: state.agent_activity.rule().map(str::to_owned),
         hook_seen: state.agent_activity.hook_seen(),
+        attention_kind: (task_state(state) == RuntimeTaskState::Attention)
+            .then(|| state.agent_activity.attention_kind().unwrap_or_default()),
     })
 }
 

@@ -34,6 +34,47 @@ fn screen(status: AgentStatus) -> Option<Detection> {
 }
 
 #[test]
+fn attention_details_follow_only_the_accepted_current_interaction() {
+    let mut activity = AgentActivity::default();
+    let mut permission = event("claude", "primary", "PermissionRequest");
+    assert!(activity.apply_hook(&permission));
+    assert_eq!(activity.attention_kind(), Some(AttentionKind::Permission));
+
+    let mut foreign = event("claude", "foreign", "PermissionRequest");
+    foreign.attention.as_mut().unwrap().kind = AttentionKind::Selection;
+    assert!(!activity.apply_hook(&foreign));
+    assert_eq!(activity.attention_kind(), Some(AttentionKind::Permission));
+
+    permission.attention.as_mut().unwrap().kind = AttentionKind::Selection;
+    assert!(activity.apply_hook(&permission));
+    assert_eq!(activity.attention_kind(), Some(AttentionKind::Selection));
+    let mut compact = event("claude", "primary", "SessionStart");
+    compact.session_compacted = true;
+    assert!(activity.apply_hook(&compact));
+    assert_eq!(activity.attention_kind(), Some(AttentionKind::Selection));
+
+    for resolved in ["PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd", "SessionStart"] {
+        let mut next = AgentActivity::default();
+        assert!(next.apply_hook(&permission));
+        assert!(next.apply_hook(&event("claude", "primary", resolved)));
+        assert_eq!(next.attention_kind(), None, "{resolved}");
+    }
+    activity.submitted();
+    assert_eq!(activity.attention_kind(), None);
+    assert!(activity.apply_hook(&permission));
+    activity.command_finished();
+    assert_eq!(activity.attention_kind(), None);
+    assert!(!activity.apply_hook(&permission));
+
+    activity.begin_command(true);
+    assert!(activity.observe_screen(screen(AgentStatus::Blocked)));
+    assert_eq!(activity.attention_kind(), Some(AttentionKind::Unknown));
+    assert!(!activity.observe_screen(None));
+    assert!(activity.observe_screen(None));
+    assert_eq!(activity.attention_kind(), None);
+}
+
+#[test]
 fn complete_hooks_own_every_state_even_when_screen_disagrees() {
     for provider in ["claude", "opencode"] {
         let mut activity = AgentActivity::default();

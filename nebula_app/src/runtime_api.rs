@@ -262,6 +262,9 @@ pub struct RuntimeAgent {
     pub state_source: RuntimeAgentStateSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_rule: Option<String>,
+    /// Present only during attention; unknown means the evidence cannot classify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_kind: Option<crate::ai_hook::AttentionKind>,
     pub hook_seen: bool,
 }
 

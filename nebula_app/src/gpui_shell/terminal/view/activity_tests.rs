@@ -27,6 +27,39 @@ fn remote_hook(session: &str, name: &str, process: &str, sequence: u64) -> AiHoo
 }
 
 #[gpui::test]
+fn runtime_attention_details_track_hook_requests_and_disappear_after_resolution(
+    cx: &mut TestAppContext,
+) {
+    use crate::runtime_api::RuntimeTaskState;
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        for (index, (payload, expected)) in [
+            (serde_json::json!({"hook_event_name":"PermissionRequest", "tool_name":"Bash"}), "permission"),
+            (serde_json::json!({"hook_event_name":"PreToolUse", "tool_name":"AskUserQuestion", "tool_input":{"questions":[{"question":"Choose a scope", "options":[{"label":"Local"}, {"label":"All"}]}]}}), "selection"),
+            (serde_json::json!({"hook_event_name":"PermissionRequest", "tool_name":"ExitPlanMode"}), "confirmation"),
+        ].into_iter().enumerate() {
+            let mut payload = payload;
+            payload["session_id"] = "runtime-attention-details".into();
+            payload["bridge_sequence"] = ((index + 1) as u64).into();
+            let wire = format!("nebula-hook/1 source=claude pane=42\n{payload}");
+            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42)).unwrap();
+            assert!(view.handle_ai_hook(&event, cx));
+            assert_eq!(view.runtime_task_state(), RuntimeTaskState::Attention);
+            assert_eq!(serde_json::to_value(view.runtime_agent().unwrap()).unwrap()["attention_kind"], expected);
+        }
+        view.error = Some("transport failed".into());
+        assert_eq!(view.runtime_task_state(), RuntimeTaskState::Failed);
+        assert_eq!(view.runtime_agent().unwrap().attention_kind, None);
+        view.error = None;
+        assert!(view.handle_ai_hook(&hook("runtime-attention-details", "PostToolUse", 4), cx));
+        assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running);
+        assert!(serde_json::to_value(view.runtime_agent().unwrap()).unwrap().get("attention_kind").is_none());
+        view.finish_foreground_command(Some(0), cx);
+        assert!(view.runtime_agent().is_none());
+    });
+}
+
+#[gpui::test]
 fn pi_redraw_anchor_follows_accepted_hook_and_command_lifecycle(cx: &mut TestAppContext) {
     use nebula_terminal::term::test::TermSize;
     use nebula_terminal::vte::ansi::Processor;
