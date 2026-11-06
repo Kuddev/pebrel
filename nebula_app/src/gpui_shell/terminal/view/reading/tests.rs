@@ -31,7 +31,7 @@ fn native_result_desktop_visual_review() {
     );
     gpui_platform::application().with_assets(crate::gpui_shell::assets::NebulaAssets).run(
         move |cx| {
-            crate::gpui_shell::init(cx, None);
+            crate::gpui_shell::init(cx, Default::default());
             let mut terminal = None;
             let mut receiver = None;
             let handle = cx

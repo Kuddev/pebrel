@@ -40,7 +40,7 @@ impl SettingsPane {
             .w_full()
             .h(px(48.0))
             .flex_shrink_0()
-            .px_1()
+            .px_3()
             .gap_3()
             .items_center()
             .rounded_md()

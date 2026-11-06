@@ -174,7 +174,7 @@ fn open(cx: &mut TestAppContext) -> Fixture {
     let network_pump = NetworkPump::new();
     cx.update(|cx| {
         gpui_component::init(cx);
-        crate::gpui_shell::init(cx, None);
+        crate::gpui_shell::init(cx, Default::default());
         super::super::windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
         cx.set_reduce_motion(true);
     });

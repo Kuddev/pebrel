@@ -432,8 +432,7 @@ const CLAUDE_IDLE_SCREEN: &str = "╭─── Claude Code v2.1.286 ───╮
                                    \x20 ⏳5h 🟢 20% 2h7m | 📅MCP 13/1000\n\
                                    \x20 ⏵⏵ auto mode on (shift+tab to cycle)";
 
-/// 同款加宽 chrome 的工作中屏幕：转圈 + esc to interrupt 同屏，spinner_working
-/// 判 Working——停滞对账不得在干活时收边。
+/// Working and idle screen layouts are deliberately different from Hook state.
 const CLAUDE_WORKING_SCREEN: &str = "  ⎿  Running…\n\
                                      ✶ Moseying… (8m 42s · ↓ 18.3k tokens)\n\
                                      ────────────────────────────────────────\n\
@@ -443,140 +442,34 @@ const CLAUDE_WORKING_SCREEN: &str = "  ⎿  Running…\n\
                                      \x20 ↳ queued\n\
                                      \x20 ⏸ esc to interrupt · ? for shortcuts · ← for agents";
 
-/// 远端 Stop hook 丢失（bridge 通道锁/超时/超限都会丢）时，hook 权威把回合钉在
-/// Working；远端没有进程树这第二重证据，唯一的对账源是屏幕。停滞超阈值 +
-/// 连续两拍 agent 自家 idle 屏 → 收敛为 Done；身份保留给命令边界。
 #[gpui::test]
-fn remote_lost_stop_is_reconciled_by_stalled_idle_screen(cx: &mut TestAppContext) {
+fn remote_hook_states_are_not_rewritten_by_idle_or_working_screens(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.ssh_destination = Some("build@example.test".into());
         view.suggest.suggest_env =
             crate::display::SuggestEnv::Ssh { destination: "build@example.test".into() };
-        // fixture 先对着 detect() 钉一遍，防止规则演进让这组断言静默失效。
-        assert_eq!(
-            crate::ai_agents::detect("claude", CLAUDE_IDLE_SCREEN).unwrap().status,
-            AgentStatus::Idle
-        );
-        assert_eq!(
-            crate::ai_agents::detect("claude", CLAUDE_WORKING_SCREEN).unwrap().status,
-            AgentStatus::Working
-        );
-        // 回合起跑；Stop 在远端丢失。
-        view.handle_ai_hook(&hook("lost-stop", "UserPromptSubmit", 1), cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
-        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-        // agent 已答完：屏幕是 idle 提示符，但 hook 静默未超阈值——不得收边。
-        screen(view, CLAUDE_IDLE_SCREEN);
-        for _ in 0..4 {
-            view.refresh_agent_screen_state(cx);
+        for (index, (event, expected)) in [
+            ("UserPromptSubmit", AgentStatus::Working),
+            ("PermissionRequest", AgentStatus::Blocked),
+            ("PostToolUse", AgentStatus::Working),
+            ("Stop", AgentStatus::Done),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            view.handle_ai_hook(&hook("explicit-remote", event, index as u64 + 1), cx);
+            view.agent_activity.backdate_activity_for_test(std::time::Duration::from_secs(3600));
+            for text in [CLAUDE_IDLE_SCREEN, CLAUDE_WORKING_SCREEN] {
+                screen(view, text);
+                for _ in 0..4 {
+                    view.refresh_agent_screen_state(cx);
+                }
+                assert_eq!(view.agent_activity.status(), expected);
+                assert_eq!(view.agent_activity.source(), AgentStatusSource::Hook);
+            }
+            assert_eq!(view.running_program.as_deref(), Some("claude"));
         }
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Working,
-            "a live hook timeline outranks the idle screen"
-        );
-        // 停滞超阈值：连续两拍 idle 屏收敛为 Done；CLI 还活着，身份不动。
-        view.agent_activity.backdate_activity_for_test(
-            super::REMOTE_TURN_STALL + std::time::Duration::from_secs(1),
-        );
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working, "one sample is not enough");
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
-        assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Finished);
-        assert_eq!(view.running_program.as_deref(), Some("claude"), "identity survives the turn");
-    });
-}
-
-/// 工作中的屏幕（转圈/中断提示）反证「回合已结束」：连续 idle 计数归零，
-/// 之后即使停滞依旧，也要重新攒满两拍。
-#[gpui::test]
-fn a_working_screen_resets_the_stall_reconciliation_samples(cx: &mut TestAppContext) {
-    let (view, window, _) = open(cx);
-    view.update(window, |view, cx| {
-        view.ssh_destination = Some("build@example.test".into());
-        view.suggest.suggest_env =
-            crate::display::SuggestEnv::Ssh { destination: "build@example.test".into() };
-        view.handle_ai_hook(&hook("working-screen", "UserPromptSubmit", 1), cx);
-        view.agent_activity.backdate_activity_for_test(
-            super::REMOTE_TURN_STALL + std::time::Duration::from_secs(1),
-        );
-        screen(view, CLAUDE_IDLE_SCREEN);
-        view.refresh_agent_screen_state(cx);
-        // 攒到第 2 拍之前屏幕翻回转圈：计数归零，回合继续。
-        screen(view, CLAUDE_WORKING_SCREEN);
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
-        screen(view, CLAUDE_IDLE_SCREEN);
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Working,
-            "the counter restarted from the working frame"
-        );
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
-    });
-}
-
-/// 停滞对账只属于远端：本地 pane 有进程树这第二重证据，hook 权威不被屏幕
-/// 侵蚀（等价加固 `hook_lifecycle_cannot_be_rewritten_by_screen_words_or_idle_samples`）。
-#[gpui::test]
-fn local_hook_authority_is_never_eroded_by_stall_reconciliation(cx: &mut TestAppContext) {
-    let (view, window, _) = open(cx);
-    view.update(window, |view, cx| {
-        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
-        view.handle_ai_hook(&hook("local-authority", "UserPromptSubmit", 1), cx);
-        view.agent_activity.backdate_activity_for_test(super::REMOTE_TURN_STALL * 2);
-        screen(view, CLAUDE_IDLE_SCREEN);
-        for _ in 0..4 {
-            view.refresh_agent_screen_state(cx);
-        }
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Working,
-            "local panes keep the process tree as their second witness"
-        );
-    });
-}
-
-/// 远端 UserPromptSubmit 丢失（bridge 通道锁 busy/超时/超限都会丢）时，上一
-/// 回合的 Stop 把回合钉在 Done（侧栏 ready）；停滞超阈值 + 连续两拍转圈屏
-/// 重新点火 Running；身份保留给命令边界。
-#[gpui::test]
-fn remote_lost_prompt_submit_is_reignited_by_stalled_working_screen(cx: &mut TestAppContext) {
-    let (view, window, _) = open(cx);
-    view.update(window, |view, cx| {
-        view.ssh_destination = Some("build@example.test".into());
-        view.suggest.suggest_env =
-            crate::display::SuggestEnv::Ssh { destination: "build@example.test".into() };
-        // 第一回合完整：UserPromptSubmit → Stop（Done，侧栏读作 ready）。
-        view.handle_ai_hook(&hook("lost-prompt", "UserPromptSubmit", 1), cx);
-        view.handle_ai_hook(&hook("lost-prompt", "Stop", 2), cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
-        assert_eq!(view.sidebar_activity(), SidebarActivity::Done);
-        // 第二回合的 UserPromptSubmit 在远端丢失；屏幕转圈但 hook 静默未超
-        // 阈值——hook 时间线仍然在场，屏幕不得点火。
-        screen(view, CLAUDE_WORKING_SCREEN);
-        for _ in 0..4 {
-            view.refresh_agent_screen_state(cx);
-        }
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Done,
-            "a live hook timeline outranks the working screen"
-        );
-        // 停滞超阈值：连续两拍转圈重新点火 Running；CLI 还活着，身份不动。
-        view.agent_activity.backdate_activity_for_test(
-            super::REMOTE_TURN_STALL + std::time::Duration::from_secs(1),
-        );
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done, "one sample is not enough");
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
-        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-        assert_eq!(view.running_program.as_deref(), Some("claude"), "identity survives the turn");
     });
 }
 
@@ -598,7 +491,12 @@ fn ignored_idle_notification_does_not_reopen_the_hook_ordering_gate(cx: &mut Tes
     view.update(window, |view, cx| {
         for name in ["UserPromptSubmit", "Stop", "Notification", "PostToolUse"] {
             let wire = format!("nebula-hook/1 source=claude\n{{\"hook_event_name\":\"{name}\",\"session_id\":\"idle-notification-order\"}}");
-            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42)).unwrap();
+            let Some(event) = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42))
+            else {
+                // An untyped notification is not a waiting signal and never reaches the view.
+                assert_eq!(name, "Notification");
+                continue;
+            };
             view.handle_ai_hook(&event, cx);
             if name != "UserPromptSubmit" {
                 assert_eq!(view.agent_activity.status(), AgentStatus::Done, "{name}");

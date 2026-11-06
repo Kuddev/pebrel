@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::ssh_session) struct PtyIdentity {
     pub tty: String,
-    pid: u32,
+    pub(in crate::ssh_session) pid: u32,
 }
 
 impl PtyIdentity {

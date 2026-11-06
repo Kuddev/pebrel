@@ -73,12 +73,12 @@ const ACTIONABLE_ATTENTION_TYPES: &[&str] = &[
     "elicitation_dialog",
 ];
 
-/// Untyped legacy notifications remain parseable; the lifecycle only admits
-/// them during an active turn. Typed idle/auth/result notifications never block.
+/// A notification requires an explicit blocking type. Neither its prose nor
+/// the presence of an active turn establishes a permission or input request.
 /// Do not read `type`/`kind`: those carry other providers' lifecycle events.
 pub(super) fn attention_is_actionable(payload: &Value) -> bool {
     let Some(kind) = context_string(payload, &["notificationType", "notification_type"]) else {
-        return true;
+        return false;
     };
     let kind = kind.to_ascii_lowercase();
     ACTIONABLE_ATTENTION_TYPES.contains(&kind.as_str())

@@ -32,14 +32,17 @@ impl WorkspaceTab {
             });
         }
         match self {
-            Self::Image { view } => Some(FileInfo {
-                path: view.read(cx).path.to_string_lossy().into_owned(),
-                remote: false,
-                dirty: false,
-                saving: false,
-                ready: true,
-                revision: None,
-            }),
+            Self::Image { view } => {
+                let view = view.read(cx);
+                Some(FileInfo {
+                    path: view.path.to_string_lossy().into_owned(),
+                    remote: view.reader_is_remote(),
+                    dirty: false,
+                    saving: false,
+                    ready: view.reader_ready(),
+                    revision: view.reader_snapshot().map(|(_, revision)| revision),
+                })
+            },
             _ => None,
         }
     }
@@ -151,7 +154,20 @@ impl NebulaWorkspace {
                 });
         }
         if let WorkspaceTab::Image { view } = tab {
-            return Ok(ReaderSource::Image(view.read(cx).path.clone()));
+            let view = view.read(cx);
+            if !view.reader_ready() {
+                return Err(ApiError::new(
+                    "file_not_ready",
+                    "the computer has not loaded this image",
+                ));
+            }
+            return if view.reader_is_remote() {
+                view.reader_snapshot()
+                    .map(|(bytes, revision)| ReaderSource::RemoteImage(bytes, revision))
+                    .ok_or_else(|| ApiError::new("file_not_ready", "the remote image is not ready"))
+            } else {
+                Ok(ReaderSource::Image(view.path.clone()))
+            };
         }
         Err(ApiError::new("unsupported_file", "this tab has no readable file content"))
     }
@@ -160,6 +176,7 @@ impl NebulaWorkspace {
 enum ReaderSource {
     Text(Rope, u64),
     Image(PathBuf),
+    RemoteImage(Arc<[u8]>, u64),
 }
 
 pub(super) fn dispatch_read(
@@ -235,6 +252,14 @@ fn read_chunk(
                 &image_revision(&file.metadata().map_err(file_error)?)?,
             )?;
             (bytes, total, revision, "image")
+        },
+        ReaderSource::RemoteImage(bytes, revision) => {
+            let total = bytes.len();
+            check_size(total, offset)?;
+            let revision = format!("remote-image:{revision}");
+            check_revision(expected, &revision)?;
+            let end = offset.saturating_add(limit).min(total);
+            (bytes[offset..end].to_vec(), total, revision, "image")
         },
     };
     let next_offset = offset + bytes.len();

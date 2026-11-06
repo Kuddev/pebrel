@@ -35,7 +35,7 @@ fn convert(
 ) -> Result<toml::Value, LuaValueError> {
     match value {
         Value::Boolean(value) => Ok(toml::Value::Boolean(value)),
-        Value::Integer(value) => Ok(toml::Value::Integer(value)),
+        Value::Integer(value) => Ok(toml::Value::Integer(i64::from(value))),
         Value::Number(value) if value.is_finite() => Ok(toml::Value::Float(value)),
         Value::Number(_) => Err(error(path, "non-finite numbers are not valid configuration")),
         Value::String(value) => value
@@ -73,7 +73,9 @@ fn convert_table(
         for pair in table.clone().pairs::<Value, Value>() {
             let (key, value) = pair.map_err(|err| error(path.clone(), err.to_string()))?;
             match key {
-                Value::Integer(index) if index > 0 => integer_entries.push((index, value)),
+                Value::Integer(index) if index > 0 => {
+                    integer_entries.push((i64::from(index), value))
+                },
                 Value::String(key) => {
                     let key = key
                         .to_str()
