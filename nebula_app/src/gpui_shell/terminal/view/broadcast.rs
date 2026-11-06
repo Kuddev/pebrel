@@ -15,7 +15,7 @@
 //! 键盘协议都是 per-pane 的终端状态。一个 pane 开着 vim、旁边是普通 shell
 //! 时，同一个方向键的正确字节序列根本不同；照搬会往其中一个 pane 里灌乱码。
 
-use gpui::Context;
+use gpui::{Context, Window};
 use nebula_terminal::term::TermMode;
 
 use super::super::keymap;
@@ -34,6 +34,28 @@ pub enum TerminalInput {
 }
 
 impl TerminalView {
+    pub(super) fn on_send_string(
+        &mut self,
+        action: &super::super::SendString,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if !self.focus_handle.is_focused(window) || self.marked_text.is_some() {
+            cx.propagate();
+            return;
+        }
+        if action.text.is_empty() || self.exited.is_some() || self.ssh_failed() {
+            return;
+        }
+        // Reuse literal input tracking and writes, without clipboard normalization
+        // or translating the configured string back into protocol key records.
+        self.apply_broadcast_text(&action.text, false, cx);
+        cx.emit(TerminalViewEvent::UserInput(TerminalInput::Text {
+            text: action.text.clone(),
+            paste: false,
+        }));
+    }
+
     /// 编码器路径的用户按键：本 pane 照原样写入，同时把 keystroke 上报。
     pub(super) fn write_user_key(
         &mut self,
