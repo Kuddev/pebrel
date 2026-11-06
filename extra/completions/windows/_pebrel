@@ -1103,7 +1103,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (init)
 _arguments "${_arguments_options[@]}" : \
-'--config-file=[Lua configuration path; otherwise use the platform user config directory]:CONFIG_FILE:_files' \
+'--config-file=[Luau configuration path; otherwise use the platform user config directory]:CONFIG_FILE:_files' \
 '--language=[Comment language for the generated template]:LANGUAGE:(system zh-CN en-US)' \
 '--force[Back up and replace an existing configuration]' \
 '-h[Print help]' \
@@ -1847,8 +1847,8 @@ _pebrel__agent__wait_commands() {
 (( $+functions[_pebrel__config_commands] )) ||
 _pebrel__config_commands() {
     local commands; commands=(
-'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
-'init:Create an annotated Lua configuration template' \
+'check:Validate a Luau, TOML, or YAML configuration without opening the GUI' \
+'init:Create an annotated Luau configuration template' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel config commands' commands "$@"
@@ -1861,8 +1861,8 @@ _pebrel__config__check_commands() {
 (( $+functions[_pebrel__config__help_commands] )) ||
 _pebrel__config__help_commands() {
     local commands; commands=(
-'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
-'init:Create an annotated Lua configuration template' \
+'check:Validate a Luau, TOML, or YAML configuration without opening the GUI' \
+'init:Create an annotated Luau configuration template' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel config help commands' commands "$@"
@@ -2350,8 +2350,8 @@ _pebrel__help__agent__wait_commands() {
 (( $+functions[_pebrel__help__config_commands] )) ||
 _pebrel__help__config_commands() {
     local commands; commands=(
-'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
-'init:Create an annotated Lua configuration template' \
+'check:Validate a Luau, TOML, or YAML configuration without opening the GUI' \
+'init:Create an annotated Luau configuration template' \
     )
     _describe -t commands 'pebrel help config commands' commands "$@"
 }
@@ -2640,8 +2640,8 @@ _pebrel__help__pane__zoom_commands() {
 (( $+functions[_pebrel__help__plugin_commands] )) ||
 _pebrel__help__plugin_commands() {
     local commands; commands=(
-'check:Validate package metadata and entry paths without executing Lua' \
-'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'check:Validate package metadata and entry paths without executing Luau' \
+'run:Invoke one declared native or Luau command; no resident plugin is started' \
     )
     _describe -t commands 'pebrel help plugin commands' commands "$@"
 }
@@ -2881,8 +2881,8 @@ _pebrel__pane__zoom_commands() {
 (( $+functions[_pebrel__plugin_commands] )) ||
 _pebrel__plugin_commands() {
     local commands; commands=(
-'check:Validate package metadata and entry paths without executing Lua' \
-'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'check:Validate package metadata and entry paths without executing Luau' \
+'run:Invoke one declared native or Luau command; no resident plugin is started' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel plugin commands' commands "$@"
@@ -2895,8 +2895,8 @@ _pebrel__plugin__check_commands() {
 (( $+functions[_pebrel__plugin__help_commands] )) ||
 _pebrel__plugin__help_commands() {
     local commands; commands=(
-'check:Validate package metadata and entry paths without executing Lua' \
-'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'check:Validate package metadata and entry paths without executing Luau' \
+'run:Invoke one declared native or Luau command; no resident plugin is started' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel plugin help commands' commands "$@"
