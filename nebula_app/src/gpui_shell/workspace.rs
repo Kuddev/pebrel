@@ -63,6 +63,7 @@ mod launcher_menu;
 mod logos;
 mod notifications;
 mod palette;
+mod palette_action;
 mod pane_header;
 mod quick_jump;
 mod quick_terminal;
@@ -82,6 +83,7 @@ mod session_recovery;
 pub(crate) mod shell_launch;
 mod shell_picker;
 mod sidebar_resize;
+mod ssh_quick_add;
 mod terminal_activity;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
@@ -418,33 +420,7 @@ const PALETTE_FILTER_BAR_HEIGHT: f32 = 44.0;
 const PALETTE_ROW_GAP: f32 = 4.0;
 const PALETTE_SCROLLBAR_CONTENT_GUTTER: f32 = 16.0;
 
-#[derive(Clone)]
-enum WorkspacePaletteAction {
-    TerminalReading {
-        commands: bool,
-    },
-    Shared(crate::display::command_palette::PaletteAction),
-    /// 聚焦已经存在的工作区标签，不创建副本。
-    FocusTab(usize),
-    LayoutRecipes,
-    /// 先激活标签，再把焦点交给其中的明确 pane。
-    FocusPane {
-        tab: usize,
-        pane: u64,
-    },
-    /// 在 frecency 目录中新建终端；已有目录中的 pane 由上面的 FocusPane 命中。
-    OpenDirectory(std::path::PathBuf),
-    RunAiSession {
-        command: String,
-        cwd: Option<std::path::PathBuf>,
-    },
-    /// 启动器混排的 SSH 主机行（数据源 = 共享主机列表权威）。
-    LaunchSshHost(String),
-    /// 新建终端弹窗里的一台已检测 shell（旧壳 `ProfileRow::Shell`）。
-    LaunchShell(crate::shell_detect::DetectedShell),
-    /// 设置页“导入终端目录”落盘的可执行文件快照。
-    LaunchProfile(crate::config::ui_config::Profile),
-}
+pub(super) use palette_action::WorkspacePaletteAction;
 
 #[derive(Clone, Copy)]
 enum WorkspacePaletteHintStyle {
@@ -684,6 +660,8 @@ pub struct NebulaWorkspace {
     theme_transition: crate::gpui_shell::theme::ThemeTransition,
     /// GPUI presentation over the shared old-shell command catalog.
     command_palette_open: bool,
+    /// 启动器「添加并连接」的工作区内浮层（#864）；见 `ssh_quick_add`。
+    ssh_quick_add: Option<ssh_quick_add::SshQuickAddState>,
     command_palette_input: Entity<InputState>,
     command_palette_selected: usize,
     /// 用户命令管理器贴在右侧覆盖显示，不占终端布局宽度，也不复用应用动作
@@ -953,6 +931,7 @@ impl NebulaWorkspace {
             titlebar_background: window_titlebar::TitleBarBackground::default(),
             theme_transition: crate::gpui_shell::theme::ThemeTransition::default(),
             command_palette_open: false,
+            ssh_quick_add: None,
             command_palette_input,
             command_palette_selected: 0,
             command_manager_open: false,

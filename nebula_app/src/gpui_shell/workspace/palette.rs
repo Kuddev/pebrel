@@ -16,6 +16,39 @@ fn shell_glyph_size() -> f32 {
     PALETTE_ICON_PX * crate::shell_detect::FALLBACK_ICON_SCALE
 }
 
+/// 输入形似 SSH 主机地址：无空白，主机段至少 3 个字符，且带 `@` 或 `.`
+/// （纯单词如 `myhost` 不算，避免把普通检索词变成添加行）。只决定
+/// 「添加并连接」兜底行是否出现；地址是否真的可连由编辑器保存时校验。
+fn plausible_ssh_query(query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() || query.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let (_, address) = crate::display::split_destination_user(query);
+    let (address, _) = crate::display::split_destination_port(&address);
+    address.len() >= 3 && (address.contains('.') || query.contains('@'))
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    #[test]
+    fn plausible_ssh_query_needs_host_shape() {
+        assert!(plausible_ssh_query("core.example.cn"));
+        assert!(plausible_ssh_query("root@10.11.12.11"));
+        assert!(plausible_ssh_query("user@example.com:2222"));
+        assert!(plausible_ssh_query("  host.example.org  "));
+        assert!(!plausible_ssh_query("zsh"));
+        assert!(!plausible_ssh_query("copy path"));
+        assert!(!plausible_ssh_query("a@b"));
+        assert!(!plausible_ssh_query("myhost"));
+        assert!(!plausible_ssh_query(""));
+        assert!(plausible_ssh_query("box.lan"));
+        assert!(plausible_ssh_query("deploy@box"));
+    }
+}
+
 impl NebulaWorkspace {
     pub(super) fn run_selected_palette_action(
         &mut self,
@@ -77,6 +110,11 @@ impl NebulaWorkspace {
             WorkspacePaletteAction::LaunchSshHost(host) => {
                 self.dismiss_palette_state();
                 self.add_ssh_terminal(host, window, cx);
+            },
+            WorkspacePaletteAction::AddSshHostAndConnect(destination) => {
+                // 不导航到设置页：表单浮在工作区上，保存后直接开标签连接。
+                self.dismiss_palette_state();
+                self.open_ssh_quick_add(destination, window, cx);
             },
             WorkspacePaletteAction::LaunchShell(detected) => {
                 self.launch_palette_shell(detected, window, cx);
@@ -229,8 +267,53 @@ impl NebulaWorkspace {
                     || words.iter().all(|word| row.search.to_ascii_lowercase().contains(word))
             })
             .collect();
+        // 检索没有任何命中、而输入形似主机地址时，兜底给一个「添加并连接」
+        // 行（#864）。地址合法性由编辑器保存时的校验裁决，这里保持宽松。
+        if rows.is_empty()
+            && let Some(row) = self.launcher_add_host_row(cx)
+        {
+            rows.push(row);
+        }
         rows.sort_by_key(|row| row.group_order);
         rows
+    }
+
+    /// 检索无命中的「添加 SSH 主机并连接」兜底行；条件不满足时返回 None。
+    fn launcher_add_host_row(&self, cx: &App) -> Option<WorkspacePaletteRow> {
+        // Quick Jump 的文件夹/智能体 scope 不放主机添加行。
+        if let Some(filter) = self.quick_jump_filter
+            && !matches!(filter, QuickJumpFilter::All | QuickJumpFilter::Ssh)
+        {
+            return None;
+        }
+        // 启动器的 Shell 视图是纯 shell 列表，不放主机行；All/SSH 视图保留。
+        if self.shell_picker_open
+            && self.launcher_filter == crate::display::command_palette::LauncherFilter::Shell
+        {
+            return None;
+        }
+        // 输入框原值（未小写化）：用户名大小写敏感，不能拿查询缓存的小写串。
+        let destination = self.command_palette_input.read(cx).value().trim().to_owned();
+        if !plausible_ssh_query(&destination) {
+            return None;
+        }
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let group = language.pick("SSH 主机", "SSH hosts");
+        Some(WorkspacePaletteRow {
+            group_order: 2,
+            group: group.to_owned(),
+            label: language.format(
+                crate::i18n::Message::HostsAddAndConnect,
+                &[("destination", destination.as_str())],
+            ),
+            hint: "SSH".to_owned(),
+            hint_style: WorkspacePaletteHintStyle::Metadata,
+            search: format!("{destination} ssh host add remote 远程 连接 添加").to_lowercase(),
+            action: WorkspacePaletteAction::AddSshHostAndConnect(destination),
+            icon: None,
+            icon_glyph: Some(crate::display::ui::os_icons::resolve(None).glyph),
+            icon_path: None,
+        })
     }
 
     pub(super) fn render_command_palette(

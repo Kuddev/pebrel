@@ -1139,6 +1139,11 @@
     "title": "SSH hosts",
     "subtitle": "Organize your saved hosts, manage sign-in options, and open a terminal.",
     "add": "Add host",
+    "quick_add_title": "Add SSH host",
+    "quick_add_save_and_connect": "Save and connect",
+    "quick_add_address_required": "Enter a host address",
+    "quick_add_port_invalid": "Port must be 1-65535",
+    "add_and_connect": "Add and connect {destination}",
     "connect": "Connect",
     "exchange": "Import / export",
     "pinned": "Pinned",
@@ -1161,7 +1166,8 @@
     "via": "via {host}",
     "connection_time_unknown": "Connection time has not been recorded for this host.",
     "key_file": "Private key {name}",
-    "search_placeholder": "Name, address, tags"
+    "search_placeholder": "Name, address, tags",
+    "quick_add_keys_advanced": "Private keys are added in the full editor (More settings)"
   },
   "vcs": {
     "changes": "Changes",
