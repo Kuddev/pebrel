@@ -34,7 +34,9 @@ async fn target(
 ) -> ResumeTarget {
     let identity = identity.lock().unwrap().clone().unwrap();
     for _ in 0..40 {
-        if let Some(Some(target)) = checkpoint(session, &identity, &Endpoint::default()).await {
+        if let Some(Foreground::Client(Some(target))) =
+            checkpoint(session, &identity, &Endpoint::default()).await
+        {
             return target;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -87,7 +89,7 @@ fn isolated_openssh_reconnect_preserves_pooled_pane_targets() {
             query(&session, &posix(&format!("{} detach-client -t {}", endpoint.command(), quote(&tty)))).await.unwrap();
             let identity = restored_identity.lock().unwrap().clone().unwrap();
             for attempt in 0..40 {
-                if checkpoint(&session, &identity, &endpoint).await == Some(None) { break; }
+                if matches!(checkpoint(&session, &identity, &endpoint).await, Some(Foreground::Shell)) { break; }
                 assert!(attempt < 39, "intentional detach did not clear the target");
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -101,7 +103,7 @@ fn isolated_openssh_reconnect_preserves_pooled_pane_targets() {
                 assert!(output.len() < 8192);
             }
             let identity = fallback_identity.lock().unwrap().clone().unwrap();
-            assert_eq!(checkpoint(&session, &identity, &endpoint).await, Some(None));
+            assert!(matches!(checkpoint(&session, &identity, &endpoint).await, Some(Foreground::Shell)));
             assert_eq!(target(&session, &identity_b).await, b);
             fallback.finish().await.unwrap();
             second.finish().await.unwrap();

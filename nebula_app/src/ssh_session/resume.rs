@@ -106,6 +106,15 @@ impl ResumeTarget {
     }
 }
 
+#[cfg(test)]
+impl ResumeTarget {
+    /// A positively identified remote pane for consumer tests.
+    pub(crate) fn sample() -> Self {
+        Self::parse("/dev/pts/3\t$1\t100:200\t@3\t%4", "/dev/pts/3", &Endpoint::default())
+            .expect("valid sample target")
+    }
+}
+
 fn digits(value: &str) -> bool {
     !value.is_empty() && value.len() <= 20 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
@@ -144,7 +153,12 @@ pub(super) fn startup(
     target: Option<&ResumeTarget>,
     cwd: Option<&str>,
 ) -> String {
-    let mut script = format!("printf '\\036PEBREL_PTY_{token}=%s:%s\\037' \"$(tty)\" \"$$\"; ");
+    // tty prints "not a tty" when startup has no terminal, as reported for JumpServer direct
+    // connections. The filter shows malformed markers verbatim, so send one only on success.
+    let mut script = format!(
+        "if pebrel_tty=$(tty 2>/dev/null); then \
+         printf '\\036PEBREL_PTY_{token}=%s:%s\\037' \"$pebrel_tty\" \"$$\"; fi; "
+    );
     if let Some(target) = target {
         script.push_str(&target.attach());
     }
@@ -180,11 +194,20 @@ async fn client_at(
     ResumeTarget::parse(&output, &identity.tty, endpoint)
 }
 
+/// What owns the pane's PTY in the foreground.
+#[derive(Debug)]
+enum Foreground {
+    Shell,
+    /// `None` when the client's server is outside this account's reach, for
+    /// example when it runs under another account reached through sudo.
+    Client(Option<ResumeTarget>),
+}
+
 async fn checkpoint(
     session: &SharedSession,
     identity: &PtyIdentity,
     endpoint: &Endpoint,
-) -> Option<Option<ResumeTarget>> {
+) -> Option<Foreground> {
     // The PID and tty are learned on this exact channel, including when the transport is pooled.
     let command = posix(&format!(
         "ps -t {} -o pid= -o tty= -o comm=",
@@ -192,22 +215,25 @@ async fn checkpoint(
     ));
     let processes = query(session, &command).await?;
     if !identity.has_client(&processes)? {
-        return Some(None);
+        return Some(Foreground::Shell);
     }
     if let Some(target) = client_at(session, identity, endpoint).await {
-        return Some(Some(target));
+        return Some(Foreground::Client(Some(target)));
     }
-    let discovered = query(session, &posix(include_str!("resume/discover.sh"))).await?;
+    let Some(discovered) = query(session, &posix(include_str!("resume/discover.sh"))).await else {
+        return Some(Foreground::Client(None));
+    };
     let mut found = None;
     for candidate in Endpoint::parse(&discovered).into_iter().filter(|value| value != endpoint) {
         if let Some(target) = client_at(session, identity, &candidate).await {
             if found.is_some() {
-                return None;
+                // Two servers claim this client; neither can own the pane.
+                return Some(Foreground::Client(None));
             }
             found = Some(target);
         }
     }
-    found.map(Some)
+    Some(Foreground::Client(found))
 }
 
 pub(super) async fn monitor<H: SshEventHost>(
@@ -222,22 +248,30 @@ pub(super) async fn monitor<H: SshEventHost>(
     loop {
         let current = identity.lock().ok().and_then(|value| value.clone());
         if let Some(identity) = current
-            && let Ok(Some(target)) =
+            && let Ok(Some(foreground)) =
                 tokio::time::timeout(BUDGET, checkpoint(session, &identity, &endpoint)).await
         {
-            if let Some(target) = &target {
-                endpoint = target.endpoint.clone();
-            }
-            events.ssh_resume_target(target.clone());
-            match (target.as_ref(), tmux_helper) {
-                (Some(target), Some(helper)) => {
-                    if let Some(activity) =
-                        activity::observe(session, &identity, target, helper, token).await
-                    {
-                        events.ssh_tmux_activity(Some(activity));
-                    }
-                },
-                _ => events.ssh_tmux_activity(None),
+            events.ssh_multiplexer_client(matches!(foreground, Foreground::Client(_)));
+            // An unreachable server keeps the last positively identified target.
+            let target = match foreground {
+                Foreground::Shell => Some(None),
+                Foreground::Client(target) => target.map(Some),
+            };
+            if let Some(target) = target {
+                if let Some(target) = &target {
+                    endpoint = target.endpoint.clone();
+                }
+                events.ssh_resume_target(target.clone());
+                match (target.as_ref(), tmux_helper) {
+                    (Some(target), Some(helper)) => {
+                        if let Some(activity) =
+                            activity::observe(session, &identity, target, helper, token).await
+                        {
+                            events.ssh_tmux_activity(Some(activity));
+                        }
+                    },
+                    _ => events.ssh_tmux_activity(None),
+                }
             }
         }
         tokio::time::sleep(POLL).await;

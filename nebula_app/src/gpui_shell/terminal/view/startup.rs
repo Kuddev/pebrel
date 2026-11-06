@@ -334,6 +334,7 @@ impl TerminalView {
             running_program: None,
             command_running: false,
             command_running_disproved: false,
+            interactive_login: false,
             command_started: None,
             last_process_probe: None,
             activity_probe_pending: false,

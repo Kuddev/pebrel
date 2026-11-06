@@ -368,6 +368,9 @@ pub struct TerminalView {
     /// shell 与 console plumbing 时置位，转圈据此熄灭（issue #42）。判据与
     /// 节流都在 `runtime::reconcile_shell_activity`，裁定理由见那里。
     command_running_disproved: bool,
+    /// 前台命令是用户提交的交互式 SSH 登录（`ssh host`，无远端命令）。只在确知
+    /// 提交行的边界判定，命令结束即清除；粘贴等看不到命令行的提交不判定（#857）。
+    interactive_login: bool,
     /// `command_running` 置位的时刻，进程树探测的节流窗口从这里起算。
     command_started: Option<std::time::Instant>,
     /// 上次跑进程树探测的时刻，用于节流。

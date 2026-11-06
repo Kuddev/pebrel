@@ -3,6 +3,8 @@
 // Inert outside Pebrel (no PEBREL_HOOK_EXE or legacy alias in the environment).
 import { execFile } from "node:child_process"
 
+const REPLIES = ["permission.replied", "question.replied", "question.rejected"]
+
 const PebrelNotify = async ({ directory, worktree }) => {
   const hook = process.env.PEBREL_HOOK_EXE ?? process.env.NEBULA_HOOK_EXE
   if (!hook) return {}
@@ -12,7 +14,7 @@ const PebrelNotify = async ({ directory, worktree }) => {
   const turns = new Map()
   const turnFor = (id) => {
     const key = id || "pending"
-    const turn = turns.get(key) || { active: false, lastUser: "" }
+    const turn = turns.get(key) || { active: false, lastUser: "", waiting: false }
     turns.delete(key)
     if (turns.size >= 512) turns.delete(turns.keys().next().value)
     turns.set(key, turn)
@@ -58,6 +60,7 @@ const PebrelNotify = async ({ directory, worktree }) => {
     const request = input || {}
     const candidate = request.sessionID || request.sessionId || (request.session && request.session.id)
     if (candidate) sessionId = candidate
+    turnFor(sessionId).waiting = true
     const permission = request.permission
     const permissionType = typeof permission === "string"
       ? permission
@@ -84,6 +87,8 @@ const PebrelNotify = async ({ directory, worktree }) => {
       // Root session only: subagents carry parentID and must not steal the
       // pane's resume identity.
       const candidate = props.sessionID || info.sessionID || (!info.parentID && info.id)
+      // A reply to a request this bridge never reported is not lifecycle evidence.
+      if (REPLIES.includes(t) && !turns.get(candidate || sessionId || "pending")?.waiting) return
       if (candidate) {
         const first = !sessionId
         sessionId = candidate
@@ -99,7 +104,10 @@ const PebrelNotify = async ({ directory, worktree }) => {
       } else if (t === "session.status" && ["busy", "retry"].includes(props.status?.type)) {
         if (!turn.active) { turn.active = true; send({ kind: "prompt" }) }
       } else if (t === "session.finished" || t === "session.error") {
+        // A repeated execution result must not finish the same turn twice.
+        if (!turn.active) return
         turn.active = false
+        turn.waiting = false
         const outcome = t === "session.error"
           ? (props.error?.name === "MessageAbortedError" ? "cancelled" : "failed")
           : props.outcome
@@ -107,12 +115,13 @@ const PebrelNotify = async ({ directory, worktree }) => {
       } else if (t === "session.idle" || (t === "session.status" && props.status?.type === "idle")) {
         // Dedupe opencode's spurious idles (startup/cancel): only a turn
         // that actually started reports done.
-        if (turn.active) { turn.active = false; send({ kind: "done" }) }
+        if (turn.active) { turn.active = false; turn.waiting = false; send({ kind: "done" }) }
       } else if (["permission.updated", "permission.ask", "permission.asked", "question.asked"].includes(t)) {
         // Compatibility path for OpenCode builds that also publish permission
         // changes on the generic event bus.
         reportPermission(props)
-      } else if (["permission.replied", "question.replied", "question.rejected"].includes(t)) {
+      } else if (REPLIES.includes(t)) {
+        turn.waiting = false
         send({ kind: "tool-complete" })
       } else if (t === "tool.execute.after") {
         send({ kind: "tool-complete" })

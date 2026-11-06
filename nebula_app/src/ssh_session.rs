@@ -85,6 +85,10 @@ pub trait SshEventHost:
     /// An observation belongs to this channel's currently active remote pane.
     fn ssh_tmux_activity(&self, _activity: Option<TmuxActivity>) {}
 
+    /// A terminal multiplexer client owns this channel's PTY, whether or not
+    /// its server can be queried from the authenticated account.
+    fn ssh_multiplexer_client(&self, _present: bool) {}
+
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
         let _ = stage;
