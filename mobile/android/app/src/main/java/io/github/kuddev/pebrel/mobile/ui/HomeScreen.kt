@@ -3,6 +3,7 @@ package io.github.kuddev.pebrel.mobile.ui
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -56,19 +58,30 @@ fun HomeScreen(
     onAddRelay: () -> Unit, onLocal: () -> Unit, onDeployRelay: () -> Unit,
     onPane: ((String, DesktopPane) -> Unit)? = null,
     onTab: ((String, DesktopTab) -> Unit)? = null,
+    sheetOpen: Boolean = false,
     header: @Composable () -> Unit = {},
 ) {
     val empty = isHomeEmpty(sessions, hosts, desktops, relays)
+    val motion = rememberPebrelMotion()
     var newConnection by rememberSaveable { mutableStateOf(false) }
+    // Sheets blur the live window, so a button left behind one would show through as a blot of its color.
+    val hidden = newConnection || sheetOpen
+    val button = animateFloatAsState(if (hidden) 0f else 1f, if (hidden) motion.tweenOrSnap(140) else motion.expandSpring(),
+        label = "new_connection_button")
+    val buttonGone by remember { derivedStateOf { button.value == 0f } }
     GlassPage(topBar = header, floatingActionButton = {
-        if (!empty) NewConnectionButton { newConnection = true }
+        if (!empty) NewConnectionButton(Modifier.graphicsLayer {
+            alpha = button.value.coerceIn(0f, 1f)
+            scaleX = .6f + .4f * button.value
+            scaleY = scaleX
+        }) { newConnection = true }
     }) { padding, source ->
         if (empty) Box(Modifier.padding(top = padding.calculateTopPadding())) { EmptyHomeScreen(onAddRelay, onAddHost, onLocal) }
         else HomeContent(sessions, hosts, desktops, relays, onSession, onSessions, onHosts, onLogin, onEditHost,
             onDeleteHost, onDesktop, onRelay, onComputers, onAddRelay, onLocal, onPane, onTab,
             Modifier.fillMaxSize().then(source), padding.calculateTopPadding())
     }
-    if (newConnection) NewConnectionSheet(
+    if (newConnection && buttonGone) NewConnectionSheet(
         onDismiss = { newConnection = false },
         onComputer = onAddRelay,
         onSshHost = onAddHost,
@@ -79,10 +92,10 @@ fun HomeScreen(
 
 /** The page's one primary action: accent glass, lifted above the content it floats over. */
 @Composable
-private fun NewConnectionButton(onClick: () -> Unit) {
+private fun NewConnectionButton(modifier: Modifier, onClick: () -> Unit) {
     val label = stringResource(R.string.new_connection)
-    Box(Modifier.padding(end = 6.dp, bottom = 7.dp).size(58.dp)
-        .glass(CircleShape, lift = GlassLift.Floating, accent = MaterialTheme.colorScheme.primary)
+    Box(modifier.padding(end = 6.dp, bottom = 7.dp).size(58.dp)
+        .glass(CircleShape, lift = GlassLift.Floating, highlight = false, accent = MaterialTheme.colorScheme.primary)
         .pressClickable(role = Role.Button, onClickLabel = label, onClick = onClick)
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Icon(painterResource(R.drawable.ic_plus), null, Modifier.size(27.dp), tint = MaterialTheme.colorScheme.onPrimary)
@@ -242,6 +255,10 @@ private fun SessionThumbnail(session: LocalSession, modifier: Modifier, onClick:
                         .padding(horizontal = 7.dp, vertical = 3.dp))
             }
             Spacer(Modifier.height(5.dp))
+            session.foreground?.label?.takeIf(String::isNotEmpty)?.let {
+                Text(it, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 3.dp))
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (preview.isBlank()) Glyph(R.drawable.ic_terminal, Modifier.align(Alignment.Center).size(22.dp))
                 else Text(preview, fontSize = 9.sp, lineHeight = 13.sp, fontFamily = LocalTerminalFont.current,
