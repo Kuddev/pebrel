@@ -36,6 +36,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Three-button navigation would otherwise sit on a white scrim, a band of another color under every page.
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
         launchTarget.value = intent
         setContent { PebrelTheme { Workspace((application as PebrelApplication).sessions, launchTarget.value) } }
     }
@@ -338,7 +340,7 @@ class MainActivity : ComponentActivity() {
                     else -> HomeScreen(sessions, hosts, desktops, relays, ::openSession, { switcher = true }, { showPage("hosts") },
                         { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it }, { editHost = null; hostForm = true },
                         ::openDesktop, { openDesktop(repository.connectRelay(it)) }, { showPage("computers") }, { addRelay = true },
-                        openLocal, { deployRelay = true }, ::openPane, ::openTab, header = {
+                        openLocal, { deployRelay = true }, ::openPane, ::openTab, sheetOpen = switcher, header = {
                             HomeHeader({ settingsInitial = ""; showPage("settings") }, { settingsInitial = "notices"; showPage("settings") },
                                 showNotices = !isHomeEmpty(sessions, hosts, desktops, relays))
                         })

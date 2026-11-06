@@ -147,12 +147,12 @@ private fun Modifier.softShadow(shape: Shape, palette: GlassPalette, lift: Glass
     }
 }
 
-/** A full-width bar: heavy glass with a bottom hairline, above whatever follows it in a column. */
+/** A full-width bar: page-tinted glass with a bottom hairline, above whatever follows it in a column. */
 @Composable
 internal fun Modifier.glassBar(): Modifier {
     val hairline = glassPalette().hairline
     return zIndex(1f)
-        .glass(RectangleShape, GlassTier.Heavy, GlassLift.Bar, highlight = false)
+        .glass(RectangleShape, GlassTier.Bar, GlassLift.Bar, highlight = false)
         .drawWithContent {
             drawContent()
             val stroke = GlassHairline.toPx()
