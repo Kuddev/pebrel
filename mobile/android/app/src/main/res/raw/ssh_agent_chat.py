@@ -1,8 +1,8 @@
-"""Find the Agent behind this SSH connection's terminal and project its native transcript.
+"""Find what runs behind this SSH connection's terminal and project an Agent's native transcript.
 
 Runs on the server through a separate exec channel, never through the interactive shell.
-Input: argv[1] is base64 JSON {"mode": "detect"|"read", "revision": str|null, "before": int|null}.
-Output: one line "PEBREL_SSH_CHAT=<json>". Python 3.6 or later, standard library only.
+Input: argv[1] is base64 JSON {"mode": "detect"|"read", "revision": str|null, "before": int|null,
+"tty": str|null}. Output: one line "PEBREL_SSH_CHAT=<json>". Python 3.6 or later, standard library only.
 """
 import base64
 import glob
@@ -20,12 +20,19 @@ MESSAGE_BYTES = 8 * 1024
 OUTPUT_BYTES = 36 * 1024
 MESSAGE_COUNT = 120
 KINDS = ("claude", "codex", "pi", "antigravity")
+TERMINAL = re.compile(r"^(?:pts/[0-9]+|tty[A-Za-z0-9]+)$")
+SESSION = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+SHELLS = {"sh", "bash", "zsh", "fish", "ksh", "mksh", "dash", "ash", "csh", "tcsh", "nu", "xonsh", "elvish"}
+# A runtime names the script it runs, the way a person would name the program.
+RUNTIMES = re.compile(r"^(?:node|nodejs|bun|bunx|deno|npx|pnpx|uvx|env|python[0-9.]*|pypy[0-9.]*|"
+                      r"ruby|perl|php|java)$")
+SCRIPT = re.compile(r"\.(?:[cm]?js|ts|py|rb|pl|php|sh)$")
 
 
-def run(args):
+def run(args, timeout=5):
     try:
         return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              universal_newlines=True, timeout=5).stdout
+                              universal_newlines=True, timeout=timeout).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -50,14 +57,47 @@ def processes():
     return rows
 
 
-def own_terminal(rows):
-    """The PTY whose sshd also owns this exec channel. Several candidates are ambiguous."""
+def environ(pid):
+    """The variables this reader uses from a process of the same user; None when unreadable."""
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as file:
+            data = file.read(512 * 1024)
+    except OSError:
+        return None
+    wanted = {b"SSH_CONNECTION", b"SSH_TTY", b"TMUX_TMPDIR", b"CLAUDE_CONFIG_DIR", b"CODEX_HOME"}
+    values = {}
+    for item in data.split(b"\0"):
+        key, equals, value = item.partition(b"=")
+        if equals and key in wanted:
+            values[key.decode("ascii")] = value.decode("utf-8", "replace")
+    return values
+
+
+def link(path):
+    try:
+        return os.readlink(path)
+    except OSError:
+        return None
+
+
+def started(pid):
+    """Kernel start time in clock ticks; tells a live process from an earlier one with the same PID."""
+    try:
+        with open("/proc/%d/stat" % pid) as file:
+            return file.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def ancestor_terminal(rows):
+    """Fallback without /proc: the PTY under the sshd process that also owns this exec channel."""
     pid, server = os.getpid(), None
     for _ in range(32):
         row = rows.get(pid)
         if row is None:
             break
-        if os.path.basename(row["args"].split()[0]).startswith("sshd"):
+        name = os.path.basename(row["args"].split()[0])
+        if name.startswith("sshd") or name == "dropbear":
             server = pid
             break
         pid = row["ppid"]
@@ -74,15 +114,36 @@ def own_terminal(rows):
             pid = row["ppid"]
         return False
 
-    terminals = {row["tty"] for row in rows.values()
-                 if row["tty"] not in ("?", "??", "-") and under(row["pid"])}
+    terminals = {row["tty"] for row in rows.values() if TERMINAL.match(row["tty"]) and under(row["pid"])}
     return terminals.pop() if len(terminals) == 1 else None
+
+
+def connection_terminal(rows):
+    """The one PTY this SSH connection opened. Several candidates are ambiguous.
+
+    Every channel of a connection carries the same SSH_CONNECTION, and its client port tells
+    connections from one address apart. sshd's process tree differs between versions and
+    servers, so ancestry is only the fallback.
+    """
+    mine = os.environ.get("SSH_CONNECTION")
+    if mine and os.path.isdir("/proc/self"):
+        found = set()
+        for row in rows.values():
+            if not TERMINAL.match(row["tty"]):
+                continue
+            env = environ(row["pid"])
+            # Panes of a multiplexer started here inherit the variables but run on their own PTY.
+            if env and env.get("SSH_CONNECTION") == mine and env.get("SSH_TTY") == "/dev/" + row["tty"]:
+                found.add(row["tty"])
+        if found:
+            return found.pop() if len(found) == 1 else None
+    return ancestor_terminal(rows)
 
 
 def agent_kind(args):
     for word in args.split()[:3]:
         name = os.path.basename(word)
-        if name == "claude" or word.endswith("claude-code/cli.js"):
+        if name == "claude" or word.endswith("claude-code/cli.js") or "/claude/versions/" in word:
             return "claude"
         if name == "codex" or name.startswith("codex-") or word.endswith("codex.js"):
             return "codex"
@@ -93,17 +154,142 @@ def agent_kind(args):
     return None
 
 
-def find_agent(rows, terminal):
-    found = [row for row in rows.values() if row["tty"] == terminal and agent_kind(row["args"])]
-    foreground = [row for row in found if row["pgid"] == row["tpgid"]]
-    found = foreground or found
-    if not found:
+def program(args):
+    """What a person would call the program: a runtime's script, a shell's command, or nothing for an idle shell."""
+    words = args.split()
+    if not words:
+        return ""
+    name = os.path.basename(words[0]).lstrip("-")
+    if name not in SHELLS and not RUNTIMES.match(name):
+        return name
+    for index, word in enumerate(words[1:], 1):
+        if word == "-c" and name in SHELLS:
+            return program(" ".join(words[index + 1:])) or name
+        if word.startswith("-") or (name == "env" and "=" in word):
+            continue
+        if name == "env":
+            return program(" ".join(words[index:]))
+        return SCRIPT.sub("", os.path.basename(word)) or name
+    return "" if name in SHELLS else name
+
+
+def owner(pid):
+    try:
+        return os.stat("/proc/%d" % pid).st_uid
+    except OSError:
         return None
-    pids = {row["pid"] for row in found}
-    # npm launchers start the native binary as a child; prefer the deepest of one kind.
-    found.sort(key=lambda row: row["ppid"] in pids, reverse=True)
-    kind = agent_kind(found[0]["args"])
-    return kind, [row for row in found if agent_kind(row["args"]) == kind]
+
+
+def delegate(request, view):
+    """Ask again as the account a relay switched to, when non-interactive sudo allows it.
+
+    `sudo -i -u dev mydev` leaves the tmux client and its Agents readable only by that account.
+    The source goes through stdin because the other account may not read this one's cache.
+    """
+    with open(os.path.abspath(sys.argv[0]), "rb") as file:
+        source = file.read()
+    request = dict(request, tty="/dev/" + (view["relay"] or view["terminal"]), delegated=True)
+    encoded = base64.b64encode(json.dumps(request).encode("utf-8")).decode("ascii")
+    try:
+        output = subprocess.run(["sudo", "-n", "-u", "#%d" % view["owner"], "python3", "-I", "-", encoded],
+                                input=source, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=15).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in output.splitlines():
+        if line.startswith("PEBREL_SSH_CHAT="):
+            try:
+                reply = json.loads(line[len("PEBREL_SSH_CHAT="):])
+            except ValueError:
+                return None
+            return reply if isinstance(reply, dict) and "error" not in reply else None
+    return None
+
+
+def foreground(rows, terminal):
+    return [row for row in rows.values() if row["tty"] == terminal and row["pgid"] == row["tpgid"]]
+
+
+def tmux_pane(client, terminal):
+    """The PTY and ID of the pane a tmux client on this terminal shows, asked with the client's own binary."""
+    words = client["args"].split()
+    exe = link("/proc/%d/exe" % client["pid"])
+    if not exe or not os.access(exe, os.X_OK):
+        exe = words[0] if words[0].startswith("/") else "tmux"
+    env = environ(client["pid"]) or {}
+    base = os.path.join(env.get("TMUX_TMPDIR") or os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.getuid())
+    sockets = []
+    for index, word in enumerate(words[1:], 1):
+        if word in ("-L", "-S") and index + 1 < len(words):
+            flag, value = word[1], words[index + 1]
+        elif word[:2] in ("-L", "-S") and len(word) > 2:
+            flag, value = word[1], word[2:]
+        else:
+            continue
+        sockets = [value if flag == "S" else os.path.join(base, value)]
+        break
+    for socket in (sockets or sorted(glob.glob(os.path.join(base, "*"))))[:16]:
+        output = run([exe, "-S", socket, "list-clients", "-F",
+                      "#{client_pid}\t#{client_tty}\t#{pane_tty}\t#{pane_id}"], timeout=2)
+        for line in output.splitlines():
+            fields = line.split("\t")
+            if len(fields) == 4 and (fields[0] == str(client["pid"]) or fields[1] == "/dev/" + terminal) \
+                    and TERMINAL.match(fields[2][len("/dev/"):]) and fields[2].startswith("/dev/"):
+                return fields[2][len("/dev/"):], fields[3]
+    return None
+
+
+def locate(rows, request):
+    """What the person sees in this terminal: through tmux to the pane it shows, then its foreground program."""
+    requested = request.get("tty")
+    if isinstance(requested, str) and re.match(r"^/dev/(pts/[0-9]+|tty[A-Za-z0-9]+)$", requested):
+        terminal = requested[len("/dev/"):]
+    else:
+        terminal = connection_terminal(rows)
+    if terminal is None:
+        return None
+    view = {"terminal": terminal, "multiplexer": None, "pane": None, "relay": None}
+    client = None
+    for _ in range(6):
+        shown = foreground(rows, terminal)
+        # sudo, su and script relay through a PTY of their own; follow it to what the person sees.
+        pids = {row["pid"] for row in shown}
+        relayed = next((row["tty"] for row in rows.values() if row["ppid"] in pids and row["tty"] != terminal
+                        and TERMINAL.match(row["tty"])), None)
+        if relayed is not None:
+            view["relay"], terminal = relayed, relayed
+            continue
+        client = next((row for row in shown if os.path.basename(row["args"].split()[0]) == "tmux"), None)
+        if client is None:
+            break
+        view["multiplexer"] = "tmux"
+        pane = tmux_pane(client, terminal)
+        if pane is None:
+            break
+        terminal, view["pane"] = pane
+    shown = foreground(rows, terminal)
+    view["owner"] = owner(client["pid"]) if client else None
+    agents = [row for row in shown if agent_kind(row["args"])]
+    if agents:
+        pids = {row["pid"] for row in agents}
+        # npm launchers start the native binary as a child; prefer the deepest of one kind.
+        agents.sort(key=lambda row: row["ppid"] in pids, reverse=True)
+        kind = agent_kind(agents[0]["args"])
+        agents = [row for row in agents if agent_kind(row["args"]) == kind]
+    else:
+        kind = None
+    leaders = [row for row in shown if row["pid"] == row["pgid"]]
+    leader = (agents or leaders or sorted(shown, key=lambda row: row["pid"]) or [None])[0]
+    # The login shell is the oldest process on the terminal; it answers for programs of other users.
+    everyone = sorted((row for row in rows.values() if row["tty"] == terminal),
+                      key=lambda row: (-(row["age"] or 0), row["pid"]))
+    cwd = None
+    for row in ([leader] if leader else []) + everyone[:1]:
+        cwd = link("/proc/%d/cwd" % row["pid"])
+        if cwd:
+            break
+    view.update(agent=kind, agents=agents, program=program(leader["args"]) if leader else "", cwd=cwd)
+    return view
 
 
 def option(args, *names):
@@ -140,15 +326,36 @@ def codex_cwd(path):
         return None
 
 
-def transcript(kind, agents):
+def claude_session(agents):
+    """Claude Code registers each interactive process under sessions/<pid>.json with its current session."""
+    for row in agents:
+        home = (environ(row["pid"]) or {}).get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
+        try:
+            with open(os.path.join(home, "sessions", "%d.json" % row["pid"]), encoding="utf-8") as file:
+                record = json.load(file)
+        except (OSError, ValueError):
+            continue
+        session = record.get("sessionId") if isinstance(record, dict) else None
+        stamp = record.get("procStart") if isinstance(record, dict) else None
+        if isinstance(session, str) and SESSION.match(session) and (stamp is None or str(stamp) == started(row["pid"])):
+            return home, session, record.get("cwd") if isinstance(record.get("cwd"), str) else None
+    return None
+
+
+def transcript(kind, agents, cwd):
     agent = agents[0]
-    cwd = None
-    try:
-        cwd = os.readlink("/proc/%d/cwd" % agent["pid"])
-    except OSError:
-        pass
     since = time.time() - agent["age"] if agent["age"] is not None else None
     resumed = any(word in agent["args"].split() for word in ("-c", "--continue", "-r", "--resume", "resume"))
+    registered = claude_session(agents) if kind == "claude" else None
+    if registered:
+        # The registry is exact: a session without its file yet has no messages, never another one's.
+        home, session, origin = registered
+        folders = [os.path.join(home, "projects", re.sub(r"[^A-Za-z0-9]", "-", origin or cwd or ""))]
+        for folder in folders + glob.glob(os.path.join(home, "projects", "*")):
+            path = os.path.join(folder, session + ".jsonl")
+            if os.path.isfile(path):
+                return path
+        return None
     # An Agent that keeps its own transcript open names it exactly.
     patterns = {"claude": "/.claude/projects/", "codex": "/rollout-", "pi": "/.pi/agent/sessions/",
                 "antigravity": "/.system_generated/logs/transcript"}
@@ -157,26 +364,27 @@ def transcript(kind, agents):
             for fd in os.listdir("/proc/%d/fd" % row["pid"]):
                 target = os.readlink("/proc/%d/fd/%s" % (row["pid"], fd))
                 if patterns[kind] in target and target.endswith(".jsonl"):
-                    return target, cwd
+                    return target
         except OSError:
             pass
     if kind == "claude":
         session = option(agent["args"], "--resume", "-r", "--session-id")
         folders = [os.path.join(HOME, ".claude/projects", re.sub(r"[^A-Za-z0-9]", "-", cwd))] if cwd else []
-        if session and re.match(r"^[0-9a-fA-F-]{8,64}$", session):
+        if session and SESSION.match(session):
             for folder in folders + glob.glob(os.path.join(HOME, ".claude/projects/*")):
                 path = os.path.join(folder, session + ".jsonl")
                 if os.path.isfile(path):
-                    return path, cwd
+                    return path
         paths = [path for folder in folders for path in glob.glob(os.path.join(folder, "*.jsonl"))]
     elif kind == "codex":
-        days = sorted(glob.glob(os.path.join(HOME, ".codex/sessions/*/*/*")))[-3:]
+        home = (environ(agent["pid"]) or {}).get("CODEX_HOME") or os.path.join(HOME, ".codex")
+        days = sorted(glob.glob(os.path.join(home, "sessions/*/*/*")))[-3:]
         paths = [path for day in days for path in glob.glob(os.path.join(day, "rollout-*.jsonl"))
                  if cwd is None or codex_cwd(path) in (cwd, None)]
     elif kind == "pi":
         explicit = option(agent["args"], "--session")
         if explicit and explicit.endswith(".jsonl") and os.path.isfile(explicit):
-            return explicit, cwd
+            return explicit
         paths = []
         if cwd:
             folder = "--" + re.sub(r"[/\\:]", "-", cwd.lstrip("/\\")) + "--"
@@ -193,8 +401,8 @@ def transcript(kind, agents):
                     paths.append(os.path.join(logs, name))
                     break
         if session:
-            return (paths[0] if paths else None), cwd
-    return newest(paths, None if resumed else since), cwd
+            return paths[0] if paths else None
+    return newest(paths, None if resumed else since)
 
 
 def text_of(value):
@@ -400,28 +608,28 @@ def read_page(kind, path, revision, before):
 
 def main(request):
     rows = processes()
-    # The app names the pane PTY when a multiplexer client on this connection shows another terminal.
-    requested = request.get("tty")
-    if isinstance(requested, str) and re.match(r"^/dev/(pts/[0-9]+|tty[A-Za-z0-9]+)$", requested):
-        target = requested[len("/dev/"):]
-    else:
-        target = own_terminal(rows)
-    if target is None:
+    view = locate(rows, request)
+    if view is None:
         return {"error": "terminal_unknown"}
-    found = find_agent(rows, target)
-    if found is None:
-        return {"agent": None}
-    kind, agents = found
-    result = {"agent": kind}
-    if request.get("mode") != "read":
+    if view["agent"] is None and view["pane"] is None and view["owner"] not in (None, os.getuid()) \
+            and not request.get("delegated"):
+        reply = delegate(request, view)
+        if reply is not None:
+            reply.pop("version", None)
+            return reply
+    agents = view.pop("agents")
+    view.pop("relay")
+    view.pop("owner")
+    result = dict(view, home=HOME)
+    if request.get("mode") != "read" or view["agent"] is None:
         return result
-    path, cwd = transcript(kind, agents)
-    result.update(cwd=cwd or "", session=path or "")
+    path = transcript(view["agent"], agents, view["cwd"])
+    result.update(cwd=view["cwd"] or "", session=path or "")
     if path is None:
         result.update(unchanged=False, revision="", messages=[], before=None, truncated=False, busy=False)
         return result
     try:
-        result.update(read_page(kind, path, request.get("revision"), request.get("before")))
+        result.update(read_page(view["agent"], path, request.get("revision"), request.get("before")))
     except OSError:
         result["error"] = "conversation_unavailable"
     return result

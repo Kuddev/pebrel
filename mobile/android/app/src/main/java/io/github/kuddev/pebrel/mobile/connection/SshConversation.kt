@@ -23,6 +23,22 @@ fun sshAgentName(kind: String): String = when (kind) {
     else -> kind
 }
 
+/** What the person sees in an SSH tab's terminal, through tmux to the pane it shows, as the server reader saw it. */
+data class SshForeground(val program: String, val cwd: String, val agent: String?, val multiplexer: String?) {
+    /** "Codex · ~/src/app"; only the directory at an idle prompt. */
+    val label: String get() = listOf(agent?.let(::sshAgentName) ?: program, cwd).filter(String::isNotEmpty).joinToString(" · ")
+
+    companion object {
+        internal fun parse(result: JSONObject): SshForeground {
+            // org.json renders a JSON null as the text "null" through optString.
+            fun text(key: String) = if (result.isNull(key)) "" else result.optString(key)
+            val home = text("home").trimEnd('/')
+            val cwd = text("cwd").let { if (home.isNotEmpty() && (it == home || it.startsWith("$home/"))) "~" + it.removePrefix(home) else it }
+            return SshForeground(text("program"), cwd, text("agent").ifEmpty { null }, text("multiplexer").ifEmpty { null })
+        }
+    }
+}
+
 /**
  * Runs the bundled transcript reader on the server over an exec channel. The script is installed once under
  * `~/.cache/pebrel`, named by its hash, because a single exec command is limited to 8 KiB.
@@ -30,14 +46,14 @@ fun sshAgentName(kind: String): String = when (kind) {
 internal class SshAgentChat(
     private val script: ByteArray,
     private val query: suspend (String) -> JSONObject,
-    /** The PTY to inspect when a multiplexer client on this connection shows another pane; null for its own PTY. */
-    private val paneTerminal: suspend () -> String? = { null },
 ) {
     private val file = "\$HOME/.cache/pebrel/ssh-agent-chat-" +
         MessageDigest.getInstance("SHA-256").digest(script).take(6).joinToString("") { "%02x".format(it) } + ".py"
 
+    /** The reader resolves tmux itself, with the client's own binary and socket, in this one round trip. */
+    suspend fun foreground(): SshForeground = SshForeground.parse(call(JSONObject().put("mode", "detect")))
+
     suspend fun call(request: JSONObject): JSONObject {
-        paneTerminal()?.let { request.put("tty", it) }
         val argument = Base64.encodeToString(request.toString().toByteArray(), Base64.NO_WRAP)
         val command = RemoteSessions.posixWithPath(
             "f=\"$file\"; [ -f \"\$f\" ] || exit 86; command -v python3 >/dev/null 2>&1 || exit 87; " +
