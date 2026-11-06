@@ -216,10 +216,11 @@ pub(super) async fn run<H: SshEventHost>(
         event_proxy.ssh_pane_connection(Some(connection));
         super::report_stage(Some(&event_proxy), SshStage::Ready);
         let identity = channel.identity.clone();
+        let tmux_helper = channel.tmux_helper.clone();
         let result = tokio::select! {
             biased;
-            result = pump(&mut channel, hook_token, initial_size, &terminal, &event_proxy, &mut input) => result,
-            never = resume::monitor(&acquired.session, identity, resume_target.as_ref(), &event_proxy) => match never {},
+            result = pump(&mut channel, hook_token.clone(), initial_size, &terminal, &event_proxy, &mut input) => result,
+            never = resume::monitor(&acquired.session, identity, resume_target.as_ref(), tmux_helper.as_deref(), &hook_token, &event_proxy) => match never {},
         };
         if result.is_err() || acquired.session.is_closed() {
             super::evict_pooled_session(&acquired.key, &acquired.session).await;
@@ -249,6 +250,7 @@ fn finish<H: SshEventHost>(
     event_proxy: &H,
 ) {
     event_proxy.ssh_pane_connection(None);
+    event_proxy.ssh_tmux_activity(None);
     match result {
         Ok(()) => terminal.lock().exit(),
         Err(error) => {
@@ -286,6 +288,7 @@ pub(super) struct ShellChannel {
     pending_bytes: usize,
     identity: Arc<std::sync::Mutex<Option<resume::PtyIdentity>>>,
     identity_input: Option<resume::IdentityInput>,
+    tmux_helper: Option<String>,
 }
 
 /// The same close-on-drop ownership applies to shell and short-lived exec channels.
@@ -298,6 +301,7 @@ pub(super) fn own_channel(channel: Channel<client::Msg>) -> ShellChannel {
         pending_bytes: 0,
         identity: Default::default(),
         identity_input: None,
+        tmux_helper: None,
     }
 }
 
@@ -393,7 +397,7 @@ async fn open_shell_channel(
 ) -> Result<(ShellChannel, String), SessionError> {
     let hook_token = super::remote_hook_token()?;
     let posix = resume::supported(session).await;
-    let bootstrap =
+    let integration =
         if posix { super::integration::prepare(session, &hook_token).await } else { None };
     let mut channel = own_channel(session.channel_open_session().await?);
     channel
@@ -409,11 +413,17 @@ async fn open_shell_channel(
         .await?;
     wait_request_success(&mut channel, "PTY").await?;
     if posix {
-        let command = resume::startup(&hook_token, bootstrap.as_deref(), target, remote_cwd);
+        let command = resume::startup(
+            &hook_token,
+            integration.as_ref().map(|prepared| prepared.bootstrap.as_str()),
+            target,
+            remote_cwd,
+        );
         match super::integration::start(&mut channel, &command).await {
             Ok(()) => {
                 channel.identity_input =
                     Some(resume::IdentityInput::new(&hook_token, channel.identity.clone()));
+                channel.tmux_helper = integration.map(|prepared| prepared.tmux_helper);
                 return Ok((channel, hook_token));
             },
             Err(error) => {

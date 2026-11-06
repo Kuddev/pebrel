@@ -4,7 +4,7 @@ from pathlib import Path, PurePosixPath
 
 
 BUDGET_PATH = "architecture/file-budgets.txt"
-SOURCE_SUFFIXES = {".rs", ".py", ".ps1", ".mjs", ".js", ".sh", ".lua"}
+SOURCE_SUFFIXES = {".rs", ".py", ".ps1", ".mjs", ".js", ".sh", ".lua", ".luau"}
 EXCLUDED = {"node_modules", "__pycache__"}
 
 

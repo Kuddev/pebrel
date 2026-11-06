@@ -251,6 +251,14 @@ def source_without_allowed_occurrences(path: str, text: str) -> str:
         text = text.replace(r"/\/tmux$/", "").replace(r"\/tmux\)$/", "")
     if path == "nebula_app/src/ssh_session/resume/tests.rs":
         text = re.sub(r'(?<=\\n)[0-9]+ pts/[0-9]+ tmux: client(?=\\n)', "", text)
+    if path in {"nebula_app/res/hooks/remote_bridge.py", "nebula_app/res/hooks/remote_tmux.py"}:
+        text = re.sub(r'\bos\.environ\.get\("TMUX"(?:, "")?\)', "", text)
+    if path == "nebula_app/res/hooks/remote_tmux.py":
+        text = text.replace(' / "tmux-routes"', "")
+    if path == "nebula_app/res/hooks/remote_bridge.py":
+        text = text.replace('header += " tmux="', "")
+    if path == "nebula_app/src/ai_hook/protocol.rs":
+        text = text.replace('field.strip_prefix("tmux=")', "")
     if path == "nebula_app/src/gpui_shell/terminal/view/activity_tests.rs":
         # These fixtures exercise actual process identity. Labels and explanatory
         # prose are not interfaces, and appended text must remain checked.

@@ -59,7 +59,7 @@ fn resource_command_uses_native_result_without_a_lua_vm() {
     .unwrap();
     assert_eq!(execution.engine, "native");
     assert_eq!(execution.lua_memory_bytes, 0);
-    assert_eq!(execution.instruction_ticks, 0);
+    assert_eq!(execution.interrupt_count, 0);
     assert_eq!(lua::vm_creation_count(), initial_vms);
 }
 
@@ -242,15 +242,15 @@ fn native_error_receipts_survive_the_lua_boundary() {
 }
 
 #[test]
-fn instruction_yields_stop_loops_even_inside_pcall() {
+fn interrupt_limits_stop_loops_even_inside_pcall() {
     let error = run_lua("return {describe=function() while true do pcall(function() while true do end end) end end}").unwrap_err();
-    assert_eq!(error.code, "lua_instruction_limit");
+    assert_eq!(error.code, "luau_interrupt_limit");
 }
 
 #[test]
 fn source_initialization_is_budgeted_too() {
     let error = run_lua("while true do end").unwrap_err();
-    assert_eq!(error.code, "lua_instruction_limit");
+    assert_eq!(error.code, "luau_interrupt_limit");
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn lua_memory_is_bounded() {
     let error =
         run_lua("return {describe=function() return string.rep('x', 32 * 1024 * 1024) end}")
             .unwrap_err();
-    assert_eq!(error.code, "lua_memory_limit");
+    assert_eq!(error.code, "luau_memory_limit");
 }
 
 #[test]

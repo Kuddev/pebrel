@@ -129,7 +129,7 @@ mod tests {
     fn source() -> ConfigSource {
         ConfigSource {
             primary_path: PathBuf::from("nebula.lua"),
-            format: ConfigFormat::Lua,
+            format: ConfigFormat::Luau,
             explicit: true,
         }
     }

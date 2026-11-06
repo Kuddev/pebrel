@@ -101,6 +101,9 @@ impl TextFileView {
                         .ghost()
                         .xsmall()
                         .label(language.text(Message::TransferCancel))
+                        .disabled(
+                            self.operation.as_ref().is_some_and(DocumentOperation::is_cancelled),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(operation) = &this.operation {
                                 operation.cancel();
@@ -108,6 +111,18 @@ impl TextFileView {
                             this.notice = Some((Message::TransferCancelling, None));
                             cx.notify();
                         })),
+                )
+            })
+            .when(!self.markdown && !self.loading && !self.saving, |bar| {
+                bar.child(
+                    Button::new("file-reload")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Redo2)
+                        .tooltip(language.text(Message::EditorReload))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.request_reload(window, cx)),
+                        ),
                 )
             })
             .when(self.markdown, |bar| bar.child(self.render_document_menu(cx)))

@@ -23,11 +23,9 @@ fn collect_sources(root: &Path, files: &mut Vec<PathBuf>) {
         assert!(!path.is_symlink(), "source must not be a symlink: {}", path.display());
         if path.is_dir() {
             collect_sources(&path, files);
-        } else if path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| matches!(value, "rs" | "py" | "ps1" | "mjs" | "js" | "sh" | "lua"))
-        {
+        } else if path.extension().and_then(|value| value.to_str()).is_some_and(|value| {
+            matches!(value, "rs" | "py" | "ps1" | "mjs" | "js" | "sh" | "lua" | "luau")
+        }) {
             files.push(path);
         }
     }

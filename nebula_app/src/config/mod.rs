@@ -15,6 +15,7 @@ pub mod bell;
 pub mod color;
 pub mod cursor;
 pub mod debug;
+pub mod desktop;
 pub mod font;
 pub mod general;
 pub mod lua;
@@ -24,6 +25,7 @@ pub mod reload;
 pub mod scrolling;
 pub mod selection;
 pub mod serde_utils;
+pub mod shaders;
 pub mod source;
 pub mod template;
 pub mod terminal;
@@ -94,7 +96,7 @@ impl Display for Error {
             Error::Toml(err) => write!(f, "Config error: {err}"),
             Error::TomlSe(err) => write!(f, "Yaml conversion error: {err}"),
             Error::Yaml(err) => write!(f, "Config error: {err}"),
-            Error::Lua(err) => write!(f, "Lua config error: {err}"),
+            Error::Lua(err) => write!(f, "Luau config error: {err}"),
         }
     }
 }
@@ -216,7 +218,7 @@ fn profile_command_key(command: &str) -> String {
 /// Load configuration file and log errors.
 pub fn load_source(source: &source::ConfigSource) -> Result<LoadedConfig> {
     let result: Result<LoadedConfig> = match source.format {
-        source::ConfigFormat::Lua => {
+        source::ConfigFormat::Luau => {
             lua::load_lua_file(&source.primary_path, lua::runtime::ReloadSignal::default())
                 .map(|loaded| {
                     for diagnostic in &loaded.diagnostics {
