@@ -36,6 +36,21 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class HomeSessionsTest {
+    @Test fun pairedComputerShowsBothSavedRoutesAndOneClickableRow() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        fun profile(mode: String) = RelayProfile("wss://$mode.example.com", mode, "a".repeat(43), "Paired computer",
+            "sha256/${"a".repeat(43)}=", mode, SecureRelayProfile("b".repeat(43), "grant-$mode", "c".repeat(43), false))
+        val saved = RelayProfile.latestByComputer(listOf(profile("lan"), profile("relay"))).single()
+        var selected: RelayProfile? = null
+        compose.setContent { MaterialTheme {
+            ComputerRows(emptyList(), listOf(saved), {}, { selected = it }, {})
+        } }
+        compose.onNodeWithText(context.getString(R.string.computer_lan_relay), substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText("Paired computer").assertCountEquals(1)
+        compose.onNodeWithText("Paired computer").performClick()
+        assertSame(saved, selected)
+    }
+
     @Test fun terminalHeaderActionsStayCompactAndKeepSeparateTouchTargets() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val opened = mutableListOf<String>()

@@ -264,4 +264,5 @@
     <string name="computer_address">Computer address and port</string>
     <string name="computer_address_hint">Use the address shown in the computer’s Phone Remote settings. Pairing and permissions stay unchanged. The address is saved after connecting successfully.</string>
     <string name="computer_address_invalid">Enter a valid computer address and port.</string>
+    <string name="computer_lan_relay">LAN + Relay</string>
 </resources>

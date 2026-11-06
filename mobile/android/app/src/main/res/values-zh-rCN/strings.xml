@@ -264,4 +264,5 @@
     <string name="computer_address">电脑地址与端口</string>
     <string name="computer_address_hint">填写电脑“手机远程”设置中显示的地址。保留原配对和权限，连接成功后才保存新地址。</string>
     <string name="computer_address_invalid">请输入有效的电脑地址和端口。</string>
+    <string name="computer_lan_relay">局域网 + 中转</string>
 </resources>
