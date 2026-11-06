@@ -773,6 +773,7 @@ impl SettingsPane {
             "dim_inactive_panes" => flag!(dim_inactive_panes),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
+            "static_tab_titles" => flag!(static_tab_titles),
             "terminal_proxy" => flag!(terminal_proxy),
             "refresh_environment" => flag!(refresh_environment),
             "powerline" => flag!(powerline),
@@ -1388,6 +1389,13 @@ impl SettingsPane {
             )
             .child(
                 self.group(language.pick("标签与窗口", "Tabs and windows"), cx)
+                    .child(self.switch_row(
+                        "static_tab_titles",
+                        language.pick("标签标题固定为目录名", "Keep tab titles on the directory"),
+                        help("static_tab_titles", language),
+                        self.runtime.static_tab_titles,
+                        cx,
+                    ))
                     .child(self.select_row(
                         "tabs_position",
                         language.pick("标签栏位置", "Tab bar position"),

@@ -646,7 +646,8 @@
       "restores_tabs_layout_and_directories": "Restores tabs, layout and directories, not the original processes.",
       "restored_tabs_start_new_shells": "Restored tabs start new shells; terminated programs are not resumed.",
       "continues_the_previous_conversation_when": "Continues the previous conversation when restoring an AI tab.",
-      "shows_ai_session_status_in": "Shows AI session status in the notification area."
+      "shows_ai_session_status_in": "Shows AI session status in the notification area.",
+      "tab_titles_stay_on_the_directory": "Tab titles follow the AI task title; turn this on to keep the directory name."
     },
     "pane": {
       "restore_default": "Restore default",

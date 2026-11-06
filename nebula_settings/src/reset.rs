@@ -27,6 +27,7 @@ const RESET_KEYS: &[&str] = &[
     "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
+    "static_tab_titles",
     "terminal_proxy",
     "refresh_environment",
     "powerline",

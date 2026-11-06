@@ -646,7 +646,8 @@
       "restores_tabs_layout_and_directories": "恢复标签、布局和目录，不恢复原进程。",
       "restored_tabs_start_new_shells": "恢复的标签会启动新的 Shell，不会让已结束的程序继续运行。",
       "continues_the_previous_conversation_when": "恢复 AI 标签时，继续上次的对话。",
-      "shows_ai_session_status_in": "在通知区域查看 AI 会话状态。"
+      "shows_ai_session_status_in": "在通知区域查看 AI 会话状态。",
+      "tab_titles_stay_on_the_directory": "关闭时标签跟随 AI 任务标题；开启后固定为目录名。"
     },
     "pane": {
       "restore_default": "还原为默认值",
