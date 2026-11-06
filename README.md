@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
 </p>
 
 ---
@@ -79,11 +79,11 @@ For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](ma
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-04.jpg"><img src="extra/community/wechat-group-2026-11-04.jpg" alt="QR code for the Pebrel WeChat group, valid before November 4, 2026" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-11.jpg"><img src="extra/community/wechat-group-2026-11-11.jpg" alt="QR code for the Pebrel WeChat group, valid before November 11, 2026" width="300" /></a>
 </p>
 
 <p align="center">
-  Scan with WeChat to join. Valid before November 4, 2026. Click the image to view full size.
+  Scan with WeChat to join. Valid before November 11, 2026. Click the image to view full size.
 </p>
 
 ## One Workspace
@@ -304,6 +304,11 @@ Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 Pebrel includes third-party terminal, interface and font components. Their
 provenance, copyright and license notices are preserved in
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
+
+<p>Thanks to <a href="https://molchuan.com/"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="extra/logo/acknowledgement_1molchuan_dark.png">
+  <img alt="1molchuan" src="extra/logo/acknowledgement_1molchuan_light.png" width="120">
+</picture></a> for providing extra support for Pebrel's development.</p>
 
 ## Community
 
