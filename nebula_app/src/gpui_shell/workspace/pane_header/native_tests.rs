@@ -153,6 +153,28 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
     window.update(|window, cx| {
         assert!(views[0].read(cx).focus_handle(cx).is_focused(window));
     });
+    for (keys, leaves) in [
+        ("ctrl-alt-shift-left", [ids[2], ids[0], ids[1]]),
+        ("ctrl-alt-shift-up", [ids[2], ids[0], ids[1]]),
+        ("ctrl-alt-shift-right", [ids[2], ids[1], ids[0]]),
+    ] {
+        window.run_until_parked();
+        window.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        window.simulate_keystrokes(keys);
+        workspace.read_with(&window, |workspace, _| {
+            let WorkspaceTab::Terminal { tree, panes, focused, .. } = &workspace.tabs[0] else {
+                panic!()
+            };
+            assert_eq!(tree.leaves(), leaves, "{keys}");
+            assert_eq!(*focused, ids[0], "the moved pane keeps focus");
+            assert_eq!(panes.iter().map(|pane| pane.view.clone()).collect::<Vec<_>>(), views);
+        });
+    }
+    window.update(|window, cx| {
+        assert!(views[0].read(cx).focus_handle(cx).is_focused(window));
+    });
     window.run_until_parked();
     window.update(|window, cx| {
         let _ = window.draw(cx);
