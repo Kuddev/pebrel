@@ -93,6 +93,61 @@ pub(crate) fn save(
     save_at(&nebula_settings::settings_path(), expected, updates)
 }
 
+pub(crate) struct ThemeDeletion {
+    pub(crate) revision: PreferenceRevision,
+    pub(crate) switched_to_default: bool,
+    pub(crate) delete_error: Option<String>,
+}
+
+/// Retire an active reference before removing its file. A failed preference
+/// write leaves the library untouched; a later delete failure keeps the theme
+/// file and reports that the default has already been applied.
+pub(crate) fn delete_custom_theme(
+    store: &super::ThemeLibraryStore,
+    document: &ThemeDocument,
+    expected: &PreferenceRevision,
+    fallback_updates: &[(&str, String)],
+) -> io::Result<ThemeDeletion> {
+    delete_at(&nebula_settings::settings_path(), store, document, expected, fallback_updates)
+}
+
+fn delete_at(
+    path: &Path,
+    store: &super::ThemeLibraryStore,
+    document: &ThemeDocument,
+    expected: &PreferenceRevision,
+    fallback_updates: &[(&str, String)],
+) -> io::Result<ThemeDeletion> {
+    validate_updates(fallback_updates)?;
+    if document.is_builtin() {
+        return Err(io::Error::other("built-in themes cannot be deleted"));
+    }
+    let id = document.id().ok_or_else(|| io::Error::other("custom theme has no id"))?;
+    let _lock = crate::atomic_file::try_lifetime_lock(path)?.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::WouldBlock, "settings are being saved by another window")
+    })?;
+    let current = read_at(path)?;
+    if current != *expected {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "settings changed outside this dialog; reload before deleting the theme",
+        ));
+    }
+    // Preflight avoids switching appearance for a stale request. Deletion checks
+    // the same snapshot again under the library locks before removing any file.
+    if store.load(id).map_err(io::Error::other)? != *document {
+        return Err(io::Error::other("theme changed outside this dialog; reload before deleting"));
+    }
+    let text = std::str::from_utf8(current.0.as_deref().unwrap_or_default())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let raw = nebula_settings::RawSettings::from_text(text);
+    let switched_to_default = raw.value("custom_theme") == Some(id);
+    let revision =
+        if switched_to_default { save_locked(path, &current, fallback_updates)? } else { current };
+    let delete_error = store.delete_unchanged(document).err().map(|error| error.to_string());
+    Ok(ThemeDeletion { revision, switched_to_default, delete_error })
+}
+
 fn read_at(path: &Path) -> io::Result<PreferenceRevision> {
     let file = match File::open(path) {
         Ok(file) => file,
@@ -117,6 +172,14 @@ fn save_at(
     expected: &PreferenceRevision,
     updates: &[(&str, String)],
 ) -> io::Result<PreferenceRevision> {
+    validate_updates(updates)?;
+    let _lock = crate::atomic_file::try_lifetime_lock(path)?.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::WouldBlock, "settings are being saved by another window")
+    })?;
+    save_locked(path, expected, updates)
+}
+
+fn validate_updates(updates: &[(&str, String)]) -> io::Result<()> {
     if updates.iter().any(|(key, value)| {
         key.is_empty() || key.contains(['=', '\r', '\n']) || value.contains(['\r', '\n'])
     }) {
@@ -125,9 +188,14 @@ fn save_at(
             "a setting key or value contains a line separator",
         ));
     }
-    let _lock = crate::atomic_file::try_lifetime_lock(path)?.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::WouldBlock, "settings are being saved by another window")
-    })?;
+    Ok(())
+}
+
+fn save_locked(
+    path: &Path,
+    expected: &PreferenceRevision,
+    updates: &[(&str, String)],
+) -> io::Result<PreferenceRevision> {
     let current = read_at(path)?;
     if current != *expected {
         return Err(io::Error::new(
@@ -351,5 +419,138 @@ mod tests {
         std::fs::write(&path, vec![b'x'; MAX_PREFERENCE_BYTES + 1]).unwrap();
         assert_eq!(read_at(&path).unwrap_err().kind(), io::ErrorKind::InvalidData);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), (MAX_PREFERENCE_BYTES + 1) as u64);
+    }
+    fn deletion_fixture()
+    -> (tempfile::TempDir, super::super::ThemeLibraryStore, ThemeDocument, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = super::super::ThemeLibraryStore::new(dir.path().join("themes"));
+        let document = store
+            .import(
+                &super::super::builtin_document(nebula_settings::ThemeName::Nord).unwrap(),
+                Some("Saved theme"),
+            )
+            .unwrap();
+        let path = dir.path().join("settings.txt");
+        (dir, store, document, path)
+    }
+
+    fn deletion_fallback() -> Vec<(&'static str, String)> {
+        vec![("theme", "OneDark".to_owned()), ("custom_theme", String::new())]
+    }
+
+    #[test]
+    fn deleting_active_theme_publishes_default_and_preserves_other_settings() {
+        let (_dir, store, theme, path) = deletion_fixture();
+        std::fs::write(
+            &path,
+            format!(
+                "theme=Nord\ncustom_theme={}\nfont_size=18\nunknown=keep\n",
+                theme.id().unwrap()
+            ),
+        )
+        .unwrap();
+        let result =
+            delete_at(&path, &store, &theme, &read_at(&path).unwrap(), &deletion_fallback())
+                .unwrap();
+        assert!(result.switched_to_default);
+        assert!(result.delete_error.is_none());
+        assert_eq!(read_at(&path).unwrap(), result.revision);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let runtime = nebula_settings::RuntimeSettings::from_raw(
+            &nebula_settings::RawSettings::from_text(&text),
+        );
+        assert_eq!(runtime.theme, nebula_settings::ThemeName::OneDark);
+        assert_eq!(runtime.custom_theme, None);
+        assert!(text.contains("font_size=18\nunknown=keep"));
+        assert!(matches!(
+            store.load(theme.id().unwrap()),
+            Err(super::super::StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn deleting_inactive_theme_keeps_preference_bytes_unchanged() {
+        let (_dir, store, theme, path) = deletion_fixture();
+        let original = b"# personal\r\ntheme=Nord\r\ncustom=keep\r\n";
+        std::fs::write(&path, original).unwrap();
+        let revision = read_at(&path).unwrap();
+        let result = delete_at(&path, &store, &theme, &revision, &deletion_fallback()).unwrap();
+        assert!(!result.switched_to_default);
+        assert!(result.delete_error.is_none());
+        assert_eq!(result.revision, revision);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn stale_theme_or_preferences_cannot_delete_or_change_appearance() {
+        let (_dir, store, theme, path) = deletion_fixture();
+        let original = format!("theme=Nord\ncustom_theme={}\n", theme.id().unwrap());
+        std::fs::write(&path, &original).unwrap();
+        let revision = read_at(&path).unwrap();
+        std::fs::write(&path, "theme=Paper\n").unwrap();
+        assert!(delete_at(&path, &store, &theme, &revision, &deletion_fallback()).is_err());
+        assert_eq!(store.load(theme.id().unwrap()).unwrap(), theme);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theme=Paper\n");
+
+        std::fs::write(&path, &original).unwrap();
+        let changed = theme.with_name("Changed externally").unwrap();
+        std::fs::write(
+            store.path_for(theme.id().unwrap()).unwrap(),
+            changed.to_json_bytes().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            store.delete_unchanged(&theme).is_err(),
+            "same-revision external edits must survive"
+        );
+        assert!(delete_at(&path, &store, &theme, &revision, &deletion_fallback()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(store.load(theme.id().unwrap()).unwrap(), changed);
+    }
+
+    #[test]
+    fn failed_preferences_leave_theme_and_settings_untouched() {
+        let (_dir, store, theme, path) = deletion_fixture();
+        let original = format!("custom_theme={}\n", theme.id().unwrap());
+        std::fs::write(&path, &original).unwrap();
+        let revision = read_at(&path).unwrap();
+        let lock = crate::atomic_file::try_lifetime_lock(&path).unwrap().unwrap();
+        assert_eq!(
+            delete_at(&path, &store, &theme, &revision, &deletion_fallback()).err().unwrap().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(lock);
+        assert!(
+            delete_at(&path, &store, &theme, &revision, &[("theme", "bad\nvalue".into())]).is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(store.load(theme.id().unwrap()).unwrap(), theme);
+    }
+
+    #[test]
+    fn blocked_delete_reports_partial_success_without_a_dangling_active_theme() {
+        let (_dir, store, theme, path) = deletion_fixture();
+        std::fs::write(&path, format!("custom_theme={}\n", theme.id().unwrap())).unwrap();
+        let theme_path = store.path_for(theme.id().unwrap()).unwrap();
+        let lock = crate::atomic_file::try_lifetime_lock(&theme_path).unwrap().unwrap();
+        let result =
+            delete_at(&path, &store, &theme, &read_at(&path).unwrap(), &deletion_fallback())
+                .unwrap();
+        assert!(result.switched_to_default);
+        assert!(result.delete_error.is_some());
+        assert_eq!(store.load(theme.id().unwrap()).unwrap(), theme);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            nebula_settings::RuntimeSettings::from_raw(&nebula_settings::RawSettings::from_text(
+                &text
+            ))
+            .custom_theme,
+            None
+        );
+        drop(lock);
+        let retried =
+            delete_at(&path, &store, &theme, &result.revision, &deletion_fallback()).unwrap();
+        assert!(retried.delete_error.is_none());
+        assert!(!retried.switched_to_default);
     }
 }

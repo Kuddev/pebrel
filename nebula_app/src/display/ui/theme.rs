@@ -33,6 +33,7 @@ pub enum NebulaTheme {
     CoalDark,
     LinenLight,
     MossDark,
+    OneDark,
     Nord,
     NordLight,
     Paper,
@@ -54,7 +55,7 @@ impl Default for NebulaTheme {
     /// 这里通过稳定的 prompt 名桥接而不是再写一份枚举映射：`ThemeName` 和
     /// `NebulaTheme` 是两个 crate 里的两个枚举，各存一份字面量默认值就会在
     /// 「改了出厂主题但只改了一处」时让两壳分家 —— 圆角默认值当初正是这样漏出
-    /// 一圈白边的。名字对不上时回落到 Nord，与真源当前的默认一致。
+    /// 一圈白边的。名字对不上时回落到 Nord，与真源的原有默认一致。
     fn default() -> Self {
         Self::from_prompt_name(nebula_settings::ThemeName::default().prompt_name())
             .unwrap_or(Self::Nord)
@@ -71,6 +72,7 @@ impl NebulaTheme {
     /// user's choice to Steel.
     pub(crate) fn for_system_appearance(self, is_light: bool) -> Self {
         match (self, is_light) {
+            (Self::OneDark, _) => Self::OneDark,
             (Self::Nebula, true) => Self::SilverLight,
             (Self::Nebula, false) => Self::Nebula,
             (Self::SilverLight | Self::SteelDark, true) => Self::SilverLight,
@@ -104,6 +106,7 @@ impl NebulaTheme {
             Self::CoalDark => "Coal Dark",
             Self::LinenLight => "Linen Light",
             Self::MossDark => "Moss Dark",
+            Self::OneDark => "One Dark",
             Self::Nord => "Nord",
             Self::Paper => "Warm Sand",
             Self::NordLight => "Nord Light",
@@ -130,6 +133,7 @@ impl NebulaTheme {
             Self::CoalDark => "Theme: Coal Dark",
             Self::LinenLight => "Theme: Linen Light",
             Self::MossDark => "Theme: Moss Dark",
+            Self::OneDark => "Theme: One Dark",
             Self::Nord => "Theme: Nord",
             Self::Paper => "Theme: Warm Sand",
             Self::NordLight => "Theme: Nord Light",
@@ -155,6 +159,7 @@ impl NebulaTheme {
             Self::CoalDark => "CoalDark",
             Self::LinenLight => "LinenLight",
             Self::MossDark => "MossDark",
+            Self::OneDark => "OneDark",
             Self::Nord => "Nord",
             Self::Paper => "WarmSand",
             Self::NordLight => "NordLight",
@@ -182,6 +187,7 @@ impl NebulaTheme {
             "CoalDark" => Self::CoalDark,
             "LinenLight" => Self::LinenLight,
             "MossDark" => Self::MossDark,
+            "OneDark" | "One Dark" => Self::OneDark,
             "Nord" => Self::Nord,
             "Paper" | "WarmSand" => Self::Paper,
             "NordLight" => Self::NordLight,
@@ -209,6 +215,7 @@ impl NebulaTheme {
             Self::SteelDark => "Steel",
             Self::CoalDark => "Coal",
             Self::MossDark => "Moss",
+            Self::OneDark => "One Dark",
             Self::Nord => "Nord",
             Self::Paper => "Warm Sand",
             Self::NordLight => "Nord Light",
@@ -224,7 +231,8 @@ impl NebulaTheme {
     /// themes a light one).
     pub(crate) fn accent(self) -> Rgb {
         match self {
-            Self::NordLight
+            Self::OneDark
+            | Self::NordLight
             | Self::Paper
             | Self::BreezeLight
             | Self::BreezeDark
@@ -374,7 +382,8 @@ impl NebulaTheme {
     /// theme switch retroactively, which users read as "the prompt is stuck").
     pub(crate) fn powerline_colors(self) -> [Rgb; 8] {
         match self {
-            Self::NordLight
+            Self::OneDark
+            | Self::NordLight
             | Self::Paper
             | Self::BreezeLight
             | Self::BreezeDark
@@ -940,6 +949,24 @@ pub(crate) fn write_nebula_prompt_theme(theme: NebulaTheme) {
 #[cfg(test)]
 mod tests {
     use super::NebulaTheme;
+
+    #[test]
+    fn one_dark_keeps_its_identity_and_exact_chrome_colors() {
+        assert_eq!(NebulaTheme::default(), NebulaTheme::Nord);
+        let theme = NebulaTheme::OneDark;
+        assert_eq!(theme.label(), "One Dark");
+        assert_eq!(theme.short_label(), "One Dark");
+        assert_eq!(theme.prompt_name(), "OneDark");
+        for is_light in [false, true] {
+            assert_eq!(theme.for_system_appearance(is_light), theme);
+        }
+        let palette = theme.palette();
+        assert!(!palette.is_light);
+        assert_eq!(palette.term_bg, super::Rgb::new(0x28, 0x2c, 0x34));
+        let skin = theme.skin();
+        assert_eq!(skin.ink, super::Rgb::new(0xab, 0xb2, 0xbf));
+        assert_eq!(skin.accent, super::Rgb::new(0x61, 0xaf, 0xef));
+    }
 
     #[test]
     fn system_appearance_keeps_the_selected_theme_family() {

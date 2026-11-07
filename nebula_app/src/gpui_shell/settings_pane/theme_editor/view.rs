@@ -382,6 +382,11 @@ impl SettingsPane {
     ) -> Option<gpui::AnyElement> {
         let editor = self.theme_editor.as_ref()?;
         let language = crate::gpui_shell::config::ui_language(cx);
+        let title = language.text(if editor.fork_source {
+            Message::ThemeEditorTitle
+        } else {
+            Message::ThemeEditorEditTitle
+        });
         let colors = AppearanceColors::current(cx);
         let viewport = window.viewport_size();
         let compact = f32::from(viewport.width) < 760.0;
@@ -438,7 +443,7 @@ impl SettingsPane {
             .id("theme-editor-dialog")
             .debug_selector(|| "theme-editor-dialog".to_owned())
             .role(Role::Dialog)
-            .aria_label(language.text(Message::ThemeEditorTitle))
+            .aria_label(title)
             .w(px(width))
             .h(px(height))
             .max_h(px(f32::from(viewport.height) - 28.0))
@@ -490,12 +495,7 @@ impl SettingsPane {
                                     .min_w_0()
                                     .flex_1()
                                     .gap(px(3.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(22.0))
-                                            .font_semibold()
-                                            .child(language.text(Message::ThemeEditorTitle)),
-                                    )
+                                    .child(div().text_size(px(22.0)).font_semibold().child(title))
                                     .child(
                                         div()
                                             .text_size(px(11.0))
@@ -794,7 +794,11 @@ impl SettingsPane {
                             )),
                     )
                     .child(div().text_size(px(11.0)).text_color(colors.secondary).child(
-                        language.format(Message::ThemeEditorBasedOn, &[("name", &source_name)]),
+                        if editor.fork_source {
+                            language.format(Message::ThemeEditorBasedOn, &[("name", &source_name)])
+                        } else {
+                            language.text(Message::ThemeEditorEditHint).to_owned()
+                        },
                     )),
             )
             .when(editor.templates_loading, |view| {

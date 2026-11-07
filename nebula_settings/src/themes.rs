@@ -13,7 +13,7 @@ pub struct FreshPalette {
 
 impl ThemeName {
     /// The only catalog of selectable built-ins. Retired identifiers remain readable.
-    pub const BUILTIN: [Self; 16] = [
+    pub const BUILTIN: [Self; 17] = [
         Self::BreezeLight,
         Self::BreezeDark,
         Self::MintLight,
@@ -30,6 +30,7 @@ impl ThemeName {
         Self::CatppuccinMacchiato,
         Self::GlassLight,
         Self::GlassDark,
+        Self::OneDark,
     ];
 
     pub const BUILTIN_NAMES: [&'static str; Self::BUILTIN.len()] = {
@@ -120,6 +121,23 @@ impl ReviewedPalette {
 impl ThemeName {
     pub const fn reviewed_palette(self) -> ReviewedPalette {
         match self.available() {
+            // User-supplied One Dark theme; keep terminal and chrome colors exact.
+            Self::OneDark => ReviewedPalette {
+                shell: [0x21, 0x25, 0x2b],
+                background: [0x28, 0x2c, 0x34],
+                foreground: [0xab, 0xb2, 0xbf],
+                muted: [0x63, 0x6d, 0x83],
+                accent: [0x61, 0xaf, 0xef],
+                selected: [0x3e, 0x44, 0x51, 255],
+                line: [0x3e, 0x44, 0x51, 255],
+                red: [0xe0, 0x6c, 0x75],
+                green: [0x98, 0xc3, 0x79],
+                yellow: [0xe5, 0xc0, 0x7b],
+                blue: [0x61, 0xaf, 0xef],
+                purple: [0xc6, 0x78, 0xdd],
+                cyan: [0x56, 0xb6, 0xc2],
+                frame: [0x5c, 0x63, 0x70],
+            },
             Self::BreezeLight => ReviewedPalette {
                 shell: [0xea, 0xf0, 0xf6],
                 background: [0xf9, 0xfb, 0xff],
@@ -391,6 +409,10 @@ impl ThemeName {
 pub(crate) fn fresh_terminal(name: ThemeName) -> TermTheme {
     let palette = name.fresh_palette().expect("fresh theme");
     let ansi = match name {
+        ThemeName::OneDark => [
+            0x3f4451, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xabb2bf,
+            0x5c6370, 0xff7b86, 0xb2e08c, 0xffd685, 0x79c0ff, 0xd2a8ff, 0x76e3ea, 0xffffff,
+        ],
         ThemeName::NordLight => [
             0x2e3440, 0xa3434c, 0x506b3e, 0x826323, 0x4c6a87, 0x805578, 0x376d76, 0x4c566a,
             0x596579, 0x933e47, 0x466034, 0x74571c, 0x405d79, 0x71496a, 0x2d626b, 0x3b4252,
@@ -437,18 +459,25 @@ pub(crate) fn fresh_terminal(name: ThemeName) -> TermTheme {
     // Preserve Paper's user-provided cursor and selection when reading old
     // preferences. New explicit theme choices still use the shared UI palette.
     let inherit_terminal_marks = name == ThemeName::Paper;
+    let mut exact = ExactTermColors {
+        foreground: palette.foreground,
+        ansi,
+        cursor: (!inherit_terminal_marks).then_some(palette.accent),
+        cursor_text: (!inherit_terminal_marks).then_some(palette.surface),
+        cursor_stroke: (!inherit_terminal_marks).then_some(palette.accent),
+        selection_foreground: (!inherit_terminal_marks).then_some(palette.foreground),
+        selection_background: (!inherit_terminal_marks).then_some(palette.shell),
+    };
+    if name == ThemeName::OneDark {
+        exact.cursor = Some([0xe5, 0xe9, 0xf0]);
+        exact.cursor_text = Some([0x2e, 0x34, 0x40]);
+        exact.cursor_stroke = Some([0x88, 0xc0, 0xd0]);
+        exact.selection_background = Some([0x3e, 0x44, 0x51]);
+    }
     TermTheme {
         background: palette.surface,
         is_light: palette.is_light,
-        exact: Some(ExactTermColors {
-            foreground: palette.foreground,
-            ansi,
-            cursor: (!inherit_terminal_marks).then_some(palette.accent),
-            cursor_text: (!inherit_terminal_marks).then_some(palette.surface),
-            cursor_stroke: (!inherit_terminal_marks).then_some(palette.accent),
-            selection_foreground: (!inherit_terminal_marks).then_some(palette.foreground),
-            selection_background: (!inherit_terminal_marks).then_some(palette.shell),
-        }),
+        exact: Some(exact),
         powerline: [
             palette.accent,
             palette.surface,
@@ -467,6 +496,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn one_dark_is_available_without_replacing_the_factory_default() {
+        assert_eq!(ThemeName::default(), ThemeName::Nord);
+        assert_eq!(ThemeName::OneDark.prompt_name(), "OneDark");
+        assert!(ThemeName::BUILTIN.contains(&ThemeName::OneDark));
+        for text in ["", "theme=NoSuchTheme\n"] {
+            let runtime = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(text));
+            assert_eq!(runtime.theme, ThemeName::Nord);
+        }
+        for text in ["theme=OneDark\n", "theme=One Dark\n"] {
+            let runtime = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(text));
+            assert_eq!(runtime.theme, ThemeName::OneDark);
+        }
+        for name in ThemeName::BUILTIN {
+            let text = format!("theme={}\n", name.prompt_name());
+            let runtime = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(&text));
+            assert_eq!(runtime.theme, name);
+        }
+    }
+
+    #[test]
     fn renamed_light_themes_accept_old_preferences_and_use_canonical_names() {
         for (old, current, expected) in [
             ("Paper", "WarmSand", ThemeName::Paper),
@@ -481,7 +530,6 @@ mod tests {
             assert!(ThemeName::BUILTIN_NAMES.contains(&current));
             assert!(!ThemeName::BUILTIN_NAMES.contains(&old));
         }
-        assert_eq!(ThemeName::default(), ThemeName::Nord);
         assert!(ThemeName::BUILTIN.contains(&ThemeName::NordLight));
         assert!(ThemeName::NordLight.term_theme().is_light);
     }

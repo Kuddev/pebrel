@@ -190,6 +190,7 @@ pub(super) const ITEMS: &[PaletteItem] = &[
     theme_item(NebulaTheme::CatppuccinMacchiato, "theme 主题 catppuccin macchiato dark"),
     theme_item(NebulaTheme::GlassLight, "theme 主题 slate light glass 雾霾 冷灰"),
     theme_item(NebulaTheme::GlassDark, "theme 主题 glass dark"),
+    theme_item(NebulaTheme::OneDark, "theme 主题 one dark onedark"),
 ];
 
 #[cfg(test)]

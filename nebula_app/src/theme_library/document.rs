@@ -1003,6 +1003,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn one_dark_builtin_matches_the_supplied_theme_document() {
+        let supplied = ThemeDocument::from_json_bytes(include_bytes!(
+            "../../tests/fixtures/themes/one-dark.pebrel-theme.json"
+        ))
+        .expect("user-supplied One Dark theme");
+        let expected = supplied.definition().expect("supplied theme definition");
+        let definition = ThemeDefinition::from_builtin(ThemeName::OneDark);
+        assert_eq!(definition.name, "One Dark");
+        assert_eq!(definition, expected);
+        let builtin = builtin_document(ThemeName::OneDark).expect("built-in One Dark");
+        assert!(builtin.is_builtin());
+        assert_eq!(builtin.name(), "One Dark");
+        assert_eq!(builtin.definition().expect("built-in theme definition"), expected);
+        let exported = builtin.to_json_bytes().expect("export One Dark");
+        let restored = ThemeDocument::from_json_bytes(&exported).expect("reimport One Dark");
+        assert_eq!(restored.definition().expect("reimported theme definition"), expected);
+    }
+
+    #[test]
     fn builtins_produce_one_valid_document_per_catalog_entry() {
         let documents = builtin_documents();
         assert_eq!(documents.len(), ThemeName::BUILTIN.len());

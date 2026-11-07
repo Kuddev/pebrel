@@ -28,11 +28,12 @@ fn appearance_theme_catalog_matches_the_approved_gallery_order() {
             "Catppuccin Frappé",
             "Catppuccin Macchiato",
             "Slate Light",
-            "Glass Dark"
+            "Glass Dark",
+            "One Dark"
         ]
     );
     assert_eq!(themes.choices(1).len(), 9);
-    assert_eq!(themes.choices(2).len(), 7);
+    assert_eq!(themes.choices(2).len(), 8);
     for choice in themes.choices(0) {
         assert_ne!(themes.choices(1).contains(&choice), themes.choices(2).contains(&choice));
     }
@@ -51,9 +52,12 @@ fn appearance_icon_filters_cover_each_catalog_entry_once() {
 #[test]
 fn appearance_theme_confirmation_preserves_icon_and_other_settings() {
     let initial = "theme=Nebula\nfollow_system_theme=1\napp_icon=graphite-violet\nbackground=#111111\nfont_size=17\nshell=cmd\n";
-    for theme in
-        [ThemeName::LinenLight, ThemeName::CatppuccinFrappe, ThemeName::CatppuccinMacchiato]
-    {
+    for theme in [
+        ThemeName::OneDark,
+        ThemeName::LinenLight,
+        ThemeName::CatppuccinFrappe,
+        ThemeName::CatppuccinMacchiato,
+    ] {
         let updates = AppearanceSelection::Theme(theme).updates();
         let updated = nebula_settings::apply_updates(initial, &updates);
         let runtime = RuntimeSettings::from_raw(&nebula_settings::RawSettings::from_text(&updated));
