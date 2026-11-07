@@ -25,4 +25,8 @@
     <string name="chat_exit_immersive">Exit immersive reading</string>
     <string name="chat_python_missing">Conversation view needs python3 on the server.</string>
     <string name="chat_terminal_unknown">This connection\'s terminal could not be identified on the server.</string>
+    <plurals name="chat_files_changed">
+        <item quantity="one">%1$d file changed</item>
+        <item quantity="other">%1$d files changed</item>
+    </plurals>
 </resources>

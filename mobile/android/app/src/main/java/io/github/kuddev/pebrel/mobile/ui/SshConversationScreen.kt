@@ -27,6 +27,6 @@ fun SshConversationScreen(session: LocalSession, kind: String, repository: Sessi
     )
     ConversationView(client, host, repository, onTerminal) { onImmersive ->
         TerminalHeader(session.title, session.source, session.status, onTerminal, onSessions,
-            conversationActive = true, standalone = false, onImmersive = onImmersive)
+            onConversation = onTerminal, conversationActive = true, standalone = false, onImmersive = onImmersive)
     }
 }

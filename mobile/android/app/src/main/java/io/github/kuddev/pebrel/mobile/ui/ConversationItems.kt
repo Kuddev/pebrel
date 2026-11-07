@@ -31,6 +31,9 @@ internal sealed interface ChatItem {
     data class Tool(override val key: String, val kind: ToolKind, val name: String?, val summary: String,
                     val input: String, val output: String?, val state: ToolState, val truncated: Boolean) : ChatItem
 
+    /** What one turn changed, after its last tool call. */
+    data class Changes(override val key: String, val files: List<String>) : ChatItem
+
     /** A structured question shown natively. Answers stay with the desktop's prompt projection. */
     data class Question(override val key: String, val questions: List<AskedQuestion>, val answered: Boolean) : ChatItem
 }
@@ -60,8 +63,27 @@ internal class ConversationTimelineBuilder(private val style: ChatMarkdownStyle)
             item
         }
         documents = parsed
-        return items.distinctBy { it.key }
+        return withChanges(items.distinctBy { it.key })
     }
+}
+
+/** Closes each turn with the files it edited; a turn ends at the next person's message or at the last item. */
+internal fun withChanges(items: List<ChatItem>): List<ChatItem> {
+    val result = ArrayList<ChatItem>(items.size + 4)
+    val files = LinkedHashSet<String>()
+    fun close(key: String) {
+        if (files.isNotEmpty()) result.add(ChatItem.Changes("changes:$key", files.toList()))
+        files.clear()
+    }
+    for (item in items) {
+        if (item is ChatItem.User) close(item.key)
+        result.add(item)
+        if (item is ChatItem.Tool && item.kind == ToolKind.Edit) {
+            files += item.summary.split(", ").map(String::trim).filter(String::isNotEmpty)
+        }
+    }
+    close("tail")
+    return result
 }
 
 internal fun toolItem(message: ConversationMessage, conversationState: String): ChatItem {

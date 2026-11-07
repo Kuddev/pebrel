@@ -58,10 +58,10 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
     if (!focused) TerminalHeader(session.title,
         if (session.source == "Local") stringResource(R.string.local_device) else session.source,
         session.status, onBack, onSessions, { closing = true }, onFiles = onFiles,
+        onConversation = agent?.let { kind -> onConversation?.let { open -> { open(kind) } } },
         detail = session.foreground?.label?.ifEmpty { null },
         onRemoteSessions = if (onAttachRemote != null && session.host != null && session.status == "ready") ({ remoteSessions = true }) else null)
     Column(Modifier.fillMaxSize()) {
-        if (!focused && agent != null && onConversation != null) SessionModeTabs(conversation = false) { onConversation(agent) }
         if (session.status == "ended" || (session.hasConnected && session.status != "ready"))
             TerminalDisconnected(session, if (session.host != null) retry else null)
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -133,10 +133,9 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     Column(Modifier.fillMaxSize()) {
     if (!focused) TerminalHeader(pane.displayTitle, desktop.host.name, desktop.status, onBack, onSessions,
         onGit = onGit.takeIf { pane.sshDestination == null }, gitEnabled = desktop.status == "ready",
-        onDetails = { showDetails = true },
+        onDetails = { showDetails = true }, onConversation = onConversation.takeIf { pane.agent != null },
         wrapLines = wrapLines, onToggleWrap = { repository.display.update { it.copy(desktopWrapLines = !it.desktopWrapLines) } })
     Column(Modifier.fillMaxSize()) {
-        if (!focused && pane.agent != null && onConversation != null) SessionModeTabs(conversation = false, onSwitch = onConversation)
         if (desktop.status != "ready") Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             val recovering = desktop.hasConnected && desktop.relayProfile != null && DesktopReconnect.retryable(desktop.failure)

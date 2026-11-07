@@ -41,6 +41,16 @@ class ConversationTimelineTest {
                         complete: Boolean = true, error: Boolean = false) =
         ConversationMessage(id, role, text, name, detail, complete, false, error)
 
+    @Test fun eachTurnClosesWithTheFilesItEdited() {
+        fun edit(id: String, input: String) = toolItem(message(id, "tool", input, "Edit"), "idle")
+        val user = ChatItem.User("u", "go", parseChatMarkdown("go", style), false)
+        val items = withChanges(listOf(edit("1", """{"file_path":"/a/b.kt"}"""), edit("2", """{"file_path":"/a/b.kt"}"""), user,
+            edit("3", """{"file_path":"/a/c.kt"}""")))
+        assertEquals(listOf(listOf("/a/b.kt"), listOf("/a/c.kt")), items.filterIsInstance<ChatItem.Changes>().map { it.files })
+        assertTrue(items[2] is ChatItem.Changes)
+        assertTrue(items.last() is ChatItem.Changes)
+    }
+
     @Test fun claudeAndCodexToolNamesShareKinds() {
         assertEquals(ToolKind.Shell, toolKind("Bash"))
         assertEquals(ToolKind.Shell, toolKind("exec_command"))
@@ -138,7 +148,7 @@ class ConversationTimelineTest {
         compose.setContent {
             MaterialTheme {
                 val clipboard = rememberReaderClipboard("test") {}
-                ChatTimeline(items, false, "Codex", rememberLazyListState(), PaddingValues(), hasOlder = false,
+                ChatTimeline(items, false, "", "Codex", rememberLazyListState(), PaddingValues(), hasOlder = false,
                     olderEnabled = false, onOlder = {}, actions = ChatActions(clipboard, {}, {}), modifier = Modifier.fillMaxSize())
             }
         }
