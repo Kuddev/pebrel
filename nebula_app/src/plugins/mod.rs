@@ -18,8 +18,8 @@ const MAX_JSON_BYTES: usize = 64 * 1024;
 const MAX_JSON_NODES: usize = 4096;
 const MAX_JSON_DEPTH: usize = 32;
 const MAX_LUA_MEMORY: usize = 8 * 1024 * 1024;
-const MAX_INSTRUCTIONS: usize = 1_000_000;
-const INSTRUCTION_QUANTUM: usize = 10_000;
+const MAX_INTERRUPTS: usize = 1_000_000;
+const INTERRUPT_QUANTUM: usize = 10_000;
 const MAX_RUNTIME_CALLS: usize = 16;
 
 #[derive(Clone, Debug, Serialize)]

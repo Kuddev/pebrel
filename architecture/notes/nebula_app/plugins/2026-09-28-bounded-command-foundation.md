@@ -6,6 +6,7 @@ Implemented command slice. It is not a resident UI host.
 
 The permission boundary is superseded by
 [core experience ownership](2026-10-01-core-experience-boundary.md); the original rationale below is retained.
+The Lua 5.4 runtime and instruction hooks are superseded by [Luau](../config/lua/2026-11-07-luau-runtime.md).
 
 ## Context
 
