@@ -104,7 +104,7 @@ internal fun ConversationView(client: ConversationSource, host: ConversationHost
     val items by produceState(emptyList<ChatItem>(), page.messages, page.state, builder) {
         value = withContext(Dispatchers.Default) { builder.build(page.messages, page.state) }
     }
-    val working = showsWorking(items, page.state)
+    val working = showsWorking(items, page.state) || page.activity.isNotEmpty()
 
     // Snapshot pushes carry task-state changes; read at once instead of waiting for the next poll.
     val signal = host.signal
@@ -201,7 +201,6 @@ internal fun ConversationView(client: ConversationSource, host: ConversationHost
                     modifier = Modifier.glass(CircleShape, GlassTier.Light, GlassLift.Raised))
             } else Column(Modifier.fillMaxWidth().glassBar()) {
                 header { immersive = true }
-                SessionModeTabs(conversation = true, onSwitch = onTerminal)
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp)) else Spacer(Modifier.height(2.dp))
             }
         },
@@ -274,7 +273,7 @@ internal fun ConversationView(client: ConversationSource, host: ConversationHost
         }
         CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalTextToolbar provides toolbar) {
             Box(Modifier.fillMaxSize()) {
-                ChatTimeline(items, working, agentName, listState, contentPadding,
+                ChatTimeline(items, working, page.activity, agentName, listState, contentPadding,
                     hasOlder = page.before != null, olderEnabled = !loading && host.ready, onOlder = {
                         if (!loading) {
                             loading = true

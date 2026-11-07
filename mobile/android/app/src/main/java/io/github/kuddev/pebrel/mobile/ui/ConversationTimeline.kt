@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -61,6 +62,7 @@ private const val PREVIEW_LINES = 40
 internal fun ChatTimeline(
     items: List<ChatItem>,
     working: Boolean,
+    activity: String,
     agentName: String,
     listState: LazyListState,
     contentPadding: PaddingValues,
@@ -82,10 +84,11 @@ internal fun ChatTimeline(
                 is ChatItem.User -> UserMessage(item, actions)
                 is ChatItem.Assistant -> AssistantMessage(item, agentName, actions)
                 is ChatItem.Tool -> ToolCard(item, actions)
+                is ChatItem.Changes -> ChangesRow(item)
                 is ChatItem.Question -> AskedQuestionCard(item, actions.onTerminal)
             }
         }
-        if (working) item("working", contentType = "working") { WorkingRow() }
+        if (working) item("working", contentType = "working") { WorkingRow(activity) }
     }
 }
 
@@ -387,10 +390,27 @@ private fun OptionRow(number: Int, label: String, description: String) {
 }
 
 @Composable
-private fun WorkingRow() {
+private fun ChangesRow(item: ChatItem.Changes) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f))
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(pluralStringResource(R.plurals.chat_files_changed, item.files.size, item.files.size),
+            style = MaterialTheme.typography.labelLarge)
+        item.files.take(CHANGED_FILES).forEach { file ->
+            Text(file.substringAfterLast('/'), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (item.files.size > CHANGED_FILES) Text("+${item.files.size - CHANGED_FILES}", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private const val CHANGED_FILES = 5
+
+@Composable
+private fun WorkingRow(activity: String) {
     Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.primary)
-        Text(stringResource(R.string.chat_working), style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(activity.ifEmpty { stringResource(R.string.chat_working) }, style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }

@@ -104,7 +104,14 @@ internal object TerminalPrompt {
     private val option = Regex("^([❯›>▶]\\s*)?(\\d{1,2})[.)]\\s+(.+)$")
     private val running = Regex("(?i)\\b(?:esc|ctrl\\+c) to interrupt\\b")
 
+    // "(12s · esc to interrupt)" keeps "(12s)", "(esc to interrupt)" goes whole, a bare trailing hint is cut.
+    private val hint = Regex("(?i)\\s*(?:\\(\\s*(?:esc|ctrl\\+c) to interrupt\\s*\\)|[·•]\\s*(?:esc|ctrl\\+c) to interrupt\\b|\\b(?:esc|ctrl\\+c) to interrupt\\b.*$)")
+
     fun isRunning(screen: String): Boolean = screen.lineSequence().toList().takeLast(12).any(running::containsMatchIn)
+
+    /** The status line an Agent keeps above its input, without the interrupt hint. */
+    fun activity(screen: String): String = screen.lineSequence().toList().takeLast(12).lastOrNull(running::containsMatchIn)
+        ?.replace(border, "")?.replace(hint, "")?.trim().orEmpty()
 
     fun parse(screen: String): ConversationPrompt? {
         val lines = screen.lines().takeLast(30).map { it.replace(border, "") }
@@ -149,11 +156,15 @@ internal class SshConversation(
     override val state: StateFlow<ConversationPage> = current.asStateFlow()
     private val reads = Mutex()
     private val input = Mutex()
+    // Transcripts are written a moment after input is accepted; until then the sent text is shown from here.
+    private var pending = emptyList<Pair<ConversationMessage, Long>>()
+    private var sent = 0
 
     private suspend fun screen(): String = terminal()?.screenText().orEmpty()
 
     override suspend fun refresh(older: Boolean): Boolean = reads.withLock {
-        val old = current.value
+        val previous = current.value
+        val old = previous.copy(messages = previous.messages.filterNot { it.id.startsWith(PENDING) })
         if (older && old.before == null) return@withLock false
         val request = JSONObject().put("mode", "read")
         if (older) request.put("before", old.before) else old.revision?.let { request.put("revision", it) }
@@ -180,7 +191,11 @@ internal class SshConversation(
         }
         val text = screen()
         val prompt = TerminalPrompt.parse(text)
-        val next = base.copy(messages = messages,
+        val users = messages.filter { it.role == "user" }.takeLast(pending.size + 4).map { it.text.trim() }
+        val waiting = System.currentTimeMillis() - PENDING_MILLIS
+        pending = pending.filter { (message, at) -> at > waiting && message.text.trim() !in users }
+        val running = TerminalPrompt.isRunning(text)
+        val next = base.copy(messages = messages + pending.map { it.first },
             revision = if (older) base.revision else response.optString("revision").ifEmpty { null },
             before = when {
                 unchanged -> base.before
@@ -191,12 +206,13 @@ internal class SshConversation(
             canSend = terminal()?.isReady == true && prompt == null,
             state = when {
                 prompt != null -> "waiting_input"
-                TerminalPrompt.isRunning(text) -> "running"
+                running || pending.isNotEmpty() -> "running"
                 else -> "idle"
             },
+            activity = if (running) TerminalPrompt.activity(text) else "",
             truncated = base.truncated || response.optBoolean("truncated"))
         current.value = next
-        next != old
+        next != previous
     }
 
     override suspend fun send(text: String) = input.withLock {
@@ -206,7 +222,9 @@ internal class SshConversation(
         if (!session.paste(text)) throw DesktopRpcFailure("input_in_progress")
         delay(80)
         if (!session.sendText("\r")) throw DesktopRpcFailure("delivery_unknown")
-        current.value = current.value.copy(canSend = false)
+        val message = ConversationMessage("$PENDING${sent++}", "user", text, null, null, true, false, false)
+        pending = pending + (message to System.currentTimeMillis())
+        current.value = current.value.let { it.copy(messages = it.messages + message, canSend = false, state = "running") }
     }
 
     override suspend fun choose(prompt: ConversationPrompt, index: Int) = input.withLock {
@@ -232,4 +250,9 @@ internal class SshConversation(
     }
 
     private fun offset(id: String): Long = id.substringBefore(':').toLong()
+
+    private companion object {
+        const val PENDING = "pending:"
+        const val PENDING_MILLIS = 60_000L
+    }
 }

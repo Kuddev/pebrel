@@ -50,6 +50,14 @@ class TerminalPromptTest {
         assertFalse(TerminalPrompt.isRunning("esc to interrupt\n" + "line\n".repeat(20)))
     }
 
+    @Test fun theActivityLineDropsOnlyTheInterruptHint() {
+        assertEquals("✻ Thinking… (12s · ↑ 1.2k tokens)",
+            TerminalPrompt.activity("✻ Thinking… (12s · ↑ 1.2k tokens · esc to interrupt)\n> "))
+        assertEquals("• Working", TerminalPrompt.activity("• Working (esc to interrupt)\n› "))
+        assertEquals("Running tool", TerminalPrompt.activity("│ Running tool · ctrl+c to interrupt │"))
+        assertEquals("", TerminalPrompt.activity("$ ls\nREADME.md"))
+    }
+
     @Test fun everyKnownAgentHasADisplayName() {
         assertEquals(listOf("Claude Code", "Codex", "Pi", "Antigravity"),
             listOf("claude", "codex", "pi", "antigravity").map(::sshAgentName))
