@@ -22,7 +22,9 @@ data class ConversationPrompt(val id: String, val text: String, val options: Lis
 data class ConversationPage(val identity: ConversationIdentity, val messages: List<ConversationMessage> = emptyList(),
                             val revision: String? = null, val before: Long? = null, val cwd: String = "",
                             val prompt: ConversationPrompt? = null, val canSend: Boolean = false,
-                            val state: String = "unknown", val loaded: Boolean = false, val truncated: Boolean = false)
+                            val state: String = "unknown", val loaded: Boolean = false, val truncated: Boolean = false,
+                            /** The Agent's own status line, such as "Thinking… (12s)", while it runs. */
+                            val activity: String = "")
 
 /** Only recent, in-memory views survive navigation. Native transcripts stay on the computer. */
 class ConversationCache {
