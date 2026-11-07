@@ -104,6 +104,14 @@ const VALUE_OPTS: &[u8] = b"bcDEeFIiJLlmOopQRSWw";
 /// forward): never inject into, never worth auto-saving as a host.
 const NO_SESSION_FLAGS: &[u8] = b"NnfGTVW";
 
+/// Keepalive policy for every SSH link Pebrel owns: the managed OpenSSH launch
+/// below and the built-in client in `ssh_session`. Probes keep NAT/firewall
+/// state alive; the link is declared dead only after this many probes in a row
+/// go unanswered (≈3.5 min), so a short network stall does not end an idle
+/// session that plain OpenSSH would have kept.
+pub(crate) const SERVER_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const SERVER_ALIVE_COUNT_MAX: usize = 6;
+
 /// How long a typed `ssh` session must live before OSC 133;D confirms it as
 /// a real connection worth auto-saving in the sidebar (fast failures — DNS,
 /// connection refused, an aborted auth prompt — die well under this).
@@ -752,7 +760,12 @@ pub fn run(mut args: Vec<String>) -> i32 {
             // trade accepted here, since a dead-by-default link is the bug
             // being fixed.
             if !args.iter().any(|arg| arg.contains("ServerAliveInterval")) {
-                cmd.args(["-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=6"]);
+                cmd.args([
+                    "-o".to_owned(),
+                    format!("ServerAliveInterval={}", SERVER_ALIVE_INTERVAL.as_secs()),
+                    "-o".to_owned(),
+                    format!("ServerAliveCountMax={SERVER_ALIVE_COUNT_MAX}"),
+                ]);
             }
             // The bootstrap contains quotes and `$` — passing it straight
             // through Windows `Command` arg-escaping → ssh.exe → the remote
