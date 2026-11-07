@@ -1,9 +1,11 @@
 # Pebrel Lua Configuration
 
-Pebrel uses vendored Lua 5.4 for programmable configuration. Load its API with
+Pebrel runs programmable configuration on bundled [Luau](https://luau.org), a
+Lua 5.1-derived language with optional type annotations. Load its API with
 `require 'pebrel'` and generate a configuration with `pebrel config init`.
-Existing `require 'nebula'` calls resolve to the same API table, so old Lua
-configurations continue to work.
+Existing `require 'nebula'` calls resolve to the same API table. Files written
+for the earlier Lua 5.4 runtime keep their names and normally load unchanged;
+see [Lua 5.4 compatibility](#lua-54-compatibility).
 
 Lua configuration is executable local code. Only use configuration files and
 modules that you trust. Pebrel does not download or execute remote
@@ -101,9 +103,44 @@ config.colors = require 'theme'
 return config
 ```
 
-Files successfully loaded through `require` are added to the live-reload watch
-list. Extra local files can be registered with
+Module names search `package.path`, which starts with the configuration
+directory (`?.luau`, `?.lua`, `?/init.luau`, `?/init.lua`) followed by
+`LUA_PATH_5_4`, `LUA_PATH` or the Lua 5.4 default path. A name beginning with
+`./` or `../` resolves next to the file that calls `require`, as in Luau.
+
+Files found through `require`, `dofile` or `loadfile` are added to the
+live-reload watch list. Extra local files can be registered with
 `pebrel.add_to_config_reload_watch_list(path)`.
+
+## Lua 5.4 Compatibility
+
+Luau omits parts of the Lua 5.4 standard library. For configuration only,
+Pebrel restores them with Lua 5.4 results:
+
+- `package` (`path`, `loaded`, `preload`, `searchers`, `searchpath`), `require`,
+  `dofile`, `loadfile` and `load`.
+- `io.open` for reading, writing (`w`) and appending (`a`); `io.lines`,
+  `io.popen` in read mode, `io.write`, `io.type` and file `read`, `lines`,
+  `write`, `seek` and `close`.
+- `os.getenv`, `os.execute`, `os.remove`, `os.rename` and `os.tmpname`.
+- `warn`, `math.type`, `math.tointeger`, `math.ult`, the `string.rep`
+  separator and the `__pairs` metamethod.
+
+`local name <const> = value` is accepted. The remaining differences are:
+
+| Lua 5.4 | Luau configuration |
+| --- | --- |
+| Separate integer and float subtypes | Numbers are doubles; `math.type(1.0)` is `"integer"` and `tostring(3.0)` is `"3"` |
+| `goto`, `::labels::`, `<close>`, `_ENV` | Not available |
+| `&`, `\|`, `~`, `<<`, `>>` | Use `bit32.band`, `bor`, `bxor`/`bnot`, `lshift`, `rshift` |
+| Hexadecimal floats such as `0x1p4` | Write the value in decimal |
+| A call whose `(` starts a new line | Rejected as ambiguous; add `;` or join the lines |
+| `io.open` update modes, `io.input`/`io.output` redirection, `io.popen(cmd, 'w')` | Return or raise an error |
+| `os.exit` | Raises an error instead of closing Pebrel |
+
+When Luau rejects a file, the error names the file and line and lists any
+Lua 5.4-only constructs found in it with their replacements. Plugins run in a
+separate restricted Luau environment and never receive these functions.
 
 ## Shell IDs And Config Profiles
 
@@ -259,6 +296,13 @@ evidence that a native package has passed its runtime checks.
 Lua 文件。普通空表 `{}` 表示对象；空数组必须写成 `pebrel.array()`。保存配置
 后若出现语法或字段错误，Pebrel 会保留上一份可用配置，修正并再次保存即可恢复
 自动重载。
+
+配置运行在内置的 Luau 上。为旧 Lua 5.4 写的配置通常无需修改：`package`/`require`
+（含 `package.path`、`preload`、自定义 searcher）、`dofile`、`loadfile`、`load`、
+`io` 文件读写与 `io.popen` 读取、`os.getenv`/`execute`/`remove`/`rename`/`tmpname`
+以及 `__pairs` 均按 Lua 5.4 结果恢复，`<const>` 可以继续使用。`goto`、`<close>`、
+`_ENV`、位运算符和十六进制浮点数不可用；出错时提示会给出行号和 `bit32` 等替代写法。
+数字统一为双精度，`require './name'` 按 Luau 规则相对当前文件解析。
 
 旧的 `require 'nebula'` 与新的 `require 'pebrel'` 指向同一 API。显式配置文件优先，
 其次为 `PEBREL_CONFIG_FILE`、兼容的 `NEBULA_CONFIG_FILE`，然后依次查找 Pebrel 与

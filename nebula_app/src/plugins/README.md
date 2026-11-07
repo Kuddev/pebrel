@@ -43,9 +43,10 @@ The check command is offline. The examples do not create panes or modify setting
 - Entry paths are portable package-relative paths. Traversal, alternate roots and package-internal
   links/reparse points are rejected. The root itself is the directory explicitly selected by the user.
   These filesystem checks are not an OS sandbox against concurrent same-user directory replacement.
-- The Lua entry is a single UTF-8 text file returning a command-function table. A handler receives
-  `(ctx, args)` and returns one JSON-compatible value. Arbitrary module loading is not part of this
-  initial entry; the existing configuration Lua module loader is unchanged.
+- The Lua entry is a single UTF-8 Luau source file returning a command-function table; the `engine`
+  name stays `lua`. A handler receives `(ctx, args)` and returns one JSON-compatible value.
+  Arbitrary module loading is not part of this initial entry; the configuration module loader is
+  not available to plugins.
 - `ctx.runtime.call(method, params)` yields to the Rust driver. The manifest requests exact method
   names; it does not grant access. Only methods explicitly exposed by `boundary.rs` are accepted
   at package validation and again at dispatch. Currently this is `runtime.describe` only.
@@ -73,7 +74,7 @@ neither an installed package nor its own permissions list supplies that authoriz
 | Manifest | 32 KiB, 64 commands, 32 permissions |
 | Lua source | 256 KiB |
 | Lua allocator | 8 MiB per invocation |
-| Lua instruction sampling | Yield every 10000 instructions; stop at 1000000 accounted instructions |
+| Luau interrupt checkpoints | Yield every 10000 checkpoints; stop at 1000000 |
 | Runtime calls | 16 per Lua invocation |
 | Structured data | Depth 32, 4096 visitation/allocation units, 64 KiB cumulative key/string bytes |
 | CLI argument JSON | 64 KiB before parsing |
@@ -84,9 +85,12 @@ stack and existing application resources have separate costs. Conversion reserve
 slots before allocation so nested/shared tables do not expand outside the structured-data budget.
 
 Entry initialization and handlers both run as managed coroutines. The Rust driver regains control
-through instruction yields, including loops wrapped in `pcall`. Filesystem loading, raw OS access,
-unmanaged coroutines, dynamic Lua loading and direct output are not exposed to plugin code.
-Instruction hooks do not preempt an arbitrary C operation; host I/O is outside Lua execution and
+through Luau interrupt yields, including loops wrapped in `pcall`. Luau raises interrupts at function
+calls and loop back-edges. Where it cannot yield, such as inside a `table.sort` comparator, an
+exhausted budget raises an error at every later checkpoint. Filesystem loading, raw OS access,
+unmanaged coroutines, dynamic Lua loading and direct output are not exposed to plugin code; the
+configuration-only Lua 5.4 compatibility layer is not installed.
+Interrupts do not preempt an arbitrary C operation; host I/O is outside Lua execution and
 the one-shot Runtime transport applies a cumulative deadline to its connect/write/read loop.
 
 This CLI driver performs that yielded Runtime request synchronously on the command process.
@@ -94,6 +98,7 @@ It is not an asynchronous worker adapter and must not be called from a GUI callb
 resident worker. A persistent/event-driven host is a separate next slice, not implied by this CLI.
 
 `execution.lua_memory_bytes` reports the VM's current allocator usage before it is dropped;
-`instruction_ticks` is sampled VM work, not CPU cycles, peak memory or total process allocation.
+`instruction_ticks` counts Luau interrupt checkpoints, not instructions, CPU cycles, peak memory or
+total process allocation.
 The native branch reports zero Lua usage. Focused regressions live in `tests.rs`, with transport
 and command-line integration assertions beside their existing owners.

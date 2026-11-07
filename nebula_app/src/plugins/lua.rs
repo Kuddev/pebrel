@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use mlua::{
-    ChunkMode, Function, HookTriggers, Lua, LuaOptions, LuaSerdeExt, MultiValue, StdLib, Table,
-    ThreadStatus, Value as LuaValue, VmState,
+    ChunkMode, Function, Lua, LuaOptions, LuaSerdeExt, MultiValue, StdLib, Table, ThreadStatus,
+    Value as LuaValue, VmState,
 };
 use serde_json::Value;
 
 use super::{
-    Error, Execution, INSTRUCTION_QUANTUM, MAX_INSTRUCTIONS, MAX_LUA_MEMORY, MAX_RUNTIME_CALLS,
+    Error, Execution, INTERRUPT_QUANTUM, MAX_INTERRUPTS, MAX_LUA_MEMORY, MAX_RUNTIME_CALLS,
     Package, Result, RuntimeCall, json,
 };
 
@@ -35,14 +35,23 @@ struct Budget {
 
 impl Budget {
     fn remaining(&self) -> Result<Duration> {
-        if self.ticks.load(Ordering::Relaxed) >= MAX_INSTRUCTIONS {
-            return Err(Error::new("lua_instruction_limit", "Lua instruction budget exhausted"));
+        match instruction_limit(&self.ticks) {
+            Some(error) => Err(error),
+            None => deadline(self.deadline),
         }
-        self.deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| Error::new("plugin_timeout", "plugin execution deadline reached"))
     }
+}
+
+fn instruction_limit(ticks: &AtomicUsize) -> Option<Error> {
+    (ticks.load(Ordering::Relaxed) >= MAX_INTERRUPTS)
+        .then(|| Error::new("lua_instruction_limit", "Lua instruction budget exhausted"))
+}
+
+fn deadline(deadline: Instant) -> Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| Error::new("plugin_timeout", "plugin execution deadline reached"))
 }
 
 pub(super) fn execute(
@@ -67,6 +76,20 @@ pub(super) fn execute(
     )
     .map_err(lua_error)?;
     lua.set_memory_limit(MAX_LUA_MEMORY).map_err(lua_error)?;
+    let ticks = budget.ticks.clone();
+    let deadline_at = budget.deadline;
+    // Luau 只在调用和循环回边触发 interrupt。可让出处交回 Rust 裁定；
+    // 比较器、gsub 回调等 C 边界内无法让出，预算耗尽后每个检查点都抛错。
+    lua.set_interrupt(move |_| {
+        let count = ticks.fetch_add(1, Ordering::Relaxed) + 1;
+        if count % INTERRUPT_QUANTUM != 0 && count < MAX_INTERRUPTS {
+            return Ok(VmState::Continue);
+        }
+        match instruction_limit(&ticks).map_or_else(|| deadline(deadline_at).err(), Some) {
+            Some(error) => Err(mlua::Error::external(error)),
+            None => Ok(VmState::Yield),
+        }
+    });
     let request: Function = lua
         .load(
             r#"
@@ -82,9 +105,21 @@ pub(super) fn execute(
         .map_err(lua_error)?;
     let globals = lua.globals();
     // 不留绕过宿主的文件入口，也不让非托管 coroutine 绕过指令分片。
-    for name in
-        ["coroutine", "dofile", "loadfile", "load", "require", "print", "warn", "collectgarbage"]
-    {
+    for name in [
+        "coroutine",
+        "dofile",
+        "loadfile",
+        "load",
+        "loadstring",
+        "getfenv",
+        "setfenv",
+        "require",
+        "print",
+        "warn",
+        "collectgarbage",
+        "gcinfo",
+        "newproxy",
+    ] {
         globals.raw_set(name, LuaValue::Nil).map_err(lua_error)?;
     }
     let entry = lua
@@ -143,17 +178,6 @@ fn drive(
     call: &mut RuntimeCall<'_>,
 ) -> Result<LuaValue> {
     let thread = lua.create_thread(function).map_err(lua_error)?;
-    let ticks = budget.ticks.clone();
-    thread
-        .set_hook(
-            HookTriggers::new().every_nth_instruction(INSTRUCTION_QUANTUM as u32),
-            move |_, _| {
-                ticks.fetch_add(INSTRUCTION_QUANTUM, Ordering::Relaxed);
-                // 使用 yield 而非可被 pcall 吞掉的异常，让预算裁定回到 Rust。
-                Ok(VmState::Yield)
-            },
-        )
-        .map_err(lua_error)?;
     loop {
         budget.remaining()?;
         let values: MultiValue = thread.resume(args).map_err(lua_error)?;

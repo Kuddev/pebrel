@@ -36,6 +36,7 @@ pub(crate) mod global_shortcut;
 pub(crate) mod keyboard;
 pub(crate) mod launch_directory;
 pub(crate) mod local_paths;
+pub(crate) mod lua_host;
 pub mod notifications;
 pub(crate) mod pi_session;
 pub(crate) mod private_file;

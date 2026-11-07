@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, Table, Value};
 
-use super::{LuaConfigError, validate_config_value};
+use super::{LuaConfigError, compat, modules, validate_config_value};
 
 pub const ARRAY_MARKER: &str = "__nebula_array";
 pub const BUILDER_MARKER: &str = "__nebula_config_builder";
@@ -25,16 +25,38 @@ impl ReloadSignal {
     }
 }
 
+/// Files whose changes reload the configuration: modules, `dofile` targets and
+/// paths registered explicitly by the configuration.
+#[derive(Clone, Default)]
+pub(super) struct WatchList(Arc<Mutex<Vec<PathBuf>>>);
+
+impl WatchList {
+    pub(super) fn add(&self, path: &Path) -> mlua::Result<()> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+        let mut paths = self.0.lock().unwrap_or_else(|lock| lock.into_inner());
+        if paths.len() >= 1024 {
+            return Err(mlua::Error::external("configuration watch list exceeds 1024 paths"));
+        }
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+        Ok(())
+    }
+
+    fn paths(&self) -> Vec<PathBuf> {
+        self.0.lock().unwrap_or_else(|lock| lock.into_inner()).clone()
+    }
+}
+
 pub struct LuaRuntime {
     lua: Lua,
-    watched_paths: Arc<Mutex<Vec<PathBuf>>>,
+    watch: WatchList,
 }
 
 impl LuaRuntime {
     pub fn new(config_file: &Path, reload: ReloadSignal) -> Result<Self, LuaConfigError> {
         let lua = Lua::new();
-        let watched_paths = Arc::new(Mutex::new(Vec::new()));
-        let runtime = Self { lua, watched_paths };
+        let runtime = Self { lua, watch: WatchList::default() };
         runtime.register(config_file, reload)?;
         Ok(runtime)
     }
@@ -44,7 +66,7 @@ impl LuaRuntime {
     }
 
     pub fn watched_paths(&self) -> Vec<PathBuf> {
-        self.watched_paths.lock().unwrap_or_else(|lock| lock.into_inner()).clone()
+        self.watch.paths()
     }
 
     pub fn into_lua(self) -> Lua {
@@ -53,9 +75,6 @@ impl LuaRuntime {
 
     fn register(&self, config_file: &Path, reload: ReloadSignal) -> Result<(), LuaConfigError> {
         let config_dir = config_file.parent().unwrap_or_else(|| Path::new("."));
-        let globals = self.lua.globals();
-        let package: Table = globals.get("package")?;
-        let loaded: Table = package.get("loaded")?;
         let module = self.lua.create_table()?;
 
         module.set("config_file", path_string(config_file)?)?;
@@ -103,25 +122,13 @@ impl LuaRuntime {
             })?,
         )?;
 
-        let watched_paths = self.watched_paths.clone();
-        let lua_config_dir = path_string(config_dir)?.replace('\\', "/");
-        let config_dir = config_dir.to_owned();
+        let watch = self.watch.clone();
+        let watch_dir = config_dir.to_owned();
         module.set(
             "add_to_config_reload_watch_list",
             self.lua.create_function(move |_, path: String| {
                 let path = PathBuf::from(path);
-                let path = if path.is_absolute() { path } else { config_dir.join(path) };
-                let path = path.canonicalize().unwrap_or(path);
-                let mut paths = watched_paths.lock().unwrap_or_else(|lock| lock.into_inner());
-                if paths.len() >= 1024 {
-                    return Err(mlua::Error::external(
-                        "configuration watch list exceeds 1024 paths",
-                    ));
-                }
-                if !paths.contains(&path) {
-                    paths.push(path);
-                }
-                Ok(())
+                watch.add(&if path.is_absolute() { path } else { watch_dir.join(path) })
             })?,
         )?;
 
@@ -140,30 +147,9 @@ impl LuaRuntime {
         }
 
         module.set("config_builder", self.lua.create_function(create_config_builder)?)?;
-        loaded.set("pebrel", module.clone())?;
-        loaded.set("nebula", module)?;
 
-        let current_path: String = package.get("path")?;
-        package.set(
-            "path",
-            format!("{lua_config_dir}/?.lua;{lua_config_dir}/?/init.lua;{current_path}"),
-        )?;
-        self.lua
-            .load(
-                r#"
-                local original = package.searchers[2]
-                package.searchers[2] = function(name)
-                    local path = package.searchpath(name, package.path)
-                    if path then
-                        package.loaded.pebrel.add_to_config_reload_watch_list(path)
-                    end
-                    return original(name)
-                end
-                "#,
-            )
-            .set_name("=pebrel-module-watcher")
-            .exec()?;
-
+        compat::install(&self.lua)?;
+        modules::install(&self.lua, config_dir, module, self.watch.clone())?;
         Ok(())
     }
 }
@@ -210,14 +196,15 @@ fn create_config_builder(lua: &Lua, (): ()) -> mlua::Result<Table> {
         })?,
     )?;
 
+    // `pairs(config)` (Lua 5.4 style, restored by the compat layer) and Luau's
+    // generalized `for key, value in config` both iterate the assigned fields.
     let pairs_store = store.clone();
-    metatable.set(
-        "__pairs",
-        lua.create_function(move |lua, _table: Table| {
-            let next: mlua::Function = lua.globals().get("next")?;
-            Ok((next, pairs_store.clone(), Value::Nil))
-        })?,
-    )?;
+    let iterate = lua.create_function(move |lua, _table: Table| {
+        let next: mlua::Function = lua.globals().get("next")?;
+        Ok((next, pairs_store.clone(), Value::Nil))
+    })?;
+    metatable.set("__pairs", iterate.clone())?;
+    metatable.set("__iter", iterate)?;
     config.set_metatable(Some(metatable))?;
     Ok(config)
 }
