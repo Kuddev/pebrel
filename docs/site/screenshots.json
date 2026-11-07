@@ -1,0 +1,86 @@
+{
+  "nebula-top-tabs.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/nebula-top-tabs.png",
+    "sha256": "a857a5d055fff00447e1e3ee5e36fc7b3e8618b1c7ab6c5343f26933ebd225d7",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "split-ai-workflows.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/split-ai-workflows.png",
+    "sha256": "2d603eb796af45bd927c8ff9a0c3dcc74ffeb6d9df8ace1b5e7a7d5d0bb1fbfb",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "nebula-claude-session.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/nebula-claude-session.png",
+    "sha256": "aac8e3e610c8d54a145ffe81a238f82415d3eefbe5a472d23b5adfc396352619",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "native-math-rendering.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/native-math-rendering.png",
+    "sha256": "c1b8e356878ebf5fe368873d37f5daa0cca2de7688129f3a05ec28c8637d6e16",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "themes.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/themes.png",
+    "sha256": "f8031403d4da402a8dd9388d72a7e13e3d1e31d3d7424a2a8ec0c4bbf9a04946",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "ai-sidebar.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/ai-sidebar.png",
+    "sha256": "df0916d23dc254b9cbc31238c47606b27466104f800ba53f663674bca4dfc4da",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "notification-duration.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/notification-duration.png",
+    "sha256": "bff479f36adf609b4fae95d79fcf751357cae133af46cdd9afeb1d6235fa4786",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "reader-selection-opacity.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/reader-selection-opacity.png",
+    "sha256": "9264f5cdb5e34a9d1f101cb561cf4a8fcbdd67146199f4e99092e46ea7a9f23a",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "hero.png": {
+    "kind": "existing_repository_screenshot",
+    "source": "https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/screenshots/hero.png",
+    "sha256": "763d24c1cfe411e6624b77fcfa9dd3da82f5d0c5f4e237f52eada418312ce687",
+    "capture_version": "not established; do not infer from documentation version"
+  },
+  "pebrel-1.9.1-macos-arm64-ci.png": {
+    "kind": "official_release_ci_screenshot",
+    "version": "1.9.1",
+    "platform": "macOS",
+    "architecture": "aarch64",
+    "reported_os_version": "26.6.2",
+    "source_commit": "e9e83d83a63ca9cc885857439f7f6826c1cbabaf",
+    "source_tree": "601e9bdf8a43323337f6d768759b262b75a16da2",
+    "workflow_run": "https://github.com/Kuddev/pebrel/actions/runs/35961098033",
+    "artifact_id": 10792632932,
+    "artifact_name": "stable-evidence-macos-aarch64",
+    "artifact_created_at": "2026-09-24T05:58:38Z",
+    "artifact_sha256": "7c444586185e180881b5ee0c7b1bfadbd7cfddb72dd27ef0504fbf2973157797",
+    "original_path": "macos-aarch64-launch-artifacts/installed-app.png",
+    "sha256": "6f2b2a1b42975020ce53bc37bf85e9529dee97ca12f79f9edfc43825b2d892b9",
+    "modifications": "none",
+    "scope": "Visible native application launch with CI test text. Existing upstream run; not newly dispatched for this documentation task.",
+    "launch_report": {
+      "status": "passed",
+      "launch_method": "launchservices",
+      "commit": "e9e83d83a63ca9cc885857439f7f6826c1cbabaf",
+      "architecture": "aarch64",
+      "os_version": "26.6.2",
+      "quarantine_assessment": "not_tested",
+      "screenshot": "captured",
+      "rendered_text": true,
+      "utf8_locale": true,
+      "home_cwd": true
+    }
+  }
+}
