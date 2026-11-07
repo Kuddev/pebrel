@@ -8,7 +8,8 @@ pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
 
 /// 稳定路由只追加；视觉顺序独立放在 NAV_GROUPS，避免旧入口指向另一页。
 pub(super) const MOBILE_SECTION: usize = 11;
-pub(super) const SECTION_IDS: [&str; 12] = [
+pub(super) const RELEASE_NOTES_SECTION: usize = 12;
+pub(super) const SECTION_IDS: [&str; 13] = [
     "application",
     "appearance",
     "profiles",
@@ -21,11 +22,12 @@ pub(super) const SECTION_IDS: [&str; 12] = [
     "backup",
     "agents",
     "mobile",
+    "release-notes",
 ];
 
 /// Catalog search aliases for each stable section route. English and Chinese
 /// remain searchable in every locale alongside the current language.
-pub(super) const SECTION_SEARCH_TERMS: [crate::i18n::Message; 12] = [
+pub(super) const SECTION_SEARCH_TERMS: [crate::i18n::Message; 13] = [
     crate::i18n::Message::SettingsSearchTermsApplication,
     crate::i18n::Message::SettingsSearchTermsAppearance,
     crate::i18n::Message::SettingsSearchTermsProfiles,
@@ -38,6 +40,7 @@ pub(super) const SECTION_SEARCH_TERMS: [crate::i18n::Message; 12] = [
     crate::i18n::Message::SettingsSearchTermsBackup,
     crate::i18n::Message::SettingsSearchTermsAgents,
     crate::i18n::Message::SettingsSearchTermsMobile,
+    crate::i18n::Message::SettingsSearchTermsReleaseNotes,
 ];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
@@ -45,7 +48,7 @@ pub(super) const SECTION_SEARCH_TERMS: [crate::i18n::Message; 12] = [
 pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] = [
     ("workspace", &[0, 1, 2, 10, 6, 7]),
     ("connections", &[3, 4, 5, MOBILE_SECTION]),
-    ("system", &[8, 9]),
+    ("system", &[8, 9, RELEASE_NOTES_SECTION]),
 ];
 
 pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) -> &'static str {
@@ -62,6 +65,7 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
         Some("backup") => language.tr("settings.sidebar.backup"),
         Some("agents") => language.text(crate::i18n::Message::SettingsSidebarAgents),
         Some("mobile") => language.text(crate::i18n::Message::MobileTitle),
+        Some("release-notes") => language.text(crate::i18n::Message::UpdateReleaseNotesTitle),
         _ => "",
     }
 }
@@ -123,6 +127,7 @@ pub(super) fn section_icon(index: usize) -> SharedString {
         9 => crate::gpui_shell::assets::backup::DRIVE.into(),
         10 => IconName::Bot.path(),
         MOBILE_SECTION => crate::gpui_shell::assets::nav::PHONE.into(),
+        RELEASE_NOTES_SECTION => IconName::BookOpen.path(),
         _ => IconName::Inbox.path(),
     }
 }
