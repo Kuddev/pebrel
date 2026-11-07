@@ -89,6 +89,11 @@ pub enum Event {
     /// Write some text to the PTY.
     PtyWrite(String),
 
+    /// A remote program started a ZMODEM transfer, which Pebrel does not
+    /// implement. The stream has already queued the cancel sequence as a
+    /// preceding `PtyWrite`; frontends only tell the user what happened.
+    ZmodemCancelled(crate::zmodem::ZmodemOffer),
+
     /// Request to write the text area size.
     TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Sync + Send + 'static>),
 
@@ -121,6 +126,7 @@ impl Debug for Event {
             Event::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
             Event::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
             Event::PtyWrite(text) => write!(f, "PtyWrite({text})"),
+            Event::ZmodemCancelled(offer) => write!(f, "ZmodemCancelled({offer:?})"),
             Event::Title(title) => write!(f, "Title({title})"),
             Event::CwdReport(cwd) => write!(f, "CwdReport({cwd})"),
             Event::InlineImage { data, placement } => {

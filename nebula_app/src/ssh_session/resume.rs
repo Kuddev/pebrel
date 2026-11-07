@@ -142,7 +142,12 @@ pub(super) fn startup(
     target: Option<&ResumeTarget>,
     cwd: Option<&str>,
 ) -> String {
-    let mut script = format!("printf '\\036PEBREL_PTY_{token}=%s:%s\\037' \"$(tty)\" \"$$\"; ");
+    // tty prints "not a tty" when startup has no terminal, as reported for JumpServer direct
+    // connections. The filter shows malformed markers verbatim, so send one only on success.
+    let mut script = format!(
+        "if pebrel_tty=$(tty 2>/dev/null); then \
+         printf '\\036PEBREL_PTY_{token}=%s:%s\\037' \"$pebrel_tty\" \"$$\"; fi; "
+    );
     if let Some(target) = target {
         script.push_str(&target.attach());
     }
