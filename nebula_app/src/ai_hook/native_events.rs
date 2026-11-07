@@ -191,6 +191,46 @@ mod tests {
             assert_eq!(parse("done", body).unwrap().turn_outcome, outcome, "{body}");
         }
     }
+
+    #[test]
+    fn antigravity_hook_identity_resumes_after_session_round_trip() {
+        let event = parse_envelope(
+            b"nebula-hook/1 source=antigravity pane=5 event=session-start\n{\"conversationId\":\"b5f6c1c2-1111-2222-3333-444455556666\"}",
+        )
+        .unwrap();
+        let saved = crate::session::AgentSession {
+            source: event.source,
+            session_id: event.session_id,
+            session_file: event.session_file,
+        };
+        let json = serde_json::to_string(&saved).unwrap();
+        let restored: crate::session::AgentSession = serde_json::from_str(&json).unwrap();
+        let expected = "agy --conversation b5f6c1c2-1111-2222-3333-444455556666";
+        assert_eq!(restored.resume_command().as_deref(), Some(expected));
+
+        let manual = crate::ai_sessions::AiSession::test_session(
+            crate::ai_agents::AgentKind::Antigravity,
+            restored.session_id.as_deref().unwrap(),
+            "Saved conversation",
+        );
+        assert_eq!(manual.resume_command().as_deref(), Some(expected));
+        assert_eq!(manual.fork_command(), None);
+    }
+
+    #[test]
+    fn antigravity_resume_requires_a_safe_explicit_conversation_id() {
+        for id in [None, Some(""), Some("x; calc"), Some("$(id)"), Some("two words"), Some("x\ny")]
+        {
+            let saved = crate::session::AgentSession {
+                source: "antigravity".into(),
+                session_id: id.map(str::to_owned),
+                session_file: None,
+            };
+            assert_eq!(saved.resume_command(), None, "{id:?}");
+        }
+        assert_eq!(crate::ai_agents::AgentKind::Antigravity.resume_command(&"a".repeat(65)), None);
+    }
+
     #[test]
     fn antigravity_background_work_defers_completion_until_fully_idle() {
         use crate::ai_agents::AgentStatus;
