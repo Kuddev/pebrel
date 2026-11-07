@@ -264,13 +264,13 @@ impl AgentKind {
             Self::Grok => format!("grok --resume {session_id}"),
             Self::Pi => format!("pi --session {session_id}"),
             Self::OhMyPi => format!("omp --resume {session_id}"),
+            Self::Antigravity => format!("agy --conversation {session_id}"),
             Self::Aider
             | Self::Goose
             | Self::Droid
             | Self::Auggie
             | Self::Hermes
             | Self::Vibe
-            | Self::Antigravity
             | Self::Qwen
             | Self::Cline
             | Self::Devin
