@@ -28,6 +28,8 @@ def main() -> None:
         if 0xE000 <= cp <= 0xF8FF or 0xF0000 <= cp <= 0xFFFFD
         or 0x100000 <= cp <= 0x10FFFD or 0x23FB <= cp <= 0x23FE or cp == 0x2B58
     }
+    # GPUI 的 macOS 加载器会跳过没有 `m` 字形的字体；只保留这一个文字字形。
+    symbols.add(ord("m"))
     options = subset.Options()
     options.name_IDs = ["*"]
     options.name_languages = ["*"]
