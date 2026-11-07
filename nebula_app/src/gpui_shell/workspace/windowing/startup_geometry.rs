@@ -261,6 +261,53 @@ pub(super) fn capture_window(window: &Window, cx: &App) -> crate::session::Windo
     }
 }
 
+/// Saved logical rect and target display for the native re-placement pass.
+#[derive(Clone, Copy)]
+pub(super) struct RestoreTarget {
+    position: (i32, i32),
+    size: (u32, u32),
+    display: u64,
+}
+
+/// Resolve the saved rect that GPUI cannot place itself on a mixed-DPI desktop.
+///
+/// Only the first ordinary `RestoreOrDefault` window has one, and explicit Lua
+/// geometry or a maximized restore keeps ownership of the native rectangle.
+pub(super) fn restore_target(runtime_window_id: u64, cx: &App) -> Option<RestoreTarget> {
+    if runtime_window_id != 1 {
+        return None;
+    }
+    let config = cx.try_global::<StartupWindow>()?;
+    let restored = config.restored?;
+    if config.dimensions.is_some() || config.position.is_some() || restored.maximized {
+        return None;
+    }
+    let position = restored.position?;
+    let display = restored
+        .display
+        .and_then(|uuid| {
+            cx.displays()
+                .into_iter()
+                .find(|display| display.uuid().is_ok_and(|id| id.as_bytes() == &uuid))
+        })
+        .map(|display| u64::from(display.id()))
+        .or_else(|| crate::platform::startup::physical_display(position).map(|(id, _)| id))?;
+    Some(RestoreTarget { position, size: (restored.width, restored.height), display })
+}
+
+/// Re-anchor the restored client rect in the target display's physical pixels.
+///
+/// GPUI applies its pending placement in the activation task, so callers must
+/// run this afterwards (the first active frame) rather than in the builder.
+pub(super) fn settle_restored_placement(window: &Window, target: RestoreTarget) -> bool {
+    crate::platform::startup::restored_window::settle_restored_window(
+        window,
+        target.position,
+        target.size,
+        target.display,
+    )
+}
+
 pub(super) fn apply_configured_position(window: &Window, cx: &App) {
     if let Some(position) = cx.try_global::<StartupWindow>().and_then(|config| config.position)
         && !crate::platform::startup::place_configured_window(window, (position.x, position.y))

@@ -31,6 +31,8 @@ mod console;
 pub(crate) mod first_frame;
 #[cfg(any(unix, test))]
 mod login;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod restored_window;
 
 /// Match GPUI's primary-monitor DPI query before a native window is created.
 /// Other platforms retain post-creation sizing until their display API exposes scale.
@@ -273,6 +275,32 @@ pub(crate) fn display_scale(id: u64) -> Option<f32> {
         } else {
             Some(x as f32 / 96.0)
         }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        None
+    }
+}
+
+/// Physical work area `(left, top, right, bottom)` of a borrowed HMONITOR.
+pub(crate) fn display_work_area(id: u64) -> Option<(i32, i32, i32, i32)> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
+        // SAFETY: MONITORINFO is a plain output structure; cbSize is set below.
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        // SAFETY: the borrowed display handle and initialized output are valid.
+        if unsafe { GetMonitorInfoW(id as *mut core::ffi::c_void, &mut info) } != 0 {
+            return Some((
+                info.rcWork.left,
+                info.rcWork.top,
+                info.rcWork.right,
+                info.rcWork.bottom,
+            ));
+        }
+        None
     }
     #[cfg(not(windows))]
     {
