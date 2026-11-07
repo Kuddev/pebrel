@@ -1,5 +1,104 @@
 use super::*;
 
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn ssh_group_headers_toggle_with_mouse_keyboard_and_reveal_search(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, cx| {
+            pane.manage_launcher_ssh(String::new(), false, window, cx);
+            pane.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
+                saved: vec!["alpha".into(), "beta".into(), "other".into()],
+                ..Default::default()
+            };
+            for host in ["alpha", "beta"] {
+                pane.ssh_hosts.profiles.upsert(pane.ssh_hosts.profiles.for_destination(host));
+                pane.ssh_hosts
+                    .profiles
+                    .set_organization(
+                        host,
+                        crate::ssh_profiles::HostOrganization {
+                            group: "work".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+        });
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(800.0), px(1100.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let header = cx.debug_bounds("ssh-group-work").unwrap();
+    assert!(header.size.height >= px(32.0));
+    assert!(cx.debug_bounds("ssh-host-row-0").is_some());
+    // Click the blank part of the real button, away from the label and chevron.
+    cx.simulate_click(
+        gpui::point(header.right() - px(8.0), header.center().y),
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_none());
+    assert!(cx.debug_bounds("ssh-host-row-1").is_none());
+    assert!(cx.debug_bounds("ssh-host-row-2").is_some());
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    // Buttons deliberately preserve input focus on mouse clicks. Reach the first
+    // group through the actual Tab path from the toolbar's last input instead.
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.ssh_library.search.update(cx, |input, cx| input.focus(window, cx));
+        });
+    });
+    cx.simulate_keystrokes("tab enter");
+    cx.run_until_parked();
+    assert!(!pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    cx.simulate_keystrokes("space");
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.ssh_library.search.update(cx, |input, cx| input.set_value("alpha", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_some(), "search reveals folded matches");
+    let header = cx.debug_bounds("ssh-group-work").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.ssh_library.search.update(cx, |input, cx| input.set_value("", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_none(), "clearing restores folds");
+    assert!(cx.debug_bounds("ssh-host-row-2").is_some());
+}
+
 #[test]
 fn pairing_design_ssh_auth_description_uses_metadata_not_a_saved_password_claim() {
     let profiles = crate::ssh_profiles::SshProfiles::default();
