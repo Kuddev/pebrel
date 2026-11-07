@@ -8,8 +8,9 @@
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 
+use crate::platform::lua_host;
 use mlua::{
     AnyUserData, Function, IntoLuaMulti, Lua, MetaMethod, MultiValue, UserData, UserDataMethods,
     Value,
@@ -68,7 +69,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             match capture(&command) {
                 Ok((data, status)) => lua
                     .create_userdata(LuaFile(Handle::Buffer {
-                        data: text_mode(data),
+                        data: lua_host::text_mode_read(data),
                         position: 0,
                         status: Some(status),
                     }))?
@@ -161,46 +162,12 @@ fn read_file(path: &str, binary: bool) -> std::io::Result<Vec<u8>> {
     if data.len() as u64 > MAX_BUFFER_BYTES {
         return Err(std::io::Error::other("file exceeds the 64 MiB configuration read limit"));
     }
-    Ok(if binary { data } else { text_mode(data) })
-}
-
-/// Windows C runtimes translate CRLF in text mode; Lua 5.4 inherited that.
-fn text_mode(data: Vec<u8>) -> Vec<u8> {
-    if !cfg!(windows) || !data.contains(&b'\r') {
-        return data;
-    }
-    let mut translated = Vec::with_capacity(data.len());
-    let mut bytes = data.iter().peekable();
-    while let Some(&byte) = bytes.next() {
-        if byte != b'\r' || bytes.peek() != Some(&&b'\n') {
-            translated.push(byte);
-        }
-    }
-    translated
-}
-
-/// Runs a command through the platform shell, as C `popen`/`system` do.
-pub(super) fn shell(command: &str) -> Command {
-    #[cfg(windows)]
-    let mut process = {
-        use std::os::windows::process::CommandExt as _;
-        let mut process =
-            Command::new(std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()));
-        process.raw_arg("/c").raw_arg(command);
-        process
-    };
-    #[cfg(not(windows))]
-    let mut process = {
-        let mut process = Command::new("/bin/sh");
-        process.arg("-c").arg(command);
-        process
-    };
-    crate::platform::process::hidden_command(&mut process);
-    process
+    Ok(if binary { data } else { lua_host::text_mode_read(data) })
 }
 
 fn capture(command: &str) -> std::io::Result<(Vec<u8>, ExitStatus)> {
-    let mut child = shell(command).stdin(Stdio::null()).stdout(Stdio::piped()).spawn()?;
+    let mut child =
+        lua_host::shell_command(command).stdin(Stdio::null()).stdout(Stdio::piped()).spawn()?;
     let mut data = Vec::new();
     let read = match child.stdout.take() {
         Some(stdout) => stdout.take(MAX_BUFFER_BYTES + 1).read_to_end(&mut data),
@@ -217,8 +184,7 @@ fn capture(command: &str) -> std::io::Result<(Vec<u8>, ExitStatus)> {
 
 /// `(true|nil, "exit"|"signal", code)`, the Lua 5.4 result of `close` and `os.execute`.
 pub(super) fn exit_result(lua: &Lua, status: ExitStatus) -> mlua::Result<MultiValue> {
-    #[cfg(unix)]
-    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+    if let Some(signal) = lua_host::exit_signal(status) {
         return (Value::Nil, "signal", signal).into_lua_multi(lua);
     }
     let success = if status.success() { Value::Boolean(true) } else { Value::Nil };
@@ -275,8 +241,8 @@ fn write(lua: &Lua, file: AnyUserData, values: MultiValue) -> mlua::Result<Multi
         let mut handle = file.borrow_mut::<LuaFile>()?;
         match &mut handle.0 {
             Handle::Writer { file, binary } => {
-                if !*binary && cfg!(windows) {
-                    text = String::from_utf8_lossy(&text).replace('\n', "\r\n").into_bytes();
+                if !*binary {
+                    text = lua_host::text_mode_write(text);
                 }
                 file.write_all(&text)
             },

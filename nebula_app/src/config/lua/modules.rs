@@ -12,8 +12,8 @@ use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use super::runtime::WatchList;
 use super::syntax;
+use crate::platform::lua_host::{self, DIRECTORY_SEPARATOR};
 
-const DIRECTORY_SEPARATOR: &str = if cfg!(windows) { "\\" } else { "/" };
 const MODULE_SUFFIXES: [&str; 4] = [".luau", ".lua", "/init.luau", "/init.lua"];
 
 pub(super) fn install(
@@ -217,43 +217,11 @@ fn default_path(config_dir: &Path) -> String {
         .into_iter()
         .find_map(|name| std::env::var(name).ok())
         .map(|value| {
-            let value = value.replace(";;", &format!(";{};", lua54_default_path()));
+            let value = value.replace(";;", &format!(";{};", lua_host::lua54_default_path()));
             value.trim_matches(';').to_owned()
         })
-        .unwrap_or_else(lua54_default_path);
+        .unwrap_or_else(lua_host::lua54_default_path);
     format!("{dir}/?.luau;{dir}/?.lua;{dir}/?/init.luau;{dir}/?/init.lua;{inherited}")
-}
-
-fn lua54_default_path() -> String {
-    if cfg!(windows) {
-        let program = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_owned))
-            .map(|path| path_text(&path))
-            .unwrap_or_default();
-        [
-            "!\\lua\\?.lua",
-            "!\\lua\\?\\init.lua",
-            "!\\?.lua",
-            "!\\?\\init.lua",
-            "!\\..\\share\\lua\\5.4\\?.lua",
-            "!\\..\\share\\lua\\5.4\\?\\init.lua",
-            ".\\?.lua",
-            ".\\?\\init.lua",
-        ]
-        .map(|template| template.replace('!', &program))
-        .join(";")
-    } else {
-        [
-            "/usr/local/share/lua/5.4/?.lua",
-            "/usr/local/share/lua/5.4/?/init.lua",
-            "/usr/local/lib/lua/5.4/?.lua",
-            "/usr/local/lib/lua/5.4/?/init.lua",
-            "./?.lua",
-            "./?/init.lua",
-        ]
-        .join(";")
-    }
 }
 
 fn path_text(path: &Path) -> String {

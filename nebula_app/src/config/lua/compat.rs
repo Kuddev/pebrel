@@ -28,7 +28,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(command) = command else {
                 return true.into_lua_multi(lua);
             };
-            match io::shell(&command).stdin(Stdio::null()).status() {
+            match crate::platform::lua_host::shell_command(&command).stdin(Stdio::null()).status() {
                 Ok(status) => io::exit_result(lua, status),
                 Err(error) => (Value::Nil, io::io_message(&command, &error), io::errno(&error))
                     .into_lua_multi(lua),
