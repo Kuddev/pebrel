@@ -887,6 +887,15 @@ pub enum ConfigCommand {
     Check(ConfigCheckOptions),
     /// Create an annotated Lua configuration template.
     Init(ConfigInitOptions),
+    /// Write editor types for `require '@pebrel'` beside the Lua configuration.
+    Types(ConfigTypesOptions),
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigTypesOptions {
+    /// Lua configuration path; otherwise use the platform user config directory.
+    #[clap(long, value_hint = ValueHint::FilePath)]
+    pub config_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

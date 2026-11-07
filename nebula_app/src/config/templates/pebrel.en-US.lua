@@ -1,4 +1,4 @@
-local pebrel = require 'pebrel'
+local pebrel = require '@pebrel'
 local config = pebrel.config_builder()
 
 -- Pebrel Lua configuration. Run `pebrel config check` after editing to validate syntax and fields.

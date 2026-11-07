@@ -109,6 +109,9 @@ _pebrel() {
             pebrel__config,init)
                 cmd="pebrel__config__init"
                 ;;
+            pebrel__config,types)
+                cmd="pebrel__config__types"
+                ;;
             pebrel__config__help,check)
                 cmd="pebrel__config__help__check"
                 ;;
@@ -117,6 +120,9 @@ _pebrel() {
                 ;;
             pebrel__config__help,init)
                 cmd="pebrel__config__help__init"
+                ;;
+            pebrel__config__help,types)
+                cmd="pebrel__config__help__types"
                 ;;
             pebrel__ctl,agent-fork)
                 cmd="pebrel__ctl__agent__fork"
@@ -375,6 +381,9 @@ _pebrel() {
                 ;;
             pebrel__help__config,init)
                 cmd="pebrel__help__config__init"
+                ;;
+            pebrel__help__config,types)
+                cmd="pebrel__help__config__types"
                 ;;
             pebrel__help__ctl,agent-fork)
                 cmd="pebrel__help__ctl__agent__fork"
@@ -1065,7 +1074,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__config)
-            opts="-h --help check init help"
+            opts="-h --help check init types help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1108,7 +1117,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__config__help)
-            opts="check init help"
+            opts="check init types help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1163,6 +1172,20 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__config__help__types)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__config__init)
             opts="-h --config-file --language --force --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -1187,6 +1210,35 @@ _pebrel() {
                     ;;
                 --language)
                     COMPREPLY=($(compgen -W "system zh-CN en-US" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__config__types)
+            opts="-h --config-file --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --config-file)
+                    local oldifs
+                    if [ -n "${IFS+x}" ]; then
+                        oldifs="$IFS"
+                    fi
+                    IFS=$'\n'
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    if [ -n "${oldifs+x}" ]; then
+                        IFS="$oldifs"
+                    fi
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o filenames
+                    fi
                     return 0
                     ;;
                 *)
@@ -2708,7 +2760,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__config)
-            opts="check init"
+            opts="check init types"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2736,6 +2788,20 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__config__init)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__config__types)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

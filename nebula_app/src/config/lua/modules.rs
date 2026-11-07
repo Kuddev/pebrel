@@ -32,6 +32,8 @@ pub(super) fn install(
     }
     loaded.raw_set("_G", globals.clone())?;
     loaded.raw_set("pebrel", api.clone())?;
+    // Luau alias form; `pebrel config types` maps it to editor types.
+    loaded.raw_set("@pebrel", api.clone())?;
     loaded.raw_set("nebula", api)?;
     package.raw_set("loaded", loaded)?;
     package.raw_set("preload", lua.create_table()?)?;

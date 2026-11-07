@@ -1111,6 +1111,13 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(types)
+_arguments "${_arguments_options[@]}" : \
+'--config-file=[Lua configuration path; otherwise use the platform user config directory]:CONFIG_FILE:_files' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_pebrel__config__help_commands" \
@@ -1128,6 +1135,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(types)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1634,6 +1645,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(types)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -1827,6 +1842,7 @@ _pebrel__config_commands() {
     local commands; commands=(
 'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
 'init:Create an annotated Lua configuration template' \
+'types:Write editor types for \`require '\''@pebrel'\''\` beside the Lua configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel config commands' commands "$@"
@@ -1841,6 +1857,7 @@ _pebrel__config__help_commands() {
     local commands; commands=(
 'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
 'init:Create an annotated Lua configuration template' \
+'types:Write editor types for \`require '\''@pebrel'\''\` beside the Lua configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel config help commands' commands "$@"
@@ -1860,10 +1877,20 @@ _pebrel__config__help__init_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel config help init commands' commands "$@"
 }
+(( $+functions[_pebrel__config__help__types_commands] )) ||
+_pebrel__config__help__types_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel config help types commands' commands "$@"
+}
 (( $+functions[_pebrel__config__init_commands] )) ||
 _pebrel__config__init_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel config init commands' commands "$@"
+}
+(( $+functions[_pebrel__config__types_commands] )) ||
+_pebrel__config__types_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel config types commands' commands "$@"
 }
 (( $+functions[_pebrel__ctl_commands] )) ||
 _pebrel__ctl_commands() {
@@ -2328,6 +2355,7 @@ _pebrel__help__config_commands() {
     local commands; commands=(
 'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
 'init:Create an annotated Lua configuration template' \
+'types:Write editor types for \`require '\''@pebrel'\''\` beside the Lua configuration' \
     )
     _describe -t commands 'pebrel help config commands' commands "$@"
 }
@@ -2340,6 +2368,11 @@ _pebrel__help__config__check_commands() {
 _pebrel__help__config__init_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help config init commands' commands "$@"
+}
+(( $+functions[_pebrel__help__config__types_commands] )) ||
+_pebrel__help__config__types_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help config types commands' commands "$@"
 }
 (( $+functions[_pebrel__help__ctl_commands] )) ||
 _pebrel__help__ctl_commands() {
