@@ -95,9 +95,12 @@ impl NebulaWorkspace {
                         && self.remote_browser.path == snapshot.path
                     {
                         self.remote_browser.entries = snapshot.entries.clone();
-                        self.remote_browser.selected = None;
+                        let rows = self.remote_rows();
+                        let paths: Vec<_> = rows.iter().map(|row| row.path.as_str()).collect();
+                        self.remote_browser.selection.retain(&paths);
                     }
                     self.remote_browser.error = None;
+                    self.remote_browser.last_outcome = Some(Message::TransferCompleted);
                 },
                 SftpPhase::Error => self.remote_browser.error = snapshot.error.clone(),
                 SftpPhase::Cancelled => {
@@ -145,11 +148,11 @@ impl NebulaWorkspace {
             PendingRemoteTransfer::Upload(paths) => {
                 controller.upload_paths_with_options(paths, options)
             },
-            PendingRemoteTransfer::Download { entry, local_directory } => {
-                controller.download_with_options(entry, local_directory, options)
+            PendingRemoteTransfer::Download { entries, local_directory } => {
+                controller.download_with_options(entries, local_directory, options)
             },
             PendingRemoteTransfer::Copy(source) => {
-                controller.copy_from(source.source_destination, source.entry, options)
+                controller.copy_from(source.source_destination, source.entries, options)
             },
         }
         cx.notify();
@@ -413,17 +416,22 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn remote_copy_selected(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(entry) = self.selected_remote_entry() else { return };
+        let entries = self.selected_remote_entries();
+        if entries.is_empty() {
+            return;
+        }
+        let message = if entries.len() == 1 {
+            workspace_ui_language()
+                .format(Message::TransferCopiedItem, &[("name", &entries[0].name)])
+        } else {
+            workspace_ui_language()
+                .format(Message::TransferCopiedItems, &[("count", &entries.len().to_string())])
+        };
         self.remote_browser.clipboard = Some(RemoteClipboard {
             source_destination: self.remote_browser.destination.clone(),
-            entry: entry.clone(),
+            entries,
         });
-        crate::gpui_shell::toast::toast(
-            window,
-            cx,
-            crate::display::ToastKind::Info,
-            workspace_ui_language().format(Message::TransferCopiedItem, &[("name", &entry.name)]),
-        );
+        crate::gpui_shell::toast::toast(window, cx, crate::display::ToastKind::Info, message);
         cx.notify();
     }
 
@@ -437,6 +445,9 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.remote_transfer_working() || self.remote_browser.preflighting {
+            return;
+        }
         let Some(target) = self.current_remote_transfer_target() else { return };
         let picked = crate::platform::file_picker::files(
             window,
@@ -466,6 +477,9 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.remote_transfer_working() || self.remote_browser.preflighting {
+            return;
+        }
         let Some(target) = self.current_remote_transfer_target() else { return };
         let picked = crate::platform::file_picker::directory(
             window,
@@ -492,8 +506,14 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.remote_transfer_working() || self.remote_browser.preflighting {
+            return;
+        }
         let Some(target) = self.current_remote_transfer_target() else { return };
-        let Some(entry) = self.selected_remote_entry() else { return };
+        let entries = self.selected_remote_entries();
+        if entries.is_empty() {
+            return;
+        }
         let picked = crate::platform::file_picker::directory(
             window,
             cx,
@@ -504,7 +524,7 @@ impl NebulaWorkspace {
             let Some(local_directory) = picked.await else { return };
             let _ = this.update_in(cx, |workspace, window, cx| {
                 workspace.request_remote_transfer_at(
-                    PendingRemoteTransfer::Download { entry, local_directory },
+                    PendingRemoteTransfer::Download { entries, local_directory },
                     target,
                     window,
                     cx,
@@ -560,44 +580,55 @@ fn pending_remote_conflicts(
             }
             (conflicts, overwrite_allowed, follows_symlink)
         },
-        PendingRemoteTransfer::Download { entry, local_directory } => {
-            let target = local_directory.join(&entry.name);
-            let Ok(metadata) = std::fs::symlink_metadata(target) else {
-                return (0, true, false);
-            };
-            if skip_unchanged && local_metadata_matches(&metadata, entry) {
-                return (0, true, false);
-            }
-            let compatible = match entry.kind {
-                SftpEntryKind::Directory => metadata.is_dir(),
-                SftpEntryKind::File => metadata.is_file() || metadata.file_type().is_symlink(),
-                // 链接的目标类型必须由远端 lstat/readlink 后才能确定，交给
-                // 内核的执行时校验，UI 不凭列表图标猜。
-                SftpEntryKind::Symlink => true,
-            };
-            (1, compatible, metadata.file_type().is_symlink())
-        },
-        PendingRemoteTransfer::Copy(source) => {
-            let Some(target) = entries.iter().find(|entry| entry.name == source.entry.name) else {
-                return (0, true, false);
-            };
-            if skip_unchanged
-                && source.entry.kind == SftpEntryKind::File
-                && target.kind == SftpEntryKind::File
-                && source.entry.size == target.size
-                && source.entry.modified != 0
-                && source.entry.modified == target.modified
-            {
-                return (0, true, false);
-            }
-            let compatible = match source.entry.kind {
-                SftpEntryKind::Directory => target.kind == SftpEntryKind::Directory,
-                SftpEntryKind::File => {
-                    matches!(target.kind, SftpEntryKind::File | SftpEntryKind::Symlink)
-                },
-                SftpEntryKind::Symlink => true,
-            };
-            (1, compatible, target.kind == SftpEntryKind::Symlink)
-        },
+        PendingRemoteTransfer::Download { entries, local_directory } => entries
+            .iter()
+            .map(|entry| {
+                let target = local_directory.join(&entry.name);
+                let Ok(metadata) = std::fs::symlink_metadata(target) else {
+                    return (0, true, false);
+                };
+                if skip_unchanged && local_metadata_matches(&metadata, entry) {
+                    return (0, true, false);
+                }
+                let compatible = match entry.kind {
+                    SftpEntryKind::Directory => metadata.is_dir(),
+                    SftpEntryKind::File => metadata.is_file() || metadata.file_type().is_symlink(),
+                    // 链接的目标类型必须由远端 lstat/readlink 后才能确定，交给
+                    // 内核的执行时校验，UI 不凭列表图标猜。
+                    SftpEntryKind::Symlink => true,
+                };
+                (1, compatible, metadata.file_type().is_symlink())
+            })
+            .fold((0, true, false), combine_conflicts),
+        PendingRemoteTransfer::Copy(source) => source
+            .entries
+            .iter()
+            .map(|entry| {
+                let Some(target) = entries.iter().find(|target| target.name == entry.name) else {
+                    return (0, true, false);
+                };
+                if skip_unchanged
+                    && entry.kind == SftpEntryKind::File
+                    && target.kind == SftpEntryKind::File
+                    && entry.size == target.size
+                    && entry.modified != 0
+                    && entry.modified == target.modified
+                {
+                    return (0, true, false);
+                }
+                let compatible = match entry.kind {
+                    SftpEntryKind::Directory => target.kind == SftpEntryKind::Directory,
+                    SftpEntryKind::File => {
+                        matches!(target.kind, SftpEntryKind::File | SftpEntryKind::Symlink)
+                    },
+                    SftpEntryKind::Symlink => true,
+                };
+                (1, compatible, target.kind == SftpEntryKind::Symlink)
+            })
+            .fold((0, true, false), combine_conflicts),
     }
+}
+
+fn combine_conflicts(a: (usize, bool, bool), b: (usize, bool, bool)) -> (usize, bool, bool) {
+    (a.0 + b.0, a.1 && b.1, a.2 || b.2)
 }

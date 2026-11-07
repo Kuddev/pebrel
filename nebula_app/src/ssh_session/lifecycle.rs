@@ -392,7 +392,9 @@ async fn open_shell_channel(
     target: Option<&ResumeTarget>,
 ) -> Result<(ShellChannel, String), SessionError> {
     let hook_token = super::remote_hook_token()?;
-    let bootstrap = super::integration::prepare(session, &hook_token).await;
+    let posix = resume::supported(session).await;
+    let bootstrap =
+        if posix { super::integration::prepare(session, &hook_token).await } else { None };
     let mut channel = own_channel(session.channel_open_session().await?);
     channel
         .request_pty(
@@ -406,7 +408,7 @@ async fn open_shell_channel(
         )
         .await?;
     wait_request_success(&mut channel, "PTY").await?;
-    if bootstrap.is_some() || target.is_some() || resume::supported(session).await {
+    if posix {
         let command = resume::startup(&hook_token, bootstrap.as_deref(), target, remote_cwd);
         match super::integration::start(&mut channel, &command).await {
             Ok(()) => {

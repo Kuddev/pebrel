@@ -86,6 +86,7 @@ DEPENDENCY_REFERENCE_PATTERNS = (
     re.compile(r"\bsource\s*=\s*[\"']git\+https?://[^\"']+[\"']", re.IGNORECASE),
 )
 PROTOCOL_COMPATIBILITY_PATTERNS = (
+    re.compile(r"\bkitty\s+(?:graphics\s+protocol\b|图形协议)", re.IGNORECASE),
     re.compile(r"\bKITTY_[A-Z0-9_]+\b"),
     re.compile(r"\bkitty_(?:keyboard|seq|event|release|escape|input)[A-Za-z0-9_]*\b", re.IGNORECASE),
     re.compile(r"\b(?:kitty|tmux)/(?:legacy|style|protocol)\b", re.IGNORECASE),
@@ -250,6 +251,11 @@ def source_without_allowed_occurrences(path: str, text: str) -> str:
         text = text.replace(r"/\/tmux$/", "").replace(r"\/tmux\)$/", "")
     if path == "nebula_app/src/ssh_session/resume/tests.rs":
         text = re.sub(r'(?<=\\n)[0-9]+ pts/[0-9]+ tmux: client(?=\\n)', "", text)
+    if path == "nebula_app/src/gpui_shell/terminal/view/activity_tests.rs":
+        # These fixtures exercise actual process identity. Labels and explanatory
+        # prose are not interfaces, and appended text must remain checked.
+        text = text.replace('view.running_program = Some("tmux".into())', "")
+        text = text.replace('for program in ["tmux", "screen"]', "")
     return mobile_reference_remainder(path, text)
 
 

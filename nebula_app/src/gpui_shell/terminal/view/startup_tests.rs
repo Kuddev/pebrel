@@ -350,6 +350,56 @@ fn issue_353_history_uses_echoed_command_and_refreshes_on_all_platforms(cx: &mut
 }
 
 #[gpui::test]
+fn nested_path_completion_after_native_tab_keeps_the_shell_in_control(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.completion_style = crate::display::CompletionStyle::Inline;
+            // Some shell integrations report prompt start without OSC 133;B.
+            view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+            feed(view, b"> ");
+            view.ghost_enabled = false;
+            view.replace_text_in_range(None, "cd lin", window, cx);
+            feed(view, b"cd lin");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+            assert!(view.suggest.line_buf.is_empty());
+            // The shell completed the parent directory; only subsequent typing
+            // is present in the mirror when Pebrel next considers a suggestion.
+            feed(view, b"gting/");
+            view.ghost_enabled = true;
+            view.replace_text_in_range(None, "li", window, cx);
+            feed(view, b"li");
+            refresh_completion_from_grid(view, cx);
+            assert!(view.suggest.screen_line.is_empty(), "a path suffix is not a command line");
+        })
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert!(view.suggest.suggestion.is_empty());
+            assert!(view.suggest.completion_items.is_empty());
+            view.on_terminal_tab(&TerminalTab, window, cx);
+        })
+    });
+    // A prompt marker may precede its editor capability report. Let the normal
+    // bounded query fallback deliver Tab when this shell never reports one.
+    window.run_until_parked();
+    window.executor().advance_clock(std::time::Duration::from_secs(1));
+    window.run_until_parked();
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"cd lin\tli\t", "both Tabs must reach the native editor unchanged");
+}
+
+#[gpui::test]
 fn completion_never_accepts_a_candidate_for_partial_pty_echo(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler as _;
     let directory = tempfile::tempdir().unwrap();
@@ -867,18 +917,53 @@ fn ssh_tab_name_and_hover_preserve_host_identity_across_remote_titles(cx: &mut T
 }
 
 #[gpui::test]
-fn ai_tab_hover_shows_full_directory_and_reported_task_but_not_stale_task(cx: &mut TestAppContext) {
+fn ai_tab_name_shows_reported_task_and_restores_directory_on_exit(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.process_event(Event::CwdReport("/home/test/很长的项目目录".into()), cx);
-        view.running_program = Some("codex".into());
-        view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
-        assert_eq!(view.tab_label(), "很长的项目目录");
-        let hover = view.tab_tooltip(&view.tab_label());
-        assert!(hover.contains("/home/test/很长的项目目录"));
-        assert!(hover.contains("修复 SSH 标签名称"));
+        for program in ["codex", "claude", "pi", "opencode", "qoder"] {
+            view.running_program = Some(program.into());
+            assert_eq!(
+                view.tab_label(),
+                "很长的项目目录",
+                "a new task must not inherit an old title"
+            );
+            view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
+            assert_eq!(view.tab_label(), "修复 SSH 标签名称", "{program}");
+            let hover = view.tab_tooltip(&view.tab_label());
+            assert!(hover.contains("/home/test/很长的项目目录"));
+            assert!(hover.contains("修复 SSH 标签名称"));
+            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+            assert_eq!(view.tab_label(), "很长的项目目录");
+            assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
+        }
+    });
+}
+
+#[gpui::test]
+fn ai_task_name_preserves_remote_identity_in_hover_and_shell_fallback(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.ssh_destination = Some("root@192.0.2.10:2222".into());
+        view.ssh_label = Some("SG-1 新加坡".into());
+        view.cwd = "/srv/project".into();
+        view.running_program = Some("claude".into());
+        for title in ["", "shell", "claude", "Claude Code", "/srv/project", "root@192.0.2.10:2222"]
+        {
+            view.process_event(Event::Title(title.into()), cx);
+            assert_eq!(view.tab_label(), "SG-1 新加坡", "{title}");
+        }
+        view.process_event(Event::Title("修复登录失败".into()), cx);
+        assert_eq!(view.tab_label(), "修复登录失败");
+        assert_eq!(
+            view.tab_tooltip(&view.tab_label()),
+            "修复登录失败\nSG-1 新加坡\nroot@192.0.2.10:2222\n/srv/project\nclaude · 修复登录失败"
+        );
         view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
-        assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
+        assert_eq!(view.tab_label(), "SG-1 新加坡");
+        view.running_program = Some("htop".into());
+        view.process_event(Event::Title("ordinary application title".into()), cx);
+        assert_eq!(view.tab_label(), "SG-1 新加坡");
     });
 }
 

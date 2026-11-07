@@ -315,6 +315,102 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn image_tabs_dispatch_default_and_custom_new_close_shortcuts(cx: &mut TestAppContext) {
+        // Keep real key dispatch and tab transitions, but replace shell selection
+        // with a failed launch so no PTY thread enters GPUI's test scheduler.
+        struct ImageShortcutHost(Entity<NebulaWorkspace>);
+        impl Render for ImageShortcutHost {
+            fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+                let workspace = self.0.clone();
+                div()
+                    .size_full()
+                    .capture_action(move |_: &NewTerminal, window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.add_terminal_with(
+                                crate::session::LaunchSession::Shell {
+                                    name: "image shortcut fixture".into(),
+                                    program: "pebrel-test-missing-shell-executable".into(),
+                                    args: Vec::new(),
+                                },
+                                None,
+                                None,
+                                window,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    })
+                    .child(self.0.clone())
+            }
+        }
+
+        let (directory, workspace, mut cx) = open_workspace(1, cx);
+        cx.update(|_, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+        });
+        cx.update(|window, cx| {
+            window.replace_root(cx, |window, cx| {
+                let host = cx.new(|_| ImageShortcutHost(workspace.clone()));
+                Root::new(host, window, cx)
+            });
+        });
+        let image = directory.path().join("image.png");
+        image::RgbaImage::from_pixel(20, 20, image::Rgba([50, 80, 120, 255])).save(&image).unwrap();
+        let broken = directory.path().join("broken.png");
+        std::fs::write(&broken, b"not an image").unwrap();
+
+        for position in
+            [nebula_settings::TabsPositionName::Sidebar, nebula_settings::TabsPositionName::Top]
+        {
+            for (path, custom) in
+                [(&image, false), (&image, true), (&broken, false), (&broken, true)]
+            {
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.tabs_position = position;
+                        workspace.update_keybinds(
+                            if custom {
+                                vec![
+                                    ("alt+n".into(), "CreateNewTab".into()),
+                                    ("alt+w".into(), "CloseTab".into()),
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                            cx,
+                        );
+                        workspace.open_document_path(path.clone(), window, cx);
+                    });
+                });
+                cx.run_until_parked();
+                press(if custom { "alt-n" } else { "ctrl-shift-t" }, &mut cx);
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tabs.len(), 3, "new tab from {path:?}, {position:?}");
+                    assert!(workspace.tabs[workspace.active].is_terminal());
+                });
+
+                // Returning by keyboard must focus the image again, including
+                // when its background decoder reported an error.
+                press("alt-2", &mut cx);
+                assert_eq!(workspace.read_with(&cx, |workspace, _| workspace.active), 1);
+                press(if custom { "alt-w" } else { "ctrl-shift-w" }, &mut cx);
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tabs.len(), 2, "close image from {position:?}");
+                    assert!(
+                        !workspace.tabs.iter().any(|tab| matches!(tab, WorkspaceTab::Image { .. }))
+                    );
+                });
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.close_tab(1, window, cx));
+                });
+                cx.run_until_parked();
+                assert_active(&workspace, 0, &mut cx);
+            }
+        }
+    }
+
+    #[gpui::test]
     fn control_character_dispatch_reaches_the_terminal_receiver(cx: &mut TestAppContext) {
         use nebula_terminal::event_loop::Msg;
 

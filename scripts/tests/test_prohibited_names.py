@@ -21,6 +21,39 @@ def run_git(repository: Path, *args: str) -> None:
 
 
 class ProhibitedNamesTests(unittest.TestCase):
+    def test_graphics_protocol_names_preserve_the_exact_technical_reference(self) -> None:
+        for text in ("Support the Kitty graphics protocol.", "支持 Kitty 图形协议。"):
+            with self.subTest(text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line("CHANGELOG.md", text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(
+                    "CHANGELOG.md", text + " Compare with Kitty."
+                ))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(
+                    "CHANGELOG.md", text + " https://example.invalid/kitty"
+                ))
+        for text in ("Kitty graphics are beautiful", "Kitty 图像", "Use Kitty instead",
+                     "Kitty graphics protocol_adapter"):
+            self.assertTrue(check_prohibited_names.prohibited_source_line("CHANGELOG.md", text))
+
+    def test_activity_fixtures_preserve_real_process_names_without_exempting_prose(self) -> None:
+        path = "nebula_app/src/gpui_shell/terminal/view/activity_tests.rs"
+        cases = ('view.running_program = Some("tmux".into());',
+                 'for program in ["tmux", "screen"] {')
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(
+                    path.replace("activity_tests", "other_tests"), text
+                ))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " // use tmux"))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(
+                    path, text + " // https://example.invalid/tmux"
+                ))
+        for text in ('let label = "tmux";', '// tmux 里的 Agent 经 hook 报告回合',
+                     'hook("inside-tmux", "UserPromptSubmit", 1)', 'println!("tmux");'):
+            self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
+
     def test_desktop_endpoint_protocol_references_do_not_allow_prose(self) -> None:
         cases = (
             ("resume.rs", 'Self { executable: "tmux".into(), socket: String::new() }'),

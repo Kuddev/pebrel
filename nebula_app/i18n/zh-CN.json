@@ -198,6 +198,22 @@
     }
   },
   "settings": {
+    "search": {
+      "terms": {
+        "application": "应用 更新 版本 支持",
+        "appearance": "连字 外观 主题 自定义 模板 导入 导出 字体 透明度 背景 背景模糊 模糊 语言 显示语言 终端效果 着色器 视频 动图 光标 平滑 动画 图标 调暗非活动窗格 分屏变暗 回滚 滚动 速度 历史 滚轮 缩放",
+        "profiles": "配置文件 终端 补全 命令历史 清除历史 启动 环境变量 刷新 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 时长 秒 常驻 自动关闭",
+        "providers": "供应商 服务商 模型 补齐 预测",
+        "ssh": "主机 远程 连接",
+        "network": "网络 代理 连接",
+        "interaction": "交互 复制 粘贴 标签 面板 焦点跟随鼠标 自动聚焦",
+        "keymap": "快速终端 独立窗口 已有窗口 按键映射 快捷键",
+        "advanced": "高级 会话 托盘 恢复 自启动 静默启动 开机 登录",
+        "backup": "云备份 云同步 云存储 备份 导出 恢复 坚果云 123云盘 群晖 快照",
+        "agents": "智能体 钩子 接入",
+        "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知"
+      }
+    },
     "opacity": {
       "title": "窗口背景不透明度",
       "description": "同步调整终端和设置页背景；数值越低越透明，文字不变。"
@@ -1094,7 +1110,9 @@
     "choose_files": "选择要上传的文件",
     "choose_upload_directory": "选择要上传的文件夹",
     "choose_download_directory": "选择下载位置",
-    "drag_hint": "拖入文件即可上传；拖到资源管理器即可下载。"
+    "drag_hint": "拖入文件即可上传；拖到资源管理器即可下载。",
+    "completed": "传输完成",
+    "copied_items": "已复制 {count} 个远端项目"
   },
   "hosts": {
     "copied": "已创建主机副本：{name}",
@@ -1635,7 +1653,10 @@
     "reading": "正在读取远端目录…",
     "empty": "此目录为空。",
     "error_retry": "{error}（点右上角重新读取）",
-    "busy_other": "另一主机正在传输：{destination}"
+    "busy_other": "另一主机正在传输：{destination}",
+    "items": "{count} 项",
+    "selected_items": "已选 {count} 项",
+    "clear_selection": "清空选择（Esc）"
   },
   "backup_flow": {
     "password_notice": "Pebrel 不把这个密码写到磁盘，只在本次运行期间留在内存里，下次启动后第一次备份时再问。忘了它，已有的备份就解不开了。",
@@ -1959,7 +1980,8 @@
     "serial_read_failed": "串口已停止：{error}",
     "serial_write_failed": "串口写入失败：{error}",
     "serial_start_failed": "串口打开失败：{error}",
-    "pty_start_failed": "PTY 启动失败: {error}"
+    "pty_start_failed": "PTY 启动失败: {error}",
+    "zmodem_cancelled": "Pebrel 暂不支持 ZMODEM（rz/sz）传输，已自动取消以免终端卡住。请改用 scp 或 SFTP 传输文件。"
   },
   "confirmation": {
     "cover_title": "让背景图覆盖窗口控件区域？",
