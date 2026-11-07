@@ -74,17 +74,23 @@ pub(super) fn effective_line_height_with_theme(
     effective_line_height(target, offset_y, scale)
 }
 
+/// An explicit terminal line height scales the shaped natural height; Auto
+/// leaves the theme / natural-height policy above in charge.
 pub(super) fn line_height_for_view(
     font_size: Pixels,
-    line_height_multiplier: Option<f32>,
+    theme_line_height: Option<f32>,
+    terminal_line_height: Option<f32>,
     natural_height: f32,
     offset_y: f32,
     scale: f32,
 ) -> Pixels {
+    if let Some(multiplier) = terminal_line_height {
+        return effective_line_height(natural_height * multiplier, offset_y, scale);
+    }
     effective_line_height_with_theme(
         natural_height,
         font_size.as_f32(),
-        line_height_multiplier,
+        theme_line_height,
         offset_y,
         scale,
     )
@@ -99,6 +105,7 @@ fn measure_cell_metrics(
     offset_x: f32,
     offset_y: f32,
     line_height_multiplier: Option<f32>,
+    terminal_line_height: Option<f32>,
 ) -> (Pixels, Pixels) {
     let font = mono_font(family, FontWeight::NORMAL, FontStyle::Normal, false);
     let sample = text_system.shape_line(
@@ -116,10 +123,11 @@ fn measure_cell_metrics(
     );
     (
         effective_cell_width(sample.width.as_f32(), mode, scale, offset_x),
-        effective_line_height_with_theme(
-            sample.ascent.as_f32() + sample.descent.as_f32(),
-            font_size.as_f32(),
+        line_height_for_view(
+            font_size,
             line_height_multiplier,
+            terminal_line_height,
+            sample.ascent.as_f32() + sample.descent.as_f32(),
             offset_y,
             scale,
         ),
@@ -127,7 +135,7 @@ fn measure_cell_metrics(
 }
 
 pub(super) fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
-    let (family, font_size, mode, offset_x, offset_y, line_height_multiplier) =
+    let (family, font_size, mode, offset_x, offset_y, line_height_multiplier, terminal_line_height) =
         match cx.try_global::<Settings>() {
             Some(settings) => (
                 settings.font_family.as_str(),
@@ -136,8 +144,9 @@ pub(super) fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
                 settings.font_offset_x,
                 settings.font_offset_y,
                 settings.theme_line_height,
+                settings.terminal_line_height,
             ),
-            None => (REQUIRED_FONT_FAMILY, 15.0, CellWidthModeName::Compact, 0.0, 0.0, None),
+            None => (REQUIRED_FONT_FAMILY, 15.0, CellWidthModeName::Compact, 0.0, 0.0, None, None),
         };
     measure_cell_metrics(
         window.text_system(),
@@ -148,6 +157,7 @@ pub(super) fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
         offset_x,
         offset_y,
         line_height_multiplier,
+        terminal_line_height,
     )
 }
 
@@ -168,7 +178,7 @@ fn measure_startup_cell_metrics(
     scale: f32,
     cx: &App,
 ) -> (Pixels, Pixels) {
-    let (family, font_size, mode, offset_x, offset_y, line_height_multiplier) =
+    let (family, font_size, mode, offset_x, offset_y, line_height_multiplier, terminal_line_height) =
         match cx.try_global::<Settings>() {
             Some(settings) => (
                 settings.font_family.as_str(),
@@ -177,8 +187,9 @@ fn measure_startup_cell_metrics(
                 settings.font_offset_x,
                 settings.font_offset_y,
                 settings.theme_line_height,
+                settings.terminal_line_height,
             ),
-            None => (REQUIRED_FONT_FAMILY, 15.0, CellWidthModeName::Compact, 0.0, 0.0, None),
+            None => (REQUIRED_FONT_FAMILY, 15.0, CellWidthModeName::Compact, 0.0, 0.0, None, None),
         };
     measure_cell_metrics(
         text_system,
@@ -189,5 +200,6 @@ fn measure_startup_cell_metrics(
         offset_x,
         offset_y,
         line_height_multiplier,
+        terminal_line_height,
     )
 }
