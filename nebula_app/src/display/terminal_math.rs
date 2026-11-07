@@ -724,15 +724,27 @@ impl FormulaOverlay {
             .any(|row| rows.contains(&row))
     }
 
+    pub(super) fn inline_span(&self) -> Option<RowSpan> {
+        (!self.display).then(|| self.spans.last().copied()).flatten()
+    }
+
     fn bounds(&self, size: &SizeInfo) -> Option<FormulaBounds> {
-        let first = self.spans.first()?;
-        let last = self.spans.last()?;
-        let left_col = self.spans.iter().map(|span| span.start).min()?;
-        let right_col = self.spans.iter().map(|span| span.end).max()?;
+        let (first_row, last_row, left_col, right_col) = if let Some(span) = self.inline_span() {
+            if span.row < 0 || span.row >= size.screen_lines() as i32 {
+                return None;
+            }
+            (span.row, span.row, span.start, span.end)
+        } else {
+            let first = self.spans.first()?;
+            let last = self.spans.last()?;
+            let left_col = self.spans.iter().map(|span| span.start).min()?;
+            let right_col = self.spans.iter().map(|span| span.end).max()?;
+            (first.row, last.row, left_col, right_col)
+        };
         let left = size.padding_x() + left_col as f32 * size.cell_width();
         let right = size.padding_x() + right_col as f32 * size.cell_width();
-        let top = size.padding_y() + first.row as f32 * size.cell_height();
-        let bottom = size.padding_y() + (last.row + 1) as f32 * size.cell_height();
+        let top = size.padding_y() + first_row as f32 * size.cell_height();
+        let bottom = size.padding_y() + (last_row + 1) as f32 * size.cell_height();
         (right > left && bottom > top).then_some(FormulaBounds { left, top, right, bottom })
     }
 
@@ -886,7 +898,7 @@ impl LineProjection {
             let Some(visual_cells) = prepared.and_then(|prepared| prepared.compact_cells) else {
                 continue;
             };
-            let [span] = overlay.spans.as_slice() else { continue };
+            let Some(span) = overlay.inline_span() else { continue };
             let Ok(row) = usize::try_from(span.row) else { continue };
             if span.end <= span.start {
                 continue;
@@ -1120,8 +1132,12 @@ pub(crate) fn prepare_overlays(
                     .metrics;
                 widest = widest.max(metrics.width);
             }
-            let compact_inline = !overlay.display && overlay.spans.len() == 1;
-            let source_start = overlay.spans.first()?.start;
+            let inline_span = overlay.inline_span();
+            let compact_inline = inline_span.is_some();
+            let source_start = inline_span.map_or_else(
+                || overlay.spans.first().map(|span| span.start),
+                |span| Some(span.start),
+            )?;
             let remaining_columns = size.columns().saturating_sub(source_start);
             let natural_cells =
                 quantized_visual_cells(widest, size.cell_width(), remaining_columns);
@@ -1300,12 +1316,12 @@ pub(crate) fn plan_overlay_draw(
     pixels_per_point: f32,
 ) -> Option<OverlayDrawPlan> {
     let mut bounds = overlay.bounds(size)?;
-    let shift_columns = match overlay.spans.as_slice() {
-        [span] => usize::try_from(span.row)
-            .ok()
-            .map_or(0, |row| state.projection.shift_before(row, span.start)),
-        _ => 0,
-    };
+    let shift_columns = overlay
+        .inline_span()
+        .and_then(|span| {
+            usize::try_from(span.row).ok().map(|row| state.projection.shift_before(row, span.start))
+        })
+        .unwrap_or(0);
     let shift_pixels = shift_columns as f32 * size.cell_width();
     bounds.left += shift_pixels;
     bounds.right += shift_pixels;

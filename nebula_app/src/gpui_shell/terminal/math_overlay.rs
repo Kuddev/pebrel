@@ -292,8 +292,8 @@ impl MathOverlay {
             candidates,
             size: *size,
             pixels_per_point,
-            // 与旧壳一致：TUI/备用屏继续拥有固定列坐标，但公式覆盖本身仍可用。
-            reflow_inline: !alt_screen,
+            // 行内公式统一按渲染宽度压缩，避免在备用屏 TUI 中留下多余空白。
+            reflow_inline: true,
             selection,
             viewport_origin: origin,
         }
@@ -992,8 +992,8 @@ mod tests {
         );
         assert_eq!(
             frame.project_cell(0, source_end, 96),
-            Some(source_end),
-            "alternate-screen formulas may overlay but must keep fixed TUI columns"
+            main_frame.project_cell(0, source_end, 96),
+            "alternate-screen inline formulas compact trailing columns like the main screen"
         );
     }
 
