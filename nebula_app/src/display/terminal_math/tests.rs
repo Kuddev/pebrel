@@ -1539,6 +1539,42 @@ fn display_math_without_a_right_pane_uses_the_viewport() {
     assert_eq!(overlays[0].widen_right_to, Some(grid.columns));
 }
 
+#[test]
+fn wrapped_inline_formula_stays_on_closing_row_and_compacts_trailing_text() {
+    let grid = TextGrid::from_rows(&[
+        r"- 如果保留动态衰减矩阵 $\prod_{i=1}^N (I - \hat{\kappa}_i^\top",
+        r"  (a_i \odot \hat{\kappa}_i))$，因为一般矩阵乘法 $A_1 A_2 \neq A_2 A_1$，排在后面",
+    ]);
+    let overlays = scan_grid_with_hints(&grid);
+    assert_eq!(overlays.len(), 2);
+    assert!(!overlays[0].display);
+    assert_eq!(overlays[0].spans.len(), 2);
+    let closing_span = overlays[0].inline_span().expect("wrapped inline span");
+    assert_eq!(closing_span.row, 1);
+    assert_eq!(closing_span.start, 2, "must preserve list continuation indent");
+
+    let size = test_size(grid.columns as f32, grid.rows.len() as f32);
+    let bounds = overlays[0].bounds(&size).expect("bounds");
+    assert_eq!(bounds.left, 2.0 * size.cell_width());
+    assert_eq!(bounds.top, size.cell_height());
+    assert_eq!(bounds.bottom, 2.0 * size.cell_height());
+
+    let mut state = TerminalMathState::default();
+    let prepared = prepare_overlays(&mut state, &overlays, &size, TEST_FONT_PX, 1.0);
+    let compact_cells = prepared[0].and_then(|item| item.compact_cells).expect("compact inline");
+    state.update_projection(&overlays, &prepared, true);
+
+    let coverage = CoverageMask::build(&overlays, &prepared);
+    assert!(coverage.covers(Point::new(0, Column(overlays[0].spans[0].start))));
+    assert!(coverage.covers(Point::new(1, Column(closing_span.start))));
+    assert!(!coverage.covers(Point::new(1, Column(0))), "leading indent stays uncovered");
+
+    let suffix = state
+        .project_cell(Point::new(1, Column(closing_span.end)), grid.columns)
+        .expect("trailing prose stays visible");
+    assert_eq!(suffix.column.0, closing_span.start + compact_cells);
+}
+
 /// 诊断用：打印各场景的缩放比例，`cargo test diagnose -- --nocapture`。
 #[test]
 fn diagnose_sizes() {
