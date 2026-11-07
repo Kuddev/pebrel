@@ -6,6 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CHINESE_TEMPLATE: &str = include_str!("templates/pebrel.zh-CN.lua");
 pub const ENGLISH_TEMPLATE: &str = include_str!("templates/pebrel.en-US.lua");
+/// Editor types for `require '@pebrel'`; the runtime never loads this file.
+pub const EDITOR_TYPES: &str = include_str!("templates/pebrel-types.luau");
+const EDITOR_TYPES_PATH: &str = "types/pebrel.luau";
+const LUAURC_ALIAS: &str = "types/pebrel";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateLanguage {
@@ -126,6 +130,73 @@ pub fn ensure_user_lua_config(
         },
         result => result,
     }
+}
+
+/// How the `.luaurc` beside the configuration maps `@pebrel` for editors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LuaurcStatus {
+    Created,
+    AlreadyMapped,
+    /// An existing file lacks the alias; Pebrel does not rewrite user JSON.
+    NeedsAlias,
+    /// The configuration lives in the home directory, where a `.luaurc` would
+    /// apply to every Luau project below it.
+    SkippedHome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorTypesWrite {
+    pub types_path: PathBuf,
+    pub luaurc_path: PathBuf,
+    pub luaurc: LuaurcStatus,
+}
+
+/// The `.luaurc` alias line an existing file needs, for messages.
+pub fn luaurc_alias_hint() -> String {
+    format!("\"aliases\": {{ \"pebrel\": \"{LUAURC_ALIAS}\" }}")
+}
+
+/// Writes the generated type module and, when absent, a `.luaurc` alias so
+/// Luau language servers resolve `require '@pebrel'`.
+pub fn write_editor_types(config_dir: &Path) -> Result<EditorTypesWrite, TemplateError> {
+    let types_path = config_dir.join(EDITOR_TYPES_PATH);
+    let types_dir = types_path.parent().unwrap_or(config_dir);
+    fs::create_dir_all(types_dir)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(types_dir)?;
+    temporary.write_all(EDITOR_TYPES.as_bytes())?;
+    temporary.persist(&types_path).map_err(|error| TemplateError::Io(error.error))?;
+
+    let luaurc_path = config_dir.join(".luaurc");
+    let home = home::home_dir().and_then(|home| home.canonicalize().ok());
+    let luaurc = if home.is_some_and(|home| config_dir.canonicalize().is_ok_and(|dir| dir == home))
+    {
+        LuaurcStatus::SkippedHome
+    } else {
+        match fs::read_to_string(&luaurc_path) {
+            Ok(text) => {
+                let mapped = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|value| value.get("aliases")?.get("pebrel").cloned())
+                    .is_some();
+                if mapped { LuaurcStatus::AlreadyMapped } else { LuaurcStatus::NeedsAlias }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let contents = format!("{{\n    {}\n}}\n", luaurc_alias_hint());
+                match fs::OpenOptions::new().write(true).create_new(true).open(&luaurc_path) {
+                    Ok(mut file) => {
+                        file.write_all(contents.as_bytes())?;
+                        LuaurcStatus::Created
+                    },
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        LuaurcStatus::NeedsAlias
+                    },
+                    Err(error) => return Err(error.into()),
+                }
+            },
+            Err(error) => return Err(error.into()),
+        }
+    };
+    Ok(EditorTypesWrite { types_path, luaurc_path, luaurc })
 }
 
 fn create_backup(path: &Path) -> Result<PathBuf, std::io::Error> {
@@ -271,5 +342,49 @@ mod tests {
         });
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents == ENGLISH_TEMPLATE || contents == CHINESE_TEMPLATE);
+    }
+
+    #[test]
+    fn editor_types_list_exactly_the_runtime_module_fields() {
+        let body = EDITOR_TYPES.split("export type Pebrel = {").nth(1).unwrap();
+        let body = body.split("\n}").next().unwrap();
+        let mut declared: Vec<String> = body
+            .lines()
+            .filter_map(|line| line.trim().split_once(':').map(|(name, _)| name.to_owned()))
+            .collect();
+        declared.sort();
+
+        let runtime = crate::config::lua::runtime::LuaRuntime::new(
+            Path::new("pebrel.lua"),
+            ReloadSignal::default(),
+        )
+        .unwrap();
+        let actual: Vec<String> = runtime
+            .lua()
+            .load(
+                "local names = {} for name in pairs(require '@pebrel') do names[#names + 1] = name end \
+                 table.sort(names) return names",
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(declared, actual);
+    }
+
+    #[test]
+    fn editor_types_create_an_alias_once_and_never_rewrite_user_luaurc() {
+        let temp = tempfile::tempdir().unwrap();
+        let written = write_editor_types(temp.path()).unwrap();
+        assert_eq!(written.luaurc, LuaurcStatus::Created);
+        assert_eq!(fs::read_to_string(&written.types_path).unwrap(), EDITOR_TYPES);
+        let luaurc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&written.luaurc_path).unwrap()).unwrap();
+        assert_eq!(luaurc["aliases"]["pebrel"], "types/pebrel");
+        assert_eq!(write_editor_types(temp.path()).unwrap().luaurc, LuaurcStatus::AlreadyMapped);
+
+        let other = tempfile::tempdir().unwrap();
+        let user = "{ \"languageMode\": \"strict\" }";
+        fs::write(other.path().join(".luaurc"), user).unwrap();
+        assert_eq!(write_editor_types(other.path()).unwrap().luaurc, LuaurcStatus::NeedsAlias);
+        assert_eq!(fs::read_to_string(other.path().join(".luaurc")).unwrap(), user);
     }
 }

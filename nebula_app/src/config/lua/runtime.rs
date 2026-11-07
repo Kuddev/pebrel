@@ -290,7 +290,8 @@ mod tests {
             pebrel.reload_configuration()
             local config = legacy.config_builder()
             config.profiles = pebrel.array()
-            return rawequal(pebrel, legacy) and getmetatable(config.profiles).__nebula_array
+            return rawequal(pebrel, legacy) and rawequal(pebrel, require '@pebrel')
+                and getmetatable(config.profiles).__nebula_array
         "#,
             )
             .eval()

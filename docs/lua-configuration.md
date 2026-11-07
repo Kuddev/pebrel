@@ -31,6 +31,26 @@ pebrel config check
 pebrel config check --config-file D:/configs/pebrel.lua
 ```
 
+## Editor Types
+
+`pebrel config init` also writes `types/pebrel.luau` and, when absent, a
+`.luaurc` that maps `@pebrel` to it. With a Luau language server such as
+[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), `require '@pebrel'`
+then provides completion and type errors for the `pebrel` module. For an
+existing configuration, run:
+
+```text
+pebrel config types
+pebrel config types --config-file D:/configs/pebrel.lua
+```
+
+An existing `.luaurc` is never rewritten; the command prints the alias line to
+add. In the home directory no `.luaurc` is created, because it would apply to
+every Luau project below it. `require 'pebrel'`, `require 'nebula'` and
+`require '@pebrel'` return the same module. The types describe the module API,
+not configuration fields; `pebrel config check` remains the field validator.
+Regenerate the file after upgrading Pebrel.
+
 ## Basic Configuration
 
 ```lua
@@ -303,6 +323,9 @@ Lua 文件。普通空表 `{}` 表示对象；空数组必须写成 `pebrel.arra
 以及 `__pairs` 均按 Lua 5.4 结果恢复，`<const>` 可以继续使用。`goto`、`<close>`、
 `_ENV`、位运算符和十六进制浮点数不可用；出错时提示会给出行号和 `bit32` 等替代写法。
 数字统一为双精度，`require './name'` 按 Luau 规则相对当前文件解析。
+`pebrel config init` 会同时写入 `types/pebrel.luau` 与 `.luaurc`（已存在则不改写），
+配合 luau-lsp 等编辑器插件，`require '@pebrel'` 可获得补全和类型检查；已有配置可运行
+`pebrel config types` 补写。类型只描述 `pebrel` 模块，字段校验仍以 `pebrel config check` 为准。
 
 旧的 `require 'nebula'` 与新的 `require 'pebrel'` 指向同一 API。显式配置文件优先，
 其次为 `PEBREL_CONFIG_FILE`、兼容的 `NEBULA_CONFIG_FILE`，然后依次查找 Pebrel 与

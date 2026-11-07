@@ -1,4 +1,4 @@
-local pebrel = require 'pebrel'
+local pebrel = require '@pebrel'
 local config = pebrel.config_builder()
 
 -- Pebrel Lua 配置文件。修改后可运行 `pebrel config check` 检查语法和字段。

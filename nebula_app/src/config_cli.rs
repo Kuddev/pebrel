@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::cli::{ConfigCommand, ConfigInitOptions, ConfigOptions};
+use crate::cli::{ConfigCommand, ConfigInitOptions, ConfigOptions, ConfigTypesOptions};
 use crate::config;
 use crate::config::source::{self, ConfigFormat};
 use crate::config::template;
@@ -9,6 +9,7 @@ pub fn run(options: ConfigOptions) -> i32 {
     match options.command {
         ConfigCommand::Check(options) => run_check(options.config_file),
         ConfigCommand::Init(options) => run_init(options),
+        ConfigCommand::Types(options) => run_types(options),
     }
 }
 
@@ -75,11 +76,54 @@ fn run_init(options: ConfigInitOptions) -> i32 {
             if let Some(backup) = written.backup {
                 println!("Backed up previous configuration: {}", backup.display());
             }
+            // Editor types are a convenience; the configuration itself is complete.
+            if let Some(dir) = written.path.parent() {
+                report_editor_types(dir);
+            }
             0
         },
         Err(error) => {
             eprintln!("Unable to write Lua configuration: {error}");
             1
+        },
+    }
+}
+
+fn run_types(options: ConfigTypesOptions) -> i32 {
+    let path = match options.config_file.map(Ok).unwrap_or_else(source::default_lua_path) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Unable to choose a configuration path: {error}");
+            return 1;
+        },
+    };
+    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    if report_editor_types(dir) { 0 } else { 1 }
+}
+
+fn report_editor_types(dir: &Path) -> bool {
+    match template::write_editor_types(dir) {
+        Ok(written) => {
+            println!("Wrote Luau editor types: {}", written.types_path.display());
+            let luaurc = written.luaurc_path.display();
+            match written.luaurc {
+                template::LuaurcStatus::Created => println!("Created {luaurc}"),
+                template::LuaurcStatus::AlreadyMapped => {},
+                template::LuaurcStatus::NeedsAlias => println!(
+                    "Add {} to {luaurc} so editors resolve require '@pebrel'",
+                    template::luaurc_alias_hint()
+                ),
+                template::LuaurcStatus::SkippedHome => println!(
+                    "Skipped .luaurc in the home directory; add {} to a .luaurc beside the \
+                     configuration to enable editor types",
+                    template::luaurc_alias_hint()
+                ),
+            }
+            true
+        },
+        Err(error) => {
+            eprintln!("Unable to write Luau editor types: {error}");
+            false
         },
     }
 }
