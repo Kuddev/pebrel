@@ -110,6 +110,86 @@ pub(super) fn feed(view: &mut TerminalView, bytes: &[u8]) {
     parser.advance(&mut *term, bytes);
 }
 
+#[gpui::test]
+fn clear_screen_clears_history_and_writes_redraw_only_at_prompt(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    for prompt in [false, true] {
+        view.update(cx, |view, cx| {
+            for _ in 0..40 {
+                feed(view, b"previous output\r\n");
+            }
+            {
+                let mut term = view.session.as_ref().unwrap().term.lock();
+                assert!(term.history_size() > 0);
+                term.selection = Some(Selection::new(
+                    SelectionType::Simple,
+                    TermPoint::new(Line(0), Column(0)),
+                    Side::Left,
+                ));
+                if prompt {
+                    term.nebula_add_prompt_mark();
+                } else {
+                    term.nebula_end_prompt();
+                }
+            }
+            receiver.try_iter().for_each(drop);
+            view.clear_screen(cx);
+            let term = view.session.as_ref().unwrap().term.lock();
+            assert_eq!(term.history_size(), 0);
+            assert_eq!(term.grid().display_offset(), 0);
+            assert!(term.selection.is_none());
+            assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
+            if !prompt {
+                assert_eq!(term.grid().cursor.point, TermPoint::new(Line(0), Column(0)));
+            }
+        });
+        let writes: Vec<_> = receiver
+            .try_iter()
+            .filter_map(|message| match message {
+                Msg::Input(bytes) => Some(bytes.into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(writes, if prompt { vec![b"\x0c".to_vec()] } else { vec![] });
+    }
+}
+
+#[gpui::test]
+fn clear_screen_keeps_alternate_screen_and_primary_history(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    view.update(cx, |view, cx| {
+        for _ in 0..40 {
+            feed(view, b"primary output\r\n");
+        }
+        let history = view.session.as_ref().unwrap().term.lock().history_size();
+        assert!(history > 0);
+        feed(view, b"\x1b[?1049hfull-screen application");
+        let before = {
+            let term = view.session.as_ref().unwrap().term.lock();
+            (
+                term.grid().cursor.point,
+                term.grid().display_iter().map(|cell| cell.c).collect::<String>(),
+            )
+        };
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+        {
+            let term = view.session.as_ref().unwrap().term.lock();
+            assert!(term.mode().contains(TermMode::ALT_SCREEN));
+            assert_eq!(
+                before,
+                (
+                    term.grid().cursor.point,
+                    term.grid().display_iter().map(|cell| cell.c).collect::<String>()
+                )
+            );
+        }
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        feed(view, b"\x1b[?1049l");
+        assert_eq!(view.session.as_ref().unwrap().term.lock().history_size(), history);
+    });
+}
+
 fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<TerminalView>) {
     let (line, anchor) = {
         let term = view.session.as_ref().unwrap().term.lock();
