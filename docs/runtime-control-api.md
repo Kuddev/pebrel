@@ -195,9 +195,18 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 任意终端字节注入接口。控制键走 `pane.send_key`：只开放命名键，字母必须配
 `control=true`，`repeat` 上限 64；API 不接受任意 bytes 或 ANSI 字符串。
 
-`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置相同的 id（`pwsh`、`cmd`、
-`wsl:Ubuntu`，或某个 profile 的 settings id），只作用于这一次创建；缺省照旧用设置里的
-默认 Shell。id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
+`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置及 `pebrel --shell` 相同的 id，
+只作用于这一次创建；缺省照旧用设置里的默认 Shell。Windows 上 `powershell` 指
+Windows PowerShell，`pwsh` 指检测到的 PowerShell 7，两者不是别名；其他例子有
+`cmd`、`wsl:Ubuntu`。检测不到的普通 Shell 不会出现在可用 id 中。
+
+导入终端配置的 settings id 来自 `terminal_profiles.json` 中的实际条目，形式为
+`profile:<shell-id>|<profile-id>`，完整 id 区分大小写。它不指 Lua `config.profiles`
+的 `name` 或 `shell_id`：后者表示 Shell 家族，不能创建 CLI 或 Runtime API 别名。
+`config check` 通过只表示配置有效，不表示其中的 `shell_id` 已注册。自定义程序和
+参数的命令行启动方式见 [Lua 配置中的 Shell 选择说明](lua-configuration.md#shell-ids-and-config-profiles)。
+
+id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
 静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
 升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
 需要重启驻留实例。

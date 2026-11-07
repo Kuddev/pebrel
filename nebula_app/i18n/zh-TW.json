@@ -615,7 +615,9 @@
     "choose_files": "選擇要上傳的檔案",
     "choose_upload_directory": "選擇要上傳的資料夾",
     "choose_download_directory": "選擇下載位置",
-    "drag_hint": "將檔案拖進來即可上傳；拖至檔案總管即可下載。"
+    "drag_hint": "將檔案拖進來即可上傳；拖至檔案總管即可下載。",
+    "completed": "傳輸完成",
+    "copied_items": "已複製 {count} 個遠端項目"
   },
   "hosts": {
     "search": "搜尋名稱、位址、群組、標籤或備註",
@@ -1030,7 +1032,10 @@
     "reading": "正在讀取遠端目錄…",
     "empty": "此目錄為空。",
     "error_retry": "{error}（點選右上角重新讀取）",
-    "busy_other": "另一主機正在傳輸：{destination}"
+    "busy_other": "另一主機正在傳輸：{destination}",
+    "items": "{count} 個項目",
+    "selected_items": "已選取 {count} 個項目",
+    "clear_selection": "清除選取（Esc）"
   },
   "terminal.ssh_disconnected": "連線已中斷，按 R 重新連線。",
   "terminal.ssh_reconnect": "重新連線 (R)",

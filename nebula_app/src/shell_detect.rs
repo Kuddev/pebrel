@@ -3,7 +3,7 @@
 //! Third-party provenance for this module and its icon assets is recorded
 //! in THIRD-PARTY-NOTICES at the repository root. The menu lists what's
 //! actually installed, in a stable, familiar order:
-//! PowerShell 7 → Windows PowerShell → CMD → Git Bash → Nushell → WSL distros.
+//! PowerShell 7 → Windows PowerShell → CMD → Git Bash → Zsh → Nushell → WSL distros.
 //!
 //! Detection touches the filesystem and the registry, so callers run it ONCE
 //! per process (at first menu open) and cache the result — see
@@ -379,6 +379,15 @@ fn detect_windows() -> Vec<DetectedShell> {
         });
     }
 
+    // Prefer PATH, then the standard MSYS2 installs. Other locations can be
+    // imported explicitly; discovery never executes a shell to identify it.
+    let directories: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    shells.extend(find_windows_zsh(
+        directories.into_iter().chain([PathBuf::from(r"C:\msys64"), PathBuf::from(r"C:\msys32")]),
+    ));
+
     // Nushell — installed per-user; only ever listed via fragment files.
     if let Some(program) = find_nushell() {
         shells.push(DetectedShell {
@@ -394,6 +403,22 @@ fn detect_windows() -> Vec<DetectedShell> {
     shells.extend(find_wsl_distros());
 
     shells
+}
+
+/// Reuse directory import's executable validation, shell identity and arguments.
+fn find_windows_zsh(directories: impl IntoIterator<Item = PathBuf>) -> Option<DetectedShell> {
+    directories.into_iter().filter(|directory| directory.is_absolute()).find_map(|directory| {
+        let profile = crate::terminal_profiles::scan_directory(&directory)
+            .ok()?
+            .into_iter()
+            .find(|profile| profile.shell_id == "zsh")?;
+        Some(DetectedShell {
+            name: profile.name,
+            id: profile.shell_id,
+            program: profile.command.to_string_lossy().into_owned(),
+            args: profile.args,
+        })
+    })
 }
 
 #[cfg(windows)]
@@ -1042,6 +1067,50 @@ fn find_wsl_distros() -> Vec<DetectedShell> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_zsh_discovery_preserves_path_precedence_and_launch_arguments() {
+        let temp = tempfile::tempdir().unwrap();
+        let path_directory = temp.path().join("shells with spaces");
+        let msys = temp.path().join("msys64");
+        let msys_bin = msys.join("usr").join("bin");
+        let missing = temp.path().join("missing");
+        assert!(super::find_windows_zsh([missing.clone(), temp.path().to_path_buf()]).is_none());
+
+        // A minimal x86 PE header is accepted on all supported Windows hosts.
+        let mut executable = vec![0_u8; 0x86];
+        executable[..2].copy_from_slice(b"MZ");
+        executable[0x3c..0x40].copy_from_slice(&0x80_u32.to_le_bytes());
+        executable[0x80..0x84].copy_from_slice(b"PE\0\0");
+        executable[0x84..0x86].copy_from_slice(&0x014c_u16.to_le_bytes());
+        for directory in [&path_directory, &msys_bin] {
+            std::fs::create_dir_all(directory).unwrap();
+            for name in ["bash.exe", "zsh.exe"] {
+                std::fs::write(directory.join(name), &executable).unwrap();
+            }
+        }
+
+        for (directories, expected) in [
+            (
+                vec![
+                    missing.clone(),
+                    path_directory.join("zsh.exe"),
+                    path_directory.clone(),
+                    msys.clone(),
+                ],
+                path_directory,
+            ),
+            (vec![missing, msys], msys_bin),
+        ] {
+            let detected = super::find_windows_zsh(directories).expect("installed Zsh");
+            let command = expected.join("zsh.exe").canonicalize().unwrap();
+            assert_eq!(detected.id, "zsh");
+            assert_eq!(detected.name, "Zsh");
+            assert_eq!(detected.integration(), super::ShellIntegration::Unsupported);
+            assert_eq!(detected.shell().program(), command.to_str().unwrap());
+            assert_eq!(detected.shell().args(), ["--login", "-i"]);
+        }
+    }
+
     #[test]
     fn zellij_discovery_requires_an_installed_program_and_preserves_argv() {
         let directory = tempfile::tempdir().unwrap();

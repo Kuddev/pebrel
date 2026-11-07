@@ -124,8 +124,16 @@ fn posix(script: &str) -> String {
     format!("sh -c {}", quote(script))
 }
 
+pub(super) const PROBE_REPLY: &str = "PEBREL_POSIX_2:'\"$\\ spaced";
+
+pub(super) fn probe_command() -> String {
+    // Finding sh does not establish how the SSH server's outer shell passes
+    // nested quotes. Exercise the same quoting and expansion as startup.
+    posix(&format!("pebrel_probe={}; printf '%s' \"$pebrel_probe\"", quote(PROBE_REPLY)))
+}
+
 pub(super) async fn supported(session: &SharedSession) -> bool {
-    query(session, "sh -c 'printf PEBREL_POSIX_1'").await.as_deref() == Some("PEBREL_POSIX_1")
+    query(session, &probe_command()).await.as_deref() == Some(PROBE_REPLY)
 }
 
 pub(super) fn startup(
@@ -134,7 +142,12 @@ pub(super) fn startup(
     target: Option<&ResumeTarget>,
     cwd: Option<&str>,
 ) -> String {
-    let mut script = format!("printf '\\036PEBREL_PTY_{token}=%s:%s\\037' \"$(tty)\" \"$$\"; ");
+    // tty prints "not a tty" when startup has no terminal, as reported for JumpServer direct
+    // connections. The filter shows malformed markers verbatim, so send one only on success.
+    let mut script = format!(
+        "if pebrel_tty=$(tty 2>/dev/null); then \
+         printf '\\036PEBREL_PTY_{token}=%s:%s\\037' \"$pebrel_tty\" \"$$\"; fi; "
+    );
     if let Some(target) = target {
         script.push_str(&target.attach());
     }

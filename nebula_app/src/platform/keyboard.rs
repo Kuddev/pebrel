@@ -1,5 +1,8 @@
 //! Native character data discarded by the GPUI keyboard adapter.
 
+#[cfg(test)]
+mod tests;
+
 /// Recover native character data without changing keyboard composition state.
 /// GPUI filters control text out of `key_char`, including Ctrl+C's ETX.
 pub(crate) fn native_character(
