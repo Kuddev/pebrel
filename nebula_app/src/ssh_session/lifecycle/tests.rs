@@ -1360,4 +1360,5 @@ fn ssh_echo_keeps_draining_while_a_large_input_waits_for_window_space() {
     });
 }
 
+mod keepalive;
 mod sftp;

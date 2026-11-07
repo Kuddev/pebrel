@@ -186,6 +186,7 @@ fn conpty_cursor_probe(_pid: u32) -> Option<ConhostCursor> {
 pub struct StreamProcessor {
     parser: ansi::Processor<SyncTimeout>,
     cwd_sniffer: crate::osc_cwd::CwdSniffer,
+    zmodem: crate::zmodem::ZmodemSniffer,
     window_size: Option<WindowSize>,
     remote_hook_token: Option<String>,
     // The stream owns unreplayed payloads: disconnecting drops them even if
@@ -251,6 +252,7 @@ impl StreamProcessor {
         bytes: &[u8],
     ) -> usize {
         let osc_events = self.cwd_sniffer.feed(bytes);
+        let zmodem = self.zmodem.feed(bytes);
         let mut advanced = 0;
         let mut parser_input_bytes = bytes.len();
         for (offset, event) in osc_events {
@@ -405,6 +407,13 @@ impl StreamProcessor {
             }
         }
         self.advance(terminal, &bytes[advanced..]);
+        if let Some(offer) = zmodem {
+            // Without a ZMODEM implementation the remote rz/sz would hold the
+            // TTY in raw mode indefinitely; cancel it so the shell returns.
+            log::info!("cancelling unsupported ZMODEM {offer:?} session");
+            event_proxy.send_event(Event::PtyWrite(crate::zmodem::ABORT_SEQUENCE.to_owned()));
+            event_proxy.send_event(Event::ZmodemCancelled(offer));
+        }
         self.release_replayed_images();
         // Publish placements only once their cells are in the grid, and at most
         // once per image: a chunked transfer must not queue 700 decodes.
@@ -1555,3 +1564,7 @@ mod sync_tests;
 #[cfg(test)]
 #[path = "event_loop/kitty_tests.rs"]
 mod kitty_tests;
+
+#[cfg(test)]
+#[path = "event_loop/zmodem_tests.rs"]
+mod zmodem_tests;
