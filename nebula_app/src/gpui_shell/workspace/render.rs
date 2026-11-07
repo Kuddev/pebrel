@@ -252,6 +252,13 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &OpenQuickJump, window, cx| {
                 this.open_quick_jump_palette(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &CopyWorkingDirectory, window, cx| {
+                if let Some(view) = this.tabs.get(this.active).and_then(WorkspaceTab::focused_view)
+                {
+                    view.update(cx, |view, cx| view.copy_working_directory(window, cx));
+                }
+                this.focus_active(window, cx);
+            }))
             .child(
                 // 用户显式配置的背景图画在 chrome 之下；系统 Mica/Aero/Acrylic
                 // 位于整个 GPUI 内容层下方，由 DWM 合成，不能在这里读取壁纸仿画。
