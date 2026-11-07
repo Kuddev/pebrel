@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <strong>简体中文</strong>
+  <a href="README.md">English</a> · <strong>简体中文</strong> · <a href="README.ja.md">日本語</a>
 </p>
 
 ---
@@ -79,11 +79,11 @@
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-04.jpg"><img src="extra/community/wechat-group-2026-11-04.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 4 日前有效" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-11.jpg"><img src="extra/community/wechat-group-2026-11-11.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 11 日前有效" width="300" /></a>
 </p>
 
 <p align="center">
-  微信扫码加入，2026 年 11 月 4 日前有效。点击图片可查看原图。
+  微信扫码加入，2026 年 11 月 11 日前有效。点击图片可查看原图。
 </p>
 
 ## 一个工作区
@@ -266,6 +266,11 @@ Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 Pebrel 使用了第三方终端、界面和字体组件。组件来源、版权与许可证声明统一保留在
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) 和 [licenses/](licenses/) 中。
+
+<p>感谢 <a href="https://molchuan.com/"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="extra/logo/acknowledgement_1molchuan_dark.png">
+  <img alt="1molchuan" src="extra/logo/acknowledgement_1molchuan_light.png" width="120">
+</picture></a> 为 Pebrel 的开发提供额外支持。</p>
 
 ## 友情链接
 
