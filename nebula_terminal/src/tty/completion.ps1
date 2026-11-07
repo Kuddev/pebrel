@@ -10,9 +10,15 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             # Windows PowerShell's bundled PSReadLine lacks -Chord.
             Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F12','Shift+Ctrl+F12' }
         }
-        if (-not $existing -or $existing.Function -eq 'Unbound') {
+        if (-not $existing -or $existing.Function -eq 'Unbound' -or
+            ($global:PebrelEditorHandlerName -and $existing.Function -eq $global:PebrelEditorHandlerName)) {
+            $global:PebrelEditorHandlerName = 'PebrelNativeEditor:' + $global:PebrelShellToken
             Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F12 -ScriptBlock {
                 param($key, $arg)
+                if ($null -ne $global:PebrelPointerArgument) {
+                    Complete-PebrelPointerArgument
+                    return
+                }
                 $line = ''
                 $cursor = 0
                 [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
@@ -21,7 +27,7 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
                     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($owner + "`nutf16`n" + $cursor + "`n" + $line))
                     [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor=$payload$([char]7)")
                 }
-            }
+            } -BriefDescription $global:PebrelEditorHandlerName
             # PSReadLine 2.0 loses surrogate pairs inserted after native editing.
             # Advertise that boundary so completion cannot silently alter a name.
             $owner = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($global:PebrelShellToken))

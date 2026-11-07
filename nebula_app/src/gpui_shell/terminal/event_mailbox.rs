@@ -48,13 +48,28 @@ pub(super) fn channel() -> (EventSender, EventReceiver) {
     )
 }
 
-/// Editing a CMD input line does not invalidate a prompt already received from
+/// Editing a native input line does not invalidate a prompt already received from
 /// the PTY. Submission and unknown control sequences remain conservative.
 pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
     let editing_control = |value| {
-        matches!(value, 1 | 2 | 5 | 6 | 8 | 9 | 11 | 12 | 14 | 16 | 18 | 21 | 23 | 25 | 27 | 127)
+        matches!(
+            value,
+            1 | 2 | 5 | 6 | 8 | 9 | 11 | 12 | 14 | 16 | 18 | 21 | 23 | 25 | 27 | 31 | 127
+        )
     };
     while let Some((&byte, rest)) = bytes.split_first() {
+        if let Some(paste) = bytes.strip_prefix(b"\x1b[200~") {
+            let Some(end) = paste.windows(6).position(|part| part == b"\x1b[201~") else {
+                return false;
+            };
+            // A complete single-line paste edits the existing native buffer.
+            // Controls, embedded sentinels and incomplete packets stay conservative.
+            if paste[..end].iter().any(u8::is_ascii_control) {
+                return false;
+            }
+            bytes = &paste[end + 6..];
+            continue;
+        }
         if byte != 0x1b {
             if byte.is_ascii_control() && (byte == 27 || !editing_control(u16::from(byte))) {
                 return false;
@@ -178,6 +193,25 @@ impl Stream for EventReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_line_bracketed_paste_and_native_undo_preserve_the_prompt() {
+        for input in ["\x1b[200~echo 中文\x1b[201~", "\x1b[200~\x1b[201~", "\x1f"] {
+            assert!(preserves_native_prompt(input.as_bytes()), "{input:?}");
+        }
+        for input in [
+            "\x1b[200~echo\nnext\x1b[201~",
+            "\x1b[200~echo\rnext\x1b[201~",
+            "\x1b[200~echo\x03\x1b[201~",
+            "\x1b[200~echo\x7f\x1b[201~",
+            "\x1b[200~echo",
+            "\x1b[201~",
+            "\x1b[200~\x1b[200~echo\x1b[201~\x1b[201~",
+            "\x1b[200~echo\x1b[201~\r",
+        ] {
+            assert!(!preserves_native_prompt(input.as_bytes()), "{input:?}");
+        }
+    }
 
     #[test]
     fn program_status_flood_coalesces_snapshots_without_losing_hook_edges() {

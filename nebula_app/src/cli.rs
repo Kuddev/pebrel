@@ -173,10 +173,14 @@ pub struct TerminalOptions {
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub working_directory: Option<PathBuf>,
 
-    /// Start this shell instead of the configured default one, by the same id the
-    /// `shell` setting uses (`pwsh`, `cmd`, `wsl:Ubuntu`, or a profile's settings id).
+    /// Start a detected shell or an imported terminal profile by its settings id.
     ///
-    /// The Explorer menu uses it to open a folder in a specific WSL distribution.
+    /// Uses the same id as the `shell` setting: `powershell` (Windows PowerShell),
+    /// `pwsh` (PowerShell 7, when detected), `cmd`, `wsl:Ubuntu`, or an imported
+    /// profile's `profile:<shell-id>|<profile-id>` from terminal_profiles.json.
+    /// Lua config.profiles names and shell_id fields do not register ids here.
+    /// To supply a program and custom arguments directly, use -e instead.
+    ///
     /// An id that no longer resolves still starts `wsl.exe` for `wsl:<distro>`
     /// rather than silently falling back to the default shell.
     #[clap(long, value_name = "ID", conflicts_with = "command")]
@@ -294,6 +298,8 @@ impl WindowIdentity {
 /// Available CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Subcommands {
+    /// Start a native AI agent with process-local Pebrel prompt predictions.
+    Predict(crate::prompt_suggestions::launcher::Options),
     /// Render Markdown, JSON tables, or Git progress in the current terminal.
     View(crate::native_view_cli::Options),
     /// Agent-oriented terminal control: split panes, run commands, start Codex/Claude,

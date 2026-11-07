@@ -61,7 +61,12 @@ impl SessionPersistence {
     ) -> std::io::Result<()> {
         let retry_checkpoint = reason == SaveReason::Checkpoint
             && current.as_ref().is_none_or(|session| session.tabs.is_empty());
-        let candidate = if self.quitting {
+        let system_ending = crate::platform::session_end::is_pending();
+        let candidate = if system_ending {
+            // System teardown can end PTYs before the UI exits. Keep the last
+            // complete workspace, not the progressively removed tabs/AI targets.
+            self.latest.clone().or_else(|| current.filter(|session| !session.tabs.is_empty()))
+        } else if self.quitting {
             if reason != SaveReason::Quit {
                 return Ok(());
             }
@@ -88,7 +93,7 @@ impl SessionPersistence {
         }
         self.latest = Some(session.clone());
         if self.saved.as_ref() == Some(&session) {
-            self.quitting |= reason == SaveReason::Quit;
+            self.quitting |= reason == SaveReason::Quit && !system_ending;
             return Ok(());
         }
         // A failed final write is cancellable: windows stay live and subsequent
@@ -96,17 +101,21 @@ impl SessionPersistence {
         if self.isolated {
             // 未预约更新时只记忆当前会话，绝不写入普通会话文件或开启常规管理员恢复。
             if !crate::update_download::handoff::checkpoint_scheduled(&session)? {
-                self.quitting |= reason == SaveReason::Quit;
+                self.quitting |= reason == SaveReason::Quit && !system_ending;
                 return Ok(());
             }
         } else {
             write(&session)?;
         }
         self.saved = Some(session);
-        self.quitting |= reason == SaveReason::Quit;
+        self.quitting |= reason == SaveReason::Quit && !system_ending;
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "session_persistence/shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {

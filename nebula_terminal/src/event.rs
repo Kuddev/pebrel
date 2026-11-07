@@ -34,6 +34,19 @@ pub enum Event {
     /// Grid cells own placement and lifetime; frontends only decode/cache pixels.
     InlineImage { data: Arc<Vec<u8>>, placement: crate::inline_image::ImagePlacement },
 
+    /// A Kitty protocol image, published once its cells are already in the grid.
+    ///
+    /// `data` is raw pixels (`channels` 3 = RGB, 4 = RGBA), never an encoded
+    /// container: the protocol transfers pixels, and re-encoding them would put
+    /// a compressor between the PTY reader and the frontend. `placement.layout`
+    /// carries the bitmap's pixel size, so neither side divides by a cell size
+    /// it may not know.
+    KittyImage {
+        data: std::sync::Weak<Vec<u8>>,
+        channels: u8,
+        placement: crate::inline_image::ImagePlacement,
+    },
+
     /// OSC 133;C — a command started executing in this pane.
     CommandStart,
 
@@ -76,6 +89,11 @@ pub enum Event {
     /// Write some text to the PTY.
     PtyWrite(String),
 
+    /// A remote program started a ZMODEM transfer, which Pebrel does not
+    /// implement. The stream has already queued the cancel sequence as a
+    /// preceding `PtyWrite`; frontends only tell the user what happened.
+    ZmodemCancelled(crate::zmodem::ZmodemOffer),
+
     /// Request to write the text area size.
     TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Sync + Send + 'static>),
 
@@ -108,11 +126,20 @@ impl Debug for Event {
             Event::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
             Event::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
             Event::PtyWrite(text) => write!(f, "PtyWrite({text})"),
+            Event::ZmodemCancelled(offer) => write!(f, "ZmodemCancelled({offer:?})"),
             Event::Title(title) => write!(f, "Title({title})"),
             Event::CwdReport(cwd) => write!(f, "CwdReport({cwd})"),
             Event::InlineImage { data, placement } => {
                 write!(f, "InlineImage({} bytes, id={})", data.len(), placement.id)
             },
+            Event::KittyImage { data, channels, placement } => write!(
+                f,
+                "KittyImage({} bytes, {channels} channels, {}x{} cells, id={})",
+                data.upgrade().map_or(0, |data| data.len()),
+                placement.layout.columns,
+                placement.layout.rows,
+                placement.id
+            ),
             Event::CommandStart => write!(f, "CommandStart"),
             Event::CommandDone { exit_code } => write!(f, "CommandDone({exit_code:?})"),
             Event::UserVar { name, value } => {

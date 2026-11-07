@@ -1,4 +1,18 @@
 {
+  "prompt_suggestions": {
+    "title": "Prédiction de message",
+    "description": "Prédit le prochain message dans les champs natifs vides de Claude Code, Pi et OpenCode. S’applique aux nouvelles sessions, dans la langue de l’application.",
+    "provider": "Fournisseur",
+    "model": "Modèle de prédiction",
+    "choose_provider": "Choisir un fournisseur",
+    "no_providers": "Ajoutez un fournisseur configuré avec une API compatible.",
+    "invalid_model": "Saisissez un identifiant de modèle de 256 caractères maximum, sans espaces.",
+    "save_failed": "Impossible d’enregistrer les réglages de prédiction : {error}",
+    "saved": "Réglages de prédiction enregistrés.",
+    "predicting": "{model} prépare une prédiction",
+    "launcher_fallback": "La prédiction de messages est indisponible. Démarrage normal de {agent}. {error}",
+    "launcher_failed": "Impossible de démarrer {agent} : {error}"
+  },
   "language": {
     "system": "Suivre le système",
     "self_name": "Français",
@@ -262,5 +276,8 @@
     "move_left": "Déplacer vers la gauche",
     "move_right": "Déplacer vers la droite",
     "tab_color": "Couleur de l’onglet"
+  },
+  "startup": {
+    "handover_unconfirmed": "L’instance Pebrel en cours n’a pas confirmé la demande d’ouverture. L’onglet ou la fenêtre existe peut-être déjà. Vérifiez la fenêtre existante avant de réessayer ; cette ouverture ne sera pas répétée automatiquement."
   }
 }

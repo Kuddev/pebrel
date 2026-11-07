@@ -17,6 +17,12 @@ The bundled AI-CLI screen-state evidence in
 nebula_app/src/agent_detection derives from Herdr
 (github.com/AmrDeveloper/herdr), distributed under the Apache License 2.0.
 
+The unmodified next-message prediction prompt in
+nebula_app/res/prompts/codex_prompt_suggestion.txt and its JSON-schema suffix
+come from OpenAI Codex (github.com/openai/codex), revision
+814de47b69dd63a2660fd14f9af66690888d183e, under the Apache License 2.0
+(full text below). OpenAI Codex, Copyright 2025 OpenAI.
+
 The embedded Latin Modern Math font is distributed under the GUST Font
 License 1.0. Its complete license text is included as
 licenses/LICENSE-LATIN-MODERN-MATH.
@@ -415,4 +421,5 @@ Normal NF CN Regular font (SIL Open Font License 1.1). The original copyright
 and license metadata are retained in the font; see licenses/LICENSE-PEBREL-SYMBOLS.
 Source: https://github.com/subframe7536/maple-font
 Regeneration: python scripts/build_symbol_font.py (requires fontTools).
+It also keeps Maple's unchanged `m` glyph, required by GPUI's macOS font loader.
 The complete Maple face remains unchanged and separately selectable.

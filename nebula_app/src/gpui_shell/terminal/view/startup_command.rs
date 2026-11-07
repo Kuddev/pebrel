@@ -157,6 +157,28 @@ impl TerminalView {
         self.flush_pending_shell_command(cx);
     }
 
+    fn prediction_startup_command(&self, text: &str, cx: &Context<Self>) -> Option<String> {
+        use crate::display::side_panel::{PathQuote, drop_text_for_paths};
+        use crate::prompt_suggestions::launcher;
+
+        if !cx.try_global::<Settings>().is_some_and(|settings| settings.prompt_suggestions_enabled)
+            || self.ssh_destination.is_some()
+            || !self
+                .exec_context
+                .as_ref()
+                .is_some_and(|context| context.wsl_distribution().is_none())
+            || !self.suggest.suggest_env.is_this_machine()
+        {
+            return None;
+        }
+        launcher::command_agent(text)?;
+        let executable = std::env::current_exe().ok()?;
+        let shell = self.path_quote();
+        let call_operator = if matches!(&shell, PathQuote::PowerShell) { "& " } else { "" };
+        let quoted = drop_text_for_paths(&[executable.to_str()?.to_owned()], shell)?;
+        launcher::decorate(text, &format!("{call_operator}{quoted}"))
+    }
+
     pub fn seed_ai_session(&mut self, source: String, session_id: String, cx: &mut Context<Self>) {
         if session_id.is_empty() {
             return;
@@ -325,7 +347,12 @@ impl TerminalView {
         }
         let pending = self.pending_shell_command.take().expect("checked above");
         let kind = crate::ai_agents::AgentKind::parse_command(&pending.text);
-        if let Err(error) = self.runtime_prompt(pending.text.clone(), true, cx) {
+        // Retain the native command for session/recovery identity. Only its
+        // submission gets the local launcher; installation runs in that process.
+        let submission = self
+            .prediction_startup_command(&pending.text, cx)
+            .unwrap_or_else(|| pending.text.clone());
+        if let Err(error) = self.runtime_prompt(submission, true, cx) {
             log::warn!("Could not submit startup command: {error:?}");
             self.pending_shell_command = Some(pending);
             return;
@@ -340,5 +367,52 @@ impl TerminalView {
         }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod prediction_tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn native_prediction_launch_requires_enabled_local_host_context(cx: &mut TestAppContext) {
+        let (view, window, _) = super::super::startup_tests::open(cx);
+        view.update(window, |view, cx| {
+            let context = |program: &str| {
+                crate::runtime_exec::PaneExecContext::from_pty_options(
+                    &nebula_terminal::tty::Options {
+                        shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                        ..Default::default()
+                    },
+                )
+            };
+            let command = "claude --resume abc --fork-session";
+            cx.global_mut::<Settings>().prompt_suggestions_enabled = true;
+            view.exec_context = Some(context("bash"));
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            assert!(
+                view.prediction_startup_command(command, cx)
+                    .unwrap()
+                    .ends_with(&format!("predict {command}"))
+            );
+            assert!(view.prediction_startup_command("codex resume abc", cx).is_none());
+            cx.global_mut::<Settings>().prompt_suggestions_enabled = false;
+            assert!(view.prediction_startup_command(command, cx).is_none());
+            cx.global_mut::<Settings>().prompt_suggestions_enabled = true;
+            view.exec_context = Some(context("wsl.exe"));
+            assert!(view.prediction_startup_command(command, cx).is_none());
+            view.exec_context = Some(context("bash"));
+            view.ssh_destination = Some("fixture-host".into());
+            assert!(view.prediction_startup_command(command, cx).is_none());
+            view.ssh_destination = None;
+            view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+                scope: crate::nebula_history::HistoryScope::Ssh("fixture-host".into()),
+            };
+            assert!(view.prediction_startup_command(command, cx).is_none());
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.exec_context = None;
+            assert!(view.prediction_startup_command(command, cx).is_none());
+        });
     }
 }

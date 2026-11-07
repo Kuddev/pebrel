@@ -42,6 +42,14 @@ impl SettingsPane {
         {
             self.refresh_provider_installations(cx);
         }
+        self.prepare_agent_brands(window, cx);
+    }
+
+    pub(in crate::gpui_shell::settings_pane) fn prepare_agent_brands(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let target = ((24.0 * window.scale_factor()).ceil() as u32, cx.theme().is_dark());
         if self.provider_ui.brands.target == Some(target) {
             return;
@@ -49,12 +57,8 @@ impl SettingsPane {
         self.provider_ui.brands.target = Some(target);
         self.provider_ui.brands.images.clear();
         let work = cx.background_executor().spawn(async move {
-            let installed = AgentKind::ALL
-                .into_iter()
-                .filter(|agent| crate::ai_hook::integrations::executable(*agent).is_some())
-                .collect::<std::collections::HashSet<_>>();
             let ink = if target.1 { [224, 228, 236] } else { [40, 45, 55] };
-            let images = [
+            [
                 AgentKind::Claude,
                 AgentKind::Codex,
                 AgentKind::Gemini,
@@ -63,6 +67,11 @@ impl SettingsPane {
                 AgentKind::Pi,
                 AgentKind::Kimi,
                 AgentKind::Hermes,
+                AgentKind::Qoder,
+                AgentKind::Qwen,
+                AgentKind::CodeBuddy,
+                AgentKind::Droid,
+                AgentKind::Antigravity,
             ]
             .into_iter()
             .filter_map(|agent| {
@@ -83,24 +92,29 @@ impl SettingsPane {
                 let rgba = image::RgbaImage::from_raw(width, height, pixels)?;
                 Some((agent, Arc::new(RenderImage::new([image::Frame::new(rgba)]))))
             })
-            .collect::<HashMap<_, _>>();
-            (images, installed)
+            .collect::<HashMap<_, _>>()
         });
         self.provider_ui.brands.task = Some(cx.spawn(async move |this, cx| {
-            let (images, installed) = work.await;
+            let images = work.await;
             let _ = this.update(cx, |this, cx| {
                 if this.provider_ui.brands.target == Some(target) {
                     this.provider_ui.brands.images = images;
-                    this.provider_ui.brands.installed = Some(installed);
                     cx.notify();
                 }
             });
         }));
     }
 
-    pub(super) fn provider_brand(&self, agent: AgentKind) -> gpui::AnyElement {
+    pub(in crate::gpui_shell::settings_pane) fn provider_brand(
+        &self,
+        agent: AgentKind,
+    ) -> gpui::AnyElement {
         if let Some(image) = self.provider_ui.brands.images.get(&agent) {
             img(image.clone()).size(px(24.0)).into_any_element()
+        } else if source(agent).is_some() {
+            // Keep the slot stable while the color texture is prepared. Rendering
+            // a multicolor SVG as an alpha mask can produce an opaque square.
+            div().size(px(24.0)).into_any_element()
         } else {
             super::view::agent_icon(agent).size(px(24.0)).into_any_element()
         }
@@ -126,6 +140,11 @@ fn source(agent: AgentKind) -> Option<&'static [u8]> {
         AgentKind::Pi => AiLogo::Pi.svg(),
         AgentKind::Kimi => AiLogo::Kimi.svg(),
         AgentKind::Hermes => include_bytes!("../../../../assets/icons/nebula-agent-hermes.svgz"),
+        AgentKind::Qoder => include_bytes!("../../../../../extra/logo/ai_qoder.svgz"),
+        AgentKind::Qwen => include_bytes!("../../../../../extra/logo/ai_qwen.svgz"),
+        AgentKind::CodeBuddy => AiLogo::CodeBuddy.svg(),
+        AgentKind::Droid => include_bytes!("../../../../../extra/logo/ai_droid.svgz"),
+        AgentKind::Antigravity => AiLogo::Antigravity.svg(),
         _ => return None,
     })
 }

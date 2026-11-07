@@ -1507,7 +1507,7 @@ impl SettingsPane {
             6 => self.section_interaction(cx),
             7 => self.section_keymap(cx),
             8 => self.section_advanced(cx),
-            10 => self.section_agents(cx),
+            10 => self.section_agents(window, cx),
             MOBILE_SECTION => self.section_mobile(window, cx),
             _ => self.section_backup(window, cx),
         }
@@ -1571,6 +1571,7 @@ impl SettingsPane {
             nav = nav.child(
                 div()
                     .id(("settings-nav", ix))
+                    .debug_selector(move || format!("settings-nav-{ix}"))
                     .px(px(10.0))
                     .ml_1()
                     .mr_1()

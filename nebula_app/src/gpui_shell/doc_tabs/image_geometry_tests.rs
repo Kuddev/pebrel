@@ -36,7 +36,14 @@ fn decoded_png_dimensions_enable_real_pointer_zoom_and_pan(cx: &mut TestAppConte
         modifiers: Modifiers::default(),
     });
     draw(&mut window);
+    window.update(|window, _| window.blur());
     window.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+    window.update(|window, cx| {
+        assert!(
+            image.read(cx).focus_handle(cx).is_focused(window),
+            "clicking the image must restore its keyboard focus"
+        );
+    });
     window.simulate_mouse_move(
         position + point(px(30.0), px(25.0)),
         Some(MouseButton::Left),

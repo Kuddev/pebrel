@@ -14,6 +14,7 @@ const RESIDENT_ENDPOINT: &str = "resident";
 struct HostedEndpoint {
     endpoint: Endpoint,
     shared_discovery: bool,
+    prediction_token: String,
 }
 
 static CHILD_ENDPOINT: Mutex<Option<HostedEndpoint>> = Mutex::new(None);
@@ -21,9 +22,20 @@ static CHILD_ENDPOINT: Mutex<Option<HostedEndpoint>> = Mutex::new(None);
 /// Shared residents export discovery mode; private instances export only their
 /// own address. An explicit mode also replaces a nested launch's inherited pin.
 pub(crate) fn apply_child_endpoint(env: &mut std::collections::HashMap<String, String>) {
-    env.retain(|key, _| !key.eq_ignore_ascii_case(ENDPOINT_ENV));
+    env.retain(|key, _| {
+        ![ENDPOINT_ENV, "PEBREL_PREDICTION_ENDPOINT", "PEBREL_PREDICTION_TOKEN"]
+            .iter()
+            .any(|name| key.eq_ignore_ascii_case(name))
+    });
     if let Some(hosted) = CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
     {
+        if !hosted.prediction_token.is_empty() {
+            env.insert(
+                "PEBREL_PREDICTION_ENDPOINT".into(),
+                format!("http://127.0.0.1:{}", hosted.endpoint.port),
+            );
+            env.insert("PEBREL_PREDICTION_TOKEN".into(), hosted.prediction_token.clone());
+        }
         env.insert(
             ENDPOINT_ENV.to_owned(),
             child_endpoint_value(&hosted.endpoint, hosted.shared_discovery),
@@ -136,12 +148,7 @@ pub fn try_open_directory_existing(dir: &std::path::Path, shell: Option<&str>) -
 /// 仍先发送 ATTACH，保证隐藏驻留进程被唤醒；真正的窗口由同一 GPUI App
 /// 创建，避免第二个进程争抢 runtime.port 和托盘所有权。
 pub fn try_open_window_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
-    if legacy_request("ATTACH").is_none() {
-        return false;
-    }
-    cli::request_once("window.create", handover_params(dir, shell), IO_TIMEOUT)
-        .map(|response| response.ok)
-        .unwrap_or(false)
+    handover::open("window.create", handover_params(dir, shell))
 }
 
 /// 交接请求的参数：目录与 shell 都可缺省。
@@ -160,34 +167,25 @@ fn handover_params(dir: Option<&std::path::Path>, shell: Option<&str>) -> serde_
 }
 
 fn try_open_tab_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
-    if legacy_request("ATTACH").is_none() {
-        return false;
-    }
-    // ATTACH 与 tab.new 落到同一事件队列，窗口先恢复，新标签随后创建。
-    cli::request_once("tab.new", handover_params(dir, shell), IO_TIMEOUT)
-        .map(|response| response.ok)
-        .unwrap_or(false)
+    handover::open("tab.new", handover_params(dir, shell))
 }
 
-fn legacy_request(verb: &str) -> Option<()> {
+pub(super) fn attach_endpoint() -> Option<Endpoint> {
+    let attach = |endpoint: Endpoint| legacy_request_to("ATTACH", &endpoint).map(|_| endpoint);
     let local = CHILD_ENDPOINT
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .as_ref()
         .map(|hosted| hosted.endpoint.clone());
     if let Some(endpoint) = local {
-        return legacy_request_to(verb, &endpoint);
+        return attach(endpoint);
     }
     if std::env::var_os(ENDPOINT_ENV).is_some() {
-        return read_endpoint().and_then(|endpoint| legacy_request_to(verb, &endpoint));
+        return read_endpoint().and_then(attach);
     }
     read_endpoint()
-        .and_then(|endpoint| legacy_request_to(verb, &endpoint))
-        // 已运行的 pre-v1 版本只发布 mux.port；升级期间仍允许普通启动交接。
-        .or_else(|| {
-            read_endpoint_from(legacy_port_file())
-                .and_then(|endpoint| legacy_request_to(verb, &endpoint))
-        })
+        .and_then(attach)
+        .or_else(|| read_endpoint_from(legacy_port_file()).and_then(attach))
 }
 
 fn legacy_request_to(verb: &str, endpoint: &Endpoint) -> Option<()> {
@@ -264,6 +262,7 @@ impl RuntimeServer {
             return None;
         }
 
+        let prediction_token = hub.predictions.token.clone();
         let server_token = endpoint.token.clone();
         let spawned = std::thread::Builder::new()
             .name("nebula-runtime-api".into())
@@ -274,6 +273,7 @@ impl RuntimeServer {
                 Some(HostedEndpoint {
                     endpoint: endpoint.clone(),
                     shared_discovery: path.is_some(),
+                    prediction_token,
                 });
             Some(Self { endpoint, port_file: path, _owner_lock: owner_lock })
         } else {
@@ -431,7 +431,7 @@ mod tests {
         // including differently cased Windows environment keys.
         env.insert(ENDPOINT_ENV.to_ascii_lowercase(), "old private endpoint".into());
         apply_child_endpoint(&mut env);
-        assert_eq!(env.len(), 1);
+        assert_eq!(env.len(), 3);
         assert_eq!(env[ENDPOINT_ENV], RESIDENT_ENDPOINT);
         let discovered =
             read_inherited_endpoint(Some(env[ENDPOINT_ENV].as_ref()), || path.clone()).unwrap();

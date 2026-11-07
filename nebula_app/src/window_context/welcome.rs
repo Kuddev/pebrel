@@ -182,6 +182,12 @@ fn powershell_single_quoted_path(path: &std::path::Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
+// The interactive shell may be fish (including when launched through WSL).
+// Keep the outer command portable and let sh interpret the POSIX script.
+fn unix_intro_command() -> Vec<u8> {
+    b"sh -c 'clear; if command -v fastfetch >/dev/null 2>&1; then fastfetch; else printf \"\\033[36mPebrel\\033[0m\\n\"; uname -a; fi'\n".to_vec()
+}
+
 /// Bytes to send to a freshly spawned shell so it prints the Nebula intro.
 #[cfg(windows)]
 pub(super) fn nebula_fastfetch_intro_command() -> Vec<u8> {
@@ -195,7 +201,7 @@ pub(super) fn nebula_fastfetch_intro_command() -> Vec<u8> {
 #[cfg(windows)]
 pub(crate) fn nebula_fastfetch_intro_command_for(columns: usize, shell: NebulaShell) -> Vec<u8> {
     if shell == NebulaShell::Bash {
-        return b"clear; if command -v fastfetch >/dev/null 2>&1; then fastfetch; else printf '\\033[36mPebrel\\033[0m\\n'; uname -a; fi\n".to_vec();
+        return unix_intro_command();
     }
 
     // 新 tab 必须秒出：所有系统信息在 Rust 侧一次性缓存；交给 PowerShell 的
@@ -212,7 +218,7 @@ pub(crate) fn nebula_fastfetch_intro_command_for(columns: usize, shell: NebulaSh
 /// Bytes to send to a freshly spawned shell so it prints the Nebula intro.
 #[cfg(not(windows))]
 pub(super) fn nebula_fastfetch_intro_command() -> Vec<u8> {
-    b"clear; if command -v fastfetch >/dev/null 2>&1; then fastfetch; else printf '\\033[36mPebrel\\033[0m\\n'; uname -a; fi\n".to_vec()
+    unix_intro_command()
 }
 
 /// Width-aware variant; the Unix intro delegates to fastfetch, which already
@@ -232,6 +238,61 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_intro_runs_in_fish_and_posix_shells_with_or_without_fastfetch() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::process::Command;
+
+        let root = tempfile::tempdir().unwrap();
+        symlink("/bin/sh", root.path().join("sh")).unwrap();
+        for (name, body) in [("clear", "exit 0"), ("uname", "echo FALLBACK")] {
+            let path = root.path().join(name);
+            fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let command = String::from_utf8(unix_intro_command()).unwrap();
+        let search_path = std::env::var_os("PATH").unwrap();
+        for shell in ["sh", "bash", "fish"] {
+            let Some(executable) = std::env::split_paths(&search_path)
+                .map(|directory| directory.join(shell))
+                .find(|path| path.is_file())
+            else {
+                assert_ne!(shell, "sh", "sh is required for the welcome command");
+                continue;
+            };
+            for fastfetch in [false, true] {
+                let fastfetch_path = root.path().join("fastfetch");
+                if fastfetch {
+                    fs::write(&fastfetch_path, "#!/bin/sh\necho FASTFETCH\n").unwrap();
+                    fs::set_permissions(&fastfetch_path, fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                } else if fastfetch_path.exists() {
+                    fs::remove_file(&fastfetch_path).unwrap();
+                }
+                let output = Command::new(&executable)
+                    .args(["-c", &command])
+                    .env("PATH", root.path())
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{shell}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                if fastfetch {
+                    assert_eq!(stdout, "FASTFETCH\n");
+                } else {
+                    assert!(
+                        stdout.contains("Pebrel") && stdout.contains("FALLBACK"),
+                        "{shell}: {stdout:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn deleted_scripts_are_recreated_for_both_layouts() {

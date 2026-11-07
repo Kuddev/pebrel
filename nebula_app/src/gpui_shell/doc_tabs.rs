@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Bounds, ContentMask, Context, Corners, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage,
-    ScrollWheelEvent, Styled as _, Window, div, px,
+    App, Bounds, ContentMask, Context, Corners, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, Render, RenderImage, ScrollWheelEvent, Styled as _, Window, div, px,
 };
 use image::Frame;
 
@@ -29,6 +29,7 @@ pub fn openable_in_app(path: &Path) -> bool {
 pub struct ImageTabView {
     pub path: PathBuf,
     pub title: String,
+    focus: FocusHandle,
     /// 共享几何状态机（zoom/pan/锚点/钳制）。
     geometry: ImageView,
     /// 后台解码的像素（BGRA 帧）；None = 解码中或失败。
@@ -46,6 +47,7 @@ impl ImageTabView {
         let mut this = Self {
             path,
             title,
+            focus: cx.focus_handle(),
             geometry,
             image: None,
             error: None,
@@ -107,7 +109,13 @@ impl ImageTabView {
         }
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus.focus(window, cx);
         let point = (f32::from(event.position.x), f32::from(event.position.y));
         if self.geometry.begin_drag(point, self.area_tuple()) {
             cx.notify();
@@ -146,6 +154,12 @@ fn decode_bgra(path: &Path) -> Result<Arc<RenderImage>, (Message, String)> {
         pixel.swap(0, 2);
     }
     Ok(Arc::new(RenderImage::new([Frame::new(rgba)])))
+}
+
+impl Focusable for ImageTabView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl Render for ImageTabView {
@@ -203,6 +217,7 @@ impl Render for ImageTabView {
 
         div()
             .id("nebula-image-tab")
+            .track_focus(&self.focus)
             .size_full()
             .relative()
             .overflow_hidden()

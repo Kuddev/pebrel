@@ -23,13 +23,19 @@ pub use self::windows::*;
 pub fn connection_shell() -> &'static str {
     static SCRIPT: LazyLock<Cow<'static, str>> = LazyLock::new(|| {
         Cow::Owned(format!(
-            "{}\n{}\n{}",
+            "{}\n{}\n{}\n{}",
             shell_line_endings(include_str!("connection.sh")),
             shell_line_endings(include_str!("completion.sh")),
+            shell_line_endings(include_str!("pointer.sh")),
             shell_line_endings(include_str!("command.sh"))
         ))
     });
     &SCRIPT
+}
+
+/// Native PSReadLine callbacks shared by the Unix and Windows shell bootstraps.
+pub fn powershell_editor() -> String {
+    format!("{}\n{}", include_str!("completion.ps1"), include_str!("pointer.ps1"))
 }
 
 /// Script text as a POSIX shell must see it: CRLF checkout line endings become LF.
