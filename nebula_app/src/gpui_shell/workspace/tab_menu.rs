@@ -88,6 +88,65 @@ pub(super) fn copy_working_directory_item(
     })
 }
 
+fn file_manager_directory(
+    view: &crate::gpui_shell::terminal::view::TerminalView,
+) -> Option<std::path::PathBuf> {
+    if view.ssh_destination.is_some() {
+        return None;
+    }
+    let cwd = view.working_directory()?;
+    // A WSL path must never fall through to the host's current drive or default distro.
+    if let Some(distro) = view.exec_context.as_ref().and_then(|context| context.wsl_distribution())
+    {
+        let located = crate::shell_detect::WslCwd {
+            distro: distro?.to_owned(),
+            guest: crate::shell_detect::wsl_guest_cwd(cwd)?.to_owned(),
+        };
+        return crate::shell_detect::wsl_host_cwd(&located);
+    }
+    if !std::path::Path::new(cwd).is_absolute() {
+        return None;
+    }
+    view.local_cwd()
+}
+
+fn open_working_directory_item(
+    source: &Entity<crate::gpui_shell::terminal::view::TerminalView>,
+    cx: &App,
+) -> PopupMenuItem {
+    let available = file_manager_directory(source.read(cx)).is_some();
+    let source = source.downgrade();
+    let language = crate::gpui_shell::config::ui_language(cx);
+    PopupMenuItem::new(language.text(Message::FilesTreeOpenInExplorer))
+        .icon(IconName::FolderOpen)
+        .disabled(!available)
+        .on_click(move |_, window, cx| {
+            // The pinned menu component can dispatch Enter even for a disabled item.
+            if !available {
+                return;
+            }
+            let Some(source) = source.upgrade() else { return };
+            let Some(path) = file_manager_directory(source.read(cx)) else {
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::display::ToastKind::Warning,
+                    language.text(Message::FilesPathUnavailable),
+                );
+                return;
+            };
+            if let Err(error) = crate::platform::file_manager::open(&path) {
+                log::warn!("Unable to open working directory {}: {error}", path.display());
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::display::ToastKind::Warning,
+                    format!("{}: {error}", language.text(Message::FilesTreeOpenInExplorer)),
+                );
+            }
+        })
+}
+
 impl NebulaWorkspace {
     /// 右键：先选中该行（旧壳 chrome 同惯例），再按当下的 hook 身份现查
     /// fork 资格，最后把菜单交给根上那一份宿主。
@@ -115,6 +174,8 @@ impl NebulaWorkspace {
             .cloned();
         let copy_cwd =
             self.tabs[ix].focused_view().map(|view| copy_working_directory_item(view, cx));
+        let open_cwd =
+            self.tabs[ix].focused_view().map(|view| open_working_directory_item(view, cx));
         let workspace = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
             if let Some(view) = choose_session {
@@ -134,7 +195,11 @@ impl NebulaWorkspace {
                     .separator();
             }
             if let Some(copy_cwd) = copy_cwd {
-                menu = menu.item(copy_cwd).separator();
+                menu = menu.item(copy_cwd);
+                if let Some(open_cwd) = open_cwd {
+                    menu = menu.item(open_cwd);
+                }
+                menu = menu.separator();
             }
             Self::tab_popup_menu(
                 menu.external_link_icon(false),
@@ -408,6 +473,181 @@ mod cwd_copy_tests {
     use crate::gpui_shell::terminal::view::{TerminalLaunch, TerminalView};
     use gpui::{AppContext as _, ClipboardItem, IntoElement, TestAppContext};
     use gpui_component::Root;
+
+    fn open_source(
+        cx: &mut TestAppContext,
+    ) -> (Entity<TerminalView>, &mut gpui::VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
+        });
+        let mut source = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                TerminalView::new(
+                    42,
+                    (80, 24),
+                    TerminalLaunch::Local {
+                        cwd: None,
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell-executable".into(),
+                            vec![],
+                        )),
+                        shell_name: None,
+                    },
+                    window,
+                    cx,
+                )
+            });
+            let menu = PopupMenu::build(window, cx, |menu, _, _| menu);
+            source = Some(view.clone());
+            let content = cx.new(|_| CwdMenuProbe { menu, _source: view });
+            Root::new(content, window, cx)
+        });
+        (source.unwrap(), window)
+    }
+
+    #[gpui::test]
+    fn file_manager_directory_rejects_remote_invalid_and_missing_paths(cx: &mut TestAppContext) {
+        let (source, window) = open_source(cx);
+        let directory = tempfile::tempdir().unwrap();
+        source.update(window, |view, _| {
+            view.cwd = directory.path().to_string_lossy().into_owned();
+            assert_eq!(file_manager_directory(view), Some(directory.path().to_path_buf()));
+            view.ssh_destination = Some("remote".into());
+            assert_eq!(file_manager_directory(view), None);
+            view.ssh_destination = None;
+            for path in ["", "relative/path", "/bad\npath"] {
+                view.cwd = path.into();
+                assert_eq!(file_manager_directory(view), None);
+            }
+            view.cwd = directory.path().join("missing").to_string_lossy().into_owned();
+            assert_eq!(file_manager_directory(view), None);
+            #[cfg(windows)]
+            {
+                view.exec_context = None;
+                view.cwd = "/".into();
+                assert_eq!(file_manager_directory(view), None);
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn file_manager_directory_does_not_fall_back_from_unknown_wsl(cx: &mut TestAppContext) {
+        let (source, window) = open_source(cx);
+        source.update(window, |view, _| {
+            let mut options = nebula_terminal::tty::Options::default();
+            options.shell = Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), vec![]));
+            view.exec_context =
+                Some(crate::runtime_exec::PaneExecContext::from_pty_options(&options));
+            view.cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+            assert_eq!(file_manager_directory(view), None);
+        });
+    }
+
+    #[cfg(windows)]
+    #[gpui::test]
+    fn file_manager_directory_maps_wsl_automount_without_using_default_distro(
+        cx: &mut TestAppContext,
+    ) {
+        let (source, window) = open_source(cx);
+        let directory = tempfile::Builder::new().prefix("directory with spaces").tempdir().unwrap();
+        let host = directory.path().to_string_lossy().replace('\\', "/");
+        let guest = format!("/mnt/{}{}", host[..1].to_ascii_lowercase(), &host[2..]);
+        source.update(window, |view, _| {
+            let mut options = nebula_terminal::tty::Options::default();
+            options.shell = Some(nebula_terminal::tty::Shell::new(
+                "wsl.exe".into(),
+                vec!["-d".into(), "pebrel-test-not-default-distro".into()],
+            ));
+            view.exec_context =
+                Some(crate::runtime_exec::PaneExecContext::from_pty_options(&options));
+            view.cwd = guest;
+            assert_eq!(file_manager_directory(view), Some(directory.path().to_path_buf()));
+            for invalid in ["/bad\npath", "relative/path", "", &host] {
+                view.cwd = invalid.into();
+                assert_eq!(file_manager_directory(view), None);
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn file_manager_menu_keyboard_rechecks_directory_before_opening(cx: &mut TestAppContext) {
+        let (source, window) = open_source(cx);
+        let directory = tempfile::tempdir().unwrap();
+        source.update(window, |view, _| {
+            view.cwd = directory.path().to_string_lossy().into_owned();
+        });
+        window.update(|window, cx| {
+            let item = open_working_directory_item(&source, cx);
+            let menu = PopupMenu::build(window, cx, |menu, _, _| menu.item(item));
+            menu.focus_handle(cx).focus(window, cx);
+            let probe = Root::read(window, cx).view().clone().downcast::<CwdMenuProbe>().unwrap();
+            probe.update(cx, |probe, cx| {
+                probe.menu = menu;
+                cx.notify();
+            });
+            source.update(cx, |view, _| view.cwd.clear());
+        });
+        window.simulate_keystrokes("down enter");
+        window.update(|window, cx| {
+            let notifications = Root::read(window, cx).notification.read(cx).notifications();
+            assert_eq!(notifications.len(), 1, "the now-unavailable directory must show a warning");
+        });
+    }
+
+    #[gpui::test]
+    fn file_manager_menu_disabled_item_ignores_keyboard_activation(cx: &mut TestAppContext) {
+        let (source, window) = open_source(cx);
+        source.update(window, |view, _| {
+            view.cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+            view.ssh_destination = Some("remote".into());
+        });
+        window.update(|window, cx| {
+            let item = open_working_directory_item(&source, cx);
+            let menu = PopupMenu::build(window, cx, |menu, _, _| menu.item(item));
+            menu.focus_handle(cx).focus(window, cx);
+            let probe = Root::read(window, cx).view().clone().downcast::<CwdMenuProbe>().unwrap();
+            probe.update(cx, |probe, cx| {
+                probe.menu = menu;
+                cx.notify();
+            });
+        });
+        window.simulate_keystrokes("down enter");
+        window.update(|window, cx| {
+            assert!(Root::read(window, cx).notification.read(cx).notifications().is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn file_manager_menu_uses_localized_label_and_disables_unavailable_paths(
+        cx: &mut TestAppContext,
+    ) {
+        let (source, window) = open_source(cx);
+        let directory = tempfile::tempdir().unwrap();
+        source.update(window, |view, _| {
+            view.cwd = directory.path().to_string_lossy().into_owned();
+        });
+        window.update(|_, cx| {
+            let PopupMenuItem::Item { label, disabled, handler, .. } =
+                open_working_directory_item(&source, cx)
+            else {
+                panic!("expected a standard menu item")
+            };
+            assert_eq!(
+                label.as_ref(),
+                crate::gpui_shell::config::ui_language(cx).text(Message::FilesTreeOpenInExplorer)
+            );
+            assert!(!disabled);
+            assert!(handler.is_some());
+            source.update(cx, |view, _| view.ssh_destination = Some("remote".into()));
+            let PopupMenuItem::Item { disabled, .. } = open_working_directory_item(&source, cx)
+            else {
+                panic!("expected a standard menu item")
+            };
+            assert!(disabled);
+        });
+    }
 
     #[gpui::test]
     fn cwd_menu_copies_the_reported_directory_via_keyboard(cx: &mut TestAppContext) {
