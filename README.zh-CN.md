@@ -165,7 +165,8 @@ WSL 发行版，以及 `cat` 读取带空格的文件名。使用内置 Powerlin
 - 已捕获的 Claude Code 与 Codex 回答可在阅读器中打开，支持 Markdown、公式、原文和本地图片预览。
   阅读器控件与提示随所选语言显示；复制原文保留完整回答。详见[阅读器语言说明](docs/answer-reader-language.md)。
 - 剪贴板图片会保存为 PNG，并把路径插入本地、WSL 或 SSH 会话。终端内直接显示图片需要 CLI
-  输出受支持的 OSC 1337 协议；附件缩略图取决于 CLI 自身。
+  输出 OSC 1337、Kitty protocol（APC，直接传输 RGB/RGBA）或 Sixel（7 位 DCS）协议；
+  附件缩略图取决于 CLI 自身。
 
 <p align="center">
   <img src="docs/screenshots/ai-sidebar.png" alt="AI 活动侧栏" width="300" />

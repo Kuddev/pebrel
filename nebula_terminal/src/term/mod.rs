@@ -31,6 +31,7 @@ pub mod color;
 mod damage;
 mod grid_content;
 mod inline_image;
+mod sixel;
 pub(crate) use inline_image::PendingImage;
 mod input;
 mod keyboard;
@@ -105,6 +106,8 @@ bitflags! {
         /// 用 OSC 11 问到的背景色上——用户把深色主题切成浅色，nvim/delta/codex
         /// 会继续用为深底挑的颜色画在白底上。
         const COLOR_SCHEME_UPDATES    = 1 << 24;
+        const SIXEL_DISPLAY           = 1 << 25;
+        const SIXEL_CURSOR_RIGHT      = 1 << 26;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -1323,27 +1326,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn identify_terminal(&mut self, intermediate: Option<char>) {
-        match intermediate {
-            None => {
-                // The pre-primed ConPTY bring-up query was already answered;
-                // a second answer would reach the shell as typed input.
-                if self.bringup_da1_pending {
-                    self.bringup_da1_pending = false;
-                    trace!("Suppressing duplicate DA1 response (pre-primed ConPTY handshake)");
-                    return;
-                }
-                trace!("Reporting primary device attributes");
-                let text = String::from("\x1b[?6c");
-                self.event_proxy.send_event(Event::PtyWrite(text));
-            },
-            Some('>') => {
-                trace!("Reporting secondary device attributes");
-                let version = version_number(env!("CARGO_PKG_VERSION"));
-                let text = format!("\x1b[>0;{version};1c");
-                self.event_proxy.send_event(Event::PtyWrite(text));
-            },
-            _ => debug!("Unsupported device attributes intermediate"),
-        }
+        self.report_device_attributes(intermediate);
     }
 
     #[inline]
@@ -1968,6 +1951,9 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_private_mode(&mut self, mode: PrivateMode) {
+        if self.set_graphics_mode(mode, true) {
+            return;
+        }
         if matches!(mode, PrivateMode::Unknown(9001)) {
             self.mode.insert(TermMode::WIN32_INPUT_MODE);
             return;
@@ -2040,6 +2026,9 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn unset_private_mode(&mut self, mode: PrivateMode) {
+        if self.set_graphics_mode(mode, false) {
+            return;
+        }
         if matches!(mode, PrivateMode::Unknown(9001)) {
             self.mode.remove(TermMode::WIN32_INPUT_MODE);
             return;
@@ -2096,6 +2085,9 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn report_private_mode(&mut self, mode: PrivateMode) {
+        if self.report_graphics_mode(mode) {
+            return;
+        }
         trace!("Reporting private mode {mode:?}");
         if matches!(mode, PrivateMode::Unknown(9001)) {
             let state = if self.mode.contains(TermMode::WIN32_INPUT_MODE) { 1 } else { 2 };
