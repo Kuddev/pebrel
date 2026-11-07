@@ -405,7 +405,7 @@ impl TerminalMathState {
             }
             if overlays.len() < MAX_VISIBLE_FORMULAS {
                 if let Some(formula) = self.formulas.get(&anchor) {
-                    overlays.push(formula.to_overlay(grid.absolute_top));
+                    overlays.push(formula.to_overlay(grid.absolute_top, grid.rows.len()));
                 }
             }
         }
@@ -599,7 +599,7 @@ impl PersistedFormula {
         compared
     }
 
-    fn to_overlay(&self, absolute_top: usize) -> FormulaOverlay {
+    fn to_overlay(&self, absolute_top: usize, viewport_rows: usize) -> FormulaOverlay {
         let spans = self
             .spans
             .iter()
@@ -614,6 +614,7 @@ impl PersistedFormula {
             display: self.display,
             formula_id: self.formula_id,
             spans,
+            viewport_rows,
             foreground: Rgb::default(),
             fallback: Vec::new(),
             neighbours_above: [NEIGHBOUR_UNKNOWN; MAX_ABSORBED_BLANK_ROWS],
@@ -621,6 +622,8 @@ impl PersistedFormula {
             formula_neighbours_above: [false; MAX_ABSORBED_BLANK_ROWS],
             formula_neighbours_below: [false; MAX_ABSORBED_BLANK_ROWS],
             widen_right_to: None,
+            reflow_limit: None,
+            reflow_content_end: None,
         }
     }
 }
@@ -671,6 +674,7 @@ pub(crate) struct FormulaOverlay {
     display: bool,
     formula_id: u64,
     spans: Vec<RowSpan>,
+    pub(super) viewport_rows: usize,
     foreground: Rgb,
     fallback: Vec<RenderableCell>,
     /// Occupied column range of each neighbouring row, nearest first, capped
@@ -690,6 +694,12 @@ pub(crate) struct FormulaOverlay {
     /// Right edge (in grid columns) available to a display formula whose rows
     /// hold nothing after the source.
     widen_right_to: Option<usize>,
+    /// First column after the formula where inline reflow must stop to keep
+    /// table borders, multi-column padding, or coloured TUI surfaces aligned.
+    reflow_limit: Option<usize>,
+    /// End of non-blank suffix prose before `reflow_limit`, used to cap inline
+    /// expansion so wider formulas never push suffix characters onto a barrier.
+    reflow_content_end: Option<usize>,
 }
 
 impl FormulaOverlay {
@@ -724,15 +734,42 @@ impl FormulaOverlay {
             .any(|row| rows.contains(&row))
     }
 
+    pub(super) fn inline_span(&self) -> Option<RowSpan> {
+        self.inline_span_in(self.viewport_rows)
+    }
+
+    pub(super) fn inline_span_in(&self, screen_lines: usize) -> Option<RowSpan> {
+        let limit = screen_lines.min(self.viewport_rows);
+        (!self.display)
+            .then(|| {
+                self.spans
+                    .iter()
+                    .rev()
+                    .find(|span| span.row >= 0 && (span.row as usize) < limit)
+                    .or_else(|| self.spans.last())
+                    .copied()
+            })
+            .flatten()
+    }
+
     fn bounds(&self, size: &SizeInfo) -> Option<FormulaBounds> {
-        let first = self.spans.first()?;
-        let last = self.spans.last()?;
-        let left_col = self.spans.iter().map(|span| span.start).min()?;
-        let right_col = self.spans.iter().map(|span| span.end).max()?;
+        let (first_row, last_row, left_col, right_col) =
+            if let Some(span) = self.inline_span_in(size.screen_lines()) {
+                if span.row < 0 || span.row >= size.screen_lines() as i32 {
+                    return None;
+                }
+                (span.row, span.row, span.start, span.end)
+            } else {
+                let first = self.spans.first()?;
+                let last = self.spans.last()?;
+                let left_col = self.spans.iter().map(|span| span.start).min()?;
+                let right_col = self.spans.iter().map(|span| span.end).max()?;
+                (first.row, last.row, left_col, right_col)
+            };
         let left = size.padding_x() + left_col as f32 * size.cell_width();
         let right = size.padding_x() + right_col as f32 * size.cell_width();
-        let top = size.padding_y() + first.row as f32 * size.cell_height();
-        let bottom = size.padding_y() + (last.row + 1) as f32 * size.cell_height();
+        let top = size.padding_y() + first_row as f32 * size.cell_height();
+        let bottom = size.padding_y() + (last_row + 1) as f32 * size.cell_height();
         (right > left && bottom > top).then_some(FormulaBounds { left, top, right, bottom })
     }
 
@@ -826,6 +863,8 @@ struct ProjectionSpan {
     source_start: usize,
     source_end: usize,
     visual_cells: usize,
+    reflow_limit: Option<usize>,
+    reflow_content_end: Option<usize>,
     shift_before: isize,
     shift_after: isize,
 }
@@ -886,9 +925,11 @@ impl LineProjection {
             let Some(visual_cells) = prepared.and_then(|prepared| prepared.compact_cells) else {
                 continue;
             };
-            let [span] = overlay.spans.as_slice() else { continue };
+            let Some(span) = overlay.inline_span() else {
+                continue;
+            };
             let Ok(row) = usize::try_from(span.row) else { continue };
-            if span.end <= span.start {
+            if row >= overlay.viewport_rows || span.end <= span.start {
                 continue;
             }
             self.spans.push(ProjectionSpan {
@@ -897,6 +938,8 @@ impl LineProjection {
                 source_start: span.start,
                 source_end: span.end,
                 visual_cells,
+                reflow_limit: overlay.reflow_limit,
+                reflow_content_end: overlay.reflow_content_end,
                 shift_before: 0,
                 shift_after: 0,
             });
@@ -928,15 +971,27 @@ impl LineProjection {
 
         let mut row = None;
         let mut shift = 0isize;
+        let mut active_limit: Option<usize> = None;
         for span in &mut self.spans {
-            if row != Some(span.row) {
+            if row != Some(span.row) || active_limit.is_some_and(|limit| span.source_start >= limit)
+            {
                 row = Some(span.row);
                 shift = 0;
             }
             span.shift_before = shift;
             let source_cells = span.source_end - span.source_start;
             shift = shift.saturating_add(span.visual_cells as isize - source_cells as isize);
+            if let Some(limit) = span.reflow_limit {
+                let content_end = span.reflow_content_end.unwrap_or(span.source_end);
+                let max_shift = (limit.saturating_sub(content_end)) as isize;
+                if shift > max_shift {
+                    let reduction = shift.saturating_sub(max_shift) as usize;
+                    span.visual_cells = span.visual_cells.saturating_sub(reduction).max(1);
+                    shift = max_shift;
+                }
+            }
             span.shift_after = shift;
+            active_limit = span.reflow_limit;
         }
         retained
     }
@@ -959,6 +1014,7 @@ impl LineProjection {
             .iter()
             .take_while(|span| span.source_end <= source_column)
             .last()
+            .filter(|span| span.reflow_limit.is_none_or(|limit| source_column < limit))
             .map_or(0, |span| span.shift_after)
     }
 
@@ -967,6 +1023,7 @@ impl LineProjection {
         let preceding = spans.partition_point(|span| span.source_start <= point.column.0);
         let shift = match preceding.checked_sub(1).and_then(|index| spans.get(index)) {
             Some(span) if point.column.0 < span.source_end => return None,
+            Some(span) if span.reflow_limit.is_some_and(|limit| point.column.0 >= limit) => 0,
             Some(span) => span.shift_after,
             None => 0,
         };
@@ -1002,8 +1059,15 @@ impl LineProjection {
         let spans = self.row_spans(point.line);
         let visual_column = point.column.0;
         let mut shift = 0isize;
+        let mut active_limit: Option<usize> = None;
 
         for span in spans {
+            if active_limit
+                .is_some_and(|limit| visual_column >= limit && span.source_start >= limit)
+            {
+                shift = 0;
+                active_limit = None;
+            }
             let visual_start = apply_shift(span.source_start, span.shift_before);
             let visual_end = visual_start.saturating_add(span.visual_cells);
             if visual_column < visual_start {
@@ -1020,8 +1084,20 @@ impl LineProjection {
                 };
             }
             shift = span.shift_after;
+            active_limit = span.reflow_limit;
         }
 
+        if let Some(limit) = active_limit {
+            if visual_column >= limit {
+                shift = 0;
+            } else {
+                let source_column = apply_shift(visual_column, shift.saturating_neg());
+                if source_column >= limit {
+                    return (Point::new(point.line, Column(limit.saturating_sub(1))), Side::Right);
+                }
+                return (Point::new(point.line, Column(source_column)), side);
+            }
+        }
         let source_column = apply_shift(visual_column, shift.saturating_neg());
         (Point::new(point.line, Column(source_column)), side)
     }
@@ -1120,9 +1196,24 @@ pub(crate) fn prepare_overlays(
                     .metrics;
                 widest = widest.max(metrics.width);
             }
-            let compact_inline = !overlay.display && overlay.spans.len() == 1;
-            let source_start = overlay.spans.first()?.start;
-            let remaining_columns = size.columns().saturating_sub(source_start);
+            let inline_span = overlay.inline_span_in(size.screen_lines());
+            let compact_inline = inline_span.is_some();
+            let source_start = inline_span.map_or_else(
+                || overlay.spans.first().map(|span| span.start),
+                |span| Some(span.start),
+            )?;
+            let max_inline_cells = inline_span.and_then(|span| {
+                overlay.reflow_limit.map(|limit| {
+                    let source_cells = span.end.saturating_sub(span.start);
+                    let content_end = overlay.reflow_content_end.unwrap_or(span.end);
+                    let slack = limit.saturating_sub(content_end);
+                    source_cells.saturating_add(slack).max(1)
+                })
+            });
+            let remaining_columns = size
+                .columns()
+                .saturating_sub(source_start)
+                .min(max_inline_cells.unwrap_or(usize::MAX));
             let natural_cells =
                 quantized_visual_cells(widest, size.cell_width(), remaining_columns);
             let box_right = if compact_inline {
@@ -1300,12 +1391,12 @@ pub(crate) fn plan_overlay_draw(
     pixels_per_point: f32,
 ) -> Option<OverlayDrawPlan> {
     let mut bounds = overlay.bounds(size)?;
-    let shift_columns = match overlay.spans.as_slice() {
-        [span] => usize::try_from(span.row)
-            .ok()
-            .map_or(0, |row| state.projection.shift_before(row, span.start)),
-        _ => 0,
-    };
+    let shift_columns = overlay
+        .inline_span_in(size.screen_lines())
+        .and_then(|span| {
+            usize::try_from(span.row).ok().map(|row| state.projection.shift_before(row, span.start))
+        })
+        .unwrap_or(0);
     let shift_pixels = shift_columns as f32 * size.cell_width();
     bounds.left += shift_pixels;
     bounds.right += shift_pixels;
