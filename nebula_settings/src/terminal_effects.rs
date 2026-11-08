@@ -1,4 +1,4 @@
-use crate::RawSettings;
+use crate::{RawSettings, ShaderTiming};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EffectAnimation {
@@ -29,11 +29,13 @@ impl EffectAnimation {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TerminalEffects {
     pub enabled: bool,
     pub paths: Vec<String>,
     pub animation: EffectAnimation,
+    pub timing: ShaderTiming,
+    pub parameters: [f32; 4],
 }
 
 impl TerminalEffects {
@@ -47,6 +49,12 @@ impl TerminalEffects {
         "terminal_effect_path_7",
         "terminal_effect_path_8",
     ];
+    pub const PARAMETER_KEYS: [&'static str; 4] = [
+        "terminal_effect_parameter_1",
+        "terminal_effect_parameter_2",
+        "terminal_effect_parameter_3",
+        "terminal_effect_parameter_4",
+    ];
 
     pub fn from_raw(raw: &RawSettings) -> Self {
         Self {
@@ -59,6 +67,9 @@ impl TerminalEffects {
                 .value("terminal_effect_animation")
                 .and_then(EffectAnimation::parse)
                 .unwrap_or_default(),
+            timing: ShaderTiming::from_raw(raw, "terminal_effect"),
+            parameters: Self::PARAMETER_KEYS
+                .map(|key| crate::shader_parameters::parameter(raw, key)),
         }
     }
 
@@ -84,7 +95,7 @@ impl TerminalEffects {
             return Ok(None);
         }
         if self.paths.is_empty() {
-            return Err("terminal effect is enabled without a WGSL source");
+            return Err("terminal effect is enabled without a shader source");
         }
         Self::source_updates(&self.paths)?;
         Ok(Some(&self.paths))
