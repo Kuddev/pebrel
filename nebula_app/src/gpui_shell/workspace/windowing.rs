@@ -195,6 +195,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::AgentStart { .. }
         | RuntimeCommand::AgentFork { .. }
         | RuntimeCommand::AgentPrompt { .. }
+        | RuntimeCommand::DelegationPrompt { .. }
         | RuntimeCommand::AgentPaste { .. }
         | RuntimeCommand::AgentRead { .. } => RuntimeWindowPolicy::Preserve,
     }
@@ -721,6 +722,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
             (*window_id, *source_pane_id)
         },
         RuntimeCommand::AgentPrompt { agent, generation, .. }
+        | RuntimeCommand::DelegationPrompt { agent, generation, .. }
         | RuntimeCommand::AgentPaste { agent, generation, .. }
         | RuntimeCommand::AgentRead { agent, generation, .. } => {
             let managed = runtime_hub.active_agent(agent, *generation)?;

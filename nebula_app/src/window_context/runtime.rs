@@ -373,6 +373,27 @@ impl WindowContext {
         Ok(())
     }
 
+    pub(crate) fn ensure_delegation_ready(
+        &self,
+        managed: &crate::runtime_api::RuntimeManagedAgent,
+    ) -> Result<(), ApiError> {
+        let pane_id = managed.pane_id;
+        let pane = self
+            .pane(pane_id)
+            .ok_or_else(|| ApiError::new("target_not_found", "the target pane no longer exists"))?;
+        let state = task_state(&pane.nebula_state);
+        if !matches!(state, RuntimeTaskState::Idle | RuntimeTaskState::Finished)
+            || pane.nebula_state.agent_activity.runtime_turn_pending()
+            || pane.nebula_state.runtime_submit_barrier.is_some()
+        {
+            return Err(ApiError::new(
+                "target_busy",
+                "the target Agent has an unfinished turn; delegation was not submitted",
+            ));
+        }
+        managed.check_delegation_identity(runtime_agent(pane).as_ref())
+    }
+
     pub(crate) fn runtime_prompt(
         &mut self,
         pane_id: u64,

@@ -241,6 +241,16 @@ fn codex_turn_done(message: &str) -> crate::ai_hook::AiHookEvent {
     crate::ai_hook::parse_remote_envelope(raw.as_bytes(), Some(4)).unwrap()
 }
 
+fn submitted_delegation(
+    hub: &RuntimeHub,
+    origin_pane_id: u64,
+    target: &RuntimeManagedAgent,
+) -> RuntimeDelegationReceipt {
+    let receipt = hub.begin_delegation(origin_pane_id, target).unwrap();
+    hub.commit_delegation(&receipt.task_id, target).unwrap();
+    receipt
+}
+
 fn call_wait_connection(hub: &RuntimeHub, request: ApiRequest) -> ApiResponse {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -702,7 +712,7 @@ fn managed_identity_requires_real_agent_and_session_evidence() {
 #[test]
 fn delegation_completion_returns_one_json_escaped_callback() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    let receipt = hub.begin_delegation(3, &target).unwrap();
+    let receipt = submitted_delegation(&hub, 3, &target);
     let result = "fixed \"vc\" skill\nall checks passed";
     let event = codex_turn_done(result);
 
@@ -728,20 +738,25 @@ fn agent_delegate_dispatches_a_generation_bound_prompt() {
     let expected_generation = target.generation;
     let dispatched = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let dispatched_for_sink = dispatched.clone();
+    let committed_hub = hub.clone();
+    let committed_target = target.clone();
     let sink = EventSink::Callback(Arc::new(move |callback| {
         if let RuntimeCallback::Control(dispatch) = callback {
             assert!(matches!(
                 &dispatch.command,
-                RuntimeCommand::AgentPrompt {
+                RuntimeCommand::DelegationPrompt {
                     agent,
                     generation: Some(generation),
                     text,
-                    submit: true,
+                    ..
                 } if agent == &expected_agent_id
                     && *generation == expected_generation
                     && text == "inspect the vc skill"
             ));
             dispatched_for_sink.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let RuntimeCommand::DelegationPrompt { task_id, .. } = &dispatch.command {
+                committed_hub.commit_delegation(task_id, &committed_target).unwrap();
+            }
             dispatch.respond(Ok(json!({ "submitted": true })));
         }
     }));
@@ -771,7 +786,7 @@ fn agent_delegate_dispatches_a_generation_bound_prompt() {
 #[test]
 fn delegation_callback_waits_for_the_original_agent_to_finish() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Running);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.complete_delegations_for_turn(&codex_turn_done("done"));
     assert!(hub.take_ready_delegation_callbacks().is_empty());
 
@@ -793,7 +808,7 @@ fn delegation_callback_waits_for_the_original_agent_to_finish() {
 #[test]
 fn delegation_callback_never_moves_to_a_replacement_origin_session() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Running);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.complete_delegations_for_turn(&codex_turn_done("done"));
 
     hub.publish(delegation_snapshot(
@@ -816,7 +831,7 @@ fn delegation_callback_never_moves_to_a_replacement_origin_session() {
 #[test]
 fn delegation_rejects_ambiguous_correlation_and_unstable_origins() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     assert_eq!(hub.begin_delegation(3, &target).unwrap_err().code, "delegation_in_progress");
 
     let empty_origin_hub = RuntimeHub::new();
@@ -1764,3 +1779,6 @@ fn wait_step_takes_its_baseline_from_the_step_it_references() {
 
 #[path = "tests/delegation_output_tests.rs"]
 mod delegation_output_tests;
+
+#[path = "tests/delegation_submission_tests.rs"]
+mod delegation_submission_tests;

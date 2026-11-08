@@ -197,6 +197,24 @@ impl TerminalView {
         {
             return RuntimeTaskState::Failed;
         }
+        if self.agent_activity.runtime_turn_pending() && self.exited.is_none() {
+            if self.agent_activity.status() == AgentStatus::Blocked {
+                return RuntimeTaskState::Attention;
+            }
+            if let Some(status) = self.effective_program_status()
+                && matches!(
+                    status.task_state(),
+                    RuntimeTaskState::Attention
+                        | RuntimeTaskState::WaitingInput
+                        | RuntimeTaskState::Failed
+                )
+            {
+                return status.task_state();
+            }
+            // The previous OSC idle frame cannot finish an explicitly
+            // submitted task before its provider completion has arrived.
+            return RuntimeTaskState::Running;
+        }
         if let Some(status) = self.effective_program_status() {
             return status.task_state();
         }
@@ -713,6 +731,23 @@ impl TerminalView {
         } else {
             self.runtime_prompt(callback.single_line_prompt().into_owned(), true, cx)
         }
+    }
+
+    pub(crate) fn ensure_delegation_ready(&self) -> Result<(), crate::runtime_api::ApiError> {
+        use crate::runtime_api::RuntimeTaskState;
+        let state = self.runtime_task_state();
+        if !matches!(state, RuntimeTaskState::Idle | RuntimeTaskState::Finished)
+            || self.agent_activity.runtime_turn_pending()
+            || self.pending_runtime_submit.is_some()
+        {
+            return Err(crate::runtime_api::ApiError::new(
+                "target_busy", "the target Agent has an unfinished turn or pending input; delegation was not submitted",
+            ).details(serde_json::json!({
+                "pane_id": self.pane_id, "task_state": state,
+                "submission_in_flight": self.agent_activity.runtime_turn_pending(),
+            })));
+        }
+        Ok(())
     }
 
     /// 三层护栏里唯一强制的那一层。

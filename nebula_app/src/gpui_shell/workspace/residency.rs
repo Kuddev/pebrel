@@ -179,6 +179,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::Run { .. }
             | RuntimeCommand::AgentStart { .. }
             | RuntimeCommand::AgentPrompt { .. }
+            | RuntimeCommand::DelegationPrompt { .. }
             | RuntimeCommand::AgentPaste { .. } => {
                 self.reveal_session(cx);
                 self.runtime_pending.push(dispatch);
@@ -790,7 +791,8 @@ impl NebulaWorkspace {
                 "invalid_runtime_command",
                 "agent.fork reached the UI before its Git worktree was prepared",
             )),
-            RuntimeCommand::AgentPrompt { agent, generation, text, submit } => {
+            RuntimeCommand::AgentPrompt { agent, generation, text, .. }
+            | RuntimeCommand::DelegationPrompt { agent, generation, text, .. } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;
                 self.runtime_window_requested(Some(managed.window_id))?;
                 let Some(tab_ix) = self.tab_of_pane(managed.pane_id) else {
@@ -808,7 +810,24 @@ impl NebulaWorkspace {
                         .clone(),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 };
-                view.update(cx, |view, cx| view.runtime_prompt(text.clone(), *submit, cx))?;
+                let result = view.update(cx, |view, cx| match command {
+                    RuntimeCommand::DelegationPrompt { task_id, .. } => {
+                        view.ensure_delegation_ready()?;
+                        managed.check_delegation_identity(view.runtime_chat_agent().as_ref())?;
+                        self.runtime_hub.commit_delegation(task_id, &managed)?;
+                        view.runtime_prompt(text.clone(), true, cx)
+                    },
+                    RuntimeCommand::AgentPrompt { submit, .. } => {
+                        view.runtime_prompt(text.clone(), *submit, cx)
+                    },
+                    _ => unreachable!(),
+                });
+                if let Err(error) = result {
+                    if let RuntimeCommand::DelegationPrompt { task_id, .. } = command {
+                        self.runtime_hub.cancel_delegation(task_id);
+                    }
+                    return Err(error);
+                }
                 self.runtime_result(json!({ "agent": managed }), window, cx)
             },
             RuntimeCommand::AgentPaste { agent, generation, text, submit } => {

@@ -43,6 +43,9 @@ pub(crate) struct AgentActivity {
     screen_blocked_fallback: Option<(AgentStatusSource, Option<String>)>,
     turn_observed: bool,
     pending_submit: bool,
+    /// A concrete submitted task stays owned until its accepted completion,
+    /// even if a title or a delayed SessionStart briefly reports idle.
+    runtime_turn_pending: bool,
     /// A completion-only hook latches its result until an idle screen or an
     /// explicit submission separates the old frame from a new turn.
     screen_armed: bool,
@@ -70,6 +73,7 @@ impl Default for AgentActivity {
             screen_blocked_fallback: None,
             turn_observed: false,
             pending_submit: false,
+            runtime_turn_pending: false,
             screen_armed: true,
             command_ended: false,
             native_codex: false,
@@ -82,6 +86,10 @@ impl Default for AgentActivity {
 }
 
 impl AgentActivity {
+    pub fn runtime_turn_pending(&self) -> bool {
+        self.runtime_turn_pending
+    }
+
     pub fn status(&self) -> AgentStatus {
         self.native_title.unwrap_or(self.status)
     }
@@ -177,6 +185,7 @@ impl AgentActivity {
         self.screen_blocked_fallback = None;
         self.turn_observed = true;
         self.pending_submit = true;
+        self.runtime_turn_pending = true;
         self.last_activity_at = Some(std::time::Instant::now());
         self.input_sent();
     }
@@ -302,6 +311,19 @@ impl AgentActivity {
     pub fn apply_hook(&mut self, event: &AiHookEvent) -> bool {
         if !self.accepts_hook(event) {
             return false;
+        }
+        let replaced_conversation = event.kind == AiHookKind::SessionStart
+            && !event.session_compacted
+            && self.owner.as_ref().is_some_and(|owner| {
+                owner.session.is_some()
+                    && event.session_id.is_some()
+                    && owner.session != event.session_id
+            });
+        if replaced_conversation {
+            self.runtime_turn_pending = false;
+        }
+        if event.kind == AiHookKind::TurnDone && event.active_background_tasks() == 0 {
+            self.runtime_turn_pending = false;
         }
         self.record_owner(event);
         self.native_title = None;

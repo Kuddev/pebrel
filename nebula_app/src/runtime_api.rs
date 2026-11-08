@@ -313,6 +313,7 @@ struct PendingDelegation {
     receipt: RuntimeDelegationReceipt,
     target_name: String,
     started_at: Instant,
+    submitted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -885,6 +886,12 @@ pub enum RuntimeCommand {
         generation: Option<u64>,
         text: String,
         submit: bool,
+    },
+    DelegationPrompt {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        task_id: String,
     },
     AgentPaste {
         agent: String,

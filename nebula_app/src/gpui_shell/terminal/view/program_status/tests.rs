@@ -11,6 +11,21 @@ struct Wire {
 }
 
 #[gpui::test]
+fn delegation_submission_cannot_finish_on_the_previous_osc_idle_frame(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        let mut wire = Wire::install(view);
+        view.running_program = Some("codex".into());
+        wire.feed(view, cx, b"\x1b]7501;state=idle:app=codex\x07");
+        assert_eq!(view.runtime_task_state(), RuntimeTaskState::Idle);
+        view.runtime_prompt("initial task".into(), true, cx).unwrap();
+        wire.feed(view, cx, b"\x1b]7501;state=idle:app=codex\x07");
+        assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running);
+        assert_eq!(view.ensure_delegation_ready().unwrap_err().code, "target_busy");
+    });
+}
+
+#[gpui::test]
 fn osc7501_identity_never_borrows_another_clients_session(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {

@@ -69,6 +69,7 @@ struct DelegationFixture {
     origin: TestAgent,
     worker: TestAgent,
     origin_input: Receiver<Msg>,
+    worker_input: Receiver<Msg>,
     hub: RuntimeHub,
     target: RuntimeManagedAgent,
     receipt: RuntimeDelegationReceipt,
@@ -83,7 +84,7 @@ fn fixture(
 ) -> DelegationFixture {
     transfer_tests::initialize_test(cx);
     let serial = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-    let (window_id, origin, worker, origin_input, hub) = cx.update(|cx| {
+    let (window_id, origin, worker, origin_input, worker_input, hub) = cx.update(|cx| {
         let (window_id, workspace) = transfer_tests::open_test_window(cx, 2);
         let panes: Vec<_> = workspace
             .read(cx)
@@ -95,7 +96,7 @@ fn fixture(
             })
             .collect();
         let origin_input = panes[0].1.update(cx, |view, _| view.install_completion_test_session());
-        panes[1].1.update(cx, |view, _| view.install_completion_test_session());
+        let worker_input = panes[1].1.update(cx, |view, _| view.install_completion_test_session());
         let agent = |index: usize, kind| TestAgent {
             view: panes[index].1.clone(),
             pane_id: panes[index].0,
@@ -109,6 +110,7 @@ fn fixture(
             agent(0, origin_kind),
             agent(1, worker_kind),
             origin_input,
+            worker_input,
             cx.global::<WindowRegistry>().runtime_hub.clone(),
         )
     });
@@ -135,8 +137,9 @@ fn fixture(
         let receipt = hub.begin_delegation(origin.pane_id, &target).unwrap();
         (target, receipt)
     });
+    hub.commit_delegation(&receipt.task_id, &target).unwrap();
     worker.send("UserPromptSubmit", "", cx);
-    DelegationFixture { origin, worker, origin_input, hub, target, receipt }
+    DelegationFixture { origin, worker, origin_input, worker_input, hub, target, receipt }
 }
 
 fn take_input(receiver: &Receiver<Msg>) -> String {
@@ -198,6 +201,7 @@ fn wsl_delegation_replayed_completion_cannot_consume_the_next_task(cx: &mut Test
     fixture.origin.send("Stop", "", cx);
     cx.run_until_parked();
     let next = fixture.hub.begin_delegation(fixture.origin.pane_id, &fixture.target).unwrap();
+    fixture.hub.commit_delegation(&next.task_id, &fixture.target).unwrap();
 
     fixture.worker.inject(completed, cx);
     cx.run_until_parked();
@@ -246,4 +250,59 @@ fn native_delegation_preserves_claude_final_message(cx: &mut TestAppContext) {
     fixture.worker.send("Stop", "NATIVE_CLAUDE_42", cx);
     cx.run_until_parked();
     assert_callback(&fixture, &fixture.receipt.task_id, "NATIVE_CLAUDE_42");
+}
+
+#[gpui::test]
+fn delegation_dispatch_rechecks_busy_view_before_committing_or_writing(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx, AgentKind::Claude, AgentKind::Codex, false, Ingress::Osc);
+    fixture.hub.cancel_delegation(&fixture.receipt.task_id);
+    // The published target snapshot still says Finished. The real view has
+    // already accepted another prompt; the UI must check it atomically.
+    let next = fixture.hub.begin_delegation(fixture.origin.pane_id, &fixture.target).unwrap();
+    let (dispatch, response) = RuntimeDispatch::test(RuntimeCommand::DelegationPrompt {
+        agent: fixture.target.agent_id.clone(),
+        generation: Some(fixture.target.generation),
+        text: "new task".into(),
+        task_id: next.task_id.clone(),
+    });
+    cx.update(|cx| dispatch_runtime(dispatch, cx));
+    assert_eq!(response.recv().unwrap().unwrap_err().code, "target_busy");
+    assert!(take_input(&fixture.worker_input).is_empty(), "busy target received no input");
+    fixture.worker.send("Stop", "READY", cx);
+    cx.run_until_parked();
+    assert!(take_input(&fixture.origin_input).is_empty(), "old completion produced no callback");
+    let next = fixture.hub.begin_delegation(fixture.origin.pane_id, &fixture.target).unwrap();
+    let (dispatch, response) = RuntimeDispatch::test(RuntimeCommand::DelegationPrompt {
+        agent: fixture.target.agent_id.clone(),
+        generation: Some(fixture.target.generation),
+        text: "new task".into(),
+        task_id: next.task_id.clone(),
+    });
+    cx.update(|cx| dispatch_runtime(dispatch, cx));
+    assert!(response.recv().unwrap().is_ok());
+    assert!(take_input(&fixture.worker_input).contains("new task"));
+    fixture.worker.send("UserPromptSubmit", "", cx);
+    fixture.worker.send("Stop", "DONE", cx);
+    cx.run_until_parked();
+    assert_callback(&fixture, &next.task_id, "DONE");
+}
+
+#[gpui::test]
+fn delegation_failed_input_releases_its_unsubmitted_registration(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx, AgentKind::Claude, AgentKind::Codex, false, Ingress::Osc);
+    fixture.hub.cancel_delegation(&fixture.receipt.task_id);
+    fixture.worker.send("Stop", "READY", cx);
+    cx.run_until_parked();
+    let receipt = fixture.hub.begin_delegation(fixture.origin.pane_id, &fixture.target).unwrap();
+    let (dispatch, response) = RuntimeDispatch::test(RuntimeCommand::DelegationPrompt {
+        agent: fixture.target.agent_id.clone(),
+        generation: Some(fixture.target.generation),
+        text: "not\na single line".into(),
+        task_id: receipt.task_id,
+    });
+    cx.update(|cx| dispatch_runtime(dispatch, cx));
+    assert_eq!(response.recv().unwrap().unwrap_err().code, "invalid_params");
+    assert!(take_input(&fixture.worker_input).is_empty());
+    assert!(fixture.hub.begin_delegation(fixture.origin.pane_id, &fixture.target).is_ok());
+    assert!(!fixture.hub.has_pending_delegation_callbacks());
 }

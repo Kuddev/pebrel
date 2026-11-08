@@ -2,7 +2,7 @@ use super::*;
 
 fn result_callback(text: &str) -> RuntimeDelegationCallback {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.complete_delegations_for_turn(&codex_turn_done(text));
     hub.take_ready_delegation_callbacks().pop().unwrap()
 }
@@ -60,7 +60,7 @@ fn delegation_output_marks_the_character_budget_without_modifying_the_prefix() {
 #[test]
 fn delegation_output_preserves_bridge_preview_and_reports_envelope_loss() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     let payload = json!({
         "type": "agent-turn-complete", "thread-id": TEST_CODEX_SESSION,
         "pebrel_output": {"reason": "envelope_limit", "original_chars": 30_000,
@@ -86,7 +86,7 @@ fn delegation_output_preserves_bridge_preview_and_reports_envelope_loss() {
 #[test]
 fn delegation_output_labels_a_missing_preview_instead_of_inventing_an_answer() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     let payload = json!({
         "type": "agent-turn-complete", "thread-id": TEST_CODEX_SESSION,
         "pebrel_output": {"reason": "envelope_limit", "original_chars": 30_000,
@@ -126,7 +126,7 @@ fn delegation_output_escapes_terminal_controls_within_the_transport_budget() {
 #[test]
 fn delegation_output_retries_reuse_one_immutable_callback() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.complete_delegations_for_turn(&codex_turn_done("line 1\nline 2"));
     let original = hub.take_ready_delegation_callbacks().pop().unwrap();
     hub.publish(delegation_snapshot(
@@ -157,7 +157,7 @@ fn delegation_output_reports_explicit_failure_cancellation_and_incomplete_turns(
         (AiTurnOutcome::Incomplete, "incomplete"),
     ] {
         let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-        hub.begin_delegation(3, &target).unwrap();
+        submitted_delegation(&hub, 3, &target);
         let mut event = codex_turn_done("provider result");
         event.turn_outcome = outcome;
         hub.complete_delegations_for_turn(&event);
@@ -169,7 +169,7 @@ fn delegation_output_reports_explicit_failure_cancellation_and_incomplete_turns(
 #[test]
 fn delegation_output_wait_timeout_does_not_cancel_or_cache_a_task_result() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.publish(delegation_snapshot(
         RuntimeTaskState::Finished,
         RuntimeTaskState::Running,

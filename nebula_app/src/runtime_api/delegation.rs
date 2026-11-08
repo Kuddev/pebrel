@@ -4,6 +4,27 @@ use super::*;
 
 const MAX_DELEGATION_RESULT_CHARS: usize = 4_000;
 
+impl RuntimeManagedAgent {
+    pub(crate) fn check_delegation_identity(
+        &self,
+        actual: Option<&RuntimeAgent>,
+    ) -> Result<(), ApiError> {
+        if actual.is_none_or(|actual| {
+            actual.kind != self.kind
+                || self
+                    .session_id
+                    .as_deref()
+                    .is_some_and(|expected| actual.session_id.as_deref() != Some(expected))
+        }) {
+            return Err(ApiError::new(
+                "agent_identity_mismatch",
+                "the target pane now contains a different Agent session",
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn delegation_endpoint_matches(endpoint: &RuntimeDelegationEndpoint, agent: &RuntimeAgent) -> bool {
     if let (Some(expected_id), Some(expected_generation)) =
         (endpoint.agent_id.as_deref(), endpoint.generation)
@@ -159,7 +180,7 @@ impl RuntimeHub {
         target: &RuntimeManagedAgent,
     ) -> Result<RuntimeDelegationReceipt, ApiError> {
         let mut state = self.lock();
-        let (origin_window_id, origin_agent, target_session_id) = {
+        let (origin_window_id, origin_agent, target_session_id, target_state) = {
             let snapshot = state.current.as_ref().ok_or_else(|| {
                 ApiError::new(
                     "runtime_unavailable",
@@ -178,7 +199,7 @@ impl RuntimeHub {
                 .session_id
                 .clone()
                 .or_else(|| target_pane.agent.as_ref().and_then(|agent| agent.session_id.clone()));
-            (origin_window_id, origin_agent, target_session_id)
+            (origin_window_id, origin_agent, target_session_id, target_pane.task_state)
         };
         if origin_pane_id == target.pane_id {
             return Err(ApiError::invalid_params("an Agent cannot delegate a task to itself"));
@@ -197,6 +218,17 @@ impl RuntimeHub {
                 "delegation_in_progress",
                 format!("agent {:?} already has an in-flight delegated task", target.name),
             ));
+        }
+        if !matches!(target_state, RuntimeTaskState::Idle | RuntimeTaskState::Finished) {
+            return Err(ApiError::new(
+                "target_busy",
+                "the target Agent has not finished its current turn; delegation was not submitted",
+            )
+            .details(json!({
+                "agent_id": target.agent_id, "generation": target.generation,
+                "window_id": target.window_id, "pane_id": target.pane_id,
+                "task_state": target_state,
+            })));
         }
         if state.pending_delegations.len() >= MAX_PENDING_DELEGATIONS {
             return Err(ApiError::new(
@@ -233,6 +265,7 @@ impl RuntimeHub {
                 receipt: receipt.clone(),
                 target_name: target.name.clone(),
                 started_at: Instant::now(),
+                submitted: false,
             },
         );
         Ok(receipt)
@@ -240,6 +273,35 @@ impl RuntimeHub {
 
     pub(crate) fn cancel_delegation(&self, task_id: &str) {
         self.lock().pending_delegations.remove(task_id);
+    }
+
+    /// Called in the same UI update that checks readiness and writes the
+    /// delegated input. A registered task cannot consume a prior Stop while
+    /// its command is still waiting in the UI queue.
+    pub(crate) fn commit_delegation(
+        &self,
+        task_id: &str,
+        target: &RuntimeManagedAgent,
+    ) -> Result<(), ApiError> {
+        let mut state = self.lock();
+        let pending = state
+            .pending_delegations
+            .get_mut(task_id)
+            .filter(|pending| {
+                !pending.submitted
+                    && pending.receipt.target.agent_id.as_deref() == Some(target.agent_id.as_str())
+                    && pending.receipt.target.generation == Some(target.generation)
+                    && pending.receipt.target.pane_id == target.pane_id
+            })
+            .ok_or_else(|| {
+                ApiError::new(
+                    "delegation_not_pending",
+                    "the delegated submission was cancelled or already committed",
+                )
+            })?;
+        pending.submitted = true;
+        pending.started_at = Instant::now();
+        Ok(())
     }
 
     /// Convert a provider TurnDone edge into a callback exactly once. The
@@ -265,7 +327,8 @@ impl RuntimeHub {
                 .session_id
                 .as_deref()
                 .is_none_or(|expected| event.session_id.as_deref() == Some(expected));
-            (target.pane_id == target_pane_id
+            (pending.submitted
+                && target.pane_id == target_pane_id
                 && same_managed_agent
                 && same_provider
                 && same_session)

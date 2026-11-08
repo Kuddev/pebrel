@@ -457,11 +457,11 @@ pub(super) fn agent_delegate_connection(
         "runtime agent.delegate request_id={} task_id={} origin_pane={} target_agent={} generation={}",
         request.id, delegation.task_id, params.origin_pane_id, target.agent_id, target.generation
     );
-    let command = RuntimeCommand::AgentPrompt {
+    let command = RuntimeCommand::DelegationPrompt {
         agent: target.agent_id.clone(),
         generation: Some(target.generation),
         text: params.text,
-        submit: true,
+        task_id: delegation.task_id.clone(),
     };
     let response = match dispatch_runtime_command(command, sink, hub) {
         Ok(mut result) => {
