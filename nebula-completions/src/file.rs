@@ -711,7 +711,7 @@ mod tests {
             None,
         );
         assert_eq!(entry_names(&suggestions), vec![("inner.txt".to_string(), false)]);
-        assert_eq!(suggestions[0].path, format!("targetdir{SEP}inner.txt"));
+        assert_eq!(suggestions[0].path, "targetdir/inner.txt");
         assert_eq!(suggestions[0].match_indices, (0..9).collect::<Vec<_>>());
     }
 
