@@ -57,6 +57,7 @@ impl TerminalView {
             event.source == "codex" && event.session_file.is_none() && self.ai_session_from_probe;
         let target = event.session_id.as_ref().filter(|_| !keep_native_identity).map(|id| {
             crate::session::AgentSession {
+                managed_name: None,
                 source: event.source.clone(),
                 session_id: Some(id.clone()),
                 session_file: event.session_file.clone(),

@@ -12,6 +12,7 @@ pub(crate) mod conversation;
 mod delegation;
 pub(crate) mod git;
 mod handover;
+mod managed_aliases;
 pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
@@ -858,6 +859,13 @@ pub enum RuntimeCommand {
         pane_id: u64,
         request: git::Request,
     },
+    AgentAttach {
+        window_id: Option<u64>,
+        pane_id: u64,
+        name: String,
+        kind: crate::ai_agents::AgentKind,
+        expected_session_id: String,
+    },
     AgentStart {
         window_id: Option<u64>,
         pane_id: Option<u64>,
@@ -1034,6 +1042,9 @@ struct HubState {
         std::collections::HashMap<(u64, u64, u64), Vec<(u64, SyncSender<RuntimeRunResult>)>>,
     completed_runs: std::collections::VecDeque<RuntimeRunResult>,
     agent_generations: std::collections::HashMap<String, u64>,
+    generation_namespace: managed_aliases::GenerationNamespace,
+    pending_alias_restores:
+        std::collections::HashMap<PaneIdentity, managed_aliases::PendingAliasRestore>,
     managed_agents: std::collections::HashMap<String, RuntimeManagedAgent>,
     next_delegation: u64,
     pending_delegations: std::collections::HashMap<String, PendingDelegation>,
@@ -1056,6 +1067,7 @@ impl RuntimeHub {
         let relocations = resolve_pane_relocations(&mut state, &snapshot);
         observe_removed_panes(&mut state, &snapshot, &relocations);
         snapshot.pane_lifecycles = state.pane_lifecycles.iter().cloned().collect();
+        managed_aliases::reconcile_alias_restores(&mut state, &snapshot);
         let agent_lifecycle_changed = project_managed_agents(&mut state, &mut snapshot);
         delegation::reconcile_delegations(&mut state, &snapshot);
         // Stamp per-pane transition counters before the dedup compare. Panes
@@ -1115,6 +1127,9 @@ impl RuntimeHub {
         let mut state = self.lock();
         for pane_id in &pane_ids {
             state.pending_pane_relocations.insert((from, *pane_id), (to, *pane_id));
+            if let Some(pending) = state.pending_alias_restores.remove(&(from, *pane_id)) {
+                state.pending_alias_restores.insert((to, *pane_id), pending);
+            }
         }
         for agent in state.managed_agents.values_mut() {
             if agent.window_id == from && pane_ids.contains(&agent.pane_id) {
@@ -1185,43 +1200,6 @@ impl RuntimeHub {
                 ),
             )),
         }
-    }
-
-    pub(crate) fn register_agent(
-        &self,
-        name: String,
-        kind: crate::ai_agents::AgentKind,
-        window_id: u64,
-        pane_id: u64,
-        session_id: Option<String>,
-        worktree: Option<crate::git_worktree::WorktreeProvenance>,
-    ) -> Result<RuntimeManagedAgent, ApiError> {
-        let mut state = self.lock();
-        if state.managed_agents.values().any(|agent| agent.active && agent.name == name) {
-            return Err(ApiError::new(
-                "agent_name_conflict",
-                format!("an active agent named {name:?} already exists"),
-            ));
-        }
-        let generation = state.agent_generations.get(&name).copied().unwrap_or(0).saturating_add(1);
-        state.agent_generations.insert(name.clone(), generation);
-        let sequence = NEXT_AGENT_ID.fetch_add(1, Ordering::Relaxed);
-        let agent_id = format!("agent-{}-{sequence}", std::process::id());
-        let agent = RuntimeManagedAgent {
-            agent_id: agent_id.clone(),
-            generation,
-            name,
-            kind: kind.slug().to_owned(),
-            window_id,
-            pane_id,
-            session_id,
-            worktree,
-            active: true,
-            observed: false,
-            closed_reason: None,
-        };
-        state.managed_agents.insert(agent_id, agent.clone());
-        Ok(agent)
     }
 
     pub(crate) fn ensure_agent_name_available(&self, name: &str) -> Result<(), ApiError> {
@@ -1449,6 +1427,7 @@ fn record_pane_lifecycle_locked(
     pane_id: u64,
     event: RuntimePaneLifecycleKind,
 ) -> bool {
+    state.pending_alias_restores.remove(&(window_id, pane_id));
     // The first terminal event is the cause. A real PTY exit must not be
     // overwritten by the shutdown/close that the UI performs immediately
     // afterwards.

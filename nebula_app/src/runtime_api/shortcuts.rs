@@ -416,6 +416,12 @@ fn command_catalog() -> Value {
             "example": "pebrel agent list",
         },
         {
+            "command": "pebrel ctl agent-attach",
+            "purpose": "Name an existing idle Agent after verifying its exact native session id. \
+                        Registers local metadata without starting a CLI or sending a prompt.",
+            "example": "pebrel ctl agent-attach --pane 17 --name worker --kind codex --expected-session-id <native-session-id>",
+        },
+        {
             "command": "pebrel agent send <agent> <task>",
             "purpose": "Hand one task to an agent and submit it. Bound to the agent's current \
                         generation, so a session that restarted in the meantime cannot inherit \
@@ -601,6 +607,13 @@ fn agent_list(options: ListOptions) -> Result<(), Box<dyn Error>> {
     print_response(&response, options.output.pretty)
 }
 
+fn accepted_local_command(response: &ApiResponse) -> bool {
+    // --wait acknowledges local input without inventing a completed model turn.
+    // The caller reads the actual menu/conversation and continues explicitly.
+    response.ok
+        && response.result.as_ref().is_some_and(|result| result["action"]["local_command"] == true)
+}
+
 fn agent_send(options: AgentSendOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
     let wait_timeout = submission_wait_timeout(options.wait, options.wait_timeout_ms, timeout)?;
@@ -614,7 +627,7 @@ fn agent_send(options: AgentSendOptions) -> Result<(), Box<dyn Error>> {
         }),
         timeout,
     )?;
-    if !response.ok || !options.wait {
+    if !response.ok || !options.wait || accepted_local_command(&response) {
         return print_response(&response, options.output.pretty);
     }
     let baseline = require_submission_baseline(dispatched_state_change_seq(&response, None, None))?;
@@ -681,7 +694,7 @@ fn agent_paste(options: AgentPasteOptions) -> Result<(), Box<dyn Error>> {
         }),
         timeout,
     )?;
-    if !response.ok || !options.wait {
+    if !response.ok || !options.wait || accepted_local_command(&response) {
         return print_response(&response, options.output.pretty);
     }
     let baseline = require_submission_baseline(dispatched_state_change_seq(&response, None, None))?;

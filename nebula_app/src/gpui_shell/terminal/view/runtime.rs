@@ -676,6 +676,13 @@ impl TerminalView {
             ));
         }
         let agent = self.runtime_agent();
+        if submit
+            && agent.as_ref().is_some_and(|agent| {
+                crate::ai_hook::local_command::is_local_command(&agent.kind, &text)
+            })
+        {
+            self.ensure_delegation_ready()?;
+        }
         let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         if submit {
             self.capture_runtime_prompt();
@@ -822,6 +829,13 @@ impl TerminalView {
     ) -> Result<(), crate::runtime_api::ApiError> {
         self.ensure_local_context_allowed(origin)?;
         let agent = self.runtime_chat_agent();
+        if submit
+            && agent.as_ref().is_some_and(|agent| {
+                crate::ai_hook::local_command::is_local_command(&agent.kind, &text)
+            })
+        {
+            self.ensure_delegation_ready()?;
+        }
         if require_agent && agent.is_none() {
             return Err(crate::runtime_api::ApiError::new(
                 "invalid_target",
@@ -960,6 +974,7 @@ impl TerminalView {
                 if let Some(session) = session_id {
                     log::debug!("agent session identity from active rollout: pane={pane_id}");
                     let target = crate::session::AgentSession {
+                        managed_name: None,
                         source: "codex".to_owned(),
                         session_id: Some(session.session_id.clone()),
                         session_file: Some(session.session_file),

@@ -178,7 +178,10 @@ impl NebulaWorkspace {
                 });
             }
             if resume_ai && let Some(agent) = agent {
-                pane.view.update(cx, |view, cx| view.restore_agent(agent.clone(), cx));
+                let mut agent = agent.clone();
+                agent.normalize_identity();
+                self.runtime_hub.restore_managed_alias(self.runtime_window_id, pane.id, &agent);
+                pane.view.update(cx, |view, cx| view.restore_agent(agent, cx));
             }
             panes.push(pane);
         }
@@ -238,7 +241,11 @@ impl NebulaWorkspace {
                     return (String::new(), None, None, None);
                 };
                 let view = pane.view.read(cx);
-                let agent = view.session_agent();
+                let mut agent = view.session_agent();
+                if let Some(agent) = &mut agent {
+                    agent.managed_name =
+                        self.runtime_hub.saved_managed_name(self.runtime_window_id, id, agent);
+                }
                 (
                     view.cwd.clone(),
                     agent,

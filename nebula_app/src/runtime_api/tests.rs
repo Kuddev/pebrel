@@ -1785,3 +1785,6 @@ mod delegation_submission_tests;
 
 #[path = "tests/delegation_terminal_tests.rs"]
 mod delegation_terminal_tests;
+
+#[path = "tests/managed_alias_tests.rs"]
+mod managed_alias_tests;

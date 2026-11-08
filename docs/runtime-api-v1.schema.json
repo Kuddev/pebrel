@@ -60,6 +60,7 @@
             "runtime.orchestrate",
             "events.subscribe",
             "agents.list",
+            "agent.attach",
             "agent.start",
             "agent.fork",
             "agent.get",
@@ -176,6 +177,22 @@
             "properties": {
               "params": {
                 "$ref": "#/$defs/window_params"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "agent.attach"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/agent_attach_params"
               }
             }
           }
@@ -1159,6 +1176,21 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 2000
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_attach_params": {
+      "type": "object",
+      "required": ["pane_id", "name", "kind", "expected_session_id"],
+      "properties": {
+        "window_id": {"$ref": "#/$defs/nullable_window_id"},
+        "pane_id": {"type": "integer", "minimum": 0},
+        "name": {"type": "string", "minLength": 1, "maxLength": 64},
+        "kind": {"type": "string", "minLength": 1},
+        "expected_session_id": {
+          "type": "string", "minLength": 1, "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
         }
       },
       "additionalProperties": false

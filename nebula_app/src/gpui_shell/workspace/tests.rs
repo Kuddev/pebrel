@@ -448,6 +448,7 @@ fn ai_hook_routing_never_falls_back_for_a_stale_exact_pane() {
 #[test]
 fn restored_agent_command_honors_resume_ai_without_changing_session_data() {
     let agent = crate::session::AgentSession {
+        managed_name: None,
         session_file: None,
         source: "claude".to_owned(),
         session_id: Some("session-42".to_owned()),
@@ -921,6 +922,7 @@ mod boot_breaker_tests {
         let workspace = workspace.unwrap();
 
         let saved = AgentSession {
+            managed_name: Some("restored-worker".into()),
             source: "codex".into(),
             session_id: Some("saved-42".into()),
             session_file: None,

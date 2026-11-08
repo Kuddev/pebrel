@@ -233,6 +233,7 @@ pub(super) fn runtime_description() -> Value {
     if cfg!(feature = "gpui-shell") {
         description["capabilities"].as_array_mut().expect("capabilities array").extend(
             [
+                "agent.attach",
                 "tab.focus",
                 "tab.open",
                 "tab.read",

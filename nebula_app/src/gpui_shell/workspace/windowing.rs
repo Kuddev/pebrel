@@ -101,6 +101,8 @@ use crate::runtime_api::{
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod delegation_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod managed_alias_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_resize_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod transfer_tests;
@@ -193,6 +195,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::Exec { .. }
         | RuntimeCommand::Git { .. }
         | RuntimeCommand::AgentStart { .. }
+        | RuntimeCommand::AgentAttach { .. }
         | RuntimeCommand::AgentFork { .. }
         | RuntimeCommand::AgentPrompt { .. }
         | RuntimeCommand::DelegationPrompt { .. }
@@ -707,6 +710,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::RenameTab { window_id, .. }
         | RuntimeCommand::MoveTab { window_id, .. } => (*window_id, None),
         RuntimeCommand::Prompt { window_id, pane_id, .. }
+        | RuntimeCommand::AgentAttach { window_id, pane_id, .. }
         | RuntimeCommand::Paste { window_id, pane_id, .. }
         | RuntimeCommand::ClosePane { window_id, pane_id }
         | RuntimeCommand::ZoomPane { window_id, pane_id, .. }

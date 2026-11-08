@@ -1,5 +1,7 @@
 use super::*;
-use crate::gpui_shell::terminal::view::{SidebarActivity, TermEvent, startup_tests::open};
+use crate::gpui_shell::terminal::view::{
+    InputOrigin, SidebarActivity, TermEvent, startup_tests::open,
+};
 use crate::runtime_api::RuntimeAgentStateSource;
 use gpui::TestAppContext;
 use nebula_terminal::event_loop::StreamProcessor;
@@ -8,6 +10,36 @@ struct Wire {
     stream: StreamProcessor,
     events: crate::gpui_shell::terminal::event_mailbox::EventReceiver,
     proxy: crate::gpui_shell::terminal::session::EventProxy,
+}
+
+#[gpui::test]
+fn local_slash_commands_cannot_discard_a_running_model_turn(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let mut wire = Wire::install(view);
+        view.running_program = Some("codex".into());
+        wire.feed(view, cx, b"\x1b]7501;state=idle:app=codex\x07");
+        view.runtime_prompt("ordinary task".into(), true, cx).unwrap();
+        let _ = receiver.try_iter().count();
+        for command in ["/new", "/clear", "/model", "/plan"] {
+            assert_eq!(
+                view.runtime_prompt(command.into(), true, cx).unwrap_err().code,
+                "target_busy"
+            );
+            assert_eq!(
+                view.runtime_agent_paste(command.into(), true, InputOrigin::Program, cx)
+                    .unwrap_err()
+                    .code,
+                "target_busy"
+            );
+            assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running);
+        }
+        assert!(
+            receiver
+                .try_iter()
+                .all(|message| !matches!(message, nebula_terminal::event_loop::Msg::Input(_)))
+        );
+    });
 }
 
 #[gpui::test]

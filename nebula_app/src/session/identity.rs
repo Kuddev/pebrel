@@ -73,6 +73,7 @@ mod tests {
             "/sessions/rollout-date-not-a-uuid.jsonl",
         ] {
             let saved = super::super::AgentSession {
+                managed_name: None,
                 source: "codex".into(),
                 session_id: Some("saved-thread".into()),
                 session_file: Some(path.into()),
@@ -100,6 +101,7 @@ mod tests {
     fn an_unrecognized_file_still_needs_a_safe_existing_id_to_resume() {
         for id in [None, Some("".into()), Some("bad; echo injected".into()), Some("x".repeat(65))] {
             let mut saved = super::super::AgentSession {
+                managed_name: None,
                 source: "codex".into(),
                 session_id: id.clone(),
                 session_file: Some("/sessions/conversation.jsonl".into()),
@@ -115,6 +117,7 @@ mod tests {
     fn snapshot_resume_uses_the_rollout_thread_instead_of_the_hook_group() {
         for id in [Some("different-hook-group".into()), None] {
             let mut saved = super::super::AgentSession {
+                managed_name: None,
                 source: "codex".into(),
                 session_id: id,
                 session_file: Some(format!(

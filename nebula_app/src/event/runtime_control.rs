@@ -348,9 +348,9 @@ impl Processor {
                 "invalid_runtime_command",
                 "pane.exec must be prepared before entering the synchronous UI dispatcher",
             )),
-            RuntimeCommand::AgentStart { .. } | RuntimeCommand::AgentFork { .. } => {
-                self.execute_agent_runtime_command(command)
-            },
+            RuntimeCommand::AgentStart { .. }
+            | RuntimeCommand::AgentFork { .. }
+            | RuntimeCommand::AgentAttach { .. } => self.execute_agent_runtime_command(command),
             RuntimeCommand::AgentPrompt { agent, generation, text, .. }
             | RuntimeCommand::DelegationPrompt { agent, generation, text, .. } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;

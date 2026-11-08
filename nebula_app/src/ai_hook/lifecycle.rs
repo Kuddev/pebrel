@@ -191,9 +191,10 @@ impl AgentActivity {
     }
 
     pub fn submitted_text(&mut self, program: &str, text: &str) {
-        // Codex /plan 只切换交互模式，不触发任务 hook；若先制造 Running，
-        // 对话输入会一直等一个不存在的完成事件。普通任务仍保留提交屏障。
-        if program == "codex" && text.trim() == "/plan" {
+        // Local commands can open menus or replace the native conversation.
+        // They do not owe a model completion hook. Unknown/custom commands and
+        // /compact still retain the ordinary submission barrier.
+        if super::local_command::is_local_command(program, text) {
             self.input_sent();
         } else {
             self.submitted();

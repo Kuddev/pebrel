@@ -26,6 +26,17 @@ struct AgentStartParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AgentAttachParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    name: String,
+    kind: String,
+    expected_session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AgentForkParams {
     #[serde(default)]
     window_id: Option<u64>,
@@ -110,6 +121,27 @@ struct AgentWaitParams {
 
 pub(super) fn command_from_request(request: &ApiRequest) -> Result<RuntimeCommand, ApiError> {
     match request.method.as_str() {
+        "agent.attach" => {
+            let params: AgentAttachParams = parse_params(&request.params)?;
+            validate_agent_name(&params.name)?;
+            let kind = crate::ai_agents::AgentKind::parse(&params.kind)
+                .ok_or_else(|| ApiError::invalid_params("unknown Agent kind"))?;
+            if params.expected_session_id.is_empty()
+                || params.expected_session_id.len() > 4096
+                || params.expected_session_id.chars().any(char::is_control)
+            {
+                return Err(ApiError::invalid_params(
+                    "expected_session_id must be a native session id",
+                ));
+            }
+            Ok(RuntimeCommand::AgentAttach {
+                window_id: params.window_id,
+                pane_id: params.pane_id,
+                name: params.name,
+                kind,
+                expected_session_id: params.expected_session_id,
+            })
+        },
         "agent.start" => {
             let params: AgentStartParams = parse_params(&request.params)?;
             validate_agent_name(&params.name)?;
@@ -449,6 +481,18 @@ pub(super) fn agent_delegate_connection(
         Ok(target) => target,
         Err(error) => return write_response(stream, &ApiResponse::failure(request.id, error)),
     };
+    if crate::ai_hook::local_command::is_local_command(&target.kind, &params.text) {
+        return write_response(
+            stream,
+            &ApiResponse::failure(
+                request.id,
+                ApiError::new(
+                    "local_command_requires_send",
+                    "local slash commands have no model result; use agent.prompt or agent send and read the pane",
+                ),
+            ),
+        );
+    }
     let mut delegation = match hub.begin_delegation(params.origin_pane_id, &target) {
         Ok(delegation) => delegation,
         Err(error) => return write_response(stream, &ApiResponse::failure(request.id, error)),

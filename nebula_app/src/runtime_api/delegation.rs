@@ -79,6 +79,21 @@ fn bounded_output(raw: Option<&str>) -> (String, bool, bool) {
     (output, escaped_controls, encoding_limited)
 }
 
+fn mark_truncated_output(output: &str) -> String {
+    const MARKER: &str = "…[truncated]";
+    let budget = MAX_DELEGATION_RESULT_CHARS - MARKER.chars().count();
+    let mut prefix: Vec<char> = output.chars().take(budget).collect();
+    // Prefer a complete recent line without discarding a large useful prefix.
+    if let Some(newline) = prefix.iter().rposition(|ch| *ch == '\n')
+        && prefix.len() - newline <= 256
+    {
+        prefix.truncate(newline + 1);
+    }
+    let mut output: String = prefix.into_iter().collect();
+    output.push_str(MARKER);
+    output
+}
+
 fn callback_header(pending: &PendingDelegation, outcome: &str, completeness: &str) -> String {
     let elapsed_ms = pending.started_at.elapsed().as_millis().min(u128::from(u64::MAX));
     let generation = pending
@@ -125,11 +140,14 @@ fn callback_prompt(
     let result_limited = raw.is_some_and(|text| {
         text.chars().take(MAX_DELEGATION_RESULT_CHARS + 1).count() > MAX_DELEGATION_RESULT_CHARS
     });
-    let (output, escaped_controls, encoding_limited) = bounded_output(raw);
+    let (mut output, escaped_controls, encoding_limited) = bounded_output(raw);
     let truncated = bridge.is_some_and(|output| output.truncated)
         || large_bytes.is_some()
         || result_limited
         || encoding_limited;
+    if truncated && raw.is_some() {
+        output = mark_truncated_output(&output);
+    }
     let completeness = if truncated {
         "true"
     } else if original_chars.is_some() {

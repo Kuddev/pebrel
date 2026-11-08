@@ -45,16 +45,40 @@ fn delegation_output_marks_the_character_budget_without_modifying_the_prefix() {
     for length in [4_000, 4_001, 4_100] {
         let callback = result_callback(&"界".repeat(length));
         let text = decoded_output(&callback);
-        assert_eq!(text, "界".repeat(4_000));
         if length == 4_000 {
+            assert_eq!(text, "界".repeat(4_000));
             assert!(callback.prompt.contains("truncated=false"));
         } else {
+            assert_eq!(text, format!("{}…[truncated]", "界".repeat(3_988)));
             assert!(callback.prompt.contains("truncated=true"));
             assert!(callback.prompt.contains("limit_chars=4000"));
             assert!(callback.prompt.contains(&format!("original_chars={length}")));
             assert!(callback.prompt.contains("reason=result_limit"));
         }
     }
+}
+
+#[test]
+fn delegation_output_truncated_tail_is_visible_inside_the_existing_budget() {
+    let callback = result_callback(&"界".repeat(4100));
+    let output = decoded_output(&callback);
+    assert!(output.ends_with("…[truncated]"));
+    assert!(output.chars().count() <= 4000);
+    assert!(callback.prompt.contains("truncated=true"));
+    let complete = decoded_output(&result_callback(&"界".repeat(4000)));
+    assert_eq!(complete, "界".repeat(4000));
+}
+
+#[test]
+fn delegation_output_prefers_a_recent_complete_line_before_the_truncation_marker() {
+    let text = format!("{}\n12345678901234567890\n{}", "a".repeat(3970), "tail".repeat(50));
+    let callback = result_callback(&text);
+    let output = decoded_output(&callback);
+    assert!(output.ends_with("\n…[truncated]"));
+    let prefix = output.strip_suffix("\n…[truncated]").unwrap();
+    assert!(text.starts_with(prefix));
+    assert!(!prefix.ends_with("1234567890123456"), "a partial number is not a complete line");
+    assert!(output.chars().count() <= 4000);
 }
 
 #[test]
@@ -77,7 +101,7 @@ fn delegation_output_preserves_bridge_preview_and_reports_envelope_loss() {
     ));
     hub.complete_delegations_for_turn(&event);
     let callback = hub.take_ready_delegation_callbacks().pop().unwrap();
-    assert_eq!(decoded_output(&callback), "中".repeat(4_000));
+    assert_eq!(decoded_output(&callback), format!("{}…[truncated]", "中".repeat(3_988)));
     for field in ["truncated=true", "reason=envelope_limit", "original_chars=30000"] {
         assert!(callback.prompt.contains(field));
     }

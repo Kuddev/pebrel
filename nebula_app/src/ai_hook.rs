@@ -13,6 +13,7 @@ mod event;
 pub(crate) mod installation;
 pub(crate) mod integrations;
 pub(crate) mod lifecycle;
+pub(crate) mod local_command;
 mod native_events;
 mod ordering;
 mod output;
