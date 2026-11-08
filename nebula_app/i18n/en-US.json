@@ -1981,7 +1981,8 @@
     "serial_read_failed": "Serial port stopped: {error}",
     "serial_write_failed": "Serial write failed: {error}",
     "serial_start_failed": "Could not open serial port: {error}",
-    "pty_start_failed": "Could not start the PTY: {error}"
+    "pty_start_failed": "Could not start the PTY: {error}",
+    "zmodem_cancelled": "Pebrel does not support ZMODEM (rz/sz) transfers, so it cancelled the transfer to keep the terminal usable. Use scp or SFTP to transfer files."
   },
   "confirmation": {
     "cover_title": "Extend the background image behind window controls?",

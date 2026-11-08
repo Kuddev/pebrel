@@ -421,6 +421,7 @@ Normal NF CN Regular font (SIL Open Font License 1.1). The original copyright
 and license metadata are retained in the font; see licenses/LICENSE-PEBREL-SYMBOLS.
 Source: https://github.com/subframe7536/maple-font
 Regeneration: python scripts/build_symbol_font.py (requires fontTools).
+It also keeps Maple's unchanged `m` glyph, required by GPUI's macOS font loader.
 The complete Maple face remains unchanged and separately selectable.
 
 nebula-waiting-hand.svg preserves the U+F256 outline from that bundled font,

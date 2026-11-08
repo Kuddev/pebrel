@@ -237,6 +237,8 @@ pub enum TerminalViewEvent {
     /// 程序上报的任务进度（OSC 9;4）变了。宿主把 pane 级状态投到 tab badge，
     /// 并且只把当前聚焦 pane 投到窗口级任务栏。
     ProgressChanged(crate::taskbar::TaskProgress),
+    /// 远端 rz/sz 发起的 ZMODEM 已被终端核心取消；宿主负责提示用户。
+    ZmodemCancelled,
 }
 
 /// 会话种类：本地 shell 或 SSH 直连（russh，共享旧壳业务层）。
@@ -718,6 +720,7 @@ impl TerminalView {
                 }
             },
             TermEvent::PtyWrite(text) => self.write_bytes(text.into_bytes()),
+            TermEvent::ZmodemCancelled(_) => cx.emit(TerminalViewEvent::ZmodemCancelled),
             TermEvent::ClipboardStore(_, text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             },
