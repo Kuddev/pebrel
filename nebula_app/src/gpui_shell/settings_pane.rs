@@ -71,6 +71,8 @@ mod shell_picker_tests;
 mod sponsor;
 mod status;
 mod theme_advanced;
+mod theme_community;
+mod theme_community_view;
 mod theme_editor;
 mod theme_foreground;
 mod theme_package;
