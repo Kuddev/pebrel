@@ -702,6 +702,19 @@ impl TerminalView {
         Ok(())
     }
 
+    pub(crate) fn runtime_delegation_callback(
+        &mut self,
+        callback: &crate::runtime_api::RuntimeDelegationCallback,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::runtime_api::ApiError> {
+        self.ensure_local_context_allowed(InputOrigin::Program)?;
+        if callback.prompt.contains('\n') && self.term_mode().contains(TermMode::BRACKETED_PASTE) {
+            self.runtime_agent_paste(callback.prompt.clone(), true, InputOrigin::Program, cx)
+        } else {
+            self.runtime_prompt(callback.single_line_prompt().into_owned(), true, cx)
+        }
+    }
+
     /// 三层护栏里唯一强制的那一层。
     ///
     /// 另两层都能被绕过，所以都只是护栏：第一层是便利层，Send-to-Chat 的目标

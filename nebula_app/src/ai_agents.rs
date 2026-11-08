@@ -617,6 +617,12 @@ fn override_path(agent: AgentKind) -> PathBuf {
 
 /// Same path contract as nebula-settings, repeated here because that crate is
 /// optional in non-GPUI builds while agent semantics serve both shells.
+#[cfg(test)]
+fn settings_dir() -> PathBuf {
+    crate::platform::dirs::data_dir().to_owned()
+}
+
+#[cfg(not(test))]
 fn settings_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("NEBULA_CONFIG_DIR").filter(|path| !path.is_empty()) {
         return PathBuf::from(path);

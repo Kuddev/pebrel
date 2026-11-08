@@ -710,8 +710,9 @@ fn delegation_completion_returns_one_json_escaped_callback() {
     let callbacks = hub.take_ready_delegation_callbacks();
     assert_eq!(callbacks.len(), 1);
     assert_eq!(callbacks[0].task_id, receipt.task_id);
-    assert!(callbacks[0].prompt.contains(&format!("[nebula {}]", receipt.task_id)));
-    let encoded = callbacks[0].prompt.split_once("worker_output=").unwrap().1;
+    assert!(callbacks[0].prompt.contains(&format!("[pebrel {}]", receipt.task_id)));
+    let single_line = callbacks[0].single_line_prompt();
+    let encoded = single_line.split_once("worker_output=").unwrap().1;
     assert_eq!(serde_json::from_str::<String>(encoded).unwrap(), result);
 
     // Provider hooks have no Nebula task id. Consuming the pending record on
@@ -1760,3 +1761,6 @@ fn wait_step_takes_its_baseline_from_the_step_it_references() {
     // 等不到同样要给现场。
     assert_eq!(receipt["steps"][1]["error"]["details"]["tail"]["text"], "› ");
 }
+
+#[path = "tests/delegation_output_tests.rs"]
+mod delegation_output_tests;

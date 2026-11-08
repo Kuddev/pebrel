@@ -18,6 +18,41 @@ import time
 MAX_PAYLOAD = 1024 * 1024
 MAX_ENVELOPE = 64 * 1024
 MAX_STREAM_FILES = 4096
+MAX_OUTPUT_PREVIEW_CHARS = 4000
+
+
+def compact_payload(source, payload):
+    """Keep lifecycle facts and an explicitly bounded final-answer preview."""
+    keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
+    compact = {key: payload[key] for key in keep if key in payload}
+    question = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
+    if question is not None:
+        compact.update(tool_name=payload["tool_name"], tool_input=question)
+    key = None
+    if source in ("claude", "codex") and payload.get("hook_event_name") == "Stop":
+        key = "last_assistant_message"
+    elif source == "codex" and payload.get("type") == "agent-turn-complete":
+        key = "last-assistant-message"
+    elif source in ("opencode", "pi") and payload.get("kind") == "done":
+        key = "message"
+    elif payload.get("hook_event_name") == "StopFailure":
+        key = "error"
+    answer = payload.get(key) if key else None
+    if isinstance(answer, str):
+        preview = answer[:MAX_OUTPUT_PREVIEW_CHARS]
+        compact["pebrel_output"] = {
+            "preview": preview, "original_chars": len(answer),
+            "truncated": len(preview) < len(answer), "reason": "envelope_limit",
+        }
+        if key in compact:
+            compact[key] = answer[:512]
+    return compact
+
+
+def encode_envelope(header, payload):
+    return header.encode() + b"\n" + json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def provider_argv_matches(source, argv):
@@ -127,6 +162,8 @@ def stream_state(token, identity):
 
 
 def send(source, native, mode, payload, token, owner=None, route=None, deadline=None):
+    # Reserved transport metadata is produced here, never trusted from a CLI.
+    payload.pop("pebrel_output", None)
     owner = owner or process_identity(source)
     with stream_state(token, owner or source) as state:
         state.seek(0)
@@ -146,18 +183,15 @@ def send(source, native, mode, payload, token, owner=None, route=None, deadline=
             header += " tmux=" + route["context"]
         if native:
             header += " codex_hooks=" + mode.split("=", 1)[1]
-        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        envelope = header.encode() + b"\n" + encoded
+        envelope = encode_envelope(header, payload)
         if len(envelope) > MAX_ENVELOPE:
-            # Lifecycle must still arrive when a tool or answer is huge. Keep
-            # protocol identities and drop content, without inventing a result.
-            keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
-            question_input = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
-            tool_name = payload.get("tool_name")
-            payload = {key: payload[key] for key in keep if key in payload}
-            if question_input is not None:
-                payload.update(tool_name=tool_name, tool_input=question_input)
-            envelope = header.encode() + b"\n" + json.dumps(payload, separators=(",", ":")).encode()
+            payload = compact_payload(source, payload)
+            envelope = encode_envelope(header, payload)
+        if len(envelope) > MAX_ENVELOPE and "pebrel_output" in payload:
+            # Large identity/context fields may leave no room for a preview.
+            # Preserve the reason and original size even in that case.
+            payload["pebrel_output"].update(preview=None, truncated=True)
+            envelope = encode_envelope(header, payload)
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"

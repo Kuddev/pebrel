@@ -19,7 +19,7 @@ was consumed by the provider; returning JSON alone did not put OSC on the PTY.
 
 - The original native delegation selection failed six of eleven cases, including
   WSL completion, queued delivery and Claude's structured final answer.
-- After shared completion routing, real WSL Codex-to-Claude direct delivery,
+- After shared completion routing, real WSL Claude-to-Codex direct delivery,
   Claude-to-Codex queued delivery and Codex-to-Claude queued delivery completed
   without manually relaying a worker result. The queue cases observed a finished
   worker while its originating agent was still running.

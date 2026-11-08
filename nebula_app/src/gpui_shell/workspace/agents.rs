@@ -309,7 +309,7 @@ impl NebulaWorkspace {
                     ));
                 },
             }
-            view.runtime_prompt(callback.prompt.clone(), true, cx)
+            view.runtime_delegation_callback(callback, cx)
         })
     }
 
