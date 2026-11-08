@@ -35,48 +35,24 @@ class ProhibitedNamesTests(unittest.TestCase):
                      "Kitty graphics protocol_adapter"):
             self.assertTrue(check_prohibited_names.prohibited_source_line("CHANGELOG.md", text))
 
-    def test_activity_fixtures_preserve_real_process_names_without_exempting_prose(self) -> None:
-        path = "nebula_app/src/gpui_shell/terminal/view/activity_tests.rs"
-        cases = ('view.running_program = Some("tmux".into());',
-                 'for program in ["tmux", "screen"] {')
-        for text in cases:
-            with self.subTest(text=text):
-                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(
-                    path.replace("activity_tests", "other_tests"), text
-                ))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " // use tmux"))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(
-                    path, text + " // https://example.invalid/tmux"
-                ))
-        for text in ('let label = "tmux";', '// tmux 里的 Agent 经 hook 报告回合',
-                     'hook("inside-tmux", "UserPromptSubmit", 1)', 'println!("tmux");'):
-            self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
-
-    def test_desktop_endpoint_protocol_references_do_not_allow_prose(self) -> None:
+    def test_the_terminal_multiplexer_name_is_a_compatibility_target(self) -> None:
+        # 产品要调用它、读取其环境变量并路由它的会话；叙述和提交说明同样可以直接写名称。
         cases = (
-            ("resume.rs", 'Self { executable: "tmux".into(), socket: String::new() }'),
-            ("resume/identity.rs", 'command == "tmux" || command == "tmux:" || command.ends_with("/tmux")'),
-            ("resume/discover.sh", r'$3 == "tmux" || $3 == "tmux:" || $3 ~ /\/tmux$/'),
-            ("resume/discover.sh", r"sed -n 's/^n\(.*\/tmux\)$/\1/p'"),
-            ("resume/tests.rs", r'identity.has_client("42 pts/3 bash\n43 pts/3 tmux: client\n")'),
+            ("README.md", "Agent status works inside tmux."),
+            ("architecture/notes/mobile/recovery.md", "Typed tmux commands use an independent channel."),
+            ("nebula_app/res/hooks/remote_tmux.py", 'if os.environ.get("TMUX"):'),
+            ("nebula_app/src/ai_hook/protocol.rs", 'field.strip_prefix("tmux=")'),
+            ("mobile/android/app/src/androidTest/SshIntegrationTest.kt", "tmux capture-pane -p -t '$name'"),
+            ("mobile/android/app/preview-proguard-rules.pro", "# The real tmux/IME regression"),
         )
-        for suffix, text in cases:
-            path = "nebula_app/src/ssh_session/" + suffix
-            with self.subTest(path=path, text=text):
+        for path, text in cases:
+            with self.subTest(path=path):
                 self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " // use tmux"))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " // use Ghostty"))
-        for path, text in (
-            ("resume.rs", 'let description = "tmux";'),
-            ("resume/identity.rs", '// use tmux for everything'),
-            ("resume/discover.sh", "tmux unknown-command"),
-            ("resume/tests.rs", 'println!("tmux");'),
-            ("other.rs", 'Self { executable: "tmux".into(), socket: String::new() }'),
-        ):
-            self.assertTrue(check_prohibited_names.prohibited_source_line("nebula_app/src/ssh_session/" + path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " Compare with Ghostty."))
+        with tempfile.TemporaryDirectory() as directory:
+            message = Path(directory) / "message.txt"
+            message.write_text("fix(android): scroll tmux history", encoding="utf-8")
+            self.assertFalse(check_prohibited_names.scan_message(message))
 
     def test_truncated_unicode_hunk_context_preserves_added_source_checks(self) -> None:
         context = "managed generation 改变时，旧回调".encode("utf-8")[:-1]
@@ -210,22 +186,6 @@ class ProhibitedNamesTests(unittest.TestCase):
         self.assertFalse(check_prohibited_names.prohibited_source_line("Cargo.toml", dependency))
         self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", dependency))
 
-    def test_desktop_hook_wire_references_preserve_only_the_exact_interface(self) -> None:
-        cases = (
-            ("nebula_app/res/hooks/remote_bridge.py", 'if os.environ.get("TMUX"):'),
-            ("nebula_app/res/hooks/remote_tmux.py", 'environment = os.environ.get("TMUX", "").rsplit(",", 2)'),
-            ("nebula_app/res/hooks/remote_tmux.py", 'root = Path(__file__).absolute().parent / "tmux-routes"'),
-            ("nebula_app/res/hooks/remote_bridge.py", 'header += " tmux=" + route["context"]'),
-            ("nebula_app/src/ai_hook/protocol.rs", 'let context = field.strip_prefix("tmux=")?;'),
-        )
-        for path, text in cases:
-            with self.subTest(path=path, text=text):
-                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + ' # compare with Otty'))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + ' # tmux design'))
-                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'label = "tmux"'))
-
     def test_mobile_build_and_session_references_preserve_their_interfaces(self) -> None:
         cases = (
             ("mobile/android/third_party/reader-build/package-lock.json", '"node_modules/@types/d3-contour": {'),
@@ -240,7 +200,6 @@ class ProhibitedNamesTests(unittest.TestCase):
             ("mobile/android/ghostty/UPSTREAM.json", '"project": "https://github.com/ghostty-org/ghostty",'),
             ("mobile/ssh/licenses/SOURCE.json", '"url": "https://raw.githubusercontent.com/warp-tech/russh/revision/LICENSE.txt",'),
             ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'TMUX("tmux"), HERDR("herdr")'),
-            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.TMUX -> "exec tmux new-session -A -s \'pebrel\'"'),
             ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.HERDR -> "exec herdr"'),
             ("mobile/android/app/src/androidTest/SshIntegrationTest.kt", '"tmux kill-session -t \'session\'" else "herdr session stop \'session\'"'),
         )
@@ -254,25 +213,16 @@ class ProhibitedNamesTests(unittest.TestCase):
     def test_remote_discovery_commands_and_wire_tags_are_not_promotion(self) -> None:
         path = "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/connection/RemoteSessions.kt"
         cases = (
-            "if command -v tmux >/dev/null; then",
             "if command -v herdr >/dev/null; then herdr session list --json; fi",
-            "tmux list-sessions -F '#{session_id}'",
-            "tmux list-windows -a -F '#{window_id}'",
             "if (Get-Command herdr -ErrorAction SilentlyContinue) { & herdr session list --json }",
-            '"tmux select-window -t ${quote(window.id)}"',
-            '"$(tmux display-message -p -t ${quote(session.id)})"',
-            '"exec tmux attach-session -t ${quote(session.id)}"',
             '"& herdr session attach ${psQuote(session.id)}"',
             '"herdr --session ${quote(session.id)} tab focus ${quote(window.id)}"',
             '"& herdr --session ${psQuote(session.id)} workspace list"',
             '"& herdr --session ${psQuote(session.id)} tab list"',
-            'val sessions = data["tmux"].orEmpty()',
             'data["herdr"]?.let { body ->',
-            'RemoteSession("tmux", id, name)',
             'RemoteSession("herdr", id, name)',
             'if (session.kind != "herdr") return session.windows',
             'require(session.kind == "herdr")',
-            '    "tmux" -> {',
             '    "herdr" -> {',
             '}.onFailure { warnings += "herdr" }',
             "[Console]::Write([char]30 + 'herdr' + [char]10)",
@@ -281,13 +231,13 @@ class ProhibitedNamesTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
                 self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-                for name in ("tmux", "herdr", "Ghostty"):
+                for name in ("herdr", "Ghostty"):
                     self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + "; compare with " + name))
-        for text in ('val label = "herdr"', '"tmux is better"', 'herdr unknown-command', 'tmux unknown-command'):
+        for text in ('val label = "herdr"', 'herdr unknown-command'):
             with self.subTest(text=text):
                 self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
         self.assertTrue(check_prohibited_names.prohibited_source_line(
-            path.replace("RemoteSessions.kt", "Other.kt"), 'RemoteSession("tmux", id, name)',
+            path.replace("RemoteSessions.kt", "Other.kt"), 'RemoteSession("herdr", id, name)',
         ))
 
     def test_mobile_reference_paths_do_not_exempt_ordinary_mentions(self) -> None:
@@ -301,69 +251,6 @@ class ProhibitedNamesTests(unittest.TestCase):
                 self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"description": "Inspired by Ghostty"'))
                 self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"url": "https://example.invalid/ghostty"'))
 
-    def test_remote_endpoint_metadata_and_isolated_recovery_commands_are_scoped(self) -> None:
-        root = "mobile/android/app/src/"
-        package = "java/io/github/kuddev/pebrel/mobile/connection/"
-        cases = (
-            ("main/" + package + "TmuxEndpoint.kt", 'data class TmuxEndpoint(val executable: String = "tmux", val socket: String = "")'),
-            ("main/" + package + "TmuxEndpoint.kt", 'require(executable == "tmux" || validPath(executable))'),
-            ("main/" + package + "TmuxEndpoint.kt", r'''${'$'}3 == "tmux:" || ${'$'}3 ~ /\/tmux${'$'}/'''),
-            ("main/" + package + "TmuxEndpoint.kt", r"sed -n 's/^n\(.*\/tmux\)$/\1/p'"),
-            ("main/" + package + "SshPtyIdentity.kt", 'it.command == "tmux" || it.command.startsWith("tmux:")'),
-            ("main/" + package + "SshSessionMode.kt", "tmux has-session -t '=original'"),
-            ("test/" + package + "TmuxSessionControlTest.kt", 'TmuxEndpoint("/opt/server 3.8/bin/tmux", "/tmp/tmux-123/custom socket")'),
-            ("test/" + package + "TmuxSessionControlTest.kt", r'"20 10 pts/7 sh\n21 20 pts/7 tmux: client\n50 10 ? sh\n"'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'TmuxEndpoint("tmux", socket)'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'ProcessBuilder("tmux", "-V")'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'environment().remove("TMUX")'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "-f", "/dev/null", "new-session", "-d")'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "has-session", "-t", "original")'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "display-message", "-p")'),
-            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "kill-server")'),
-        )
-        for relative, text in cases:
-            path = root + relative
-            with self.subTest(path=path, text=text):
-                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with tmux'))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with Ghostty'))
-        for filename, text in (
-            ("TmuxEndpoint.kt", 'val label = "tmux"'),
-            ("TmuxEndpoint.kt", '// tmux is better'),
-            ("SshPtyIdentity.kt", 'val label = "tmux"'),
-            ("Other.kt", 'it.command == "tmux"'),
-        ):
-            self.assertTrue(check_prohibited_names.prohibited_source_line(root + "main/" + package + filename, text))
-        self.assertTrue(check_prohibited_names.prohibited_source_line(
-            root + "test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "unknown-command")'))
-        for text in ('TmuxEndpoint("/opt/Ghostty/tmux", socket)', 'val socket = "/tmp/tmux-123/Ghostty"'):
-            self.assertTrue(check_prohibited_names.prohibited_source_line(
-                root + "test/" + package + "TmuxSessionControlTest.kt", text))
-
-    def test_remote_history_commands_allow_only_the_supported_cli_forms(self) -> None:
-        root = "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/connection/"
-        cases = (
-            ("RemoteSessions.kt", "tmux -u list-sessions -F '#{session_id}'"),
-            ("RemoteSessions.kt", "tmux -u list-windows -a -F '#{window_id}'"),
-            ("RemoteSessions.kt", '"tmux select-pane -t ${quote(pane)} && "'),
-            ("TmuxSessionControl.kt", "tmux list-clients -F '#{client_tty}'"),
-            ("TmuxSessionControl.kt", "tmux -u list-clients -F '#{client_tty}'"),
-            ("TmuxSessionControl.kt", 'else "tmux copy-mode -t \'$target\' && "'),
-            ("TmuxSessionControl.kt", '"tmux send-keys -X -N ${count} -t \'$target\' $action"'),
-            ("TmuxSessionControl.kt", '"tmux send-keys -X -t \'${target(attachment)}\' cancel"'),
-        )
-        for filename, text in cases:
-            path = root + filename
-            with self.subTest(path=path, text=text):
-                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-                for name in ("tmux", "herdr", "Ghostty"):
-                    self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + "; compare with " + name))
-        for text in ("tmux unknown-command", "tmux -u unknown-command", "tmux send-keys -l text", "tmux copy-mode advice"):
-            self.assertTrue(check_prohibited_names.prohibited_source_line(root + "TmuxSessionControl.kt", text))
-        self.assertTrue(check_prohibited_names.prohibited_source_line(root + "Other.kt", "tmux copy-mode -t '$target'"))
-
     def test_remote_model_tags_follow_typed_consumers_and_their_tests(self) -> None:
         root = "mobile/android/app/src/"
         package = "java/io/github/kuddev/pebrel/mobile/"
@@ -376,41 +263,20 @@ class ProhibitedNamesTests(unittest.TestCase):
             "test/" + package + "session/SshRecoveryTest.kt",
         )
         for path in paths:
-            for text in ('RemoteSession("tmux", id, name)', 'RemoteSession("herdr", id, name)',
-                         'attachment?.session?.kind == "tmux"', 'it.kind == "tmux"'):
+            for text in ('RemoteSession("herdr", id, name)', 'attachment?.session?.kind == "herdr"',
+                         'it.kind == "herdr"'):
                 with self.subTest(path=path, text=text):
                     self.assertFalse(check_prohibited_names.prohibited_source_line(root + path, text))
-                    self.assertTrue(check_prohibited_names.prohibited_source_line(root + path, text + '; compare with tmux'))
-            self.assertTrue(check_prohibited_names.prohibited_source_line(root + path, 'val label = "tmux"'))
+                    self.assertTrue(check_prohibited_names.prohibited_source_line(root + path, text + '; compare with herdr'))
+            self.assertTrue(check_prohibited_names.prohibited_source_line(root + path, 'val label = "herdr"'))
         path = root + paths[0]
-        for text in ('SshSessionMode.TMUX -> "tmux"', 'SshSessionMode.HERDR -> "herdr"'):
-            self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
-            self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with herdr'))
+        text = 'SshSessionMode.HERDR -> "herdr"'
+        self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with herdr'))
         self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'SshSessionMode.TMUX -> "herdr"'))
         for path in ("README.md", root + "main/" + package + "connection/Other.kt",
                      root + "test/" + package + "ui/PromotionTest.kt"):
-            self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'RemoteSession("tmux", id, name)'))
-
-    def test_real_remote_process_fixtures_keep_executable_and_environment_names(self) -> None:
-        root = "mobile/android/app/src/test/java/io/github/kuddev/pebrel/mobile/connection/"
-        cases = (
-            ("TmuxDiscoveryTest.kt", 'ProcessBuilder("tmux", "-V").start()'),
-            ("TmuxDiscoveryTest.kt", 'command("tmux", "-f", "/dev/null", "new-session", "-d", "-s", "fixture")'),
-            ("TmuxDiscoveryTest.kt", 'command("tmux", "kill-server")'),
-            ("TmuxDiscoveryTest.kt", 'remove("TMUX"); remove("LANG")'),
-            ("SshPtyIdentityTest.kt", "            111 110 pts/7 tmux: client"),
-            ("SshPtyIdentityTest.kt", "            300 1 ? tmux: server"),
-        )
-        for filename, text in cases:
-            with self.subTest(filename=filename, text=text):
-                self.assertFalse(check_prohibited_names.prohibited_source_line(root + filename, text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(root + filename, text + "; compare with tmux"))
-                self.assertTrue(check_prohibited_names.prohibited_source_line(root + "OtherTest.kt", text))
-                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
-        for text in ('command("tmux", "buy-now")', 'ProcessBuilder("tmux", "sponsor")',
-                     'val label = "tmux"', 'remove("TMUX premium")', "tmux: client", "111 110 pts/7 tmux: sponsor"):
-            for filename in ("TmuxDiscoveryTest.kt", "SshPtyIdentityTest.kt"):
-                self.assertTrue(check_prohibited_names.prohibited_source_line(root + filename, text))
+            self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'RemoteSession("herdr", id, name)'))
 
     def test_technical_notes_and_fix_subjects_do_not_exempt_ordinary_mentions(self) -> None:
         paths = (
@@ -420,14 +286,12 @@ class ProhibitedNamesTests(unittest.TestCase):
             "README.md",
         )
         for path in paths:
-            for text in ("Compare with tmux.", "Typed tmux commands use an independent channel.",
-                         "Promote herdr.", "Use Ghostty instead."):
+            for text in ("Promote herdr.", "Use Ghostty instead."):
                 self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
         with tempfile.TemporaryDirectory() as directory:
             message = Path(directory) / "message.txt"
-            for text in ("fix(android): scroll tmux history", "fix(android): compare with herdr"):
-                message.write_text(text, encoding="utf-8")
-                self.assertTrue(check_prohibited_names.scan_message(message))
+            message.write_text("fix(android): compare with herdr", encoding="utf-8")
+            self.assertTrue(check_prohibited_names.scan_message(message))
 
     def test_range_and_staged_checks_keep_remote_commands_but_reject_appended_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -437,10 +301,10 @@ class ProhibitedNamesTests(unittest.TestCase):
             run_git(repository, "config", "user.email", "ci@example.invalid")
             run_git(repository, "commit", "--allow-empty", "-qm", "baseline")
             base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
-            path = "mobile/android/app/src/main/java/connection/TmuxSessionControl.kt"
+            path = "mobile/android/app/src/main/java/connection/RemoteSessions.kt"
             source = repository / path
             source.parent.mkdir(parents=True)
-            line = 'val command = "tmux send-keys -X -t \'$target\' cancel"'
+            line = 'val command = "herdr session stop \'fixture\'"'
             source.write_text(line + "\n", encoding="utf-8")
             run_git(repository, "add", path)
             self.assertEqual(self.check_staged(repository).returncode, 0)
@@ -448,13 +312,13 @@ class ProhibitedNamesTests(unittest.TestCase):
             check = [sys.executable, str(CHECKER), "range", "--base", base, "--head", "HEAD"]
             clean = subprocess.run(check, cwd=repository, text=True, capture_output=True)
             self.assertEqual(clean.returncode, 0, clean.stderr)
-            source.write_text(line + " // Sponsor https://example.invalid/tmux\n", encoding="utf-8")
+            source.write_text(line + " // Sponsor https://example.invalid/herdr\n", encoding="utf-8")
             run_git(repository, "add", path)
             self.assertEqual(self.check_staged(repository).returncode, 1)
             run_git(repository, "commit", "-qm", "append a forbidden promotion")
             bad = subprocess.run(check, cwd=repository, text=True, capture_output=True)
             self.assertEqual(bad.returncode, 1, bad.stderr)
-            self.assertIn("example.invalid/tmux", bad.stderr)
+            self.assertIn("example.invalid/herdr", bad.stderr)
 
     def test_staged_hook_configuration_is_not_exempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
