@@ -70,6 +70,32 @@ fn managed_alias_attach_persists_native_identity_and_local_commands_do_not_hold_
                 assert_ne!(attached["action"]["agent"]["agent_id"], old_id);
                 assert!(attached["action"]["agent"]["generation"].as_u64().unwrap() > old_generation);
                 assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+                for direct_pane in [false, true] {
+                    let active = workspace.runtime_hub.active_agent("reuse-worker", None).unwrap();
+                    let typing = RuntimeCommand::AgentPrompt {
+                        agent: active.agent_id.clone(), generation: Some(active.generation),
+                        text: "/new".into(), submit: false,
+                    };
+                    workspace.execute_runtime_command(&typing, window, cx).unwrap();
+                    assert!(workspace.runtime_hub.active_agent("reuse-worker", Some(active.generation)).is_ok());
+                    let reset = if direct_pane {
+                        RuntimeCommand::Prompt {
+                            window_id: Some(window_id), pane_id, text: "/clear".into(), submit: true,
+                        }
+                    } else {
+                        RuntimeCommand::AgentPrompt {
+                            agent: active.agent_id, generation: Some(active.generation),
+                            text: "/new".into(), submit: true,
+                        }
+                    };
+                    let result = workspace.execute_runtime_command(&reset, window, cx).unwrap();
+                    assert_eq!(result["action"]["conversation_reset_requested"], true);
+                    assert_eq!(result["action"]["requires_attach"], true);
+                    if !direct_pane { assert_eq!(result["action"]["agent"]["active"], false); }
+                    assert_eq!(workspace.runtime_hub.active_agent("reuse-worker", Some(active.generation)).unwrap_err().code, "agent_replaced");
+                    assert_eq!(view.read(cx).runtime_agent().unwrap().session_id.as_deref(), Some("alias-native-two"));
+                    workspace.execute_runtime_command(&attach("alias-native-two"), window, cx).unwrap();
+                }
             });
         }).unwrap();
     });

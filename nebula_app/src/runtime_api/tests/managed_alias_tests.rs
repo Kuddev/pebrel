@@ -231,3 +231,46 @@ fn managed_alias_attach_parser_requires_explicit_expected_identity() {
         RuntimeCommand::AgentAttach { pane_id: 3, .. }
     ));
 }
+
+#[test]
+fn managed_alias_reset_retires_cached_authority_before_the_provider_changes_identity() {
+    let hub = RuntimeHub::new();
+    let actual = detected_agent("codex", Some(TEST_CODEX_SESSION));
+    let old = hub
+        .attach_agent("worker".into(), AgentKind::Codex, 7, 3, TEST_CODEX_SESSION, &actual)
+        .unwrap();
+    hub.publish(live(Some(TEST_CODEX_SESSION)));
+    assert!(!hub.retire_agents_for_local_reset(7, 3, "codex", "/model"));
+    assert!(hub.active_agent("worker", Some(old.generation)).is_ok());
+    assert!(hub.retire_agents_for_local_reset(7, 3, "codex", "/new"));
+    assert_eq!(
+        hub.active_agent("worker", Some(old.generation)).unwrap_err().code,
+        "agent_replaced"
+    );
+    let current = hub.publish(live(Some(TEST_CODEX_SESSION)));
+    assert_eq!(current.windows[0].tabs[0].panes[0].agent.as_ref().unwrap().name, None);
+    assert_eq!(hub.saved_managed_name(7, 3, &saved("worker")), None);
+    // A controller can explicitly reattach the verified original conversation
+    // after cancelling the chooser, but cached authority is never resurrected.
+    let reattached = hub
+        .attach_agent("worker".into(), AgentKind::Codex, 7, 3, TEST_CODEX_SESSION, &actual)
+        .unwrap();
+    assert_eq!(reattached.generation, old.generation + 1);
+}
+
+#[test]
+fn managed_alias_reset_fails_an_old_submitted_task_once_during_the_identity_gap() {
+    let (hub, old) = delegation_hub(RuntimeTaskState::Finished);
+    submitted_delegation(&hub, 3, &old);
+    assert!(hub.retire_agents_for_local_reset(7, 4, "codex", "/clear"));
+    hub.publish(delegation_snapshot(
+        RuntimeTaskState::Finished,
+        RuntimeTaskState::Idle,
+        Some("claude-session-1"),
+    ));
+    let callbacks = hub.take_ready_delegation_callbacks();
+    assert_eq!(callbacks.len(), 1);
+    assert!(callbacks[0].prompt.contains("reason=agent_replaced"));
+    hub.complete_delegations_for_turn(&codex_turn_done("OLD DONE"));
+    assert!(hub.take_ready_delegation_callbacks().is_empty());
+}

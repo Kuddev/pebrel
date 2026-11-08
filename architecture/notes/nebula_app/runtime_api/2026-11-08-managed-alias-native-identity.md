@@ -19,6 +19,10 @@ reported the formerly managed worker without its alias. The shared lifecycle
 had a local-command exemption only for exact Codex /plan. Runtime Agent prompt
 dispatch did not recheck the native foreground identity as delegation did.
 
+Private live testing reproduced a Codex /new worktree chooser followed by an
+empty conversation whose native id was temporarily unavailable. Waiting for a
+different id alone leaves a transition interval with old cached authority.
+
 ## Decision
 
 The existing per-pane AgentSession stores an optional managed_name beside its
@@ -48,6 +52,14 @@ Known local commands waive only the model-completion barrier. Their input receip
 does not claim that a menu selection has completed. They cannot create a
 delegation waiting for a result that the provider will never send. Agent input
 dispatch rechecks the foreground native identity before writing into the PTY.
+
+Accepted reset commands retire the old managed binding immediately, including
+commands submitted through pane input. Their receipt distinguishes a requested
+reset from a completed native identity change. A cancelled chooser requires a
+fresh explicit attach too. An empty native conversation without a verifiable id
+cannot be attached; its controller must confirm the pane and send the first new
+task there before naming the resulting native conversation. Menu state may still
+be reported as idle by a provider, so an idle receipt cannot confirm a selection.
 
 ## Rejected alternatives
 

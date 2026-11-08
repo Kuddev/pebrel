@@ -9,9 +9,25 @@ pub(crate) fn is_local_command(program: &str, text: &str) -> bool {
         return false;
     }
     let command = text.split_whitespace().next().unwrap_or_default();
+    if starts_new_conversation(program, text) {
+        return true;
+    }
     match program {
-        "codex" => command == "/model" || matches!(text, "/new" | "/clear" | "/plan"),
-        "claude" => command == "/model" || text == "/clear",
+        "codex" => command == "/model" || text == "/plan",
+        "claude" => command == "/model",
+        _ => false,
+    }
+}
+
+pub(crate) fn starts_new_conversation(program: &str, text: &str) -> bool {
+    let text = text.trim();
+    if text.contains(['\n', '\r']) {
+        return false;
+    }
+    match program {
+        "codex" => matches!(text, "/new" | "/clear"),
+        // Claude's optional argument labels the previous conversation.
+        "claude" => matches!(text.split_whitespace().next(), Some("/clear" | "/new" | "/reset")),
         _ => false,
     }
 }
@@ -30,6 +46,9 @@ mod tests {
             ("codex", "/model"),
             ("codex", "/model example"),
             ("claude", "/clear"),
+            ("claude", "/new"),
+            ("claude", "/clear previous task"),
+            ("claude", "/reset"),
             ("claude", "/model example"),
         ] {
             let mut activity = AgentActivity::default();
@@ -45,7 +64,7 @@ mod tests {
             ("claude", "/compact"),
             ("codex", "/review"),
             ("codex", "/custom-task"),
-            ("claude", "/new"),
+            ("claude", "/custom-new"),
             ("other", "/model"),
             ("codex", "/new run this task"),
             ("codex", "/new\nrun this task"),

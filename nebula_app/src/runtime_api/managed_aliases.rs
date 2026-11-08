@@ -33,6 +33,32 @@ pub(super) struct PendingAliasRestore {
 }
 
 impl RuntimeHub {
+    /// A reset may first open a menu or leave the native id unavailable until
+    /// the first new turn. Retire old authority as soon as input is accepted.
+    pub(crate) fn retire_agents_for_local_reset(
+        &self,
+        window_id: u64,
+        pane_id: u64,
+        program: &str,
+        text: &str,
+    ) -> bool {
+        if !crate::ai_hook::local_command::starts_new_conversation(program, text) {
+            return false;
+        }
+        let mut state = self.lock();
+        state.pending_alias_restores.remove(&(window_id, pane_id));
+        for agent in state.managed_agents.values_mut().filter(|agent| {
+            agent.active
+                && agent.window_id == window_id
+                && agent.pane_id == pane_id
+                && agent.kind == program
+        }) {
+            agent.active = false;
+            agent.closed_reason = Some("agent_replaced".into());
+        }
+        true
+    }
+
     #[cfg(test)]
     pub(super) fn with_generation_namespace_for_test(namespace: u64) -> Self {
         let hub = Self::new();

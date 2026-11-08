@@ -524,7 +524,7 @@ fn pane_send(options: PaneSendOptions) -> Result<(), Box<dyn Error>> {
         }),
         timeout,
     )?;
-    if !response.ok || !options.wait {
+    if !response.ok || !options.wait || accepted_local_command(&response) {
         return print_response(&response, options.output.pretty);
     }
     // 基线取自提交后的那张快照。用它当 `after_seq` 才让随后的等待意味着
@@ -563,7 +563,7 @@ fn pane_paste(options: PanePasteOptions) -> Result<(), Box<dyn Error>> {
         }),
         timeout,
     )?;
-    if !response.ok || !options.wait {
+    if !response.ok || !options.wait || accepted_local_command(&response) {
         return print_response(&response, options.output.pretty);
     }
     let baseline = require_submission_baseline(dispatched_state_change_seq(

@@ -286,16 +286,24 @@ pebrel ctl agent-attach --window <WINDOW_ID> --pane <PANE_ID> --name worker --ki
 恢复创建新的 `agent_id` 和 generation，不恢复旧任务、回调或 worktree 所有权。generation
 来自每个 RuntimeHub 的随机实例命名空间，调用者必须读取回执，不能假定首次为 1。
 
-Codex 的 `/new`、`/clear`、`/model`、`/plan`，以及 Claude 的 `/clear`、`/model` 作为本地命令
+Codex 的 `/new`、`/clear`、`/model`、`/plan`，以及 Claude 的 `/clear`（含 `/new`、`/reset` 别名）、
+`/model` 作为本地命令
 处理，不等待不存在的模型完成 Hook。`agent.prompt` / `agent.paste` 的提交回执通过
 `action.local_command=true` 标识这些输入；短命令的 `--wait` 返回该接受回执，不伪造模型结果。
 菜单操作需继续 `agent read` 并用 `pane.send_key` 发送明确按键。`agent.delegate` 对这些命令返回
 `local_command_requires_send`。`/compact` 与未知或自定义斜杠命令继续按可能调用模型的任务处理。
-本地命令也要求目标 idle/finished；运行中或停在输入菜单时返回 `target_busy`，避免覆盖现有工作。
+本地命令也要求目标 idle/finished；运行中或已识别为 attention/waiting_input 时返回
+`target_busy`。部分菜单仍由 Provider 报告为 idle，主控须读界面确认菜单状态。
 
-`/new`、`/clear` 改变原生对话时，旧绑定和旧委派按 `agent_replaced` 结束。重新读取
-`agents.list`，再用新的原生 `session_id` 执行 `agent.attach`；旧 generation 不会跟随名称进入
-新对话。`/model` 进入菜单时，输入已接受不代表选择已完成；以实际界面和当前身份为准。
+重置命令接受时，回执增加 `conversation_reset_requested=true` 与 `requires_attach=true`，
+旧绑定立即按 `agent_replaced` 结束，不等 Provider 稍后报告新身份。即使取消了 `/new` 菜单，
+也需重新核验原生身份并显式绑定。Codex `/new` 可能先让用户选择工作树；菜单输入仍使用
+目标 pane 的明确按键通道。核验新对话的 `session_id` 后，重新执行 `agent.attach`。
+
+空的新 Codex 对话在首条任务前可能尚无可核验的原生 ID，此时 `agent.attach` 明确拒绝。
+主控应读取该明确 pane，确认新对话界面，按同一 window/pane 提交这次新对话的首条任务；
+原生 ID 出现后再绑定名称。不要把旧原生 ID 或 generation 当成新对话的身份。
+`/model` 进入菜单时，输入已接受不代表选择已完成；以实际界面和当前身份为准。
 
 `agent.start` 提供稳定的 `agent_id + generation + name`。冷启动命令只开放经过各 Provider
 官方 CLI 文档核实的 `claude`、`codex`、`opencode`、`cursor`、`pi`、`omp` 与 `kimi`；其中

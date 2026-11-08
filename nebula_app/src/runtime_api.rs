@@ -1234,7 +1234,7 @@ impl RuntimeHub {
         }
     }
 
-    fn managed_agent(
+    pub(crate) fn managed_agent(
         &self,
         selector: &str,
         generation: Option<u64>,
