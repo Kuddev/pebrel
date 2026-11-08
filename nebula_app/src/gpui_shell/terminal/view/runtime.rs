@@ -1312,13 +1312,10 @@ impl TerminalView {
         }
         // A cold CLI can negotiate a different keyboard protocol while its
         // text is being echoed. Encode Enter at delivery, never at queuing.
-        let Ok(submit_bytes) = self.runtime_key_sequence(
-            crate::runtime_api::RuntimeKey::Enter,
-            crate::runtime_api::RuntimeKeyModifiers::default(),
-            1,
-        ) else {
-            return;
-        };
+        let submit_bytes = crate::input::terminal_input::build_runtime_deferred_submission(
+            self.running_program.as_deref(),
+            self.term_mode(),
+        );
         self.pending_runtime_submit = None;
         self.write_input(submit_bytes, cx);
     }

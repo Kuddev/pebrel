@@ -21,7 +21,7 @@ fn runtime_submission_reencodes_enter_after_keyboard_mode_changes(cx: &mut TestA
         assert!(view.term_mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
         view.flush_pending_runtime_submit(cx);
         assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
-            if bytes.as_ref() == b"\x1b[13u"));
+            if bytes.as_ref() == b"\x1b[C\x1b[13u"));
         view.process_event(TermEvent::Wakeup, cx);
         assert!(receiver.try_recv().is_err(), "submit Enter exactly once");
     });
@@ -46,7 +46,7 @@ fn runtime_submission_reencodes_enter_when_keyboard_mode_returns_to_legacy(
         feed(view, b"\x1b[<u\r\n> legacy echo");
         view.flush_pending_runtime_submit(cx);
         assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
-            if bytes.as_ref() == b"\r"));
+            if bytes.as_ref() == b"\x1b[C\r"));
         assert!(view.pending_runtime_submit.is_none());
     });
 }

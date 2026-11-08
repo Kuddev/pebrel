@@ -12,6 +12,10 @@ Kitty or return to legacy VT before the echo barrier opens, leaving that stored
 sequence in the previous protocol. In a real WSL launch the initial Claude text
 remained in its editor; a later deliberate Enter submitted it.
 
+Re-encoding Enter alone passed the mode regressions but still left that text in
+the editor on a real cold launch. Retaining the echo barrier and placing one
+non-text Right boundary immediately before Enter allowed the cold task to run.
+
 ## Evidence
 
 The view regressions queue a Claude prompt, change its keyboard protocol while
@@ -24,19 +28,23 @@ The shared barrier owns only its baseline screen. GPUI and legacy adapters keep
 their existing echo condition and encode Enter with the shared input encoder at
 flush time. Immediate empty submissions and Codex's ordered submission sequence
 retain their existing behavior. Initial validation remains before text is written.
+Only identified Claude deferred submissions add Right before their single Enter,
+through the shared input encoder. Ordinary shells and other providers keep Enter
+alone. Text and this commit sequence stay in separate writes across the barrier.
 
 ## Rejected alternatives
 
 - Sleep and send another Enter: timing does not establish which protocol is active
   and automatic retries can submit a task twice.
+- Re-encode Enter alone: passes protocol tests but failed real cold acceptance.
 - Always send CR: ignores negotiated Kitty and Windows input protocols.
 - Store both old and new encodings: the terminal state is the current authority.
 
 ## Consequences
 
-No new timer, prompt retry, readiness heuristic or persistent state. A failed
-encoding leaves the barrier pending. The change fixes a protocol race; live cold
-launch acceptance must separately verify that the CLI actually started its task.
+No new timer, prompt retry, readiness heuristic or persistent state. The input
+encoder owns both the program boundary and protocol encoding. Live cold-launch
+acceptance must separately verify that the CLI actually started its task.
 
 ## Validation
 

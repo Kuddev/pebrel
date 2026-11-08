@@ -709,11 +709,10 @@ impl WindowContext {
             return;
         }
         let pane = &mut self.panes[index];
-        let Ok(submit_bytes) =
-            runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)
-        else {
-            return;
-        };
+        let submit_bytes = crate::input::terminal_input::build_runtime_deferred_submission(
+            pane.nebula_state.running_program.as_deref(),
+            *pane.terminal.lock().mode(),
+        );
         pane.nebula_state.runtime_submit_barrier = None;
         pane.notifier.notify(submit_bytes);
     }
