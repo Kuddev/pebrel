@@ -1982,7 +1982,8 @@
     "serial_read_failed": "串口已停止：{error}",
     "serial_write_failed": "串口写入失败：{error}",
     "serial_start_failed": "串口打开失败：{error}",
-    "pty_start_failed": "PTY 启动失败: {error}"
+    "pty_start_failed": "PTY 启动失败: {error}",
+    "zmodem_cancelled": "Pebrel 暂不支持 ZMODEM（rz/sz）传输，已自动取消以免终端卡住。请改用 scp 或 SFTP 传输文件。"
   },
   "confirmation": {
     "cover_title": "让背景图覆盖窗口控件区域？",

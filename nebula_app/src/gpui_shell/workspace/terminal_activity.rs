@@ -124,6 +124,16 @@ impl NebulaWorkspace {
                     );
                 }
             },
+            TerminalViewEvent::ZmodemCancelled => {
+                let text = crate::gpui_shell::config::ui_language(cx)
+                    .text(crate::i18n::Message::TerminalZmodemCancelled);
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::display::ToastKind::Warning,
+                    text,
+                );
+            },
             TerminalViewEvent::Notification(notification) => {
                 if let Some((_, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.deliver_pane_notification(pane_id, notification.clone(), window, cx);
