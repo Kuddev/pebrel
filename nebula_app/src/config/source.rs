@@ -5,7 +5,7 @@ pub const CONFIG_FILE_ENV: &str = "PEBREL_CONFIG_FILE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigFormat {
-    Lua,
+    Luau,
     Toml,
     Yaml,
 }
@@ -125,7 +125,7 @@ pub fn discover_with(
 
     // A deliberately created Pebrel config takes priority over every legacy format.
     for brand in ["pebrel", "nebula"] {
-        for extension in ["lua", "toml", "yml", "yaml"] {
+        for extension in ["luau", "lua", "toml", "yml", "yaml"] {
             for path in roots.branded_candidates(brand, extension) {
                 if path.is_file() {
                     return source_for_path(path, false).map(Some);
@@ -149,12 +149,12 @@ pub fn source_for_path(path: PathBuf, explicit: bool) -> Result<ConfigSource, St
     let extension =
         path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase);
     let format = match extension.as_deref() {
-        Some("lua") => ConfigFormat::Lua,
+        Some("luau" | "lua") => ConfigFormat::Luau,
         Some("toml") => ConfigFormat::Toml,
         Some("yml" | "yaml") => ConfigFormat::Yaml,
         _ => {
             return Err(format!(
-                "unsupported configuration extension for {} (expected .lua, .toml, .yml, or .yaml)",
+                "unsupported configuration extension for {} (expected .luau, .lua, .toml, .yml, or .yaml)",
                 path.display()
             ));
         },
@@ -163,13 +163,13 @@ pub fn source_for_path(path: PathBuf, explicit: bool) -> Result<ConfigSource, St
 }
 
 pub fn default_lua_path() -> Result<PathBuf, String> {
-    Ok(nebula_settings::settings_dir().join("pebrel.lua"))
+    Ok(nebula_settings::settings_dir().join("pebrel.luau"))
 }
 
-/// Resolve the Lua file edited by the settings command.
+/// Resolve the Luau file edited by the settings command.
 ///
 /// Only the first loaded config is authoritative. Later entries can be imports;
-/// opening one of those merely because it has a `.lua` suffix would edit a
+/// opening one of those merely because it has a script suffix would edit a
 /// dependency instead of the user's entry point.
 pub fn user_lua_path(active_paths: &[PathBuf]) -> Result<PathBuf, String> {
     active_user_lua_path(active_paths).map(Ok).unwrap_or_else(default_lua_path)
@@ -179,9 +179,9 @@ fn active_user_lua_path(active_paths: &[PathBuf]) -> Option<PathBuf> {
     active_paths
         .first()
         .filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
+            path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("luau") || extension.eq_ignore_ascii_case("lua")
+            })
         })
         .cloned()
 }
@@ -224,7 +224,7 @@ mod tests {
         fs::write(temp.path().join("config/nebula/nebula.lua"), "invalid lua").unwrap();
 
         let source = discover_with(&roots, None, None).unwrap().unwrap();
-        assert_eq!(source.format, ConfigFormat::Lua);
+        assert_eq!(source.format, ConfigFormat::Luau);
         assert!(source.primary_path.ends_with("config/nebula/nebula.lua"));
     }
 

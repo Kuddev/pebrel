@@ -47,6 +47,7 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "refresh",
     "spinner-arc",
     "spinner-track",
+    "waiting-hand",
     "phone",
     "vcs-changes",
     "vcs-history",

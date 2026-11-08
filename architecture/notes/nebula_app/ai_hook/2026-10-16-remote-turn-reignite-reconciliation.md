@@ -1,5 +1,7 @@
 # Remote turn stall reconciliation becomes bidirectional
 
+Superseded by [explicit status authority](2026-11-02-explicit-status-authority.md).
+
 ## Status
 
 Proposed; under maintainer review. The earlier fork implementation only

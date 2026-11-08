@@ -232,6 +232,7 @@ impl Snapshot {
         let mut assets = vec![
             ("pebrel-hook", launcher.as_str()),
             ("bridge.py", BRIDGE),
+            ("remote_tmux.py", include_str!("../../res/hooks/remote_tmux.py")),
             ("shell.py", SHELL),
             ("bashrc", bashrc.as_str()),
             (".zshenv", include_str!("../../res/shell/zshenv")),

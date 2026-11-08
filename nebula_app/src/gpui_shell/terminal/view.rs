@@ -26,6 +26,7 @@ mod path_drop;
 mod pointer;
 mod program_status;
 mod reading;
+mod remote_activity;
 mod runtime;
 mod session_failure;
 mod shell_pointer;
@@ -89,16 +90,6 @@ const SELECTION_SCROLL_STEP: f32 = 20.0;
 /// 「刚成功」的对勾停留多久再沉降为圆点。看门狗按 1Hz 复核，所以实际停留是
 /// 这个值到 +1s；取 1.2s 是为了让它至少跨过一个复核点，不会一闪就没。
 pub(super) const COMPLETION_FLASH: std::time::Duration = std::time::Duration::from_millis(1200);
-
-/// 远端回合停滞对账的阈值：hook 权威在场的回合静默这么久、且屏幕连续两拍是
-/// agent 自家的同一形态，才允许双向对账（见
-/// `ai_hook::lifecycle::AgentActivity::reconcile_stalled_turn`）：两拍 idle
-/// 提示符把回合收敛为结束；两拍转圈把丢了点火事件（UserPromptSubmit/权限
-/// 答复在远端 bridge 丢失）的回合从 Done/Blocked 拉回 Working。这是远端的
-/// 第二重证据——本地有进程树对账，SSH/WSL 没有进程可见性，hook 一旦在远端
-/// bridge 丢失，回合会钉死在丢失前的状态。权限等待屏是 Blocked 检测、不参与
-/// 对账；真正的防线是「稳定的屏幕形态」而非纯计时。
-pub(super) const REMOTE_TURN_STALL: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// 一次自动回滚该滚几行：指针在网格上方为正（往回滚历史）、下方为负，网格
 /// 内为 0。贴边即 1 行，之后每远离 `SELECTION_SCROLL_STEP` 像素加一档。
@@ -394,6 +385,7 @@ pub struct TerminalView {
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
     agent_activity: crate::ai_hook::lifecycle::AgentActivity,
+    remote_activity: remote_activity::RemoteActivity,
     program_status: Option<program_status::ProgramStatus>,
     program_status_seen: bool,
     pty_failed: bool,
@@ -679,6 +671,10 @@ impl TerminalView {
             },
             TermEvent::CursorBlinkingChange => self.restart_cursor_blink(cx),
             TermEvent::Title(title) => {
+                if self.observing_tmux() {
+                    self.sync_remote_activity(cx);
+                    return;
+                }
                 // `NEBULA|cwd|branch|program` 标题协议（与旧壳 event.rs 的
                 // 解析同构）：shell 集成把 cwd/分支塞在标题里喂玻璃 powerline
                 // 与 tab 标签，而不是真拿来当窗口标题。
@@ -695,12 +691,17 @@ impl TerminalView {
                     // 协议串不是窗口标题，更不是 tab 名。
                 } else {
                     self.title = title;
+                    self.observe_agent_title(std::time::Instant::now(), cx);
                 }
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             },
             TermEvent::ResetTitle => {
+                if self.observing_tmux() {
+                    return;
+                }
                 self.title = String::from("shell");
+                self.observe_agent_title(std::time::Instant::now(), cx);
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             },
