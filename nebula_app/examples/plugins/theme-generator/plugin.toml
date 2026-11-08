@@ -1,0 +1,13 @@
+manifest_version = 1
+api_version = 1
+id = "example.theme-generator"
+name = "Ocean Theme Generator"
+version = "0.1.0"
+entry = "init.luau"
+
+[[commands]]
+id = "ocean"
+title = "Generate Ocean"
+handler = "ocean"
+output = "theme"
+params = { depth = 0.5 }

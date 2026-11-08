@@ -9,8 +9,10 @@ use serde_json::{Map, Value};
 
 use super::{Error, Result, boundary, json};
 
-const MAX_MANIFEST_BYTES: usize = 32 * 1024;
+pub(super) const MAX_MANIFEST_BYTES: usize = 32 * 1024;
 pub(super) const MAX_SOURCE_BYTES: usize = 256 * 1024;
+const MAX_BUNDLED_THEMES: usize = 16;
+const THEME_PACKAGE_SUFFIX: &str = ".pebrel-theme.zip";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -24,7 +26,40 @@ pub(super) struct Manifest {
     pub entry: Option<String>,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Theme packages shipped with the plugin; installed only after the user
+    /// grants [`Grant::ThemeLibrary`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<String>,
     pub commands: Vec<Command>,
+}
+
+/// What a command's result means to the host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Output {
+    /// Plain JSON returned to the caller.
+    #[default]
+    Json,
+    /// A theme document or theme spec the host validates and adds to the library.
+    Theme,
+}
+
+/// Host capabilities a package needs beyond running its commands. Requested by
+/// the manifest, granted only by the user at install time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Grant {
+    /// Add themes to the user's theme library (never applies them).
+    ThemeLibrary,
+}
+
+impl Grant {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "theme-library" | "theme_library" => Some(Self::ThemeLibrary),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -38,6 +73,12 @@ pub(super) struct Command {
     pub handler: Option<String>,
     #[serde(default = "empty_params")]
     pub params: Value,
+    #[serde(default, skip_serializing_if = "is_json")]
+    pub output: Output,
+}
+
+fn is_json(output: &Output) -> bool {
+    *output == Output::Json
 }
 
 fn empty_params() -> Value {
@@ -109,6 +150,13 @@ pub(super) fn allow_method(permissions: &[String], method: &str) -> Result<()> {
 }
 
 impl Manifest {
+    /// Capabilities the user must grant before install; sorted and unique.
+    pub(super) fn requested_grants(&self) -> Vec<Grant> {
+        let themes = !self.themes.is_empty()
+            || self.commands.iter().any(|command| command.output == Output::Theme);
+        if themes { vec![Grant::ThemeLibrary] } else { Vec::new() }
+    }
+
     fn validate(&self) -> Result<()> {
         if self.manifest_version != 1 || self.api_version != 1 {
             return Err(Error::new("unsupported_version", "supported manifest/API version: 1"));
@@ -154,6 +202,12 @@ impl Manifest {
                     ));
                 },
             }
+            if command.output == Output::Theme && command.handler.is_none() {
+                return Err(Error::new(
+                    "invalid_command",
+                    "theme output requires a Luau handler, not a Runtime method",
+                ));
+            }
             if !command.params.is_object() {
                 return Err(Error::new("invalid_params", "command params must be an object"));
             }
@@ -164,6 +218,21 @@ impl Manifest {
                 "invalid_entry",
                 "entry must be present exactly when Luau handlers are declared",
             ));
+        }
+        if self.themes.len() > MAX_BUNDLED_THEMES {
+            return Err(Error::new("manifest_limit", "declare at most 16 bundled themes"));
+        }
+        for (index, theme) in self.themes.iter().enumerate() {
+            valid_relative_path(theme)?;
+            if !theme.ends_with(THEME_PACKAGE_SUFFIX)
+                || theme.len() == THEME_PACKAGE_SUFFIX.len()
+                || self.themes[..index].contains(theme)
+            {
+                return Err(Error::new(
+                    "invalid_themes",
+                    "themes must be unique package-relative .pebrel-theme.zip files",
+                ));
+            }
         }
         if let Some(entry) = &self.entry {
             valid_relative_path(entry)?;
@@ -178,7 +247,7 @@ impl Manifest {
     }
 }
 
-fn identifier(value: &str) -> bool {
+pub(super) fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
         && value.bytes().next().is_some_and(|byte| byte.is_ascii_lowercase())
@@ -205,7 +274,7 @@ fn valid_relative_path(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn package_file(root: &Path, relative: &str) -> Result<PathBuf> {
+pub(super) fn package_file(root: &Path, relative: &str) -> Result<PathBuf> {
     valid_relative_path(relative)?;
     let mut path = root.to_path_buf();
     for component in relative.split('/') {
