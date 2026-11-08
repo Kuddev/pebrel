@@ -2762,6 +2762,31 @@
       },
       "additionalProperties": false
     },
+    "agent_wait_result": {
+      "type": "object",
+      "description": "Successful agent.wait response. State fields come from the matched target pane in the retained canonical snapshot.",
+      "required": [
+        "agent",
+        "task_state",
+        "state_change_seq",
+        "snapshot"
+      ],
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/managed_agent"
+        },
+        "task_state": {
+          "$ref": "#/$defs/agent_pane/properties/task_state"
+        },
+        "state_change_seq": {
+          "$ref": "#/$defs/agent_pane/properties/state_change_seq"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshot"
+        }
+      },
+      "additionalProperties": false
+    },
     "agents_result": {
       "type": "object",
       "required": [

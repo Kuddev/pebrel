@@ -294,11 +294,24 @@ Cursor 的实际可执行文件名是 `agent`。恢复/会话分叉只在对应 
 
 `agent.delegate` 是 Agent 间需要自动回传时的专用方法。服务端先验证 `origin_pane_id` 当前确实
 运行着可稳定识别的 Agent，再把目标解析成精确 `agent_id + generation`，最后复用
-`agent.prompt` 的真实 PTY 投递路径。Provider 的完成 Hook 不含 Pebrel task id，因此同一目标
-generation 同时只允许一个委派；重复完成事件在首个事件消费 pending task 后不会再次回传。
+真实 PTY 投递路径。只有目标 idle/finished 才接受委派；忙碌时返回 `target_busy`，不会把输入
+排到正在运行的回合后面。Provider 的完成 Hook 不含 Pebrel task id，因此同一目标 generation
+同时只允许一个委派。注册记录在实际视图完成就绪、身份复核并确认提交后，才可接收完成事件；
+旧回合不能消费尚未提交的记录。重复完成事件在首个事件消费 pending task 后不会再次回传。
 回调若早于发起方自己的回合结束，会先排队并由 Agent 状态看门狗重试；`running` 会继续等待，
 `attention`/`waiting_input` 不会被自动输入覆盖。发起 pane 关闭、provider session 被替换或
 managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane。
+
+已提交的委派若在最终结果到达前遇到目标进程退出、pane 关闭或会话替换，Runtime 根据实际
+生命周期事实回传一次 `status=failed`，以 `reason` 区分 `pane_closed`、`pane_exited`、
+`agent_exited`、`agent_replaced` 或 `agent_closed`。没有最终答案时为
+`output_missing=true worker_output=null`，不把旧答案或终端尾部充当结果。该任务的 pending
+记录同时释放，迟到 Hook 不会追加第二条结果。发起方忙碌时仍按原身份排队；发起方已失效则
+释放记录并丢弃回调。注册但尚未提交的请求被关闭时只取消注册，不伪造任务失败回调。
+
+`agent.wait` 成功响应直接提供 `result.task_state` 和 `result.state_change_seq`，取自真正满足
+等待条件的目标 pane；完整的 `result.agent` 与 `result.snapshot` 继续保留。返回便利字段不改变
+`after_seq` 的严格大于条件。结果结构见 schema 的 `$defs/agent_wait_result`。
 
 ## 进程、控制键与真实命令结果
 

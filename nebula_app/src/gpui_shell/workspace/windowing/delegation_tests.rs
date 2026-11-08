@@ -306,3 +306,48 @@ fn delegation_failed_input_releases_its_unsubmitted_registration(cx: &mut TestAp
     assert!(fixture.hub.begin_delegation(fixture.origin.pane_id, &fixture.target).is_ok());
     assert!(!fixture.hub.has_pending_delegation_callbacks());
 }
+
+#[gpui::test]
+fn delegation_terminal_exit_delivers_one_failed_callback_without_a_provider_stop(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(cx, AgentKind::Claude, AgentKind::Codex, false, Ingress::Osc);
+    cx.update(|cx| {
+        fixture
+            .worker
+            .view
+            .update(cx, |view, cx| view.remote_files_test_event(TermEvent::Exit, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|cx| dispatch_ready_delegation_callbacks(cx));
+    assert_callback(&fixture, &fixture.receipt.task_id, "reason=pane_exited");
+    cx.update(|cx| {
+        publish_runtime_snapshot(cx);
+        dispatch_ready_delegation_callbacks(cx);
+    });
+    assert!(
+        take_input(&fixture.origin_input).is_empty(),
+        "exit/close must not produce two results"
+    );
+}
+
+#[gpui::test]
+fn delegation_terminal_pane_close_delivers_one_failed_callback(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, AgentKind::Codex, AgentKind::Claude, false, Ingress::Native);
+    cx.update(|cx| {
+        let entry = entry_with_pane(fixture.worker.pane_id, cx).unwrap();
+        let workspace = entry.workspace.upgrade().unwrap();
+        entry
+            .handle
+            .update(cx, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let tab = workspace.tab_of_pane(fixture.worker.pane_id).unwrap();
+                    workspace.close_pane(tab, fixture.worker.pane_id, window, cx);
+                });
+            })
+            .unwrap();
+        dispatch_ready_delegation_callbacks(cx);
+    });
+    cx.run_until_parked();
+    assert_callback(&fixture, &fixture.receipt.task_id, "reason=pane_closed");
+}

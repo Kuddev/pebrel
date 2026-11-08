@@ -538,7 +538,12 @@ pub(super) fn agent_wait_connection(
                         stream,
                         &ApiResponse::success(
                             request.id,
-                            json!({ "agent": active, "snapshot": current }),
+                            json!({
+                                "agent": active,
+                                "task_state": pane.task_state,
+                                "state_change_seq": pane.state_change_seq,
+                                "snapshot": current,
+                            }),
                         ),
                     );
                 },

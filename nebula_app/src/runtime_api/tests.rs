@@ -1782,3 +1782,6 @@ mod delegation_output_tests;
 
 #[path = "tests/delegation_submission_tests.rs"]
 mod delegation_submission_tests;
+
+#[path = "tests/delegation_terminal_tests.rs"]
+mod delegation_terminal_tests;

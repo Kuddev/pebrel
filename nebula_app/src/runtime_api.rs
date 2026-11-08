@@ -1057,6 +1057,7 @@ impl RuntimeHub {
         observe_removed_panes(&mut state, &snapshot, &relocations);
         snapshot.pane_lifecycles = state.pane_lifecycles.iter().cloned().collect();
         let agent_lifecycle_changed = project_managed_agents(&mut state, &mut snapshot);
+        delegation::reconcile_delegations(&mut state, &snapshot);
         // Stamp per-pane transition counters before the dedup compare. Panes
         // whose state is unchanged keep their previous counter, so an
         // otherwise-identical projection still compares equal here.
@@ -1247,6 +1248,7 @@ impl RuntimeHub {
             false
         };
         if changed && let Some(snapshot) = state.current.clone() {
+            delegation::reconcile_delegations(&mut state, &snapshot);
             // Agent waits share the bounded snapshot channel with pane waits.
             // Re-send the canonical snapshot so a registry-only close wakes
             // immediately instead of degrading into an unrelated timeout.
