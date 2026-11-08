@@ -134,6 +134,10 @@ impl NebulaWorkspace {
                     text,
                 );
             },
+            TerminalViewEvent::AiTurnDone(event) => {
+                let event = event.as_ref().clone();
+                cx.defer(move |cx| windowing::complete_ai_turn(&event, cx));
+            },
             TerminalViewEvent::Notification(notification) => {
                 if let Some((_, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.deliver_pane_notification(pane_id, notification.clone(), window, cx);

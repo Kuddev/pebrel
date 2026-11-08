@@ -160,6 +160,13 @@ impl TerminalView {
         {
             cx.emit(TerminalViewEvent::Notification(notification));
         }
+        if event.kind == AiHookKind::TurnDone {
+            let mut completion = event.clone();
+            // The OSC/WSL envelope is authenticated by this PTY, so the local
+            // pane is the only trusted route for delegation correlation.
+            completion.pane = Some(self.pane_id);
+            cx.emit(TerminalViewEvent::AiTurnDone(Box::new(completion)));
+        }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
         true
