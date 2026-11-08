@@ -40,7 +40,8 @@ paste mode falls back to the same result as one JSON-escaped line. Both paths
 enforce the local-context boundary, size validation and exactly one submission.
 Terminal control characters are rendered as explicit escapes, not executed.
 
-The existing 4000-character result budget remains. Remote compaction keeps a
+The existing 4000-character result budget also bounds text after control escapes,
+so escape expansion cannot inflate recurring model context. Remote compaction keeps a
 bounded preview in reserved bridge metadata, independently validated by the
 receiver. Provider-supplied copies of this reserved metadata are removed by the
 sender. Partial previews do not become complete reader answers. If the envelope

@@ -115,6 +115,11 @@ fn delegation_output_escapes_terminal_controls_within_the_transport_budget() {
         assert!(!callback.prompt.contains(['\x1b', '\0']));
         assert!(callback.prompt.len() <= MAX_PROMPT_BYTES);
         assert!(fallback.len() <= MAX_PROMPT_BYTES);
+        assert!(decoded_output(&callback).chars().count() <= 4_000);
+        if text.len() > 100 {
+            assert!(callback.prompt.contains("truncated=true"));
+            assert!(callback.prompt.contains("reason=encoded_output_limit"));
+        }
     }
 }
 

@@ -30,6 +30,34 @@ impl RuntimeDelegationCallback {
     }
 }
 
+fn bounded_output(raw: Option<&str>) -> (String, bool, bool) {
+    use std::fmt::Write as _;
+    let bounded: String = raw
+        .unwrap_or("(final output unavailable; inspect worker if needed)")
+        .chars()
+        .take(MAX_DELEGATION_RESULT_CHARS)
+        .collect();
+    let normalized = bounded.replace("\r\n", "\n").replace('\r', "\n");
+    let mut output = String::with_capacity(normalized.len());
+    let mut escaped_controls = false;
+    for ch in normalized.chars() {
+        if ch.is_control() && !matches!(ch, '\n' | '\t') {
+            write!(output, "\\u{:04x}", ch as u32).unwrap();
+            escaped_controls = true;
+        } else {
+            output.push(ch);
+        }
+    }
+    // Escape expansion is content too. Bound it before the callback enters
+    // model context instead of turning a control-heavy result into 24k chars.
+    let encoding_limited =
+        output.chars().take(MAX_DELEGATION_RESULT_CHARS + 1).count() > MAX_DELEGATION_RESULT_CHARS;
+    if encoding_limited {
+        output = output.chars().take(MAX_DELEGATION_RESULT_CHARS).collect();
+    }
+    (output, escaped_controls, encoding_limited)
+}
+
 fn callback_prompt(
     pending: &PendingDelegation,
     event: &crate::ai_hook::AiHookEvent,
@@ -62,8 +90,11 @@ fn callback_prompt(
     let result_limited = raw.is_some_and(|text| {
         text.chars().take(MAX_DELEGATION_RESULT_CHARS + 1).count() > MAX_DELEGATION_RESULT_CHARS
     });
-    let truncated =
-        bridge.is_some_and(|output| output.truncated) || large_bytes.is_some() || result_limited;
+    let (output, escaped_controls, encoding_limited) = bounded_output(raw);
+    let truncated = bridge.is_some_and(|output| output.truncated)
+        || large_bytes.is_some()
+        || result_limited
+        || encoding_limited;
     let completeness = if truncated {
         "true"
     } else if original_chars.is_some() {
@@ -89,6 +120,8 @@ fn callback_prompt(
             "envelope_limit"
         } else if large_bytes.is_some() {
             "answer_limit"
+        } else if encoding_limited {
+            "encoded_output_limit"
         } else {
             "result_limit"
         };
@@ -102,22 +135,6 @@ fn callback_prompt(
     }
     if raw.is_none() {
         metadata.push_str(" output_missing=true");
-    }
-    let bounded: String = raw
-        .unwrap_or("(final output unavailable; inspect worker if needed)")
-        .chars()
-        .take(MAX_DELEGATION_RESULT_CHARS)
-        .collect();
-    let normalized = bounded.replace("\r\n", "\n").replace('\r', "\n");
-    let mut output = String::with_capacity(normalized.len());
-    let mut escaped_controls = false;
-    for ch in normalized.chars() {
-        if ch.is_control() && !matches!(ch, '\n' | '\t') {
-            write!(output, "\\u{:04x}", ch as u32).unwrap();
-            escaped_controls = true;
-        } else {
-            output.push(ch);
-        }
     }
     if escaped_controls {
         metadata.push_str(" escaped_controls=true");
