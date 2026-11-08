@@ -348,10 +348,11 @@ impl Processor {
                 "invalid_runtime_command",
                 "pane.exec must be prepared before entering the synchronous UI dispatcher",
             )),
-            RuntimeCommand::AgentStart { .. } | RuntimeCommand::AgentFork { .. } => {
-                self.execute_agent_runtime_command(command)
-            },
-            RuntimeCommand::AgentPrompt { agent, generation, text, submit } => {
+            RuntimeCommand::AgentStart { .. }
+            | RuntimeCommand::AgentFork { .. }
+            | RuntimeCommand::AgentAttach { .. } => self.execute_agent_runtime_command(command),
+            RuntimeCommand::AgentPrompt { agent, generation, text, .. }
+            | RuntimeCommand::DelegationPrompt { agent, generation, text, .. } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;
                 let id = WindowId::from(managed.window_id);
                 let Some(window) = self.windows.get_mut(&id) else {
@@ -360,7 +361,22 @@ impl Processor {
                         format!("agent {:?} no longer has a live window", managed.name),
                     ));
                 };
-                window.runtime_prompt(managed.pane_id, text.clone(), *submit)?;
+                let result = match command {
+                    RuntimeCommand::DelegationPrompt { task_id, .. } => window
+                        .ensure_delegation_ready(&managed)
+                        .and_then(|()| self.runtime_hub.commit_delegation(task_id, &managed))
+                        .and_then(|()| window.runtime_prompt(managed.pane_id, text.clone(), true)),
+                    RuntimeCommand::AgentPrompt { submit, .. } => {
+                        window.runtime_prompt(managed.pane_id, text.clone(), *submit)
+                    },
+                    _ => unreachable!(),
+                };
+                if let Err(error) = result {
+                    if let RuntimeCommand::DelegationPrompt { task_id, .. } = command {
+                        self.runtime_hub.cancel_delegation(task_id);
+                    }
+                    return Err(error);
+                }
                 self.runtime_result(serde_json::json!({ "agent": managed }))
             },
             RuntimeCommand::AgentPaste { agent, generation, text, submit } => {

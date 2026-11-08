@@ -329,6 +329,17 @@ pub(crate) fn build_runtime_codex_submission(text: &str, mode: TermMode) -> Vec<
     bytes
 }
 
+/// Commit echoed runtime text. Claude also buffers a fresh paste; a non-text
+/// boundary must precede Enter so that Enter cannot become pasted content.
+pub(crate) fn build_runtime_deferred_submission(program: Option<&str>, mode: TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if program == Some("claude") {
+        bytes.extend(build_runtime_sequence(RuntimeKey::Right, Default::default(), 1, mode));
+    }
+    bytes.extend(build_runtime_sequence(RuntimeKey::Enter, Default::default(), 1, mode));
+    bytes
+}
+
 fn runtime_modifiers(modifiers: RuntimeKeyModifiers) -> ModifiersState {
     let mut state = ModifiersState::empty();
     state.set(ModifiersState::SHIFT, modifiers.shift);
@@ -1279,6 +1290,38 @@ mod vt_tests {
             build_runtime_codex_submission("prompt", TermMode::APP_CURSOR),
             b"prompt\x1bOC\r",
         );
+    }
+
+    #[test]
+    fn runtime_submission_claude_deferred_boundary_preserves_other_programs() {
+        assert_eq!(
+            build_runtime_deferred_submission(Some("claude"), TermMode::empty()),
+            b"\x1b[C\r"
+        );
+        assert_eq!(
+            build_runtime_deferred_submission(Some("claude"), TermMode::APP_CURSOR),
+            b"\x1bOC\r"
+        );
+        assert_eq!(
+            build_runtime_deferred_submission(Some("claude"), TermMode::DISAMBIGUATE_ESC_CODES),
+            b"\x1b[C\x1b[13u"
+        );
+        for program in [None, Some("bash"), Some("opencode")] {
+            assert_eq!(build_runtime_deferred_submission(program, TermMode::empty()), b"\r");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn runtime_submission_claude_native_boundary_has_one_enter_press() {
+        let bytes = build_runtime_deferred_submission(Some("claude"), TermMode::WIN32_INPUT_MODE);
+        let sequence = String::from_utf8(bytes).unwrap();
+        let records: Vec<_> = sequence.split_inclusive('_').collect();
+        assert_eq!(records.len(), 4, "Right press/release then Enter press/release");
+        assert!(records[0].starts_with("\x1b[39;"));
+        assert!(records[1].starts_with("\x1b[39;"));
+        assert!(records[2].starts_with("\x1b[13;"));
+        assert!(records[3].starts_with("\x1b[13;"));
     }
 
     #[test]

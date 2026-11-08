@@ -1001,6 +1001,19 @@ pub enum ControlCommand {
         #[clap(long)]
         window: Option<u64>,
     },
+    /// Name an already running native Agent without starting or prompting it.
+    AgentAttach {
+        #[clap(long)]
+        window: Option<u64>,
+        #[clap(long)]
+        pane: u64,
+        #[clap(long)]
+        name: String,
+        #[clap(long)]
+        kind: String,
+        #[clap(long)]
+        expected_session_id: String,
+    },
     /// Start a verified AI CLI in a new terminal tab and assign a stable name.
     AgentStart {
         #[clap(long)]

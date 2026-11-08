@@ -20,6 +20,7 @@ fn workspace() -> Session {
                     launch: None,
                     cwd: tab.cwd.clone(),
                     agent: Some(AgentSession {
+                        managed_name: None,
                         source: "pi".into(),
                         session_id: Some(format!("fixture-{index}")),
                         session_file: Some(format!("E:/fixture/{index}/session.jsonl")),

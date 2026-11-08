@@ -34,6 +34,33 @@ fn screen(status: AgentStatus) -> Option<Detection> {
 }
 
 #[test]
+fn delegation_runtime_turn_stays_pending_across_a_late_session_start() {
+    let mut activity = AgentActivity::default();
+    activity.submitted_text("claude", "initial prompt");
+    assert!(activity.runtime_turn_pending());
+    assert!(activity.apply_hook(&event("claude", "main", "SessionStart")));
+    assert_eq!(activity.status(), AgentStatus::Idle);
+    assert!(activity.runtime_turn_pending(), "SessionStart is not a task completion");
+    assert!(activity.apply_hook(&event("claude", "main", "UserPromptSubmit")));
+    assert!(activity.runtime_turn_pending());
+    assert!(activity.apply_hook(&event("claude", "main", "Stop")));
+    assert!(!activity.runtime_turn_pending());
+}
+
+#[test]
+fn delegation_runtime_turn_is_released_on_a_verified_conversation_replacement() {
+    let mut activity = AgentActivity::default();
+    let mut start = event("claude", "first", "SessionStart");
+    start.remote_process = Some("99:1".into());
+    assert!(activity.apply_hook(&start));
+    activity.submitted();
+    let mut replacement = event("claude", "second", "SessionStart");
+    replacement.remote_process = start.remote_process.clone();
+    assert!(activity.apply_hook(&replacement));
+    assert!(!activity.runtime_turn_pending());
+}
+
+#[test]
 fn complete_hooks_own_every_state_even_when_screen_disagrees() {
     // An opencode stop without a classified outcome proves nothing about the answer.
     for (provider, stopped) in [("claude", AgentStatus::Done), ("opencode", AgentStatus::Idle)] {
