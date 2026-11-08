@@ -201,6 +201,7 @@
     <string name="reader_image_failed">图片解码失败，请检查电脑上的图片文件和格式。</string>
     <string name="reader_link_failed">链接未打开，请使用 HTTP 链接或本地文件路径。</string>
     <string name="chat_title">对话视图</string>
+    <string name="chat_compose">给助手发消息…</string>
     <string name="chat_terminal">终端视图</string>
     <string name="chat_you">你</string>
     <string name="chat_tool">工具</string>
@@ -264,4 +265,5 @@
     <string name="computer_address">电脑地址与端口</string>
     <string name="computer_address_hint">填写电脑“手机远程”设置中显示的地址。保留原配对和权限，连接成功后才保存新地址。</string>
     <string name="computer_address_invalid">请输入有效的电脑地址和端口。</string>
+    <string name="computer_lan_relay">局域网 + 中转</string>
 </resources>

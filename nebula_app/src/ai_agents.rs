@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use regex::Regex;
 use serde::Deserialize;
 
+pub(crate) mod native_title;
 mod screen_context;
 
 /// AI clients Nebula can identify as a first-class terminal workload.
@@ -419,6 +420,7 @@ impl AgentStatus {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentStatusSource {
     Hook,
+    Title,
     Screen,
     Process,
     #[default]

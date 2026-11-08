@@ -18,9 +18,9 @@ pub(crate) struct Options {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
-    /// Validate package metadata and entry paths without executing Lua.
+    /// Validate package metadata and entry paths without executing Luau.
     Check { path: PathBuf },
-    /// Invoke one declared native or Lua command; no resident plugin is started.
+    /// Invoke one declared native or Luau command; no resident plugin is started.
     Run {
         path: PathBuf,
         command: String,

@@ -4,6 +4,33 @@ use super::*;
 
 const FILES: Source = Source::Paths { directories_only: false };
 const DIRS: Source = Source::Paths { directories_only: true };
+// Native editor operands are paths in every shell. Keep command expressions,
+// profile names and unknown option values out of filesystem/history completion.
+const NVIM: &[OptionSpec] = &[
+    flag(&["-d", "-f", "-h", "-n", "-R", "-m", "-M", "--clean", "--headless"]),
+    value(&["-u", "-i", "-s", "-w", "-W", "-S"], FILES),
+    value(&["-c", "--cmd", "--listen"], Source::None),
+];
+const CODE: &[OptionSpec] = &[
+    flag(&[
+        "-d",
+        "--diff",
+        "-m",
+        "--merge",
+        "-n",
+        "--new-window",
+        "-r",
+        "--reuse-window",
+        "-w",
+        "--wait",
+        "--disable-extensions",
+        "--verbose",
+        "--help",
+        "--version",
+    ]),
+    value(&["--user-data-dir", "--extensions-dir"], DIRS),
+    value(&["--locale", "--profile", "--install-extension", "--uninstall-extension"], Source::None),
+];
 const SSH: &[OptionSpec] = &[
     flag(&[
         "-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M", "-N", "-n", "-q", "-s",
@@ -107,13 +134,21 @@ impl Context {
         let program = normalized.strip_suffix(".exe").unwrap_or(&normalized);
         let ssh = program == "ssh";
         let wsl = program == "wsl";
+        let editor = match program {
+            "nvim" => Some(NVIM),
+            "code" | "code.cmd" => Some(CODE),
+            _ => None,
+        };
         let powershell = syntax == ShellSyntax::PowerShell;
-        let cmd = syntax == ShellSyntax::Cmd && !ssh && !wsl;
+        let cmd = syntax == ShellSyntax::Cmd && !ssh && !wsl && editor.is_none();
+        let case_insensitive = cmd || powershell && !ssh && !wsl && editor.is_none();
         let program_lower = program.to_ascii_lowercase();
         let (options, mut source, limit) = if ssh {
             (SSH, Source::SshHosts { jump: false }, 1)
         } else if wsl {
             (WSL, Source::None, usize::MAX)
+        } else if let Some(options) = editor {
+            (options, FILES, usize::MAX)
         } else if cmd {
             match program {
                 "cd" | "chdir" => (CMD_CD, DIRS, 1),
@@ -190,7 +225,7 @@ impl Context {
                     return Some(Source::None);
                 }
                 if let Some((option, name, attached)) =
-                    resolve(options, arg, cmd || powershell && !ssh && !wsl, !wsl)
+                    resolve(options, arg, case_insensitive, !wsl)
                 {
                     if wsl && name == "--install" {
                         installing = true;
@@ -270,7 +305,7 @@ impl Context {
         }
         if parse_options && self.input.prefix().starts_with(if cmd { '/' } else { '-' }) {
             if let Some((option, _, Some(offset))) =
-                resolve(options, self.input.prefix(), cmd || powershell && !ssh && !wsl, !wsl)
+                resolve(options, self.input.prefix(), case_insensitive, !wsl)
             {
                 self.attached = Some(offset);
                 return option.value;

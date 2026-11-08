@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import select
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -125,8 +126,8 @@ def stream_state(token, identity):
             yield state
 
 
-def send(source, native, mode, payload, token):
-    owner = process_identity(source)
+def send(source, native, mode, payload, token, owner=None, route=None, deadline=None):
+    owner = owner or process_identity(source)
     with stream_state(token, owner or source) as state:
         state.seek(0)
         previous = state.read(32)
@@ -141,6 +142,8 @@ def send(source, native, mode, payload, token):
         header = f"nebula-hook/1 source={source}"
         if owner:
             header += " process=" + owner
+        if route:
+            header += " tmux=" + route["context"]
         if native:
             header += " codex_hooks=" + mode.split("=", 1)[1]
         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -158,22 +161,27 @@ def send(source, native, mode, payload, token):
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"
-        write_terminal(osc, source)
+        write_terminal(osc, source, route, deadline)
 
 
-def write_terminal(osc, source=None):
+def write_terminal(osc, source=None, route=None, deadline=None):
     try:
-        fd = os.open("/dev/tty", os.O_WRONLY | os.O_NONBLOCK)
+        fd = os.open(route["tty"] if route else "/dev/tty",
+                     os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError as error:
-        if source != "claude" or error.errno != errno.ENXIO:
+        if route or source != "claude" or error.errno != errno.ENXIO:
             raise
         # Interactive Claude consumes hook JSON even when its hook has no TTY.
         # This fallback is only possible before any part of the OSC was written.
         print(json.dumps({"terminalSequence": osc.decode("ascii")}), flush=True)
         return
     offset = 0
-    deadline = time.monotonic() + 0.5
+    deadline = min(deadline or float("inf"), time.monotonic() + 0.5)
     try:
+        if route:
+            info = os.fstat(fd)
+            if not stat.S_ISCHR(info.st_mode) or info.st_rdev != route["device"]:
+                raise ValueError("SSH terminal identity changed")
         while offset < len(osc):
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([], [fd], [], remaining)[1]:
@@ -199,9 +207,21 @@ def run(args):
     try:
         payload, native = bounded_payload(args)
         token = os.environ.get("PEBREL_REMOTE_HOOK_TOKEN", os.environ.get("NEBULA_REMOTE_HOOK_TOKEN", ""))
-        if payload is not None and re.fullmatch(r"[a-fA-F0-9]{32}", token):
-            if args[0] != "claude" or not os.environ.get("GROK_HOOK_NAME"):
-                send(args[0], native, args[1] if native else "", payload, token)
+        if payload is not None and (args[0] != "claude" or not os.environ.get("GROK_HOOK_NAME")):
+            mode = args[1] if native else ""
+            if os.environ.get("TMUX"):
+                from remote_tmux import destinations
+                deadline = time.monotonic() + 2
+                owner = process_identity(args[0])
+                for route in destinations(owner, deadline):
+                    if time.monotonic() >= deadline:
+                        break
+                    try:
+                        send(args[0], native, mode, payload, route["token"], owner, route, deadline)
+                    except (OSError, ValueError, TimeoutError):
+                        continue
+            elif re.fullmatch(r"[a-fA-F0-9]{32}", token):
+                send(args[0], native, mode, payload, token)
     finally:
         # A malformed payload, unavailable TTY or delivery failure must never
         # suppress the user's original notifier (also outside Pebrel).

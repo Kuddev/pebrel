@@ -21,6 +21,33 @@ use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use image::Frame;
 
+/// Text and image readers present the same in-flight byte counts.
+pub(super) fn file_read_progress(
+    language: crate::i18n::UiLanguage,
+    received: u64,
+    total: Option<u64>,
+) -> String {
+    fn amount(bytes: u64) -> String {
+        if bytes >= 1024 * 1024 {
+            format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+        } else if bytes >= 1024 {
+            format!("{:.1} KiB", bytes as f64 / 1024.0)
+        } else {
+            format!("{bytes} B")
+        }
+    }
+    if received == 0 && total.is_none() {
+        return language.text(crate::i18n::Message::EditorLoading).to_owned();
+    }
+    language.format(
+        crate::i18n::Message::EditorLoadingProgress,
+        &[
+            ("received", &amount(received)),
+            ("total", &total.map(amount).unwrap_or_else(|| "?".into())),
+        ],
+    )
+}
+
 /// Shell 的彩色品牌图标（`extra/shell-icons` 的 PNG）预缩放成与物理像素
 /// 一一对应的纹理。设置页的默认 Shell 下拉与新建终端的 Shell 选择弹窗
 /// 共用同一份资产和同一条缩放路径——把 128px 原图交给 GPUI 每帧缩小会糊

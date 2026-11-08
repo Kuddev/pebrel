@@ -43,6 +43,8 @@ pub mod session_restore;
 #[cfg(all(test, feature = "gpui-test-support"))]
 pub(crate) mod settings_fixture;
 pub mod settings_pane;
+#[cfg(feature = "shader-background")]
+mod shader_source;
 pub mod ssh_hosts;
 pub mod ssh_settings;
 pub mod terminal;
@@ -103,6 +105,9 @@ pub fn run_shell(
             Ok(false) => {},
         }
     }
+    // Script execution belongs to startup, before any GUI or background consumer
+    // reads its first RuntimeSettings snapshot.
+    let startup_window = config::source::initialize(config_file.clone());
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
     let _elevated_handover = if crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
         use crate::platform::elevation::handover::{Request, Startup, start_or_forward};
@@ -245,7 +250,7 @@ pub fn run_shell(
         // GPUI is the only event loop in `--gpui` mode, so it owns the same
         // per-process hook pipe before the first TerminalView spawns.
         let ai_events = crate::ai_hook::spawn_gpui_server();
-        init(cx, config_file);
+        init(cx, startup_window);
         if initial_cwd.is_some()
             || initial_command.is_some()
             || shell_id.is_some()
@@ -273,7 +278,7 @@ pub fn run_shell(
 }
 
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
-fn init(cx: &mut App, config_file: Option<std::path::PathBuf>) {
+fn init(cx: &mut App, startup_window: config::StartupWindow) {
     crate::platform::acrylic::init(cx);
     // 图标字库独立注册，系统正文无需为提示符和界面图标加载完整 Maple。
     register_bundled_fonts(cx);
@@ -300,7 +305,7 @@ fn init(cx: &mut App, config_file: Option<std::path::PathBuf>) {
     let settings = config::Settings::load_with_runtime(theme, runtime);
     gpui_component::set_locale(settings.ui_language.gpui_component_locale());
     cx.set_global(settings);
-    cx.set_global(config::StartupWindow::load(config_file));
+    cx.set_global(startup_window);
     theme::apply_chrome_theme(cx);
     terminal::init(cx);
     workspace::init(cx);
