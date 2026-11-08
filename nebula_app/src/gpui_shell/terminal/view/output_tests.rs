@@ -5,6 +5,43 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[gpui::test]
+fn runtime_submission_reencodes_enter_after_keyboard_mode_changes(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.running_program = Some("claude".into());
+        view.runtime_prompt("cold start".into(), true, cx).unwrap();
+        assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
+            if bytes.as_ref() == b"cold start"));
+        // A cold CLI can negotiate Kitty after accepting its initial text.
+        feed(view, b"\x1b[>1u\r\n> cold start");
+        view.flush_pending_runtime_submit(cx);
+        assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
+            if bytes.as_ref() == b"\x1b[13u"));
+        view.process_event(TermEvent::Wakeup, cx);
+        assert!(receiver.try_recv().is_err(), "submit Enter exactly once");
+    });
+}
+
+#[gpui::test]
+fn runtime_submission_reencodes_enter_when_keyboard_mode_returns_to_legacy(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.running_program = Some("claude".into());
+        feed(view, b"\x1b[>1u");
+        view.runtime_prompt("legacy echo".into(), true, cx).unwrap();
+        assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
+            if bytes.as_ref() == b"legacy echo"));
+        feed(view, b"\x1b[<u\r\n> legacy echo");
+        view.flush_pending_runtime_submit(cx);
+        assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
+            if bytes.as_ref() == b"\r"));
+        assert!(view.pending_runtime_submit.is_none());
+    });
+}
+
+#[gpui::test]
 fn runtime_submission_codex_prompt_does_not_depend_on_a_repaint(cx: &mut TestAppContext) {
     let (view, window, receiver) = open(cx);
     view.update(window, |view, cx| {

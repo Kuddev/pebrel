@@ -411,7 +411,6 @@ impl WindowContext {
                 pane.nebula_state.runtime_submit_barrier =
                     Some(crate::display::state::RuntimeSubmitBarrier {
                         baseline_screen: runtime_screen_snapshot(pane).unwrap_or_default(),
-                        submit_bytes,
                     });
             }
         }
@@ -487,12 +486,10 @@ impl WindowContext {
         if codex_submit {
             bytes = crate::input::terminal_input::build_runtime_codex_submission(&text, mode);
         } else if submit {
-            let submit_bytes =
-                runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
+            runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
             pane.nebula_state.runtime_submit_barrier =
                 Some(crate::display::state::RuntimeSubmitBarrier {
                     baseline_screen: runtime_screen_snapshot(pane).unwrap_or_default(),
-                    submit_bytes,
                 });
         }
         pane.notifier.notify(bytes);
@@ -648,12 +645,10 @@ impl WindowContext {
         }
         let mode = *pane.terminal.lock().mode();
         let bytes = crate::input::terminal_input::build_runtime_text_sequence(&command, mode);
-        let submit_bytes =
-            runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
+        runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
         pane.nebula_state.runtime_submit_barrier =
             Some(crate::display::state::RuntimeSubmitBarrier {
                 baseline_screen: runtime_screen_snapshot(pane).unwrap_or_default(),
-                submit_bytes,
             });
         let run = crate::runtime_api::begin_runtime_run();
         let run_id = run.run_id;
@@ -714,8 +709,13 @@ impl WindowContext {
             return;
         }
         let pane = &mut self.panes[index];
-        let pending = pane.nebula_state.runtime_submit_barrier.take().expect("checked above");
-        pane.notifier.notify(pending.submit_bytes);
+        let Ok(submit_bytes) =
+            runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)
+        else {
+            return;
+        };
+        pane.nebula_state.runtime_submit_barrier = None;
+        pane.notifier.notify(submit_bytes);
     }
 }
 
