@@ -2,7 +2,8 @@
 param(
     [ValidateSet('debug', 'release')]
     [string] $Configuration = 'release',
-    [string] $TargetDirectory
+    [string] $TargetDirectory,
+    [switch] $ContextMenu
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +30,9 @@ try {
     & cargo @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Cargo Windows product build failed with exit code $LASTEXITCODE"
+    }
+    if ($ContextMenu) {
+        & (Join-Path $PSScriptRoot 'build-windows-context-menu.ps1') -Configuration $Configuration -TargetDirectory $TargetDirectory
     }
 } finally {
     $env:CARGO_TARGET_DIR = $previousTargetDirectory
