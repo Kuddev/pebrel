@@ -101,6 +101,43 @@ fn resolve_with_system(
     system.and_then(|(url, no_proxy)| proxy_from_url(&url, &no_proxy).ok()).or_else(environment)
 }
 
+/// 网络失败的稳定类别；调用方各自选择文案，不把代理 URL、认证信息或查询串拼进 UI。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NetworkFailure {
+    Dns,
+    Tls,
+    Timeout,
+    Refused,
+    Interrupted,
+    Proxy,
+    Status(u16),
+    Other,
+}
+
+pub(crate) fn classify(error: &ureq::Error) -> NetworkFailure {
+    use std::io::ErrorKind;
+    use ureq::Error;
+
+    match error {
+        Error::HostNotFound => NetworkFailure::Dns,
+        Error::Tls(_) | Error::Rustls(_) | Error::TlsRequired => NetworkFailure::Tls,
+        Error::Timeout(_) => NetworkFailure::Timeout,
+        Error::Io(io) if io.kind() == ErrorKind::ConnectionRefused => NetworkFailure::Refused,
+        Error::Io(io) if io.kind() == ErrorKind::TimedOut => NetworkFailure::Timeout,
+        Error::Io(io)
+            if matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe
+            ) =>
+        {
+            NetworkFailure::Interrupted
+        },
+        Error::ConnectProxyFailed(_) | Error::InvalidProxyUrl => NetworkFailure::Proxy,
+        Error::StatusCode(status) => NetworkFailure::Status(*status),
+        _ => NetworkFailure::Other,
+    }
+}
+
 /// 每项更新操作拥有独立的有界客户端，复用现有后台执行器，不新增常驻服务。
 pub(crate) fn agent(target_url: &str, timeout: Duration) -> Result<ureq::Agent, ureq::Error> {
     Ok(agent_with_proxy(resolve(target_url)?, timeout))

@@ -1884,6 +1884,19 @@
       "edit_copy": "Edit a copy",
       "failed": "Could not complete the operation: {detail}",
       "changed": "The package changed after inspection. Choose the file again before installing."
+    },
+    "community": {
+      "error": {
+        "dns": "Could not resolve GitHub or the proxy address. Check your network and proxy settings, then retry.",
+        "tls": "Could not establish a secure connection. Check your system clock and whether a proxy intercepts TLS.",
+        "timeout": "The request timed out. Check your network or proxy, then retry.",
+        "proxy": "Could not connect through the configured proxy. Check Network settings.",
+        "network": "Could not reach the community catalog. Check your network, then retry.",
+        "http": "The server returned HTTP {status}.",
+        "integrity": "The download does not match the size and SHA-256 recorded in the catalog, so it was not installed.",
+        "catalog": "The community catalog could not be read: {detail}",
+        "package": "The theme package was rejected: {detail}"
+      }
     }
   },
   "ssh.ports.button": "Ports",

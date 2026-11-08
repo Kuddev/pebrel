@@ -1041,5 +1041,20 @@
   "terminal.ssh_reconnect": "重新連線 (R)",
   "startup": {
     "handover_unconfirmed": "執行中的 Pebrel 未確認開啟請求，分頁或視窗可能已經建立。請先檢查現有視窗，再決定是否重試；本次啟動不會重複傳送請求。"
+  },
+  "theme": {
+    "community": {
+      "error": {
+        "dns": "無法解析 GitHub 或代理位址。請檢查網路和代理設定後重試。",
+        "tls": "無法建立安全連線。請檢查系統時間，以及代理是否攔截了 TLS 連線。",
+        "timeout": "要求逾時。請檢查網路或代理後重試。",
+        "proxy": "無法透過已設定的代理連線。請檢查「網路」設定。",
+        "network": "無法連線社群目錄。請檢查網路後重試。",
+        "http": "伺服器回傳 HTTP {status}。",
+        "integrity": "下載內容與目錄登記的大小和 SHA-256 不一致，沒有安裝。",
+        "catalog": "無法讀取社群目錄：{detail}",
+        "package": "主題包未通過驗證：{detail}"
+      }
+    }
   }
 }
