@@ -15,6 +15,8 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
 #[path = "theme_background_tests.rs"]
 mod background_tests;
+#[path = "theme_community_tests.rs"]
+mod community_tests;
 #[path = "theme_package_tests.rs"]
 mod package_tests;
 #[cfg(feature = "shader-background")]

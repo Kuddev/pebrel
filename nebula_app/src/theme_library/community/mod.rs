@@ -11,6 +11,8 @@ use super::package::{MAX_ARCHIVE_BYTES, MAX_UNPACKED_BYTES, MAX_VIDEO_BYTES, Ori
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+#[cfg(test)]
+pub(crate) use transfer::install_file;
 pub(crate) use transfer::{Error, fetch_catalog, fetch_preview, install};
 
 /// Provenance name written into install receipts.

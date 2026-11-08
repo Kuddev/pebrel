@@ -1886,6 +1886,22 @@
       "changed": "The package changed after inspection. Choose the file again before installing."
     },
     "community": {
+      "filter": "Community",
+      "loading": "Loading community themes…",
+      "empty": "No community themes are listed yet.",
+      "skipped": "{count} listings could not be read and are hidden.",
+      "retry": "Retry",
+      "install": "Install",
+      "installing": "Installing…",
+      "installed": "Installed",
+      "select": "Preview",
+      "install_version": "Install {version}",
+      "author": "by {author}",
+      "download_size": "{size} download",
+      "no_preview": "No preview",
+      "notice": "From the pebrel-community/themes catalog. Downloads are checked against the catalog's SHA-256 and added to your library without being applied.",
+      "added": "{name} was added to your library. Preview it here, then choose Use this theme.",
+      "install_failed": "Could not install {name}: {error}",
       "error": {
         "dns": "Could not resolve GitHub or the proxy address. Check your network and proxy settings, then retry.",
         "tls": "Could not establish a secure connection. Check your system clock and whether a proxy intercepts TLS.",

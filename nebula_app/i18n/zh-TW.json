@@ -1044,6 +1044,22 @@
   },
   "theme": {
     "community": {
+      "filter": "社群",
+      "loading": "正在取得社群主題…",
+      "empty": "社群目錄裡還沒有主題。",
+      "skipped": "有 {count} 個項目無法讀取，已隱藏。",
+      "retry": "重試",
+      "install": "安裝",
+      "installing": "正在安裝…",
+      "installed": "已安裝",
+      "select": "預覽",
+      "install_version": "安裝 {version}",
+      "author": "作者 {author}",
+      "download_size": "下載 {size}",
+      "no_preview": "暫無預覽圖",
+      "notice": "來自 pebrel-community/themes 社群目錄。下載內容會依目錄登記的 SHA-256 驗證，只加入主題庫，不會自動套用。",
+      "added": "{name} 已加入主題庫。可以在這裡預覽，滿意後按「使用此主題」。",
+      "install_failed": "無法安裝 {name}：{error}",
       "error": {
         "dns": "無法解析 GitHub 或代理位址。請檢查網路和代理設定後重試。",
         "tls": "無法建立安全連線。請檢查系統時間，以及代理是否攔截了 TLS 連線。",

@@ -163,7 +163,7 @@ pub(super) fn install_with(
     install_file(file.path(), entry, store)
 }
 
-pub(super) fn install_file(
+pub(crate) fn install_file(
     path: &Path,
     entry: &Entry,
     store: &ThemeLibraryStore,
