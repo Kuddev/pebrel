@@ -2,6 +2,8 @@
 
 ## Status
 
+Superseded in part (tmux name rules) by [allow the tmux name](2026-11-08-allow-terminal-multiplexer-name.md).
+
 Prepared for maintainer review under the task's explicit instruction to retain
 necessary technical terms. This is a scoped governance correction, separate from
 the release candidate and its behavior fixes.

@@ -39,7 +39,7 @@ mod sftp;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 pub use pane_connection::PaneConnection;
-pub use resume::ResumeTarget;
+pub use resume::{ResumeTarget, TmuxActivity};
 use route::{ResolvedRoute, RouteTransport};
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
@@ -81,6 +81,13 @@ pub trait SshEventHost:
 
     /// Last positively identified target survives transport loss; only a confirmed shell clears it.
     fn ssh_resume_target(&self, _target: Option<ResumeTarget>) {}
+
+    /// An observation belongs to this channel's currently active remote pane.
+    fn ssh_tmux_activity(&self, _activity: Option<TmuxActivity>) {}
+
+    /// A terminal multiplexer client owns this channel's PTY, whether or not
+    /// its server can be queried from the authenticated account.
+    fn ssh_multiplexer_client(&self, _present: bool) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {

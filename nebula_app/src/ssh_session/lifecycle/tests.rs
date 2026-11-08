@@ -405,6 +405,7 @@ impl server::Handler for Loopback {
                 "disabled",
                 "pebrel-hook",
                 "bridge.py",
+                "remote_tmux.py",
                 "shell.py",
                 "bashrc",
                 ".zshenv",

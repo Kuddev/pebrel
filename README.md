@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pebrel.com"><img src="https://img.shields.io/badge/Website-pebrel.com-2f81f7?style=flat-square&logo=googlechrome&logoColor=white" alt="Website: pebrel.com" /></a>
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
   <a href="https://atomgit.com/kettys/pebrel"><img src="https://atomgit.com/kettys/pebrel/star/badge.svg" alt="AtomGitStars" /></a>
   <a href="https://hub.xerj.org/contributors/Kuddev"><img src="https://hub.xerj.org/contributors/Kuddev/badge.svg" alt="XERJ Corpus Hub contributor" /></a>
@@ -146,6 +147,12 @@ character at a time with the built-in Powerline prompt.
 Choose **Inline** (Tab accepts the suggestion), **List** (Tab accepts the selected
 candidate), or **Hybrid** (→ accepts the inline suggestion; Tab opens the list)
 in Settings.
+
+When Pebrel can query the pane's filesystem, file arguments to `nvim`, `code`, and
+`cat` use its current directory; history only ranks the discovered candidates.
+To choose among several files, select **Hybrid**: Tab opens the
+list, subsequent Tab presses cycle candidates, and Enter inserts the selection
+without running the command. Right arrow accepts the inline suggestion directly.
 
 <details>
 <summary>How history completion differs</summary>

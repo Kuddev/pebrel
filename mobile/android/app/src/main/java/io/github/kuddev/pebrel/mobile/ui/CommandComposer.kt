@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +55,7 @@ fun CommandComposer(
     shortcutsEnabled: Boolean = enabled,
     extraShortcuts: List<String> = emptyList(),
     customKeys: Boolean = onDirect != null,
+    conversation: Boolean = false,
     send: suspend (String) -> Boolean,
 ) {
     val drafts by repository.drafts.collectAsStateWithLifecycle()
@@ -169,7 +171,7 @@ fun CommandComposer(
                     Column(
                         Modifier.fillMaxWidth().testTag("composer-editor")
                             .animateContentSize(motion.contentSizeSpec())
-                            .clip(RoundedCornerShape(26.dp))
+                            .clip(if (conversation) MaterialTheme.shapes.large else RoundedCornerShape(26.dp))
                             .background(colors.surfaceVariant.copy(alpha = .42f))
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
@@ -190,15 +192,15 @@ fun CommandComposer(
                                     color = colors.onSurface,
                                     fontSize = 15.sp,
                                     lineHeight = 21.sp,
-                                    fontFamily = LocalTerminalFont.current,
+                                    fontFamily = if (conversation) FontFamily.Default else LocalTerminalFont.current,
                                 ),
                                 cursorBrush = SolidColor(colors.primary),
                                 keyboardOptions = KeyboardOptions(
-                                    capitalization = KeyboardCapitalization.None,
+                                    capitalization = if (conversation) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
                                     autoCorrectEnabled = false,
                                 ),
                                 decorationBox = { inner ->
-                                    if (draft.isEmpty()) HelperText(stringResource(R.string.composer_placeholder))
+                                    if (draft.isEmpty()) HelperText(stringResource(if (conversation) R.string.chat_compose else R.string.composer_placeholder))
                                     inner()
                                 },
                             )

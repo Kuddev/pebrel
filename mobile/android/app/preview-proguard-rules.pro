@@ -44,6 +44,8 @@
 -keep class io.github.kuddev.pebrel.mobile.connection.HostProfile { public *; }
 -keep class io.github.kuddev.pebrel.mobile.connection.SshConnection { public *; }
 -keep class io.github.kuddev.pebrel.mobile.connection.SshTerminalTransport { public *; }
+# The real tmux/IME regression creates the same history owner as SSH sessions.
+-keep,includedescriptorclasses class io.github.kuddev.pebrel.mobile.connection.TmuxSessionControl { public *; }
 -keep class io.github.kuddev.pebrel.mobile.connection.SshFailure { public *; }
 -keep enum io.github.kuddev.pebrel.mobile.connection.SshStage { *; }
 -keep enum io.github.kuddev.pebrel.mobile.connection.SshSessionMode { *; }

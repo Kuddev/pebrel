@@ -13,6 +13,7 @@ struct PebrelFrame {
     selection_foreground: vec4<f32>,
     selection_background: vec4<f32>,
     palette: array<vec4<f32>, 256>,
+    parameters: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> frame: PebrelFrame;
 @group(0) @binding(1) var surface: texture_2d<f32>;

@@ -24,6 +24,7 @@ impl TerminalView {
         if self.origin != origin || self.cell_width != cell_width || self.line_height != line_height
         {
             self.shell_pointer.invalidate();
+            self.finish_application_mouse(None);
         }
         self.origin = origin;
         self.cell_width = cell_width;
@@ -37,6 +38,8 @@ impl TerminalView {
             self.viewports.observe(content.width.as_f32(), content.height.as_f32(), &metrics);
         if change.is_some() {
             self.shell_pointer.invalidate();
+            // Release using the last valid cell before a resize changes its meaning.
+            self.finish_application_mouse(None);
         }
 
         // 启动稳定闸：开窗 resize 异步落地，首帧可能还是开窗前的旧尺寸。

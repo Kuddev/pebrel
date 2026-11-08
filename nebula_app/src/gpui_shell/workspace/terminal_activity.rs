@@ -205,7 +205,7 @@ mod tests {
     ) -> (Entity<NebulaWorkspace>, Vec<Entity<TerminalView>>, Vec<Receiver<Msg>>, VisualTestContext)
     {
         cx.update(|cx| {
-            crate::gpui_shell::init(cx, None);
+            crate::gpui_shell::init(cx, Default::default());
             windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
             cx.set_reduce_motion(true);
             snapshot_probe::enable(cx);
@@ -434,6 +434,27 @@ mod tests {
     }
 
     #[gpui::test]
+    fn interactive_ssh_paints_no_spinner_or_repeated_frame_demand(cx: &mut TestAppContext) {
+        let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
+        assert_spinner_running(&workspace, &mut window);
+        // 主屏上的交互式 SSH 登录在等人操作远端 shell（#857）：不画 badge，也不续帧。
+        terminals[0].update(&mut window, |view, cx| {
+            view.runtime_run("ssh user@example.test".into(), cx).unwrap();
+            view.running_program = Some("ssh".into());
+            assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Running);
+            cx.notify();
+        });
+        draw(&mut window);
+        assert_spinner_stopped(&workspace, &mut window);
+        terminals[0].update(&mut window, |view, cx| {
+            view.running_program = Some("make".into());
+            cx.notify();
+        });
+        draw(&mut window);
+        assert_spinner_running(&workspace, &mut window);
+    }
+
+    #[gpui::test]
     fn top_tab_spinners_share_frames_and_stop_when_running_tab_scrolls_out(
         cx: &mut TestAppContext,
     ) {
@@ -629,7 +650,7 @@ mod tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
-            crate::gpui_shell::init(cx, None);
+            crate::gpui_shell::init(cx, Default::default());
             windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
             cx.set_reduce_motion(true);
         });

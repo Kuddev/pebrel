@@ -145,7 +145,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             Some("StopFailure") => (AiHookKind::TurnDone, context_string(&payload, &["error"])),
             Some("SessionEnd") => (AiHookKind::SessionEnd, None),
             // `Notification` 覆盖「权限询问」和「idle 提醒」两类，将来也可能
-            // 用来传别的东西。类型不可操作时丢掉，读不到类型时照常上报。
+            // 用来传别的东西。缺少明确的可操作类型就不能作为等待信号。
             Some("Notification") if !attention_is_actionable(&payload) => return None,
             Some("Notification") | Some("PermissionRequest") => {
                 (AiHookKind::NeedsAttention, attention_message(&payload))
@@ -244,6 +244,13 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         && kind == AiHookKind::TurnDone
     {
         super::native_events::outcome(&source, native_event?, &payload)
+    } else if source == "opencode" && kind == AiHookKind::TurnDone {
+        match payload.get("outcome").and_then(Value::as_str) {
+            Some("succeeded") => AiTurnOutcome::Succeeded,
+            Some("failed") => AiTurnOutcome::Failed,
+            Some("cancelled") => AiTurnOutcome::Cancelled,
+            _ => AiTurnOutcome::Unknown,
+        }
     } else if matches!(source.as_str(), "pi" | "omp") && kind == AiHookKind::TurnDone {
         match payload.get("stop_reason").and_then(Value::as_str) {
             Some("stop") => AiTurnOutcome::Succeeded,
@@ -310,6 +317,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     Some(AiHookEvent {
         codex_hooks,
         remote_process: None,
+        remote_context: None,
         turn_id,
         session_compacted: kind == AiHookKind::SessionStart
             && payload.get("source").and_then(Value::as_str) == Some("compact"),
@@ -365,6 +373,11 @@ pub(crate) fn parse_remote_envelope(bytes: &[u8], pane: Option<u64>) -> Option<A
             && !key.is_empty()
             && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b':')))
         .then(|| key.to_owned())
+    });
+    event.remote_context = header.split_whitespace().find_map(|field| {
+        let context = field.strip_prefix("tmux=")?;
+        (context.len() == 64 && context.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then(|| context.to_owned())
     });
     event.pane = pane;
     if let Some(attention) = event.attention.as_mut() {

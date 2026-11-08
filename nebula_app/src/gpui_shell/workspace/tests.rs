@@ -364,6 +364,42 @@ fn copy_keymap_keeps_component_inputs_and_terminals_in_separate_contexts() {
     assert!(STATIC_DEFAULT_COMBOS.contains(&"ctrl-c"), "静态默认键清单也要同步增 ctrl-c");
 }
 
+/// Shift+Insert 在 Windows/Linux 终端惯例里是粘贴：必须命中终端上下文的
+/// PasteClipboard，而不是被编成 `\x1b[2;2~` 发进 PTY（agent 输入框因此收不到
+/// 粘贴）。作用域只给终端——输入框上下文不命中，避免抢组件自己的按键。
+#[test]
+fn shift_insert_pastes_into_the_terminal_context_only() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
+    let bindings = default_workspace_bindings();
+    let binding = bindings.iter().find(|binding| {
+        binding
+            .keystrokes()
+            .first()
+            .is_some_and(|stroke| stroke.inner() == &Keystroke::parse("shift-insert").unwrap())
+    });
+    if std::env::consts::OS == "macos" {
+        assert!(binding.is_none(), "macOS 维持 Insert 透传，不注册粘贴");
+        return;
+    }
+    let binding = binding.expect("非 macOS 缺省必须注册 shift-insert 粘贴");
+    assert!(binding.action().as_any().is::<PasteClipboard>());
+
+    let input = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let key = [Keystroke::parse("shift-insert").unwrap()];
+    let (hits, pending) = Keymap::new(vec![binding.clone()]).bindings_for_input(&key, &input);
+    assert!(!pending && hits.is_empty(), "输入框上下文不得被终端粘贴键截获");
+
+    let terminal = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let (hits, pending) = Keymap::new(vec![binding.clone()]).bindings_for_input(&key, &terminal);
+    assert!(!pending && hits.len() == 1);
+    assert!(hits[0].action().as_any().is::<PasteClipboard>());
+    assert!(STATIC_DEFAULT_COMBOS.contains(&"shift-insert"), "静态默认键清单要同步 shift-insert");
+}
+
 #[test]
 fn pane_card_divider_reaches_the_window_top_without_moving_its_bottom() {
     let card = Bounds::new(gpui::point(px(230.0), px(48.0)), size(px(850.0), px(672.0)));

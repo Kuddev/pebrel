@@ -3,6 +3,7 @@
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod activity_tests;
 mod agent_activity;
+mod application_mouse;
 mod broadcast;
 mod completion;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -26,6 +27,7 @@ mod path_drop;
 mod pointer;
 mod program_status;
 mod reading;
+mod remote_activity;
 mod runtime;
 mod session_failure;
 mod shell_pointer;
@@ -89,16 +91,6 @@ const SELECTION_SCROLL_STEP: f32 = 20.0;
 /// 「刚成功」的对勾停留多久再沉降为圆点。看门狗按 1Hz 复核，所以实际停留是
 /// 这个值到 +1s；取 1.2s 是为了让它至少跨过一个复核点，不会一闪就没。
 pub(super) const COMPLETION_FLASH: std::time::Duration = std::time::Duration::from_millis(1200);
-
-/// 远端回合停滞对账的阈值：hook 权威在场的回合静默这么久、且屏幕连续两拍是
-/// agent 自家的同一形态，才允许双向对账（见
-/// `ai_hook::lifecycle::AgentActivity::reconcile_stalled_turn`）：两拍 idle
-/// 提示符把回合收敛为结束；两拍转圈把丢了点火事件（UserPromptSubmit/权限
-/// 答复在远端 bridge 丢失）的回合从 Done/Blocked 拉回 Working。这是远端的
-/// 第二重证据——本地有进程树对账，SSH/WSL 没有进程可见性，hook 一旦在远端
-/// bridge 丢失，回合会钉死在丢失前的状态。权限等待屏是 Blocked 检测、不参与
-/// 对账；真正的防线是「稳定的屏幕形态」而非纯计时。
-pub(super) const REMOTE_TURN_STALL: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// 一次自动回滚该滚几行：指针在网格上方为正（往回滚历史）、下方为负，网格
 /// 内为 0。贴边即 1 行，之后每远离 `SELECTION_SCROLL_STEP` 像素加一档。
@@ -378,6 +370,9 @@ pub struct TerminalView {
     /// shell 与 console plumbing 时置位，转圈据此熄灭（issue #42）。判据与
     /// 节流都在 `runtime::reconcile_shell_activity`，裁定理由见那里。
     command_running_disproved: bool,
+    /// 前台命令是用户提交的交互式 SSH 登录（`ssh host`，无远端命令）。只在确知
+    /// 提交行的边界判定，命令结束即清除；粘贴等看不到命令行的提交不判定（#857）。
+    interactive_login: bool,
     /// `command_running` 置位的时刻，进程树探测的节流窗口从这里起算。
     command_started: Option<std::time::Instant>,
     /// 上次跑进程树探测的时刻，用于节流。
@@ -394,6 +389,7 @@ pub struct TerminalView {
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
     agent_activity: crate::ai_hook::lifecycle::AgentActivity,
+    remote_activity: remote_activity::RemoteActivity,
     program_status: Option<program_status::ProgramStatus>,
     program_status_seen: bool,
     pty_failed: bool,
@@ -494,6 +490,7 @@ pub struct TerminalView {
     copy_on_select: bool,
     /// 鼠标模式下最后上报的单元格：move 事件按"进入新单元格"去重。
     last_report_point: Option<TermPoint>,
+    application_mouse: Option<application_mouse::Gesture>,
     /// GPUI 没有旧壳 scheduler 的 `BlinkCursor` 事件，视图自己只维护可见相位；
     /// 光标是否允许闪烁仍由共享 `Term::cursor_style()` 裁定。
     cursor_visible: bool,
@@ -617,6 +614,7 @@ impl TerminalView {
     ) {
         if !visible {
             self.shell_pointer.invalidate();
+            self.cancel_pointer_gesture();
             self.clear_output_hover(cx);
         }
         if self.output_visible != visible {
@@ -679,6 +677,10 @@ impl TerminalView {
             },
             TermEvent::CursorBlinkingChange => self.restart_cursor_blink(cx),
             TermEvent::Title(title) => {
+                if self.observing_tmux() {
+                    self.sync_remote_activity(cx);
+                    return;
+                }
                 // `NEBULA|cwd|branch|program` 标题协议（与旧壳 event.rs 的
                 // 解析同构）：shell 集成把 cwd/分支塞在标题里喂玻璃 powerline
                 // 与 tab 标签，而不是真拿来当窗口标题。
@@ -695,12 +697,17 @@ impl TerminalView {
                     // 协议串不是窗口标题，更不是 tab 名。
                 } else {
                     self.title = title;
+                    self.observe_agent_title(std::time::Instant::now(), cx);
                 }
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             },
             TermEvent::ResetTitle => {
+                if self.observing_tmux() {
+                    return;
+                }
                 self.title = String::from("shell");
+                self.observe_agent_title(std::time::Instant::now(), cx);
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             },
@@ -883,6 +890,8 @@ impl TerminalView {
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
         self.shell_pointer.revoke();
+        self.application_mouse = None;
+        self.cancel_pointer_gesture();
         self.clear_output_hover(cx);
         self.reading.cancel_query();
         self.reading.cancel_copy();
