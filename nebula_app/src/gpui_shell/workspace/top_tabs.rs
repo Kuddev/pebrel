@@ -229,11 +229,11 @@ impl NebulaWorkspace {
                             .into_any_element(),
                     ),
                     SidebarActivity::WaitingInput => Some(
-                        Self::waiting_hand(symbol_family.clone(), label_px, theme.primary)
+                        Self::waiting_hand(label_px, theme.primary)
                             .into_any_element(),
                     ),
                     SidebarActivity::Attention => Some(
-                        Self::waiting_hand(symbol_family.clone(), label_px, theme.warning)
+                        Self::waiting_hand(label_px, theme.warning)
                             .into_any_element(),
                     ),
                     SidebarActivity::Failed => Some(
@@ -489,7 +489,11 @@ impl NebulaWorkspace {
                                         .justify_end()
                                         .items_center()
                                         .group_hover(hover_group.clone(), |item| item.invisible())
-                                        .child(status),
+                                        .child(if matches!(activity, SidebarActivity::Idle) {
+                                            status
+                                        } else {
+                                            Self::tab_status_icon(status).into_any_element()
+                                        }),
                                 )
                             })
                             .child(
@@ -501,7 +505,7 @@ impl NebulaWorkspace {
                                     .invisible()
                                     .group_hover(hover_group, |slot| slot.visible())
                                     .when(tab_close_visible || settings_navigation, |slot| {
-                                            slot.child(
+                                            slot.child(Self::tab_status_icon(
                                                 Button::new(("top-close-tab", ix))
                                                     .icon(IconName::Close)
                                                     .ghost()
@@ -512,7 +516,7 @@ impl NebulaWorkspace {
                                                             this.close_top_tab(ix, window, cx);
                                                         },
                                                     )),
-                                            )
+                                            ))
                                         }),
                             ),
                     )

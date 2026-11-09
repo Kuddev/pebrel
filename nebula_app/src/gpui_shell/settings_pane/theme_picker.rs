@@ -422,11 +422,15 @@ impl SettingsPane {
                     .child(language.format(Message::ThemeEditorLibraryError, &[("error", error)]))
             })
         };
-        let grid_column = v_flex()
-            .w(px(grid_width))
-            .gap(px(8.0))
-            .when_some(picker_status, |column, status| column.child(status))
-            .child(grid);
+        let grid_column = if picker.filter == super::theme_community::COMMUNITY_FILTER {
+            self.community_list(grid_width, compact, cx)
+        } else {
+            v_flex()
+                .w(px(grid_width))
+                .gap(px(8.0))
+                .when_some(picker_status, |column, status| column.child(status))
+                .child(grid)
+        };
         let (is_light, original_foreground, preview) = match draft {
             AppearanceSelection::Theme(name) => (
                 chrome_theme(name).palette().is_light,

@@ -239,6 +239,7 @@ pub enum RuntimeTaskState {
 pub enum RuntimeAgentStateSource {
     Hook,
     Osc7501,
+    Title,
     Screen,
     Process,
 }

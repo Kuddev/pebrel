@@ -1,0 +1,498 @@
+name: Pebrel 2.4.0 requested build and publication
+run-name: Pebrel 2.4.0 release handoff ${{ github.run_number }}
+'on':
+  push:
+    branches:
+    - release/2.4.0-20261102
+permissions:
+  contents: read
+concurrency:
+  group: pebrel-release-2.4.0
+  cancel-in-progress: false
+env:
+  PYTHONUTF8: '1'
+  RUST_TOOLCHAIN: 1.97.1
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+jobs:
+  prepare:
+    name: Validate requested release phase
+    runs-on: ubuntu-22.04
+    outputs:
+      phase: ${{ steps.request.outputs.phase }}
+      version: ${{ steps.request.outputs.version }}
+      source_commit: ${{ steps.request.outputs.source_commit }}
+      build_run_id: ${{ steps.request.outputs.build_run_id }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Read the scoped release request
+      id: request
+      run: python3 scripts/release_240.py prepare
+  linux:
+    name: Build Linux x64 package
+    needs: prepare
+    if: ${{ needs.prepare.outputs.phase == 'build' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      LINUXDEPLOY_VERSION: 1-alpha-20251107-1
+      LINUXDEPLOY_SHA256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Install build, package, and headless runtime dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          appstream build-essential cmake curl desktop-file-utils dpkg-dev \
+          imagemagick libasound2-dev libdbus-1-dev libegl1-mesa-dev \
+          libfontconfig1-dev libfreetype6-dev libgl1-mesa-dev libudev-dev \
+          libvulkan1 libwayland-dev libx11-dev libx11-xcb-dev \
+          libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+          libxcb-xinput-dev libxcb-xkb-dev libxcb1-dev libxi-dev \
+          libxkbcommon-dev libxkbcommon-x11-dev mesa-vulkan-drivers \
+          patchelf pkg-config weston xauth xvfb zsh
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ env.RUST_TOOLCHAIN }}
+    - uses: ./.github/actions/rust-cache
+      id: rust-cache
+      with:
+        key: release
+        target: target/release
+        legacy-key: linux
+    - name: Build GPUI release binary
+      run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
+    - name: Save compiled workload
+      if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: target/release
+        key: ${{ steps.rust-cache.outputs.cache-key }}
+    - name: Download pinned linuxdeploy
+      env:
+        LINUXDEPLOY: ${{ runner.temp }}/linuxdeploy-x86_64.AppImage
+      run: |
+        curl --fail --location --retry 3 --retry-all-errors --show-error \
+          --output "$LINUXDEPLOY" \
+          "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_VERSION/linuxdeploy-x86_64.AppImage"
+        echo "$LINUXDEPLOY_SHA256  $LINUXDEPLOY" | sha256sum --check --strict
+        chmod 0755 "$LINUXDEPLOY"
+        echo "LINUXDEPLOY=$LINUXDEPLOY" >>"$GITHUB_ENV"
+    - name: Package stable Linux assets
+      run: |
+        SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$GITHUB_SHA")"
+        export SOURCE_DATE_EPOCH
+        bash scripts/package-linux.sh \
+          --channel stable \
+          --binary target/release/pebrel \
+          --version "$PACKAGE_VERSION" \
+          --output-directory dist \
+          --linuxdeploy "$LINUXDEPLOY" \
+          --force
+    - name: Verify built Linux version and Debian metadata
+      run: |
+        target/release/pebrel --version
+        version="$(dpkg-deb --field dist/*.deb Version)"
+        test "$version" = "$PACKAGE_VERSION"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-240-package-linux-x64
+        path: |
+          dist/*.AppImage
+          dist/*.deb
+          dist/*.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+  macos:
+    name: Build macOS ${{ matrix.asset_architecture }} package
+    needs: prepare
+    if: ${{ needs.prepare.outputs.phase == 'build' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-26
+          architecture: aarch64
+          native_architecture: arm64
+          asset_architecture: arm64
+        - runner: macos-26-intel
+          architecture: x86_64
+          native_architecture: x86_64
+          asset_architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      PACKAGE_ARCH: ${{ matrix.architecture }}
+      NATIVE_ARCH: ${{ matrix.native_architecture }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Verify native runner architecture
+      run: test "$(uname -m)" = "${{ matrix.native_architecture }}"
+    - name: Require the modern AppKit SDK for native window controls
+      run: |
+        sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+        test "${sdk_version%%.*}" -ge 26
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ env.RUST_TOOLCHAIN }}
+    - uses: ./.github/actions/rust-cache
+      id: rust-cache
+      with:
+        key: release
+        target: target/release
+        legacy-key: macos
+    - name: Build GPUI release binary
+      run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
+    - name: Save compiled workload
+      if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: target/release
+        key: ${{ steps.rust-cache.outputs.cache-key }}
+    - name: Package the macOS Preview distribution
+      run: |
+        bash scripts/package-macos.sh \
+          --channel stable --binary target/release/pebrel \
+          --version "$PACKAGE_VERSION" --architecture "$PACKAGE_ARCH" \
+          --build-number "$GITHUB_RUN_NUMBER" --output-directory dist --force
+    - name: Verify mounted bundle, signature, architecture and version
+      run: |
+        mount="$RUNNER_TEMP/pebrel-release-volume"
+        mkdir -p "$mount"
+        dmgs=(dist/*.dmg)
+        test "${#dmgs[@]}" -eq 1
+        hdiutil attach "${dmgs[0]}" -readonly -nobrowse -mountpoint "$mount"
+        trap 'hdiutil detach "$mount"' EXIT
+        app="$mount/Pebrel.app"
+        codesign --verify --deep --strict "$app"
+        test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$PACKAGE_VERSION"
+        test "$(lipo -archs "$app/Contents/MacOS/pebrel")" = "$NATIVE_ARCH"
+        "$app/Contents/MacOS/pebrel" --version
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-240-package-macos-${{ matrix.asset_architecture }}
+        path: dist/*.dmg
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+  windows:
+    name: Build Windows ${{ matrix.architecture }} package
+    needs: prepare
+    if: ${{ needs.prepare.outputs.phase == 'build' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: windows-2022
+          architecture: x64
+        - runner: windows-11-arm
+          architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      PACKAGE_ARCH: ${{ matrix.architecture }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ env.RUST_TOOLCHAIN }}
+    - uses: ./.github/actions/rust-cache
+      id: rust-cache
+      with:
+        key: release
+        target: target/release
+        legacy-key: windows
+    - name: Prepare the pinned native console runtime
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $expected = if ($env:PACKAGE_ARCH -eq 'arm64') { 'Arm64' } else { 'X64' }
+        if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne $expected) {
+            throw 'Native runner architecture differs from the package'
+        }
+        ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture $env:PACKAGE_ARCH
+    - name: Build the GPUI application, console entry and hook
+      shell: pwsh
+      run: ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
+    - name: Save compiled workload
+      if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: target/release
+        key: ${{ steps.rust-cache.outputs.cache-key }}
+    - name: Package native ZIP and installer
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        ./scripts/package-release.ps1 -Version $env:PACKAGE_VERSION -Architecture $env:PACKAGE_ARCH -OutputDirectory dist -TargetDirectory target -Force
+        ./scripts/build-installer.ps1 -Version $env:PACKAGE_VERSION -Architecture $env:PACKAGE_ARCH -OutputDirectory dist -TargetDirectory target -Force
+    - name: Verify the packaged Windows executables and version
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $expanded = Join-Path $env:RUNNER_TEMP 'pebrel-release-package'
+        Expand-Archive -LiteralPath "dist/Pebrel-v$env:PACKAGE_VERSION-windows-$env:PACKAGE_ARCH.zip" -DestinationPath $expanded
+        . ./scripts/windows-package-architecture.ps1
+        Assert-WindowsPackageArchitecture -Root $expanded -Architecture $env:PACKAGE_ARCH -RuntimeDirectory (Join-Path $expanded 'runtime') -CliExecutable pebrel.com
+        $version = & (Join-Path $expanded 'pebrel.com') --version | Out-String
+        if ($LASTEXITCODE -ne 0 -or $version -notmatch [regex]::Escape($env:PACKAGE_VERSION)) { throw 'Packaged CLI version differs' }
+        if ((Get-Item -LiteralPath (Join-Path $expanded 'pebrel.exe')).VersionInfo.ProductVersion -ne $env:PACKAGE_VERSION) { throw 'Packaged resource version differs' }
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-240-package-windows-${{ matrix.architecture }}
+        path: |
+          dist/*.zip
+          dist/*-setup.exe
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+  relay:
+    name: Embedded relay (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: ubuntu-24.04
+          arch: x86_64
+          target: x86_64-unknown-linux-musl
+        - runner: ubuntu-24.04-arm
+          arch: aarch64
+          target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      CC: musl-gcc
+      RUSTFLAGS: -C linker=musl-gcc
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify the selected source commit
+      run: |
+        [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Install native static-link tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends musl-tools
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ env.RUST_TOOLCHAIN }}
+        targets: ${{ matrix.target }}
+    - uses: ./.github/actions/rust-cache
+      id: rust-cache
+      with:
+        key: android-relay
+        target: target/${{ matrix.target }}/release
+    - name: Build and package same-source relay
+      env:
+        RELAY_ARCH: ${{ matrix.arch }}
+        RELAY_TARGET: ${{ matrix.target }}
+      run: |
+        cargo build --locked --release -p pebrel-mobile-link --features relay --bin pebrel-relay
+        python3 mobile/tools/package_native_relay.py \
+          --binary "target/$RELAY_TARGET/release/pebrel-relay" \
+          --output relay-assets --arch "$RELAY_ARCH" --commit "$SOURCE_COMMIT"
+    - name: Save compiled relay
+      if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: target/${{ matrix.target }}/release
+        key: ${{ steps.rust-cache.outputs.cache-key }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-240-native-relay-${{ matrix.arch }}
+        path: relay-assets
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+    needs: prepare
+    if: ${{ needs.prepare.outputs.phase == 'build' }}
+  android:
+    name: Build Android universal Preview package
+    needs:
+    - prepare
+    - relay
+    if: ${{ needs.prepare.outputs.phase == 'build' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify the selected source commit
+      run: |
+        [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: android-actions/setup-android@v3
+      with:
+        packages: platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1
+    - uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: 8.11.1
+        cache-read-only: false
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ env.RUST_TOOLCHAIN }}
+        targets: aarch64-linux-android,x86_64-linux-android
+    - name: Select the pinned NDK
+      run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/rust-cache
+      id: rust-cache
+      with:
+        key: android-ssh
+        target: |
+          mobile/ssh/target/aarch64-linux-android/release
+          mobile/ssh/target/x86_64-linux-android/release
+        extra-key: ndk-27.2.12479018
+    - name: Build both Android native ABIs
+      env:
+        GIT_CEILING_DIRECTORIES: ${{ github.workspace }}/mobile/android
+      run: |
+        python3 mobile/tools/build_ghostty.py
+        python3 mobile/tools/build_russh.py
+    - name: Save compiled Android transport
+      if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          mobile/ssh/target/aarch64-linux-android/release
+          mobile/ssh/target/x86_64-linux-android/release
+        key: ${{ steps.rust-cache.outputs.cache-key }}
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: release-240-native-relay-*
+        merge-multiple: true
+        path: mobile/android/app/build/generated/nativeRelayAssets/native-relay
+    - name: Build and lint the optimized universal Preview APK
+      run: gradle --no-daemon -p mobile/android :app:lintPreview :app:assemblePreview
+    - name: Verify APK identity, signature, native payload and relay package
+      run: python3 scripts/release_240.py android --output dist --evidence release-evidence
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-240-package-android
+        path: |
+          dist/*.apk
+          dist/*-relay-manual.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-240-android-evidence
+        path: release-evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+  collect:
+    name: Collect verified 2.4.0 assets
+    needs:
+    - prepare
+    - linux
+    - macos
+    - windows
+    - android
+    if: ${{ needs.prepare.outputs.phase == 'build' }}
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: release-240-package-*
+        merge-multiple: true
+        path: release-dist
+    - uses: actions/download-artifact@v4
+      with:
+        name: release-240-android-evidence
+        path: release-evidence
+    - name: Verify the complete asset set and render final release notes
+      run: python3 scripts/release_240.py collect --output release-dist --evidence release-evidence
+    - uses: actions/upload-artifact@v4
+      with:
+        name: pebrel-2.4.0-verified
+        path: |
+          release-dist/
+          release-evidence/
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+  publish:
+    name: Publish verified Pebrel 2.4.0
+    needs: prepare
+    if: ${{ needs.prepare.outputs.phase == 'publish' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Publish the reviewed build and verify the public Release
+      run: python3 scripts/release_240.py publish --output publication/release-dist --evidence publication/release-evidence
+    - uses: actions/upload-artifact@v4
+      with:
+        name: pebrel-2.4.0-publication-evidence
+        path: publication/release-evidence
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0

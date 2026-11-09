@@ -8,6 +8,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
@@ -228,6 +230,28 @@ class CommandComposerTest {
     }
     @get:Rule val compose = createComposeRule()
     private var renderedView: View? = null
+
+    @Test fun conversationDraftSurvivesRejectedSendAndClearsOnlyAfterAcknowledgment() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        var accepted = false
+        val sent = mutableListOf<String>()
+        repository.setDraft("chat-test", "Please continue the current task")
+        compose.setContent { PebrelTheme {
+            CommandComposer("chat-test", repository, true, false, null, null, conversation = true) {
+                sent += it
+                accepted
+            }
+        } }
+        compose.onNodeWithContentDescription(context.getString(R.string.send)).performClick()
+        compose.onNode(hasSetTextAction()).assertTextEquals("Please continue the current task")
+        compose.runOnIdle { accepted = true }
+        compose.onNodeWithContentDescription(context.getString(R.string.send)).performClick()
+        // The empty editor also exposes its placeholder; assert the editable value itself.
+        compose.onNode(hasSetTextAction()).assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithText(context.getString(R.string.chat_compose)).assertIsDisplayed()
+        assertEquals(listOf("Please continue the current task", "Please continue the current task"), sent)
+    }
 
     @Test fun oneSlotSwitchesModesWithoutLosingDraftOrKeepingAnEmptyToolbar() {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()

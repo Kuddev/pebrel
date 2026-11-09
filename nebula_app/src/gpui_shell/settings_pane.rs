@@ -65,12 +65,18 @@ mod localization;
 mod mobile;
 mod navigation;
 mod notifications;
+mod plugins;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod plugins_tests;
+mod plugins_view;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
 mod sponsor;
 mod status;
 mod theme_advanced;
+mod theme_community;
+mod theme_community_view;
 mod theme_editor;
 mod theme_foreground;
 mod theme_package;
@@ -115,6 +121,7 @@ pub struct SettingsPane {
     active_section: usize,
     agents: agents::AgentSettingsState,
     mobile: mobile::MobileState,
+    plugins: plugins::PluginsState,
     appearance_picker: Option<appearance_picker::AppearancePicker>,
     appearance_picker_seq: u64,
     shader_picker: Option<Task<()>>,
@@ -1509,6 +1516,7 @@ impl SettingsPane {
             8 => self.section_advanced(cx),
             10 => self.section_agents(window, cx),
             MOBILE_SECTION => self.section_mobile(window, cx),
+            PLUGINS_SECTION => self.section_plugins(window, cx),
             _ => self.section_backup(window, cx),
         }
         .into_any_element()
@@ -1747,7 +1755,7 @@ impl Render for SettingsPane {
                                     .child(
                                         v_flex()
                                             .w_full()
-                                            .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION), |content| {
+                                            .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION | PLUGINS_SECTION), |content| {
                                                 content.items_center()
                                             })
                                             .when(application_page, |content| content.max_w(px(960.0)))

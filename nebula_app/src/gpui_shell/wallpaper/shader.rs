@@ -21,7 +21,6 @@ use std::{
 
 const WIDTH: i32 = 960;
 const HEIGHT: i32 = 540;
-const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 
 struct Placement {
     native: isize,
@@ -38,6 +37,7 @@ pub(super) struct Frame {
     program: Arc<compile::Program>,
     sequence: u64,
     seconds: f32,
+    parameter: f32,
 }
 impl Frame {
     pub fn native(&self) -> gpui::BackgroundShaderFrame<'_> {
@@ -49,7 +49,7 @@ impl Frame {
                 WIDTH as f32,
                 HEIGHT as f32,
                 self.seconds,
-                0.0,
+                self.parameter,
             ]),
         }
     }
@@ -196,12 +196,13 @@ impl Shader {
             return None;
         }
         let program = self.program.clone()?;
-        let seconds = self.elapsed().as_secs_f64();
+        let seconds = self.elapsed().as_secs_f64() * f64::from(self.settings.timing.speed);
         Some(Frame {
             owner: p.owner.clone(),
             sequence: self.sequence,
             // 先对双精度时间取周期，避免长时间运行后 f32 精度造成内置动画卡顿。
             seconds: if program.periodic { (seconds % 6.0) as f32 } else { seconds as f32 },
+            parameter: self.settings.parameter,
             program,
         })
     }
@@ -310,6 +311,7 @@ impl Shader {
         self.enabled
             && !self.failed
             && !cx.reduce_motion()
+            && self.settings.timing.speed > 0.0
             && self.program.as_ref().is_some_and(|program| program.animated)
             && self.placements.values().any(|p| p.ready && super::playback::allowed(p.native))
     }
@@ -332,8 +334,9 @@ impl Shader {
             return;
         }
         let generation = self.generation;
+        let interval = self.settings.timing.interval();
         self.timer = Some(cx.spawn(async move |entity, cx| {
-            cx.background_executor().timer(FRAME_INTERVAL).await;
+            cx.background_executor().timer(interval).await;
             let _ = entity.update(cx, |this, cx| {
                 this.timer.take();
                 if generation != this.generation {

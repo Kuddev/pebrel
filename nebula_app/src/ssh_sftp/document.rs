@@ -28,7 +28,11 @@ impl DocumentOperation {
         self.wake.notify_one();
     }
 
-    async fn cancelled(&self) {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.control.load(Ordering::Acquire) & CANCEL_REQUESTED != 0
+    }
+
+    pub(super) async fn cancelled(&self) {
         loop {
             if self.control.load(Ordering::Acquire) & CANCEL_REQUESTED != 0 {
                 return;
@@ -75,56 +79,43 @@ impl RemoteDocument {
     pub(crate) async fn load(
         location: RemoteLocation,
         operation: DocumentOperation,
+        progress: Option<tokio::sync::watch::Sender<preview::ReadProgress>>,
     ) -> io::Result<Self> {
-        let load = async {
-            let sftp = Arc::new(
-                crate::ssh_session::open_sftp(&location.destination)
-                    .await
-                    .map_err(io::Error::other)?,
-            );
-            Self::load_from_session(location, sftp, &operation).await
-        };
-        tokio::select! {
-            result = tokio::time::timeout(Duration::from_secs(45), load) => result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Remote document read timed out"))?,
-            _ = operation.cancelled() => Err(io::Error::new(io::ErrorKind::Interrupted, "Remote document read cancelled")),
-        }
+        let read = preview::load(location.clone(), operation, preview::PreviewKind::Text, progress)
+            .await?;
+        Ok(Self::from_read(location, read))
     }
 
+    #[cfg(test)]
     async fn load_from_session(
         location: RemoteLocation,
         session: Arc<SftpSession>,
         operation: &DocumentOperation,
     ) -> io::Result<Self> {
-        let context = operation.context(&location);
-        context.check_cancelled().map_err(io::Error::other)?;
-        let target = session.canonicalize(location.path.clone()).await.map_err(io::Error::other)?;
-        let metadata = session.metadata(target.clone()).await.map_err(io::Error::other)?;
-        if !metadata.is_regular() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "The remote item is not a regular file",
-            ));
-        }
-        let bytes =
-            read_bounded(&session, &target, Some(&context)).await.map_err(io::Error::other)?;
-        let after = session.metadata(target.clone()).await.map_err(io::Error::other)?;
-        if metadata.size != after.size
-            || metadata.mtime != after.mtime
-            || metadata.permissions != after.permissions
-        {
-            return Err(io::Error::other(SaveError::Changed));
-        }
+        let read = preview::read_from_session(
+            &location,
+            session,
+            operation,
+            preview::PreviewKind::Text,
+            None,
+        )
+        .await?;
+        Ok(Self::from_read(location, read))
+    }
+
+    fn from_read(location: RemoteLocation, read: preview::RemoteRead) -> Self {
+        let preview::RemoteRead { bytes, target, metadata, session } = read;
         let modified = metadata
             .mtime
             .map(|value| std::time::UNIX_EPOCH + Duration::from_secs(u64::from(value)));
-        Ok(Self {
+        Self {
             location,
             snapshot: TextSnapshot::decode(bytes, false),
             modified,
             target,
             metadata,
             session,
-        })
+        }
     }
 
     pub(crate) async fn save(

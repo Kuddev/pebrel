@@ -43,16 +43,14 @@ fn claude_session_id_never_comes_from_camel_case() {
     assert_eq!(event.session_id, None);
 }
 
-/// 防御式解析：不认识才丢，缺失要放行。两个方向都会咬人——读不到类型就丢
-/// 会让 provider 改一次字段名就永久静默 attention 徽标；能读到却不认识还
-/// 放行，会把 pane 停在一个清不掉的等待图标上。
+/// 通用通知必须提供明确的等待类型，正文不能补足缺失的协议字段。
 #[test]
-fn attention_type_gate_drops_only_types_it_can_read_and_does_not_know() {
+fn attention_type_gate_requires_an_explicit_blocking_notification() {
     let missing = b"nebula-hook/1 source=claude pane=3\n{\"hook_event_name\":\"Notification\",\"message\":\"Claude needs your permission\"}";
     assert_eq!(
         parse_remote_envelope(missing, Some(3)).map(|event| event.kind),
-        Some(AiHookKind::NeedsAttention),
-        "没有类型字段时必须照常上报"
+        None,
+        "没有类型字段时不能推断等待状态"
     );
 
     let known = b"nebula-hook/1 source=claude pane=3\n{\"hook_event_name\":\"Notification\",\"notificationType\":\"permission_prompt\"}";
@@ -84,9 +82,9 @@ fn attention_type_gate_drops_only_types_it_can_read_and_does_not_know() {
 /// 全局跳过权限」会被显示成「正在等你批准」，徽标永远误亮。
 #[test]
 fn permission_mode_is_reported_separately_from_attention() {
-    let bypass = b"nebula-hook/1 source=claude pane=3\n{\"hook_event_name\":\"Notification\",\"permission_mode\":\"bypassPermissions\",\"message\":\"Claude is waiting for your input\"}";
+    let bypass = b"nebula-hook/1 source=claude pane=3\n{\"hook_event_name\":\"Notification\",\"notification_type\":\"elicitation_dialog\",\"permission_mode\":\"bypassPermissions\",\"message\":\"Claude is waiting for your input\"}";
     let event = parse_remote_envelope(bypass, Some(3)).unwrap();
-    // 事件本身仍然是「需要你」——bypass 会话也会等你输入下一条指令。
+    // bypass 会话仍会向用户提问；提问类型是证据，权限档位不是。
     assert_eq!(event.kind, AiHookKind::NeedsAttention);
     // 但它不可能是在等批准，UI 的文案要据此区分。
     assert_eq!(event.permission_mode, Some(super::AiPermissionMode::BypassPermissions));

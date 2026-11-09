@@ -31,11 +31,11 @@ class RelayProfileStore(context: Context) {
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
         val array = JSONArray(String(cipher.doFinal(bytes, 12, bytes.size - 12), Charsets.UTF_8))
         require(array.length() <= 64)
-        return (0 until array.length()).map { RelayProfile.parse(array.getJSONObject(it).toString()) }
+        return (0 until array.length()).map { RelayProfile.parseStored(array.getJSONObject(it).toString()) }
     }
     @Synchronized fun save(profiles: List<RelayProfile>) {
         require(profiles.size <= 64)
-        val array = JSONArray().apply { profiles.forEach { put(it.toJson()) } }
+        val array = JSONArray().apply { profiles.forEach { put(it.toStoredJson()) } }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
         val bytes = cipher.iv + cipher.doFinal(array.toString().toByteArray(Charsets.UTF_8))

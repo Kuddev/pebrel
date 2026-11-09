@@ -90,7 +90,7 @@ def locations():
         "manifest": root / "manifest.json",
         "disabled": root / "disabled",
     }
-    for name in ("pebrel-hook", "bridge.py", "shell.py", "bashrc", ".zshenv", ".zprofile", ".zshrc"):
+    for name in ("pebrel-hook", "bridge.py", "remote_tmux.py", "shell.py", "bashrc", ".zshenv", ".zprofile", ".zshrc"):
         paths[name] = root / name
     return root, paths
 

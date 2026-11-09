@@ -243,6 +243,7 @@ fn collect_from(root: &Path, selection: BackupSelection) -> Result<BackupArchive
             },
             BackupCategory::Config => {
                 for name in [
+                    "nebula.luau",
                     "nebula.lua",
                     "nebula.toml",
                     "nebula.yml",
@@ -472,7 +473,8 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
             BackupCategory::Config => {
                 matches!(
                     canonical,
-                    "pebrel.lua"
+                    "pebrel.luau"
+                        | "pebrel.lua"
                         | "pebrel.toml"
                         | "pebrel.yml"
                         | "pebrel.yaml"

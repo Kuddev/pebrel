@@ -83,7 +83,17 @@ impl CheckedPackage {
 
     /// Installation only publishes a new library document after all assets are
     /// verified on disk. It never activates the theme or overwrites a theme ID.
-    pub(crate) fn install(mut self, store: &ThemeLibraryStore) -> Result<ThemeDocument> {
+    pub(crate) fn install(self, store: &ThemeLibraryStore) -> Result<ThemeDocument> {
+        self.install_from(store, None)
+    }
+
+    /// `origin` is a provenance receipt for catalog installs. It is written
+    /// after verification and never substitutes for checking the archive.
+    pub(crate) fn install_from(
+        mut self,
+        store: &ThemeLibraryStore,
+        origin: Option<&Origin>,
+    ) -> Result<ThemeDocument> {
         require(
             self.manifest.resources.iter().all(|resource| {
                 matches!(resource.kind, ResourceKind::Image | ResourceKind::Preview)
@@ -129,14 +139,15 @@ impl CheckedPackage {
             .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
             .unwrap();
-        metadata.insert(
-            "package".into(),
-            serde_json::json!({
-                "version": self.manifest.version, "author": self.manifest.author,
-                "license": self.manifest.license,
-                "resource_directory": stage.path().file_name().unwrap().to_string_lossy(),
-            }),
-        );
+        let mut receipt = serde_json::json!({
+            "version": self.manifest.version, "author": self.manifest.author,
+            "license": self.manifest.license,
+            "resource_directory": stage.path().file_name().unwrap().to_string_lossy(),
+        });
+        if let Some(origin) = origin {
+            receipt["origin"] = serde_json::to_value(origin)?;
+        }
+        metadata.insert("package".into(), receipt);
         let resolved = ThemeDocument::from_value(value).map_err(|e| PackageError(e.to_string()))?;
         // The directory already has its final random name. TempDir rolls it
         // back if persistence fails; a completed import transfers ownership.

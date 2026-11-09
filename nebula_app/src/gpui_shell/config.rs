@@ -1,20 +1,7 @@
-//! 读取用户配置：`nebula.toml` + `nebula_settings.txt`，与 `nebula_app`
-//! 共享同一套文件与语义。
-//!
-//! 两个来源、一个优先级：`nebula_settings.txt`（设置界面持久化的运行时
-//! 意图，经共享 crate `nebula-settings` 读取）覆盖 `nebula.toml` 的对应
-//! 字段；主题对终端色表的影响永远在最后叠加（镜像旧壳 `apply_term_colors`
-//! 的次序：用户配色是 defaults，主题裁定背景/浅色替换/Powerline 槽位）。
-//!
-//! 解析全程宽容：未知字段忽略、非法值回退默认，任何用户配置都不会阻止
-//! 启动。toml 查找路径与主应用 `config::installed_config` 一致；
-//! `general.import`（及顶层 `import`）按主应用语义值级合并。
-//!
-//! 尚未对齐的字段（记录在案，后续步骤处理）：
-//! - `font.offset` / `font.glyph_offset`（cell 度量微调）
-//! - `colors.cursor` 的 `CellForeground`/`CellBackground` 反色语义
-//! - `follow_system_theme`（系统外观联动切主题）
-//! - 配置热重载（主应用用 notify 监视；本壳目前启动读一次）
+//! Native presentation settings. Startup evaluates the shared config once, then
+//! settings saves reuse the cached plain data. Explicit Settings preferences win
+//! over script defaults; theme resolution stays with its existing owner.
+//! GPUI script edits currently require a restart.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +14,7 @@ use serde::Deserialize;
 use crate::display::{LanguagePreference, UiLanguage};
 use crate::gpui_shell::terminal::colors::Palette;
 
+pub(crate) mod source;
 /// GPUI 对齐 legacy 的产品默认：配置未写 `cursor_blink` 时光标闪烁。
 pub(crate) const DEFAULT_CURSOR_BLINK: bool = true;
 
@@ -201,12 +189,13 @@ impl Settings {
         let resolved_theme =
             Arc::new(crate::gpui_shell::theme::ResolvedTheme::from_runtime(&runtime, theme));
         let ui_language = resolve_ui_language(runtime.language);
-        let path = find_config_file();
         let mut load_notice = resolved_theme.notice.clone();
-        let raw = path
-            .as_deref()
-            .map(|p| load_merged_toml(p, &mut load_notice, ui_language))
-            .unwrap_or_else(|| toml::Value::Table(Default::default()));
+        let raw = source::raw(&mut load_notice).unwrap_or_else(|| {
+            find_config_file()
+                .as_deref()
+                .map(|p| load_merged_toml(p, &mut load_notice, ui_language))
+                .unwrap_or_else(|| toml::Value::Table(Default::default()))
+        });
         let raw: RawConfig = match raw.try_into() {
             Ok(config) => config,
             Err(err) => {
@@ -472,7 +461,7 @@ fn default_font_family() -> &'static str {
 ///
 /// 单独驻留而不是并入 [`Settings`]，因为生命周期不同：`Settings` 随设置页写入
 /// 反复重载，启动网格按定义只在开窗时生效一次，而 Lua 配置求值不该出现在每次
-/// 保存设置的路径上。显式 `--config-file` 优先；否则复用主应用发现顺序（`pebrel.lua`
+/// 保存设置的路径上。显式 `--config-file` 优先；否则复用主应用发现顺序（`pebrel.luau`
 /// 优先于 `pebrel.toml`，YAML 同路）和 `pebrel config check` 的同一解析器。
 #[derive(Default)]
 pub(crate) struct StartupWindow {
@@ -484,6 +473,7 @@ pub(crate) struct StartupWindow {
 impl Global for StartupWindow {}
 
 impl StartupWindow {
+    #[cfg(test)]
     pub(crate) fn load(config_file: Option<PathBuf>) -> Self {
         let source = match crate::config::source::discover(config_file) {
             Ok(Some(source)) => source,

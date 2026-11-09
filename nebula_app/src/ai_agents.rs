@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use regex::Regex;
 use serde::Deserialize;
 
+pub(crate) mod native_title;
 mod screen_context;
 
 /// AI clients Nebula can identify as a first-class terminal workload.
@@ -264,13 +265,13 @@ impl AgentKind {
             Self::Grok => format!("grok --resume {session_id}"),
             Self::Pi => format!("pi --session {session_id}"),
             Self::OhMyPi => format!("omp --resume {session_id}"),
+            Self::Antigravity => format!("agy --conversation {session_id}"),
             Self::Aider
             | Self::Goose
             | Self::Droid
             | Self::Auggie
             | Self::Hermes
             | Self::Vibe
-            | Self::Antigravity
             | Self::Qwen
             | Self::Cline
             | Self::Devin
@@ -419,6 +420,7 @@ impl AgentStatus {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentStatusSource {
     Hook,
+    Title,
     Screen,
     Process,
     #[default]

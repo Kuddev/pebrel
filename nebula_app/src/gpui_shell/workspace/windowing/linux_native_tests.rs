@@ -58,7 +58,7 @@ fn native_linux_silent_start_close_and_restore_keep_the_same_session() {
         .with_assets(crate::gpui_shell::assets::NebulaAssets)
         .with_quit_mode(gpui::QuitMode::Explicit)
         .run(move |cx| {
-            crate::gpui_shell::init(cx, None);
+            crate::gpui_shell::init(cx, Default::default());
             initialize(cx, crate::runtime_api::RuntimeHub::new());
             let (_sender, receiver) = std::sync::mpsc::channel();
             let (_ai_sender, ai_receiver) = std::sync::mpsc::channel();

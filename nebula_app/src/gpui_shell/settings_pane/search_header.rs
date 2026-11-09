@@ -273,6 +273,8 @@ mod tests {
         assert_eq!(matching_sections("123", zh), vec![9]);
         assert_eq!(matching_sections("手机", zh), vec![MOBILE_SECTION]);
         assert_eq!(matching_sections("pairing", en), vec![MOBILE_SECTION]);
+        assert_eq!(matching_sections("插件", zh), vec![PLUGINS_SECTION]);
+        assert_eq!(matching_sections("luau", en), vec![PLUGINS_SECTION]);
         assert_eq!(matching_sections("透度", zh).first(), Some(&1));
         assert!(matching_sections("no such setting", en).is_empty());
         assert_eq!(matching_sections("", en), visible_nav_sections().collect::<Vec<_>>());
@@ -356,9 +358,17 @@ mod tests {
 
     #[test]
     fn shader_and_media_search_find_the_appearance_controls() {
-        for query in
-            ["WGSL", "shader", "terminal effects", "终端效果", "着色器", "视频", "GIF", "动图"]
-        {
+        for query in [
+            "WGSL",
+            "GLSL",
+            "shader",
+            "terminal effects",
+            "终端效果",
+            "着色器",
+            "视频",
+            "GIF",
+            "动图",
+        ] {
             for language in [crate::display::UiLanguage::ZhCn, crate::display::UiLanguage::EnUs] {
                 assert_eq!(matching_sections(query, language).first(), Some(&1), "{query}");
             }

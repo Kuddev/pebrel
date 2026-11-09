@@ -201,6 +201,7 @@
     <string name="reader_image_failed">Image decoding failed. Check the image format and file on the computer.</string>
     <string name="reader_link_failed">This link did not open. Use an HTTP link or a local file path.</string>
     <string name="chat_title">Conversation</string>
+    <string name="chat_compose">Message the agent…</string>
     <string name="chat_terminal">Terminal view</string>
     <string name="chat_you">You</string>
     <string name="chat_tool">Tool</string>
@@ -264,4 +265,5 @@
     <string name="computer_address">Computer address and port</string>
     <string name="computer_address_hint">Use the address shown in the computer’s Phone Remote settings. Pairing and permissions stay unchanged. The address is saved after connecting successfully.</string>
     <string name="computer_address_invalid">Enter a valid computer address and port.</string>
+    <string name="computer_lan_relay">LAN + Relay</string>
 </resources>

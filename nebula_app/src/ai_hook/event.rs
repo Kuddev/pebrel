@@ -265,6 +265,8 @@ pub struct AiHookEvent {
     /// Identity supplied by our bridge on an authenticated SSH channel. Kept
     /// separate from local kernel PIDs; never used for host process queries.
     pub(crate) remote_process: Option<String>,
+    /// Authenticated remote pane/foreground/connection scope, never provider JSON.
+    pub(crate) remote_context: Option<String>,
     pub(crate) turn_id: Option<String>,
     /// Compaction starts hooks inside an existing turn; it is not an idle edge.
     pub(crate) session_compacted: bool,

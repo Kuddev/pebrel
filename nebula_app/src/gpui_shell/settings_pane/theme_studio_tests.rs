@@ -15,6 +15,8 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
 #[path = "theme_background_tests.rs"]
 mod background_tests;
+#[path = "theme_community_tests.rs"]
+mod community_tests;
 #[path = "theme_package_tests.rs"]
 mod package_tests;
 #[cfg(feature = "shader-background")]
@@ -1206,7 +1208,7 @@ fn native_theme_picker_visual_review() {
     )
     .unwrap();
     gpui_platform::application().with_assets(crate::gpui_shell::NebulaAssets).run(move |cx| {
-        crate::gpui_shell::init(cx, None);
+        crate::gpui_shell::init(cx, Default::default());
         let mut pane = None;
         let handle = cx
             .open_window(
