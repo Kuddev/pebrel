@@ -1,0 +1,1365 @@
+use std::sync::Mutex;
+
+use pebrel_terminal::event::EventListener;
+use pebrel_terminal::grid::Dimensions;
+use russh::keys::ssh_key::{Algorithm, PrivateKey};
+use russh::server::{self, Auth, ChannelOpenHandle, Session};
+use russh::{ChannelId, Pty};
+use tokio::net::TcpListener;
+
+use super::*;
+use crate::ssh_session::route::{ResolvedRoute, RouteTransport};
+use crate::ssh_session::{AcquiredSession, NoopSshEventHost, authenticated_route};
+
+#[derive(Clone, Default)]
+struct Events {
+    exits: Arc<std::sync::atomic::AtomicUsize>,
+    stages: Arc<Mutex<Vec<SshStage>>>,
+    replies: Option<mpsc::UnboundedSender<Msg>>,
+    hooks: Arc<Mutex<Vec<Vec<u8>>>>,
+    wakeups: Option<mpsc::UnboundedSender<()>>,
+}
+
+impl EventListener for Events {
+    fn send_event(&self, event: TerminalEvent) {
+        if matches!(event, TerminalEvent::Wakeup)
+            && let Some(sender) = &self.wakeups
+        {
+            let _ = sender.send(());
+        }
+        if let TerminalEvent::AiHookEnvelope(envelope) = &event {
+            self.hooks.lock().unwrap().push(envelope.clone());
+        }
+        if let TerminalEvent::PtyWrite(reply) = &event
+            && let Some(sender) = &self.replies
+        {
+            sender.send(Msg::Input(reply.as_bytes().to_vec().into())).unwrap();
+        }
+        if matches!(event, TerminalEvent::Exit) {
+            self.exits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+impl SshEventHost for Events {
+    fn ssh_stage(&self, stage: SshStage) {
+        self.stages.lock().unwrap().push(stage);
+    }
+}
+
+fn size() -> WindowSize {
+    WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 }
+}
+
+fn terminal(events: &Events) -> Arc<FairMutex<Term<Events>>> {
+    Arc::new(FairMutex::new(Term::new(Default::default(), &size(), events.clone())))
+}
+
+fn check(future: impl Future<Output = ()>) {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), future)
+            .await
+            .expect("SSH regression timed out");
+    });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Open,
+    EchoOutput,
+    BackpressuredEcho,
+    TerminalQuery,
+    RejectPty,
+    RejectShell,
+    DropWithoutStatus,
+    ExitAfterEof,
+    HangFirstConnection,
+    ExecEof,
+    ExecHang,
+    CompletionMetadata,
+    Integration,
+    RejectIntegration,
+    BrokenPosixQuoting,
+    RejectSftp,
+    HangSftp,
+    AcceptSftp,
+}
+
+struct Loopback {
+    mode: Mode,
+    hang: bool,
+    data: mpsc::UnboundedSender<Vec<u8>>,
+    window_changes: mpsc::UnboundedSender<WindowSize>,
+    channels: Vec<Channel<server::Msg>>,
+    scripts: std::collections::HashMap<ChannelId, Vec<u8>>,
+}
+
+impl server::Handler for Loopback {
+    type Error = russh::Error;
+
+    async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
+        Ok(Auth::Accept)
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        command: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if command == b"sh -c 'printf PEBREL_POSIX_1'" {
+            if self.mode == Mode::BrokenPosixQuoting {
+                session.channel_success(channel)?;
+                session.data(channel, "PEBREL_POSIX_1")?;
+                session.exit_status_request(channel, 0)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
+            return session.channel_failure(channel);
+        }
+        if command == resume::probe_command().as_bytes() {
+            if matches!(self.mode, Mode::Integration | Mode::RejectIntegration) {
+                session.channel_success(channel)?;
+                session.data(channel, resume::PROBE_REPLY)?;
+                session.exit_status_request(channel, 0)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
+            return session.channel_failure(channel);
+        }
+        if self.mode == Mode::BrokenPosixQuoting && command.starts_with(b"sh -c ") {
+            // Windows OpenSSH can accept exec, then the outer shell corrupts
+            // the nested command. Exec success is not shell startup success.
+            session.channel_success(channel)?;
+            session.data(channel, "unexpected EOF while looking for matching quote")?;
+            session.exit_status_request(channel, 2)?;
+            session.eof(channel)?;
+            return session.close(channel);
+        }
+        if self.mode == Mode::CompletionMetadata {
+            if command == b"python3 -I -S -" {
+                self.scripts.insert(channel, Vec::new());
+                return session.channel_success(channel);
+            }
+            session.channel_success(channel)?;
+            if command == b"hang" {
+                return Ok(());
+            }
+            let command = std::str::from_utf8(command).unwrap();
+            let output = if command.contains("'config'") {
+                "remote.origin.fetch\n+refs/heads/*:refs/remotes/origin/*\0completion.snapshot\ntrue\0"
+            } else if command.contains("'remote'") {
+                "origin\n"
+            } else {
+                "refs/heads/feature/guest\0feature/guest\0\0\0commit\0\0 \n"
+            };
+            session.data(channel, output)?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            return Ok(());
+        }
+        if command == b"python3 -" {
+            if matches!(self.mode, Mode::Integration | Mode::RejectIntegration) {
+                self.scripts.insert(channel, Vec::new());
+                return session.channel_success(channel);
+            }
+            return session.channel_failure(channel);
+        }
+        if command.starts_with(b"sh -c ")
+            && matches!(self.mode, Mode::Integration | Mode::RejectIntegration)
+        {
+            self.data.send(b"bootstrap".to_vec()).unwrap();
+            if self.mode == Mode::RejectIntegration {
+                return session.channel_failure(channel);
+            }
+            use base64::Engine as _;
+            let command = std::str::from_utf8(command).unwrap();
+            let token = command
+                .split('\'')
+                .find(|part| part.len() == 32 && part.bytes().all(|b| b.is_ascii_hexdigit()))
+                .unwrap();
+            let envelope = b"nebula-hook/1 source=codex codex_hooks=full process=42:100\n{\"hook_event_name\":\"SessionStart\",\"session_id\":\"ssh\",\"bridge_sequence\":1}";
+            let encoded = base64::engine::general_purpose::STANDARD.encode(envelope);
+            // The server rejects env requests; bootstrap must carry its own token.
+            session.channel_success(channel)?;
+            session.data(channel, format!("\x1b]777;nebula-hook;00000000000000000000000000000000;{encoded}\x07\x1b]777;nebula-hook;{token};{encoded}\x07\x1b]133;A\x07"))?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            return Ok(());
+        }
+        session.channel_success(channel)?;
+        if self.mode == Mode::ExecEof {
+            session.data(channel, &b"probe result\n"[..])?;
+            session.eof(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn channel_close(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.channels.retain(|value| value.id() != channel);
+        if matches!(
+            self.mode,
+            Mode::ExecEof
+                | Mode::ExecHang
+                | Mode::CompletionMetadata
+                | Mode::RejectSftp
+                | Mode::HangSftp
+                | Mode::AcceptSftp
+        ) {
+            let _ = self.data.send(b"closed".to_vec());
+        }
+        Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(name, "sftp");
+        let _ = self.data.send(b"sftp-request".to_vec());
+        match self.mode {
+            Mode::HangSftp => Ok(()),
+            Mode::AcceptSftp => {
+                session.channel_success(channel)?;
+                let index = self.channels.iter().position(|c| c.id() == channel).unwrap();
+                let stream = self.channels.remove(index).into_stream();
+                tokio::spawn(russh_sftp::server::run(stream, sftp::Peer));
+                Ok(())
+            },
+            _ => session.channel_failure(channel),
+        }
+    }
+
+    async fn channel_open_session(
+        &mut self,
+        channel: Channel<server::Msg>,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if self.hang {
+            std::future::pending::<()>().await;
+        }
+        reply.accept().await;
+        if self.mode == Mode::BackpressuredEcho {
+            // Consume the fixture's channel queue as a real shell would. The
+            // backpressure under test belongs to the client's receive queue.
+            let (mut reader, writer) = channel.split();
+            tokio::spawn(async move {
+                while reader.wait().await.is_some() {}
+                drop(writer);
+            });
+        } else {
+            self.channels.push(channel);
+        }
+        Ok(())
+    }
+
+    async fn pty_request(
+        &mut self,
+        channel: ChannelId,
+        _term: &str,
+        _columns: u32,
+        _rows: u32,
+        _width: u32,
+        _height: u32,
+        _modes: &[(Pty, u32)],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if self.mode == Mode::RejectPty {
+            session.channel_failure(channel)
+        } else {
+            session.channel_success(channel)
+        }
+    }
+
+    async fn window_change_request(
+        &mut self,
+        channel: ChannelId,
+        col_width: u32,
+        row_height: u32,
+        pix_width: u32,
+        pix_height: u32,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.window_changes
+            .send(WindowSize {
+                num_cols: u16::try_from(col_width).unwrap(),
+                num_lines: u16::try_from(row_height).unwrap(),
+                cell_width: u16::try_from(pix_width / col_width).unwrap(),
+                cell_height: u16::try_from(pix_height / row_height).unwrap(),
+            })
+            .unwrap();
+        session.channel_success(channel)?;
+        Ok(())
+    }
+
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if self.mode == Mode::RejectShell {
+            return session.channel_failure(channel);
+        }
+        session.data(channel, &b"welcome before shell confirmation\r\n"[..])?;
+        session.channel_success(channel)?;
+        match self.mode {
+            Mode::TerminalQuery => {
+                // The primary DA reply terminates crossterm's capability discovery.
+                session.data(channel, &b"\x1b[2J\x1b[?u\x1b[c"[..])?;
+            },
+            Mode::DropWithoutStatus => {
+                session.eof(channel)?;
+                session.close(channel)?;
+            },
+            Mode::ExitAfterEof => {
+                session.eof(channel)?;
+                session.exit_status_request(channel, 0)?;
+                session.close(channel)?;
+            },
+            _ => {},
+        }
+        Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(script) = self.scripts.get_mut(&channel) {
+            script.extend_from_slice(data);
+            return Ok(());
+        }
+        let _ = self.data.send(data.to_vec());
+        if matches!(self.mode, Mode::EchoOutput | Mode::BackpressuredEcho) {
+            match data {
+                b"\x04" => {
+                    session.eof(channel)?;
+                    session.exit_status_request(channel, 0)?;
+                },
+                b"\x03" => session.close(channel)?,
+                _ => session.data(channel, data.to_vec())?,
+            }
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let Some(script) = self.scripts.remove(&channel) else { return Ok(()) };
+        if self.mode == Mode::CompletionMetadata {
+            use base64::Engine as _;
+            let script = std::str::from_utf8(&script).unwrap();
+            let encoded = script
+                .lines()
+                .next()
+                .unwrap()
+                .strip_prefix("INPUT = '")
+                .unwrap()
+                .strip_suffix('\'')
+                .unwrap();
+            let query: serde_json::Value = serde_json::from_slice(
+                &base64::engine::general_purpose::STANDARD.decode(encoded).unwrap(),
+            )
+            .unwrap();
+            let output = if query["mode"] == "root" {
+                serde_json::json!({"root":"/remote", "manifest":{"name":"fixture", "workspaces":["packages/*"], "scripts":{"guest-task":""}}, "yaml":null})
+            } else {
+                serde_json::json!([{"path":"packages/app", "manifest":{"name":"app", "scripts":{"workspace-task":""}}}])
+            };
+            session.data(channel, output.to_string())?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            return Ok(());
+        }
+        use base64::Engine as _;
+        use serde_json::json;
+        let script = std::str::from_utf8(&script).unwrap();
+        let encoded =
+            script.rsplit("base64.b64decode('").next().unwrap().split('\'').next().unwrap();
+        let request: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::STANDARD.decode(encoded).unwrap(),
+        )
+        .unwrap();
+        let action = request["action"].as_str().unwrap();
+        self.data.send(action.as_bytes().to_vec()).unwrap();
+        let result = if action == "snapshot" {
+            let files: serde_json::Map<String, serde_json::Value> = [
+                "claude",
+                "codex",
+                "codex_config",
+                "opencode",
+                "pi",
+                "manifest",
+                "disabled",
+                "pebrel-hook",
+                "bridge.py",
+                "remote_tmux.py",
+                "shell.py",
+                "bashrc",
+                ".zshenv",
+                ".zprofile",
+                ".zshrc",
+            ]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.into(),
+                    json!({"path":format!("/test/{name}"), "sha256":null, "content":null}),
+                )
+            })
+            .collect();
+            json!({"version":1,"root":"/test","python":"/usr/bin/python3","files":files,"providers":{},"codex_version":"","codex_features":""})
+        } else {
+            assert!(
+                request["files"].as_array().unwrap().iter().any(|file| file["name"] == "shell.py")
+            );
+            json!({"version":1,"applied":true})
+        };
+        session.data(channel, format!("PEBREL_INTEGRATION={result}\n"))?;
+        session.eof(channel)?;
+        Ok(())
+    }
+}
+
+#[test]
+fn exec_probe_closes_each_channel_after_eof_on_one_connection() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::ExecEof).await;
+        let acquired = fixture.connect().await;
+        for _ in 0..16 {
+            let channel = acquired.session.channel_open_session().await.unwrap();
+            let result = super::super::exec::capture(
+                channel,
+                "probe",
+                &[],
+                Duration::from_secs(1),
+                "loopback",
+            )
+            .await
+            .unwrap();
+            assert_eq!(result, "probe result\n");
+            assert_eq!(fixture.data.recv().await.unwrap(), b"closed");
+        }
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn exec_probe_timeout_and_cancellation_close_the_channel() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::ExecHang).await;
+        let acquired = fixture.connect().await;
+        let channel = acquired.session.channel_open_session().await.unwrap();
+        assert!(
+            super::super::exec::capture(
+                channel,
+                "probe",
+                &[],
+                Duration::from_millis(20),
+                "loopback"
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(fixture.data.recv().await.unwrap(), b"closed");
+        let channel = acquired.session.channel_open_session().await.unwrap();
+        // Dropping the whole operation models a cancelled remote-CWD request.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                super::super::exec::capture(
+                    channel,
+                    "probe",
+                    &[],
+                    Duration::from_secs(5),
+                    "loopback",
+                )
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(fixture.data.recv().await.unwrap(), b"closed");
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_first_capability_query_receives_reply_and_input_keeps_flowing() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::TerminalQuery).await;
+        let acquired = fixture.connect().await;
+        let (sender, mut input) = mpsc::unbounded_channel();
+        let events = Events { replies: Some(sender.clone()), ..Events::default() };
+        let options = super::super::terminal_config(pebrel_terminal::term::Config {
+            suppress_bringup_da1: true,
+            conpty_resize: true,
+            kitty_keyboard: true,
+            ..Default::default()
+        });
+        assert!(!options.conpty_resize);
+        let terminal = Arc::new(FairMutex::new(Term::new(options, &size(), events.clone())));
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        let exchange = async {
+            let mut replies = Vec::new();
+            while !replies.ends_with(b"\x1b[?6c") {
+                replies.extend(fixture.data.recv().await.unwrap());
+            }
+            assert_eq!(replies, b"\x1b[?0u\x1b[?6c");
+            let keys = b"\x1b[A\x1b[B\x03\x1a";
+            sender.send(Msg::Input(keys.to_vec().into())).unwrap();
+            let mut received = Vec::new();
+            while received.len() < keys.len() {
+                received.extend(fixture.data.recv().await.unwrap());
+            }
+            assert_eq!(received, keys);
+            sender.send(Msg::Shutdown).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            pump(&mut channel, token, size(), &terminal, &events, &mut input),
+            exchange,
+        );
+        result.unwrap();
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_terminal_options_preserve_preferences_but_disable_conpty_only_behavior() {
+    use pebrel_terminal::term::{Config, Osc52};
+    use pebrel_terminal::vte::ansi::{CursorShape, CursorStyle};
+
+    let local = Config {
+        suppress_bringup_da1: true,
+        conpty_resize: true,
+        kitty_keyboard: true,
+        scrolling_history: 42,
+        semantic_escape_chars: "test".to_owned(),
+        osc52: Osc52::Disabled,
+        default_cursor_style: CursorStyle { shape: CursorShape::Underline, blinking: true },
+        ..Default::default()
+    };
+    let remote = super::super::terminal_config(local.clone());
+    assert!(!remote.suppress_bringup_da1);
+    assert!(!remote.conpty_resize);
+    assert_eq!(remote.kitty_keyboard, local.kitty_keyboard);
+    assert_eq!(remote.scrolling_history, local.scrolling_history);
+    assert_eq!(remote.semantic_escape_chars, local.semantic_escape_chars);
+    assert_eq!(remote.osc52, local.osc52);
+    assert_eq!(remote.default_cursor_style, local.default_cursor_style);
+
+    let (sender, mut input) = mpsc::unbounded_channel();
+    let events = Events { replies: Some(sender), ..Default::default() };
+    let mut terminal = Term::new(local, &size(), events);
+    let mut parser: pebrel_terminal::vte::ansi::Processor =
+        pebrel_terminal::vte::ansi::Processor::new();
+    parser.advance(&mut terminal, b"\x1b[c");
+    assert!(input.try_recv().is_err(), "the pre-primed local handshake is still suppressed");
+    parser.advance(&mut terminal, b"\x1b[c");
+    assert!(matches!(input.try_recv(), Ok(Msg::Input(reply)) if reply.as_ref() == b"\x1b[?6c"));
+}
+
+#[test]
+fn duplicate_ssh_directory_preserves_literal_paths_and_rejects_control_characters() {
+    use super::super::initial_remote_cd_command;
+
+    assert_eq!(
+        initial_remote_cd_command(Some("/srv/Team's \"App\" ")),
+        Some(b"cd '/srv/Team'\\''s \"App\" '\r".to_vec())
+    );
+    assert_eq!(
+        initial_remote_cd_command(Some("/srv/$(whoami);pwd")),
+        Some(b"cd '/srv/$(whoami);pwd'\r".to_vec())
+    );
+    for path in ["/srv/app\n", "/srv/app\r", "\t/srv/app", "/srv/\x1bapp", "", "relative"] {
+        assert_eq!(initial_remote_cd_command(Some(path)), None, "{path:?}");
+    }
+    assert_eq!(initial_remote_cd_command(Some(&format!("/{}", "x".repeat(16 * 1024)))), None);
+}
+
+struct Fixture {
+    route: ResolvedRoute,
+    data: mpsc::UnboundedReceiver<Vec<u8>>,
+    window_changes: mpsc::UnboundedReceiver<WindowSize>,
+    task: tokio::task::JoinHandle<()>,
+    _directory: tempfile::TempDir,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Fixture {
+    async fn new(mode: Mode) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let known_hosts = directory.path().join("known_hosts");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        russh::keys::known_hosts::learn_known_hosts_path(
+            "127.0.0.1",
+            address.port(),
+            key.public_key(),
+            &known_hosts,
+        )
+        .unwrap();
+        let config = Arc::new(server::Config {
+            keys: vec![key],
+            window_size: if mode == Mode::BackpressuredEcho { 4096 } else { 2097152 },
+            maximum_packet_size: if mode == Mode::BackpressuredEcho { 512 } else { 32768 },
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            ..Default::default()
+        });
+        let (data_tx, data) = mpsc::unbounded_channel();
+        let (window_changes_tx, window_changes) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            let mut first = true;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
+                let handler = Loopback {
+                    mode,
+                    hang: first && mode == Mode::HangFirstConnection,
+                    data: data_tx.clone(),
+                    window_changes: window_changes_tx.clone(),
+                    channels: Vec::new(),
+                    scripts: Default::default(),
+                };
+                first = false;
+                let config = config.clone();
+                connections.spawn(async move {
+                    if let Ok(session) = server::run_stream(config, stream, handler).await {
+                        let _ = session.await;
+                    }
+                });
+            }
+        });
+        let destination = format!("fixture@127.0.0.1:{}", address.port());
+        let route = ResolvedRoute {
+            destination: SshDestination::parse(&destination).unwrap(),
+            profile: crate::ssh_profiles::SshProfiles::default().for_destination(&destination),
+            transport: RouteTransport::Direct,
+            known_hosts_path: Some(known_hosts),
+        };
+        Self { route, data, window_changes, task, _directory: directory }
+    }
+
+    async fn connect(&self) -> AcquiredSession {
+        authenticated_route(&self.route, None::<&NoopSshEventHost>, false, true).await.unwrap()
+    }
+
+    async fn forget(&self, session: &SharedSession) {
+        super::super::evict_pooled_session(&self.route.pool_key(), session).await;
+    }
+}
+
+#[test]
+fn integration_exec_routes_only_the_current_channel_token_without_accept_env() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Integration).await;
+        let acquired = fixture.connect().await;
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        for expected in [b"snapshot".as_slice(), b"apply", b"bootstrap"] {
+            assert_eq!(fixture.data.recv().await.unwrap(), expected);
+        }
+        let (_sender, mut input) = mpsc::unbounded_channel();
+        pump(&mut channel, token, size(), &terminal, &events, &mut input).await.unwrap();
+        let hooks = events.hooks.lock().unwrap();
+        assert_eq!(hooks.len(), 1, "a foreign pane token must never become an event");
+        let event = crate::ai_hook::parse_remote_envelope(&hooks[0], Some(1)).unwrap();
+        assert_eq!(event.remote_process.as_deref(), Some("42:100"));
+        assert_eq!(event.session_id.as_deref(), Some("ssh"));
+        drop(hooks);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn rejected_integration_exec_falls_back_to_a_fresh_ordinary_shell_channel() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::RejectIntegration).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), Some("/requested"), None, &Events::default())
+                .await
+                .unwrap();
+        for expected in [b"snapshot".as_slice(), b"apply", b"bootstrap", b"cd '/requested'\r"] {
+            assert_eq!(fixture.data.recv().await.unwrap(), expected);
+        }
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data{data} if data.starts_with(b"welcome"))
+        ));
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn a_host_with_sh_but_incompatible_exec_quoting_opens_its_ordinary_shell() {
+    check(async {
+        let fixture = Fixture::new(Mode::BrokenPosixQuoting).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        assert!(channel.identity_input.is_none(), "unsupported startup must not run POSIX code");
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
+        ));
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn cancellation_stops_startup_before_a_shell_exists() {
+    check(async {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (_input, mut cancellation) = input_bridge(receiver);
+        let events = Events::default();
+        let terminal = terminal(&events);
+        sender.send(Msg::Shutdown).unwrap();
+        drive(std::future::pending(), &mut cancellation, &terminal, &events).await;
+        assert_eq!(events.exits.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(events.stages.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn handshake_budget_excludes_interactive_host_confirmation() {
+    check(async {
+        let handshake = Handshake::default();
+        let operation = async {
+            assert!(
+                handshake
+                    .confirm(async {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        true
+                    })
+                    .await
+            );
+            Ok(())
+        };
+        handshake.connect_with_budget(operation, Duration::from_millis(30)).await.unwrap();
+    });
+}
+
+#[test]
+fn cancelled_handshake_cannot_leave_a_pending_host_prompt() {
+    check(async {
+        let handshake = Handshake::default();
+        {
+            let connection = handshake.connect(std::future::pending::<Result<(), russh::Error>>());
+            tokio::pin!(connection);
+            tokio::select! {
+                _ = &mut connection => panic!("handshake must still be waiting"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {},
+            }
+        }
+        assert!(!handshake.confirm(std::future::pending()).await);
+    });
+}
+
+#[test]
+fn rejected_pty_and_shell_do_not_become_ready() {
+    check(async {
+        for mode in [Mode::RejectPty, Mode::RejectShell] {
+            let fixture = Fixture::new(mode).await;
+            let acquired = fixture.connect().await;
+            let events = Events::default();
+            let result = open_shell(&acquired, size(), None, None, &events).await;
+            assert!(result.is_err());
+            assert!(
+                !events.stages.lock().unwrap().iter().any(|stage| matches!(stage, SshStage::Ready))
+            );
+            fixture.forget(&acquired.session).await;
+        }
+    });
+}
+
+#[test]
+fn shell_confirmation_preserves_early_output_and_remote_directory() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), Some("/srv/Team's App "), None, &Events::default())
+                .await
+                .unwrap();
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
+        ));
+        let command = fixture.data.recv().await.unwrap();
+        assert_eq!(command, b"cd '/srv/Team'\\''s App '\r");
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_resize_updates_grid_and_remote_pty() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        let (input_tx, mut input) = mpsc::unbounded_channel();
+        let pump_terminal = Arc::clone(&terminal);
+        let pump_events = events.clone();
+        let mut running = tokio::spawn(async move {
+            pump(&mut channel, token, size(), &pump_terminal, &pump_events, &mut input).await
+        });
+
+        let grid_size = WindowSize { num_cols: 100, num_lines: 30, ..size() };
+        input_tx.send(Msg::ResizeGrid(grid_size)).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let dimensions = {
+                    let terminal = terminal.lock();
+                    (terminal.columns(), terminal.screen_lines())
+                };
+                if dimensions == (100, 30) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("SSH grid-only resize was not applied");
+
+        let remote_size = WindowSize { num_cols: 132, num_lines: 40, ..size() };
+        input_tx.send(Msg::Resize(remote_size)).unwrap();
+        let observed = tokio::select! {
+            observed = fixture.window_changes.recv() => observed.expect("SSH server stopped before window change"),
+            result = &mut running => panic!("SSH pump stopped before window change: {result:?}"),
+        };
+        assert_eq!(observed.num_cols, remote_size.num_cols);
+        assert_eq!(observed.num_lines, remote_size.num_lines);
+        assert_eq!(observed.cell_width, remote_size.cell_width);
+        assert_eq!(observed.cell_height, remote_size.cell_height);
+        let dimensions = {
+            let terminal = terminal.lock();
+            (terminal.columns(), terminal.screen_lines())
+        };
+        assert_eq!(dimensions, (132, 40));
+
+        input_tx.send(Msg::Shutdown).unwrap();
+        assert!(running.await.unwrap().is_ok());
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_delayed_synchronized_redraw_keeps_the_complete_screen_visible() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::EchoOutput).await;
+        let acquired = fixture.connect().await;
+        let (wake_tx, mut wakes) = mpsc::unbounded_channel();
+        let events = Events { wakeups: Some(wake_tx), ..Default::default() };
+        let terminal = terminal(&events);
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        let (input_tx, mut input) = mpsc::unbounded_channel();
+        let pump_terminal = Arc::clone(&terminal);
+        let pump_events = events.clone();
+        let running = tokio::spawn(async move {
+            pump(&mut channel, token, size(), &pump_terminal, &pump_events, &mut input).await
+        });
+        wakes.recv().await.unwrap(); // Initial shell output.
+
+        for bytes in [b"\x1b[2J\x1b[HCOMPLETE".as_slice(), b"\x1b[?2026h\x1b[HEARLY HISTORY"] {
+            input_tx.send(Msg::Input(bytes.to_vec().into())).unwrap();
+            assert_eq!(fixture.data.recv().await.unwrap(), bytes);
+            wakes.recv().await.unwrap();
+        }
+        // Longer than the parser's local-PTY default, but a realistic network gap.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let first_row = || {
+            use pebrel_terminal::index::{Column, Line};
+            let terminal = terminal.lock();
+            (0..terminal.columns())
+                .map(|column| terminal.grid()[Line(0)][Column(column)].c)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        assert_eq!(first_row(), "COMPLETE", "an incomplete remote redraw became visible");
+
+        // Holding a display frame must not hold keyboard input behind it.
+        input_tx.send(Msg::Input(b"key".to_vec().into())).unwrap();
+        assert_eq!(fixture.data.recv().await.unwrap(), b"key");
+        wakes.recv().await.unwrap();
+        assert_eq!(first_row(), "COMPLETE");
+
+        let final_frame = b"\x1b[2J\x1b[HLATEST\x1b[?2026l";
+        input_tx.send(Msg::Input(final_frame.to_vec().into())).unwrap();
+        assert_eq!(fixture.data.recv().await.unwrap(), final_frame);
+        wakes.recv().await.unwrap();
+        assert_eq!(first_row(), "LATEST");
+
+        input_tx.send(Msg::Input(b"\x1b[?2026h\x1b[2J\x1b[HRECOVERED".to_vec().into())).unwrap();
+        fixture.data.recv().await.unwrap();
+        wakes.recv().await.unwrap();
+        assert_eq!(first_row(), "LATEST");
+        // A silent peer that omits the end marker cannot freeze the pane.
+        tokio::time::timeout(Duration::from_secs(2), wakes.recv()).await.unwrap().unwrap();
+        assert_eq!(first_row(), "RECOVERED");
+        input_tx.send(Msg::Shutdown).unwrap();
+        assert!(running.await.unwrap().is_ok());
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_unfinished_synchronized_output_is_preserved_on_exit_disconnect_and_shutdown() {
+    check(async {
+        for ending in [Some(b'\x04'), Some(b'\x03'), None] {
+            let mut fixture = Fixture::new(Mode::EchoOutput).await;
+            let acquired = fixture.connect().await;
+            let (wake_tx, mut wakes) = mpsc::unbounded_channel();
+            let events = Events { wakeups: Some(wake_tx), ..Default::default() };
+            let terminal = terminal(&events);
+            let (mut channel, token) =
+                open_shell(&acquired, size(), None, None, &events).await.unwrap();
+            let (input_tx, mut input) = mpsc::unbounded_channel();
+            let pump_terminal = Arc::clone(&terminal);
+            let pump_events = events.clone();
+            let running = tokio::spawn(async move {
+                pump(&mut channel, token, size(), &pump_terminal, &pump_events, &mut input).await
+            });
+            wakes.recv().await.unwrap();
+            input_tx
+                .send(Msg::Input(b"\x1b[?2026h\x1b[2J\x1b[HFINAL OUTPUT".to_vec().into()))
+                .unwrap();
+            fixture.data.recv().await.unwrap();
+            wakes.recv().await.unwrap();
+            input_tx
+                .send(ending.map_or(Msg::Shutdown, |byte| Msg::Input(vec![byte].into())))
+                .unwrap();
+            let result = running.await.unwrap();
+            assert_eq!(result.is_ok(), ending != Some(b'\x03'));
+            let terminal = terminal.lock();
+            use pebrel_terminal::index::{Column, Line};
+            let row: String = (0..terminal.columns())
+                .map(|column| terminal.grid()[Line(0)][Column(column)].c)
+                .collect();
+            assert_eq!(row.trim_end(), "FINAL OUTPUT");
+            drop(terminal);
+            fixture.forget(&acquired.session).await;
+        }
+    });
+}
+
+#[test]
+fn ssh_queued_unmarked_redraw_publishes_once_and_preserves_split_text() {
+    check(async {
+        let fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let (wake_tx, mut wakes) = mpsc::unbounded_channel();
+        let events = Events { wakeups: Some(wake_tx), ..Default::default() };
+        let terminal = terminal(&events);
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        channel.pending.clear();
+        // An already received redraw has no frame markers. Packet boundaries
+        // must not each trigger a separate display update or alter UTF-8/VT order.
+        for row in 0..100 {
+            channel.pending.push_back(ChannelMsg::Data {
+                data: format!("\r\nEARLY HISTORY {row:03}").into_bytes().into(),
+            });
+        }
+        let final_frame = "\x1b[2J\x1b[HLATEST 中文".as_bytes();
+        for bytes in final_frame.chunks(3) {
+            channel.pending.push_back(ChannelMsg::ExtendedData { data: bytes.into(), ext: 1 });
+        }
+        let (input_tx, mut input) = mpsc::unbounded_channel();
+        input_tx.send(Msg::Shutdown).unwrap();
+        pump(&mut channel, token, size(), &terminal, &events, &mut input).await.unwrap();
+        let mut wakeups = 0;
+        while wakes.try_recv().is_ok() {
+            wakeups += 1;
+        }
+        assert_eq!(wakeups, 1, "one queued redraw produced {wakeups} display updates");
+        use pebrel_terminal::index::{Column, Line};
+        let terminal = terminal.lock();
+        let row: String = (0..terminal.columns())
+            .map(|column| terminal.grid()[Line(0)][Column(column)].c)
+            .collect();
+        assert!(row.starts_with("LATEST 中 文"), "{row:?}");
+        drop(terminal);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_output_batches_yield_at_control_messages_and_work_limits() {
+    check(async {
+        let fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, _) = open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        let mut stream = StreamProcessor::default();
+
+        for count in [1usize, 127, 128, 256] {
+            channel.pending =
+                (0..count).map(|_| ChannelMsg::Data { data: b"x".as_slice().into() }).collect();
+            channel.pending.push_back(ChannelMsg::Eof);
+            channel.pending.push_back(ChannelMsg::ExitStatus { exit_status: 0 });
+            let first = channel.pending.pop_front().unwrap();
+            feed_ready_output(&mut channel, first, &mut stream, &terminal, &events);
+            let remaining_data = count.saturating_sub(128);
+            assert_eq!(channel.pending.len(), remaining_data + 2);
+            if remaining_data == 0 {
+                assert!(matches!(channel.next_message().await, Some(ChannelMsg::Eof)));
+                assert!(matches!(
+                    channel.next_message().await,
+                    Some(ChannelMsg::ExitStatus { .. })
+                ));
+            }
+        }
+
+        channel.pending =
+            (0..8).map(|_| ChannelMsg::Data { data: vec![b'\r'; 32 * 1024].into() }).collect();
+        let first = channel.pending.pop_front().unwrap();
+        feed_ready_output(&mut channel, first, &mut stream, &terminal, &events);
+        assert_eq!(channel.pending.len(), 6, "large packets must yield at the byte budget");
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn unexpected_disconnect_preserves_pane_but_explicit_exit_closes_it() {
+    check(async {
+        for mode in [Mode::DropWithoutStatus, Mode::ExitAfterEof] {
+            let fixture = Fixture::new(mode).await;
+            let acquired = fixture.connect().await;
+            let events = Events::default();
+            let terminal = terminal(&events);
+            let (mut channel, token) =
+                open_shell(&acquired, size(), None, None, &events).await.unwrap();
+            let (_input_tx, mut input) = mpsc::unbounded_channel();
+            let result = pump(&mut channel, token, size(), &terminal, &events, &mut input).await;
+            assert_eq!(result.is_ok(), mode == Mode::ExitAfterEof);
+            finish(result, &terminal, &events);
+            assert_eq!(
+                events.exits.load(std::sync::atomic::Ordering::Relaxed),
+                usize::from(mode == Mode::ExitAfterEof)
+            );
+            assert_eq!(
+                events
+                    .stages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|stage| matches!(stage, SshStage::Failed(_))),
+                mode == Mode::DropWithoutStatus
+            );
+            fixture.forget(&acquired.session).await;
+        }
+    });
+}
+
+#[test]
+fn hung_channel_does_not_lock_reuse_and_fresh_connection_can_retry() {
+    check(async {
+        let fixture = Fixture::new(Mode::HangFirstConnection).await;
+        let acquired = fixture.connect().await;
+        let events = Events::default();
+        let opening = open_shell_with_budget(
+            &acquired,
+            size(),
+            None,
+            None,
+            &events,
+            Duration::from_millis(100),
+        );
+        let reuse = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let reused = fixture.connect().await;
+            assert!(Arc::ptr_eq(&reused.session, &acquired.session));
+        };
+        let (result, ()) = tokio::join!(opening, reuse);
+        assert!(result.is_err());
+        fixture.forget(&acquired.session).await;
+        let replacement = fixture.connect().await;
+        assert!(!Arc::ptr_eq(&replacement.session, &acquired.session));
+        let (channel, _) = open_shell(&replacement, size(), None, None, &events).await.unwrap();
+        assert!(!super::super::evict_pooled_session(&replacement.key, &acquired.session).await);
+        let reused = fixture.connect().await;
+        assert!(Arc::ptr_eq(&reused.session, &replacement.session));
+        drop(channel);
+        fixture.forget(&replacement.session).await;
+    });
+}
+
+#[test]
+fn completion_metadata_uses_authenticated_channels_and_closes_cancelled_queries() {
+    check(async {
+        use crate::completion::{Cancellation, Session as CompletionSession};
+        use crate::display::{CompletionStyle, SuggestEnv};
+        let mut fixture = Fixture::new(Mode::CompletionMetadata).await;
+        let destination = fixture.route.destination.original.clone();
+        assert!(
+            super::super::completion::read(
+                &destination,
+                "probe",
+                &[],
+                Duration::from_secs(1),
+                1024,
+                &|| false
+            )
+            .await
+            .is_err()
+        );
+        let acquired = fixture.connect().await;
+        let target = destination.clone();
+        let captured = super::super::completion::capture(&destination).await.unwrap();
+        {
+            let mut pool = super::super::connection_pool().lock().await;
+            let entry = pool.remove(&fixture.route.pool_key()).unwrap();
+            pool.insert(
+                fixture.route.pool_key(),
+                super::super::PooledSession::new(entry.session, entry.destination),
+            );
+            pool.insert(
+                "completion-ambiguous-fixture".into(),
+                super::super::PooledSession::new(acquired.session.clone(), destination.clone()),
+            );
+        }
+        assert!(
+            super::super::completion::capture(&destination).await.is_err(),
+            "ambiguous authenticated routes cannot be guessed"
+        );
+        assert!(
+            !super::super::completion::read_connection(
+                &captured,
+                "probe",
+                &[],
+                Duration::from_secs(1),
+                1024,
+                &|| false
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "a captured query retains its original transport"
+        );
+        super::super::connection_pool().lock().await.remove("completion-ambiguous-fixture");
+        let replacement = super::super::completion::capture(&destination).await.unwrap();
+        assert_ne!(
+            captured.key(),
+            replacement.key(),
+            "connection generations cannot share a metadata cache key"
+        );
+        tokio::task::spawn_blocking(move || {
+            let session = CompletionSession::default();
+            let env = SuggestEnv::Ssh { destination: target };
+            for (line, suffix) in [
+                ("git switch feature/gue", "st"),
+                ("npm run gue", "st-task"),
+                ("npm -w app run work", "space-task"),
+            ] {
+                let result = session
+                    .request(
+                        "/remote".into(),
+                        env.clone(),
+                        line.into(),
+                        CompletionStyle::Popup,
+                        None,
+                    )
+                    .calculate(&Cancellation::default());
+                assert_eq!(result.completion_items[0].insert, suffix, "{line}");
+            }
+        })
+        .await
+        .unwrap();
+        let stopped = std::sync::atomic::AtomicBool::new(false);
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            stopped.store(true, std::sync::atomic::Ordering::Relaxed);
+        };
+        let is_stopped = || stopped.load(std::sync::atomic::Ordering::Relaxed);
+        let query = super::super::completion::read(
+            &destination,
+            "hang",
+            &[],
+            Duration::from_secs(1),
+            1024,
+            &is_stopped,
+        );
+        let (result, _) = tokio::join!(query, cancel);
+        assert!(result.is_err());
+        assert!(!acquired.session.is_closed(), "cancel only the owned metadata channel");
+        let bytes = super::super::completion::read(
+            &destination,
+            "probe",
+            &[],
+            Duration::from_secs(1),
+            1024,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        assert!(!bytes.is_empty());
+        let mut closed = 0;
+        while let Ok(event) = fixture.data.try_recv() {
+            if event == b"closed" {
+                closed += 1;
+            }
+        }
+        assert!(closed >= 4, "completed and cancelled query channels close");
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+#[ignore = "requires an owned loopback sshd fixture in PEBREL_COMPLETION_SSH_FIXTURE"]
+fn completion_real_ssh_git_and_project_scripts_end_to_end() {
+    check(async {
+        use crate::completion::{Cancellation, Session as CompletionSession};
+        use crate::display::{CompletionStyle, SuggestEnv};
+        let path = std::env::var_os("PEBREL_COMPLETION_SSH_FIXTURE").expect("owned fixture");
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let destination = fixture["destination"].as_str().unwrap().to_owned();
+        let cwd = fixture["cwd"].as_str().unwrap().to_owned();
+        let mut profile = crate::ssh_profiles::SshProfiles::default().for_destination(&destination);
+        profile.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
+        profile.private_keys = vec![fixture["key"].as_str().unwrap().into()];
+        let route = ResolvedRoute {
+            destination: SshDestination::parse(&destination).unwrap(),
+            profile,
+            transport: RouteTransport::Direct,
+            known_hosts_path: Some(fixture["known_hosts"].as_str().unwrap().into()),
+        };
+        let acquired =
+            authenticated_route(&route, None::<&NoopSshEventHost>, false, false).await.unwrap();
+        let target = destination.clone();
+        let project = cwd.clone();
+        tokio::task::spawn_blocking(move || {
+            let session = CompletionSession::default();
+            let env = SuggestEnv::Ssh { destination: target };
+            for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+            {
+                for (line, expected) in [
+                    ("git switch feature/gue", "git switch feature/guest"),
+                    ("npm run gue", "npm run guest-task"),
+                    ("npm -w app run work", "npm -w app run workspace-task"),
+                ] {
+                    let result = session
+                        .request(project.clone(), env.clone(), line.into(), style, None)
+                        .calculate(&Cancellation::default());
+                    let edit = if style == CompletionStyle::Popup {
+                        result.completion_items.first().unwrap()
+                    } else {
+                        result.suggestion_edit.as_ref().unwrap()
+                    };
+                    let head: String =
+                        line.chars().take(line.chars().count() - edit.replace_chars).collect();
+                    assert_eq!(format!("{head}{}", edit.insert), expected, "{style:?}");
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let before = format!(
+            "test ! -e {} && test ! -e {}",
+            quote(&format!("{cwd}/.qa-guest")),
+            quote(&format!("{cwd}/.qa-workspace"))
+        );
+        super::super::completion::read(
+            &destination,
+            &before,
+            &[],
+            Duration::from_secs(2),
+            8192,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        let execute = format!(
+            "cd -- {} && git switch feature/guest && npm run guest-task && npm -w app run workspace-task",
+            quote(&cwd)
+        );
+        super::super::completion::read(
+            &destination,
+            &execute,
+            &[],
+            Duration::from_secs(5),
+            8192,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        let after = format!(
+            "test -f {} && test -f {}",
+            quote(&format!("{cwd}/.qa-guest")),
+            quote(&format!("{cwd}/.qa-workspace"))
+        );
+        super::super::completion::read(
+            &destination,
+            &after,
+            &[],
+            Duration::from_secs(2),
+            8192,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        super::super::evict_pooled_session(&route.pool_key(), &acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_echo_keeps_draining_while_a_large_input_waits_for_window_space() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::BackpressuredEcho).await;
+        let acquired = fixture.connect().await;
+        let (sender, mut input) = mpsc::unbounded_channel();
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, token) =
+            open_shell(&acquired, size(), None, None, &events).await.unwrap();
+        let bytes = b"echo remains responsive\r\n".repeat(20_000);
+        sender.send(Msg::Input(bytes.clone().into())).unwrap();
+        let exchange = async {
+            let mut received = Vec::with_capacity(bytes.len());
+            while received.len() < bytes.len() {
+                received.extend(fixture.data.recv().await.unwrap());
+            }
+            assert_eq!(received, bytes);
+            sender.send(Msg::Input(vec![4].into())).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            pump(&mut channel, token, size(), &terminal, &events, &mut input),
+            exchange,
+        );
+        result.unwrap();
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+mod keepalive;
+mod sftp;

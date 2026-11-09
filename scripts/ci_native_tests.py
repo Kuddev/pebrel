@@ -11,7 +11,7 @@ from typing import Sequence
 
 def native_commands(runner: str = "cargo") -> list[list[str]]:
     profile = ["--config", ".github/ci-profile.toml", "--profile", "ci"]
-    workspace = ["--locked", "--workspace", "--features", "nebula/gpui-test-support", "--timings"]
+    workspace = ["--locked", "--workspace", "--features", "pebrel/gpui-test-support", "--timings"]
     if runner == "cargo":
         tests = [["cargo", "test", *profile, *workspace]]
     elif runner == "nextest":
@@ -33,7 +33,7 @@ def native_commands(runner: str = "cargo") -> list[list[str]]:
         # dependencies, while metadata-only check output cannot link the tests.
         # Keep the actual production feature graph independently checked.
         [
-            "cargo", "check", "--locked", *profile, "-p", "nebula", "--bin", "pebrel",
+            "cargo", "check", "--locked", *profile, "-p", "pebrel", "--bin", "pebrel",
             "--features", "gpui-shell", "--timings",
         ],
     ]

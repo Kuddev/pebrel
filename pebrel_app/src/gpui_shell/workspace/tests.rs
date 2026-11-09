@@ -1,0 +1,1006 @@
+//! `workspace.rs` 单元测试。
+
+use super::*;
+
+#[test]
+fn ssh_host_icons_are_confined_to_the_selected_configuration_directory() {
+    let temporary = tempfile::tempdir().unwrap();
+    let legacy = temporary.path().join("Nebula");
+    let isolated = temporary.path().join("isolated");
+    let save_icon = |directory: &Path, host: &str, icon: &str| {
+        let mut profiles = crate::ssh_profiles::SshProfiles::default();
+        let mut profile = profiles.for_destination(host);
+        profile.icon = Some(icon.to_owned());
+        profiles.upsert(profile);
+        profiles.save(&directory.join("ssh_profiles.json")).unwrap();
+    };
+    save_icon(&legacy, "private@legacy.example", "ubuntu");
+    assert!(ssh_host_icon_ids(&isolated).is_empty());
+    save_icon(&isolated, "fixture@isolated.example", "debian");
+    assert_eq!(
+        ssh_host_icon_ids(&isolated),
+        [("fixture@isolated.example".to_owned(), "debian".to_owned())].into()
+    );
+    assert_eq!(
+        ssh_host_icon_ids(&legacy),
+        [("private@legacy.example".to_owned(), "ubuntu".to_owned())].into()
+    );
+}
+
+#[test]
+fn settings_only_fold_the_sidebar_in_sidebar_tab_mode() {
+    assert!(settings_should_fold_sidebar(pebrel_settings::TabsPositionName::Sidebar));
+    assert!(!settings_should_fold_sidebar(pebrel_settings::TabsPositionName::Top));
+}
+
+#[cfg(feature = "gpui-test-support")]
+mod title_bar_panel_control_tests {
+    use super::*;
+    use gpui::{Modifiers, TestAppContext, point};
+
+    #[derive(Default)]
+    struct TitleBarPanelControlProbe {
+        parent_mouse_downs: usize,
+        tab_count: usize,
+    }
+
+    impl Render for TitleBarPanelControlProbe {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.parent_mouse_downs += 1),
+                )
+                .child(div().w(px(64.0)).h(px(48.0)).flex().items_end().child(
+                    super::top_tabs::top_new_tab_control(
+                        crate::i18n::UiLanguage::EnUs,
+                        cx.listener(|this, _, _, _| this.tab_count += 1),
+                    ),
+                ))
+        }
+    }
+
+    #[gpui::test]
+    fn top_new_tab_call_site_creates_tab_without_arming_title_bar(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (probe, cx) = cx.add_window_view(|_, _| TitleBarPanelControlProbe {
+            tab_count: 1,
+            ..Default::default()
+        });
+        cx.simulate_click(point(px(16.0), px(32.0)), Modifiers::default());
+
+        let (parent_mouse_downs, tab_count) =
+            probe.read_with(cx, |probe, _| (probe.parent_mouse_downs, probe.tab_count));
+        assert_eq!(tab_count, 2, "顶部加号一次左键必须创建一个新标签");
+        assert_eq!(parent_mouse_downs, 0, "面板按钮不得启动标题栏拖拽起手");
+    }
+
+    #[derive(Default)]
+    struct TopTabGeometryProbe(pebrel_settings::DensityName);
+
+    impl Render for TopTabGeometryProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            h_flex()
+                .w(px(400.0))
+                .h(px(48.0))
+                .items_end()
+                .child(
+                    div()
+                        .debug_selector(|| "top-tab-geometry-probe".to_owned())
+                        .w(px(160.0))
+                        .h(px(super::tab_scroll::tab_row_height(self.0))),
+                )
+                .child(super::top_tabs::top_tab_action_slot(
+                    self.0,
+                    super::top_tabs::top_new_tab_control(
+                        crate::i18n::UiLanguage::EnUs,
+                        |_, _, _| {},
+                    )
+                    .debug_selector(|| "top-new-tab-geometry-probe".to_owned()),
+                ))
+                .child(super::top_tabs::top_tab_action_slot(
+                    self.0,
+                    h_flex().debug_selector(|| "top-tabs-menu-geometry-probe".to_owned()).child(
+                        super::top_tabs::top_tabs_menu_button(false, crate::i18n::UiLanguage::EnUs),
+                    ),
+                ))
+        }
+    }
+
+    fn vertical_center(bounds: Bounds<Pixels>) -> f32 {
+        f32::from(bounds.origin.y + bounds.size.height * 0.5)
+    }
+
+    #[gpui::test]
+    fn top_tab_action_buttons_share_the_tab_vertical_center(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (probe, cx) = cx.add_window_view(|_, _| TopTabGeometryProbe::default());
+        for (density, height) in [
+            (pebrel_settings::DensityName::Standard, 34.0),
+            (pebrel_settings::DensityName::Compact, 32.0),
+            (pebrel_settings::DensityName::Standard, 34.0),
+        ] {
+            probe.update(cx, |probe, cx| {
+                probe.0 = density;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let tab = cx.debug_bounds("top-tab-geometry-probe").expect("tab bounds");
+            let new_tab = cx.debug_bounds("top-new-tab-geometry-probe").expect("new-tab bounds");
+            let menu = cx.debug_bounds("top-tabs-menu-geometry-probe").expect("menu bounds");
+
+            assert_eq!(f32::from(tab.size.height), height);
+            assert_eq!(f32::from(new_tab.size.height), 32.0);
+            assert_eq!(f32::from(menu.size.height), 32.0);
+            assert_eq!(vertical_center(new_tab), vertical_center(tab));
+            assert_eq!(vertical_center(menu), vertical_center(tab));
+        }
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+mod sidebar_new_tab_tests {
+    use super::*;
+    use gpui::{Modifiers, TestAppContext};
+
+    #[derive(Default)]
+    struct SidebarNewTabProbe {
+        parent_mouse_downs: usize,
+        parent_clicks: usize,
+        new_tabs: usize,
+    }
+
+    impl Render for SidebarNewTabProbe {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let hover_group: SharedString = "sidebar-new-tab-test-hover".into();
+            h_flex()
+                .id("sidebar-new-tab-test-parent")
+                .group(hover_group.clone())
+                .w(px(200.0))
+                .h(px(34.0))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.parent_mouse_downs += 1),
+                )
+                .on_click(cx.listener(|this, _, _, _| this.parent_clicks += 1))
+                .child(div().flex_1())
+                .child(
+                    super::sidebar::sidebar_new_tab_control(
+                        hover_group,
+                        cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.new_tabs += 1;
+                        }),
+                    )
+                    .debug_selector(|| "sidebar-new-tab-probe".to_owned())
+                    .child("+"),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn sidebar_new_tab_click_after_header_hover_reaches_the_real_call_site(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let (probe, cx) = cx.add_window_view(|_, _| SidebarNewTabProbe::default());
+        let bounds = cx.debug_bounds("sidebar-new-tab-probe").expect("sidebar plus bounds");
+        let center = gpui::point(
+            bounds.origin.x + bounds.size.width * 0.5,
+            bounds.origin.y + bounds.size.height * 0.5,
+        );
+
+        cx.simulate_mouse_move(center, None, Modifiers::default());
+        cx.simulate_click(center, Modifiers::default());
+
+        let (parent_mouse_downs, parent_clicks, new_tabs) = probe.read_with(cx, |probe, _| {
+            (probe.parent_mouse_downs, probe.parent_clicks, probe.new_tabs)
+        });
+        assert_eq!(new_tabs, 1, "hover 后点击侧栏加号必须创建标签");
+        assert_eq!(parent_mouse_downs, 0, "加号按下不得给 TABS 分区标题上膛");
+        assert_eq!(parent_clicks, 0, "加号点击不得同时折叠 TABS 分区");
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+mod tab_rename_paste_tests {
+    use super::*;
+    use gpui::{ClipboardItem, TestAppContext};
+    use gpui_component::input::{Input, InputState};
+
+    struct TabRenamePasteProbe {
+        input: Entity<InputState>,
+        workspace_paste_actions: usize,
+        terminal_pastes: usize,
+    }
+
+    impl Render for TabRenamePasteProbe {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let input = self.input.clone();
+            div()
+                .size_full()
+                .on_action(cx.listener(move |this, _: &PasteClipboard, window, cx| {
+                    this.workspace_paste_actions += 1;
+                    if input.read(cx).focus_handle(cx).is_focused(window) {
+                        cx.propagate();
+                    } else {
+                        this.terminal_pastes += 1;
+                    }
+                }))
+                .child(Input::new(&self.input))
+        }
+    }
+
+    #[gpui::test]
+    fn focused_tab_rename_paste_shortcut_reaches_input_without_pasting_terminal(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            super::init(cx);
+        });
+        let mut probe = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| InputState::new(window, cx));
+            input.update(cx, |state, cx| {
+                state.set_value("old-tab", window, cx);
+                state.focus(window, cx);
+            });
+            let view = cx.new(|_| TabRenamePasteProbe {
+                input,
+                workspace_paste_actions: 0,
+                terminal_pastes: 0,
+            });
+            probe = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let probe = probe.expect("test window must publish the rename probe");
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("renamed-tab".to_owned()));
+            window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+        });
+
+        let paste_shortcut = match crate::platform::Platform::current() {
+            crate::platform::Platform::MacOS => "cmd-v",
+            _ => "ctrl-v",
+        };
+        cx.simulate_keystrokes(paste_shortcut);
+
+        let (value, workspace_paste_actions, terminal_pastes) = probe.read_with(cx, |probe, cx| {
+            (
+                probe.input.read(cx).value().to_owned(),
+                probe.workspace_paste_actions,
+                probe.terminal_pastes,
+            )
+        });
+        assert_eq!(value, "renamed-tab", "平台粘贴快捷键必须替换重命名框当前选区");
+        assert_eq!(workspace_paste_actions, 0, "输入框上下文不得命中终端粘贴动作");
+        assert_eq!(terminal_pastes, 0, "重命名框聚焦时不得向背后的终端粘贴");
+    }
+}
+
+#[test]
+fn gpui_binding_combo_maps_plus_minus_and_digits() {
+    assert_eq!(gpui_binding_combo("ctrl+plus"), "ctrl-+");
+    assert_eq!(gpui_binding_combo("ctrl+minus"), "ctrl--");
+    assert_eq!(gpui_binding_combo("ctrl+digit1"), "ctrl-1");
+    assert!(
+        custom_workspace_binding("ctrl+shift+e", &crate::config::Action::CreateNewWindow).is_some()
+    );
+}
+
+#[test]
+fn paste_keymap_keeps_component_inputs_and_terminals_in_separate_contexts() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
+    let keymap = Keymap::new(vec![
+        KeyBinding::new("ctrl-v", PasteClipboard, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
+        KeyBinding::new("ctrl-v", gpui_component::input::Paste, Some("Input")),
+    ]);
+    let key = [Keystroke::parse("ctrl-v").unwrap()];
+
+    let input = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let (bindings, pending) = keymap.bindings_for_input(&key, &input);
+    assert!(!pending);
+    assert_eq!(bindings.len(), 1);
+    assert!(bindings[0].action().as_any().is::<gpui_component::input::Paste>());
+
+    let terminal = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let (bindings, pending) = keymap.bindings_for_input(&key, &terminal);
+    assert!(!pending);
+    assert_eq!(bindings.len(), 1);
+    assert!(bindings[0].action().as_any().is::<PasteClipboard>());
+}
+
+/// 复制与粘贴同型分流：ctrl-c 在终端上下文命中 CopySelection（有选区复制、
+/// 无选区经 handler propagate 落成 ^C），在输入框上下文命中 Input 自己的 Copy——
+/// 重命名/设置页输入框的 ctrl-c 复制框内文本，不会拷终端选区。
+#[test]
+fn copy_keymap_keeps_component_inputs_and_terminals_in_separate_contexts() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
+    let keymap = Keymap::new(vec![
+        KeyBinding::new("ctrl-c", CopySelection, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
+        KeyBinding::new("ctrl-c", gpui_component::input::Copy, Some("Input")),
+    ]);
+    let key = [Keystroke::parse("ctrl-c").unwrap()];
+
+    let input = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let (bindings, pending) = keymap.bindings_for_input(&key, &input);
+    assert!(!pending);
+    assert_eq!(bindings.len(), 1);
+    assert!(bindings[0].action().as_any().is::<gpui_component::input::Copy>());
+
+    let terminal = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let (bindings, pending) = keymap.bindings_for_input(&key, &terminal);
+    assert!(!pending);
+    assert_eq!(bindings.len(), 1);
+    assert!(bindings[0].action().as_any().is::<CopySelection>());
+
+    // 默认表与镜像清单同步：ctrl-c 必须真的注册在默认绑定里。
+    let bindings = default_workspace_bindings();
+    let binding = bindings.iter().find(|binding| {
+        binding
+            .keystrokes()
+            .first()
+            .is_some_and(|stroke| stroke.inner() == &Keystroke::parse("ctrl-c").unwrap())
+    });
+    if cfg!(target_os = "macos") {
+        assert!(binding.is_none());
+        assert!(!STATIC_DEFAULT_COMBOS.contains(&"ctrl-c"));
+        return;
+    }
+    let Some(binding) = binding else {
+        panic!("ctrl-c 缺省必须绑到 CopySelection");
+    };
+    assert!(binding.action().name().ends_with("CopySelection"), "ctrl-c 应映射到 CopySelection");
+    assert!(STATIC_DEFAULT_COMBOS.contains(&"ctrl-c"), "静态默认键清单也要同步增 ctrl-c");
+}
+
+/// Shift+Insert 在 Windows/Linux 终端惯例里是粘贴：必须命中终端上下文的
+/// PasteClipboard，而不是被编成 `\x1b[2;2~` 发进 PTY（agent 输入框因此收不到
+/// 粘贴）。作用域只给终端——输入框上下文不命中，避免抢组件自己的按键。
+#[test]
+fn shift_insert_pastes_into_the_terminal_context_only() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
+    let bindings = default_workspace_bindings();
+    let binding = bindings.iter().find(|binding| {
+        binding
+            .keystrokes()
+            .first()
+            .is_some_and(|stroke| stroke.inner() == &Keystroke::parse("shift-insert").unwrap())
+    });
+    if std::env::consts::OS == "macos" {
+        assert!(binding.is_none(), "macOS 维持 Insert 透传，不注册粘贴");
+        return;
+    }
+    let binding = binding.expect("非 macOS 缺省必须注册 shift-insert 粘贴");
+    assert!(binding.action().as_any().is::<PasteClipboard>());
+
+    let input = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let key = [Keystroke::parse("shift-insert").unwrap()];
+    let (hits, pending) = Keymap::new(vec![binding.clone()]).bindings_for_input(&key, &input);
+    assert!(!pending && hits.is_empty(), "输入框上下文不得被终端粘贴键截获");
+
+    let terminal = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let (hits, pending) = Keymap::new(vec![binding.clone()]).bindings_for_input(&key, &terminal);
+    assert!(!pending && hits.len() == 1);
+    assert!(hits[0].action().as_any().is::<PasteClipboard>());
+    assert!(STATIC_DEFAULT_COMBOS.contains(&"shift-insert"), "静态默认键清单要同步 shift-insert");
+}
+
+#[test]
+fn pane_card_divider_reaches_the_window_top_without_moving_its_bottom() {
+    let card = Bounds::new(gpui::point(px(230.0), px(48.0)), size(px(850.0), px(672.0)));
+    let divider = pane_card_divider_bounds(card, 1.0, 1.5).expect("侧栏存在时必须画分界线");
+
+    assert_eq!(f32::from(divider.origin.x), 230.0);
+    assert_eq!(f32::from(divider.origin.y), 0.0);
+    assert_eq!(f32::from(divider.size.height), 720.0);
+    assert_eq!(
+        f32::from(divider.origin.y + divider.size.height),
+        f32::from(card.origin.y + card.size.height),
+        "向上延伸不能越过原来的正文底边"
+    );
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 3.0] {
+        let line = pane_card_divider_bounds(card, 1.0, scale).unwrap();
+        assert!(
+            (f32::from(line.size.width) * scale - 1.0).abs() < f32::EPSILON,
+            "default divider must remain one physical pixel at scale {scale}"
+        );
+    }
+    let wide = pane_card_divider_bounds(card, 2.0, 1.5).unwrap();
+    assert_eq!(f32::from(wide.size.width), 2.0, "explicit wider dividers retain their size");
+}
+
+#[test]
+fn pane_card_divider_requires_both_width_and_a_real_sidebar_boundary() {
+    let no_sidebar = Bounds::new(gpui::point(px(0.0), px(48.0)), size(px(1080.0), px(672.0)));
+    assert!(pane_card_divider_bounds(no_sidebar, 1.0, 1.5).is_none());
+
+    let sidebar = Bounds::new(gpui::point(px(230.0), px(48.0)), size(px(850.0), px(672.0)));
+    assert!(pane_card_divider_bounds(sidebar, 0.0, 1.5).is_none());
+}
+
+#[test]
+fn split_drag_preview_moves_only_the_overlay_divider() {
+    let viewport = pebrel_split::Rect::new(100.0, 40.0, 802.0, 500.0);
+    let visual = split_drag_visual_geometry(SplitDirection::LeftRight, viewport, 0.25, None);
+
+    assert_eq!(visual.divider, pebrel_split::Rect::new(300.0, 40.0, 2.0, 500.0));
+    assert_eq!(visual.close_area, None);
+
+    let vertical = split_drag_visual_geometry(
+        SplitDirection::TopBottom,
+        pebrel_split::Rect::new(20.0, 30.0, 700.0, 402.0),
+        0.75,
+        None,
+    );
+    assert_eq!(vertical.divider, pebrel_split::Rect::new(20.0, 330.0, 700.0, 2.0));
+}
+
+#[test]
+fn split_drag_close_preview_marks_only_the_squeezed_child() {
+    let viewport = pebrel_split::Rect::new(100.0, 40.0, 802.0, 500.0);
+    let first = split_drag_visual_geometry(
+        SplitDirection::LeftRight,
+        viewport,
+        pebrel_split::preview_ratio(0.01),
+        pebrel_split::drag_close_target(0.01),
+    );
+    assert_eq!(first.divider, pebrel_split::Rect::new(116.0, 40.0, 2.0, 500.0));
+    assert_eq!(first.close_area, Some(pebrel_split::Rect::new(100.0, 40.0, 16.0, 500.0)));
+
+    let second = split_drag_visual_geometry(
+        SplitDirection::TopBottom,
+        pebrel_split::Rect::new(20.0, 30.0, 700.0, 402.0),
+        pebrel_split::preview_ratio(0.99),
+        pebrel_split::drag_close_target(0.99),
+    );
+    assert_eq!(second.divider, pebrel_split::Rect::new(20.0, 422.0, 700.0, 2.0));
+    assert_eq!(second.close_area, Some(pebrel_split::Rect::new(20.0, 424.0, 700.0, 8.0)));
+}
+
+#[test]
+fn ai_hook_routing_never_falls_back_for_a_stale_exact_pane() {
+    let pane_ids = [7u64, 11];
+    assert_eq!(ai_hook_target_pane(&pane_ids, Some(11), Some(7)), Some(11));
+    assert_eq!(ai_hook_target_pane(&pane_ids, Some(99), Some(7)), None);
+    assert_eq!(ai_hook_target_pane(&pane_ids, None, Some(7)), Some(7));
+    assert_eq!(ai_hook_target_pane(&pane_ids, None, None), None);
+}
+
+#[test]
+fn restored_agent_command_honors_resume_ai_without_changing_session_data() {
+    let agent = crate::session::AgentSession {
+        session_file: None,
+        source: "claude".to_owned(),
+        session_id: Some("session-42".to_owned()),
+    };
+
+    assert_eq!(
+        restored_agent_command(true, Some(&agent)),
+        Some("claude --resume session-42".to_owned())
+    );
+    assert_eq!(restored_agent_command(false, Some(&agent)), None);
+    assert_eq!(restored_agent_command(true, None), None);
+}
+
+#[test]
+fn new_tab_position_uses_the_shared_runtime_semantics() {
+    use pebrel_settings::NewTabPositionName::{AfterCurrent, End};
+
+    assert_eq!(new_tab_insert_index(AfterCurrent, 1, 4), 2);
+    assert_eq!(new_tab_insert_index(End, 1, 4), 4);
+    assert_eq!(new_tab_insert_index(AfterCurrent, 9, 2), 2);
+    assert_eq!(new_tab_insert_index(AfterCurrent, 0, 0), 0);
+}
+
+/// 标签位置左右移动的落点：不环绕，两端各自到头就是 no-op。环绕会让"按住
+/// 键把标签推到最左"突然跳到最右端，而标签栏此时正滚在另一头，人就找不着
+/// 自己的标签了。
+#[test]
+fn moving_a_tab_stops_at_both_ends_instead_of_wrapping() {
+    use super::key_actions::move_target;
+
+    assert_eq!(move_target(1, 4, true), Some(2));
+    assert_eq!(move_target(1, 4, false), Some(0));
+    // 两端到头。
+    assert_eq!(move_target(0, 4, false), None);
+    assert_eq!(move_target(3, 4, true), None);
+    // 退化输入：单标签、空集合、越界 active 都不动。
+    assert_eq!(move_target(0, 1, true), None);
+    assert_eq!(move_target(0, 0, false), None);
+    assert_eq!(move_target(9, 4, true), None);
+}
+
+#[test]
+fn default_launch_tag_does_not_follow_later_default_shell_changes() {
+    use crate::session::LaunchSession;
+
+    let default_shell = crate::platform::shell::default_shell_id();
+    assert_eq!(
+        NebulaWorkspace::launch_shell_tag(&LaunchSession::Default).map(|tag| tag.to_string()),
+        Some(crate::shell_detect::shell_short_tag(&default_shell))
+    );
+}
+
+/// 分屏生命周期合同的树侧不变式：split 后叶集扩张、关到最后一个叶
+/// 判 WasRoot（宿主关整 tab）、中途摘叶塌缩并移交焦点。
+#[test]
+fn split_tree_lifecycle_matches_pane_contract() {
+    let mut tree = SplitTree::leaf(1u64);
+    assert!(tree.split_leaf(1, 2, SplitDirection::LeftRight, 0.5));
+    assert!(tree.split_leaf(2, 3, SplitDirection::TopBottom, 0.5));
+    assert_eq!(tree.leaves(), vec![1, 2, 3]);
+
+    // 摘中间叶：父节点塌缩，焦点移交幸存子树首叶。
+    assert_eq!(tree.remove_leaf(2), RemoveOutcome::Collapsed(3));
+    assert_eq!(tree.leaves(), vec![1, 3]);
+    // 摘到只剩一个：WasRoot=宿主应关整个 tab，树不再可用。
+    assert_eq!(tree.remove_leaf(1), RemoveOutcome::Collapsed(3));
+    assert_eq!(tree.remove_leaf(3), RemoveOutcome::WasRoot);
+    // 不存在的叶子不产生副作用。
+    let mut single = SplitTree::leaf(9u64);
+    assert_eq!(single.remove_leaf(4), RemoveOutcome::NotFound);
+}
+
+#[test]
+fn dock_tree_places_the_source_tree_on_the_nav_side() {
+    let docked = dock_tree(SplitTree::leaf(1u64), SplitTree::leaf(9u64), SplitNav::Left);
+    assert_eq!(docked.leaves(), vec![9, 1], "Left：source 树进 first 槽");
+    match &docked {
+        SplitTree::Split { direction: SplitDirection::LeftRight, ratio, .. } => {
+            assert!((ratio - 0.5).abs() < f32::EPSILON, "dock 恒为 50/50 根分割");
+        },
+        _ => panic!("dock 应产生根级左右分割"),
+    }
+
+    // 多叶源树整树挂入，叶序保持源树内部顺序。
+    let mut source = SplitTree::leaf(7u64);
+    assert!(source.split_leaf(7, 8, SplitDirection::TopBottom, 0.5));
+    let docked = dock_tree(SplitTree::leaf(1u64), source, SplitNav::Down);
+    assert_eq!(docked.leaves(), vec![1, 7, 8], "Down：source 树进 second 槽");
+    match &docked {
+        SplitTree::Split { direction: SplitDirection::TopBottom, .. } => {},
+        _ => panic!("Down 应产生上下分割"),
+    }
+}
+
+#[test]
+fn copying_cwd_accepts_reported_guest_paths_without_host_filesystem_access() {
+    use crate::display::command_palette::PaletteAction;
+
+    assert!(!NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, false, false));
+    assert!(!NebulaWorkspace::palette_action_available(&PaletteAction::RevealCwd, false, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, false, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, true, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::RevealCwd, true, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::NewTab, false, false));
+}
+
+/// 新建终端弹窗：默认 shell 必须占首行，因为「开弹窗 → 回车」是旧壳
+/// 点 "+" 后最常走的一条路，它必须等于「开一个默认终端」。
+fn palette_ssh_hosts(hosts: &[(&str, &str)]) -> crate::gpui_shell::ssh_hosts::SshHostLists {
+    let mut lists = crate::gpui_shell::ssh_hosts::SshHostLists::default();
+    for (host, label) in hosts {
+        let mut profile = lists.profiles.for_destination(host);
+        profile.label = Some((*label).to_owned());
+        lists.profiles.upsert(profile);
+    }
+    lists
+}
+
+#[test]
+fn shell_palette_puts_the_default_shell_first() {
+    let shells = ["pwsh", "powershell", "cmd", "nu"]
+        .into_iter()
+        .map(|id| crate::shell_detect::DetectedShell {
+            name: crate::shell_detect::display_name_for_id(id),
+            id: id.to_owned(),
+            program: format!("{id}.exe"),
+            args: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let language = crate::display::UiLanguage::ZhCn;
+
+    // 检测顺序里 nu 在最后，设成默认后必须提到首行。
+    let rows = shell_palette_rows(
+        shells.clone(),
+        Vec::new(),
+        &palette_ssh_hosts(&[("box.example", "")]),
+        "nu",
+        language,
+        1.0,
+    );
+    assert_eq!(rows.len(), 5, "四台 shell + 一台 SSH");
+    assert!(matches!(
+        &rows[0].action,
+        WorkspacePaletteAction::LaunchShell(shell) if shell.id == "nu"
+    ));
+    assert_eq!(rows[0].group, "推荐");
+    let rest: Vec<_> = rows[1..4]
+        .iter()
+        .map(|row| match &row.action {
+            WorkspacePaletteAction::LaunchShell(shell) => shell.id.as_str(),
+            _ => "?",
+        })
+        .collect();
+    assert_eq!(rest, ["pwsh", "powershell", "cmd"]);
+    assert!(rows[1..4].iter().all(|row| row.group == "所有 Shell"));
+    assert!(matches!(
+        &rows[4].action,
+        WorkspacePaletteAction::LaunchSshHost(host) if host == "box.example"
+    ));
+    assert_eq!(rows[4].group, "SSH 主机");
+
+    // 默认 id 没在检测结果里（WSL 发行版被卸载等）：不置顶也不 panic。
+    let rows =
+        shell_palette_rows(shells, Vec::new(), &Default::default(), "wsl:Ghost", language, 1.0);
+    assert!(matches!(
+        &rows[0].action,
+        WorkspacePaletteAction::LaunchShell(shell) if shell.id == "pwsh"
+    ));
+    assert_eq!(rows[0].group, "所有 Shell");
+}
+
+/// 启动器 SSH 行的"主机名称"：起过名的显示别名、hint 给真实地址；没起名
+/// 回落地址本身、hint 保持 "SSH"。搜索词必须同时覆盖别名与地址。
+#[test]
+fn shell_palette_ssh_rows_show_the_configured_host_name() {
+    let rows = shell_palette_rows(
+        Vec::new(),
+        Vec::new(),
+        &palette_ssh_hosts(&[("root@box.example", "生产机"), ("plain.example", "")]),
+        "cmd",
+        crate::display::UiLanguage::ZhCn,
+        1.0,
+    );
+    assert_eq!(rows.len(), 2);
+
+    let named = &rows[0];
+    assert_eq!(named.label, "生产机");
+    assert_eq!(named.hint, "root@box.example");
+    assert!(named.search.contains("生产机"));
+    assert!(named.search.contains("root@box.example"));
+    assert!(matches!(
+        &named.action,
+        WorkspacePaletteAction::LaunchSshHost(host) if host == "root@box.example"
+    ));
+
+    let plain = &rows[1];
+    assert_eq!(plain.label, "plain.example");
+    assert_eq!(plain.hint, "SSH");
+    assert!(matches!(
+        &plain.action,
+        WorkspacePaletteAction::LaunchSshHost(host) if host == "plain.example"
+    ));
+}
+
+/// 回归锁：新建终端弹窗里，没有品牌贴图的 shell 不能空着——必须回落到按 id
+/// 取字的 Nerd Font 字形。之前这一列只填了 `icon`，于是 zsh、csh、ksh 这些
+/// 整行左边什么都没有。
+#[test]
+fn shell_palette_falls_back_to_an_id_glyph_when_brand_art_is_absent() {
+    let shells = ["zsh", "csh", "ksh", "bash", "pwsh"]
+        .into_iter()
+        .map(|id| crate::shell_detect::DetectedShell {
+            name: crate::shell_detect::display_name_for_id(id),
+            id: id.to_owned(),
+            program: format!("/bin/{id}"),
+            args: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let rows = shell_palette_rows(
+        shells,
+        Vec::new(),
+        &Default::default(),
+        "zsh",
+        crate::display::UiLanguage::ZhCn,
+        1.0,
+    );
+    let mut brandless = 0;
+    for row in &rows {
+        let WorkspacePaletteAction::LaunchShell(shell) = &row.action else { continue };
+        assert_eq!(
+            row.icon.is_none(),
+            row.icon_glyph.is_some(),
+            "`{}` 必须恰好有一种图标来源（品牌贴图或回落字形）",
+            shell.id
+        );
+        if row.icon.is_none() {
+            brandless += 1;
+            assert_eq!(
+                row.icon_glyph,
+                crate::shell_detect::icon_for_id(&shell.id).chars().next(),
+                "`{}` 的回落字形要与共享图标口径一致",
+                shell.id
+            );
+        }
+    }
+    assert!(brandless >= 3, "zsh/csh/ksh 都没有品牌贴图，都要有字形: {brandless}");
+}
+
+#[test]
+fn shell_palette_includes_imported_terminal_profiles() {
+    let profile = crate::config::ui_config::Profile {
+        name: "Portable PowerShell".to_owned(),
+        command: r"D:\Tools\pwsh.exe".to_owned(),
+        args: vec!["-NoLogo".to_owned()],
+        cwd: None,
+        shell_id: Some("pwsh".to_owned()),
+        terminal_profile_id: Some("pwsh-deadbeef".to_owned()),
+    };
+    let id = profile.settings_id().expect("imported profile id");
+    let rows = shell_palette_rows(
+        Vec::new(),
+        vec![profile],
+        &Default::default(),
+        &id,
+        crate::display::UiLanguage::ZhCn,
+        1.0,
+    );
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].group, "推荐");
+    assert!(matches!(
+        &rows[0].action,
+        WorkspacePaletteAction::LaunchProfile(profile)
+            if profile.command == r"D:\Tools\pwsh.exe"
+    ));
+}
+
+#[test]
+fn wsl_file_tree_terminal_changes_directory_without_forcing_bash() {
+    let launch = super::file_tree::wsl_terminal_launch_at(
+        "WSL · Ubuntu".to_owned(),
+        "wsl.exe".to_owned(),
+        "Ubuntu".to_owned(),
+        "/home/user/project".to_owned(),
+    );
+    let crate::session::LaunchSession::Shell { program, args, .. } = launch else {
+        panic!("WSL file-tree launch must remain a shell session");
+    };
+
+    assert_eq!(program, "wsl.exe");
+    assert_eq!(args, ["--cd", "/home/user/project", "-d", "Ubuntu"]);
+    assert!(!args.iter().any(|arg| arg == "--exec" || arg.eq_ignore_ascii_case("bash")));
+
+    // A path wsl.exe cannot receive only enters the distribution.
+    let launch = super::file_tree::wsl_terminal_launch_at(
+        String::new(),
+        "wsl.exe".to_owned(),
+        "Ubuntu".to_owned(),
+        "/tmp/i\" touch /tmp/x #".to_owned(),
+    );
+    let crate::session::LaunchSession::Shell { args, .. } = launch else { unreachable!() };
+    assert_eq!(args, ["-d", "Ubuntu"]);
+}
+
+#[test]
+fn escape_does_not_bind_globally_when_the_terminal_is_focused() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
+    let keymap = Keymap::new(vec![KeyBinding::new(
+        "escape",
+        CloseCommandPalette,
+        Some(PALETTE_KEY_CONTEXT),
+    )]);
+    let terminal =
+        [KeyContext::parse("Root").unwrap(), KeyContext::parse("NebulaTerminal").unwrap()];
+    let (bindings, pending) =
+        keymap.bindings_for_input(&[Keystroke::parse("escape").unwrap()], &terminal);
+    assert!(!pending);
+    assert!(
+        bindings.iter().all(|binding| !binding.action().as_any().is::<CloseCommandPalette>()),
+        "终端聚焦时 Esc 不得命中 CloseCommandPalette"
+    );
+
+    let palette =
+        [KeyContext::parse("Root").unwrap(), KeyContext::parse(PALETTE_KEY_CONTEXT).unwrap()];
+    let (bindings, pending) =
+        keymap.bindings_for_input(&[Keystroke::parse("escape").unwrap()], &palette);
+    assert!(!pending);
+    assert!(bindings[0].action().as_any().is::<CloseCommandPalette>());
+}
+
+#[test]
+fn palette_now_exposes_export_workspace_and_git_panel() {
+    use crate::display::command_palette::PaletteAction;
+
+    assert!(NebulaWorkspace::palette_action_supported(&PaletteAction::ExportWorkspace));
+    assert!(NebulaWorkspace::palette_action_supported(&PaletteAction::ToggleGitPanel));
+}
+
+#[test]
+fn ai_session_palette_exposes_verified_resume_and_fork_commands() {
+    let sessions = vec![
+        crate::ai_sessions::AiSession::test_session(
+            crate::ai_agents::AgentKind::Claude,
+            "claude-42",
+            "Fix resize",
+        ),
+        crate::ai_sessions::AiSession::test_session(
+            crate::ai_agents::AgentKind::Aider,
+            "aider-42",
+            "Unsupported",
+        ),
+    ];
+    let rows = ai_session_palette_rows(sessions, crate::i18n::UiLanguage::EnUs);
+    assert_eq!(rows.len(), 2, "Claude supports resume and fork; Aider supports neither");
+    assert_eq!(rows[0].label, "Fix resize");
+    assert!(rows[0].hint.starts_with("Resume · "));
+    assert_eq!(rows[1].label, "Fork · Fix resize");
+    assert!(matches!(
+        &rows[0].action,
+        WorkspacePaletteAction::RunAiSession { command, .. }
+            if command == "claude --resume claude-42"
+    ));
+    assert!(matches!(
+        &rows[1].action,
+        WorkspacePaletteAction::RunAiSession { command, .. }
+            if command == "claude --resume claude-42 --fork-session"
+    ));
+}
+
+/// 旧壳 CommitRename：trim 后空串清掉 custom_name，恢复 cwd 自动名。
+#[test]
+fn tab_chrome_commit_empty_clears_custom_name() {
+    let mut meta = TabMeta { custom_name: Some("manual".to_owned()), ..TabMeta::default() };
+    apply_commit_rename(&mut meta, "   \t  ");
+    assert_eq!(meta.custom_name, None);
+
+    apply_commit_rename(&mut meta, "  my-tab  ");
+    assert_eq!(meta.custom_name.as_deref(), Some("my-tab"));
+}
+
+/// 旧壳 CancelRename：丢掉缓冲，custom_name 原样保留（含启动时写入的「分叉」）。
+#[test]
+fn tab_chrome_cancel_leaves_custom_name() {
+    let mut named = TabMeta { custom_name: Some("Claude 分叉".to_owned()), ..TabMeta::default() };
+    apply_cancel_rename(&mut named);
+    assert_eq!(named.custom_name.as_deref(), Some("Claude 分叉"));
+
+    let mut auto = TabMeta::default();
+    apply_cancel_rename(&mut auto);
+    assert_eq!(auto.custom_name, None);
+}
+
+/// 旧壳 `chrome_tab_label`：有 cwd 就用末级目录名，不用 OSC 标题 / `NEBULA|` 整串。
+#[test]
+fn tab_chrome_label_uses_cwd_last_component() {
+    use crate::gpui_shell::terminal::view::last_path_component;
+
+    assert_eq!(last_path_component(r"D:\work\nebula").as_deref(), Some("nebula"));
+    assert_eq!(last_path_component("/home/me/src/").as_deref(), Some("src"));
+    assert_eq!(last_path_component(r"C:\Users\me\").as_deref(), Some("me"));
+    assert_eq!(last_path_component("").as_deref(), None);
+    assert_eq!(last_path_component("///").as_deref(), None);
+}
+
+/// 侧栏拖宽热区必须对准主题真正画出来的那条分界。Nord 是铺满形态（卡缝 0 +
+/// 1px 竖线，线贴在侧栏槽位右缘），其余主题是浮起圆角卡（卡缝 8 + 无竖线，
+/// 分界是卡的可见左缘）。写死一个 8.0 只能照顾后者：Nord 下热区会整整偏右
+/// 7.5px，鼠标停在线上不出现拖拽光标。
+#[test]
+fn sidebar_resize_hot_zone_follows_the_theme_boundary() {
+    let nord = pebrel_settings::ThemeName::Nord.card_geometry();
+    assert_eq!((nord.gutter, nord.divider), (0.0, 1.0), "Nord 是铺满 + 竖线形态");
+    assert_eq!(sidebar_resize_offset_for(nord.divider, nord.gutter), 0.5, "对准 1px 线心");
+
+    let floating = pebrel_settings::ThemeCardGeometry {
+        radius: 14.0,
+        gutter: 8.0,
+        shadow: false,
+        divider: 0.0,
+    };
+    assert_eq!((floating.gutter, floating.divider), (8.0, 0.0), "显式自定义圆角仍按外缝定位");
+    assert_eq!(
+        sidebar_resize_offset_for(floating.divider, floating.gutter),
+        8.0,
+        "没有竖线时对准卡缝右侧的卡可见左缘"
+    );
+
+    // 热区宽度足以盖住线：线心两侧各 3px。
+    assert!(SIDEBAR_RESIZE_HANDLE_WIDTH * 0.5 > nord.divider);
+}
+
+/// 回归：冷恢复的 codex 目标停在 hooks 信任 / 目录选择 / 「已在别处打开」
+/// 提示上时，hook 报不了、探针拿不到 rollout，pane 一直是「未确认」。此前
+/// 快照把 `boot_attempts` 钉在启动时的 +1 值，1 Hz 自动保存永不归零——
+/// 三次正常退出后整个工作区被挪去 `session.crashed.json`。断路器只回答
+/// 「这次启动活到了第一次自动保存没有」，未确认的目标只随快照落盘、不计数。
+#[cfg(feature = "gpui-test-support")]
+mod boot_breaker_tests {
+    use super::*;
+    use crate::session::{AgentSession, LaunchSession, LayoutSession, TabSession};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn unconfirmed_agent_target_does_not_pin_the_boot_breaker(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            crate::gpui_shell::file_editor::init(cx);
+            super::super::init(cx);
+            cx.set_reduce_motion(true);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, mut window) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                )
+            });
+            workspace = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let workspace = workspace.unwrap();
+
+        let saved = AgentSession {
+            source: "codex".into(),
+            session_id: Some("saved-42".into()),
+            session_file: None,
+        };
+        let launch = LaunchSession::Shell {
+            name: "missing".into(),
+            program: "pebrel-test-missing-shell-executable".into(),
+            args: vec![],
+        };
+        let tab = TabSession {
+            cwd: String::new(),
+            custom_name: None,
+            color: None,
+            launch: Some(launch.clone()),
+            layout: Some(LayoutSession::Pane {
+                custom_name: None,
+                cwd: String::new(),
+                agent: Some(saved.clone()),
+                launch: Some(launch),
+            }),
+            active_pane: 0,
+        };
+        // 第三次启动：磁盘上的计数已被 `mark_boot_attempt` 抬到 2。
+        let mut session = crate::session::Session::new(0, vec![tab]);
+        session.boot_attempts = 2;
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.restore_update_session(&session, true, window, cx));
+                let pane = workspace.tabs.last().and_then(|tab| tab.focused_view()).unwrap();
+                assert!(pane.read(cx).recovery_pending(), "codex 目标尚未被 hook / 探针确认");
+
+                let snapshot = workspace.snapshot_session(cx);
+                assert_eq!(snapshot.boot_attempts, 0, "未确认的恢复目标不得钉住断路器计数");
+                assert!(
+                    crate::session::should_restore(&snapshot),
+                    "首次自动保存即让下次启动照常恢复"
+                );
+                let Some(LayoutSession::Pane { agent, .. }) =
+                    snapshot.tabs.last().and_then(|tab| tab.layout.as_ref())
+                else {
+                    panic!("restored tab must snapshot as a single pane");
+                };
+                assert_eq!(agent.as_ref(), Some(&saved), "恢复目标本身仍随快照落盘，下次照旧接续");
+            })
+        });
+    }
+}

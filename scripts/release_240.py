@@ -72,7 +72,7 @@ def source_commit() -> str:
 def prepare() -> None:
     data = request()
     source_commit()
-    manifest = tomllib.loads((ROOT / "nebula_app/Cargo.toml").read_text(encoding="utf-8"))
+    manifest = tomllib.loads((ROOT / "pebrel_app/Cargo.toml").read_text(encoding="utf-8"))
     if manifest["package"]["version"] != VERSION:
         raise ValueError("Cargo package version differs from the release request")
     stable_release.validate_notes(ROOT / NOTES, VERSION)

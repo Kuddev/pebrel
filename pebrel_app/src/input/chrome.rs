@@ -1,0 +1,1750 @@
+//! Nebula chrome, modal, tab, drawer, and context-menu pointer dispatch.
+
+use std::time::{Duration, Instant};
+
+use winit::event::{ElementState, MouseButton};
+
+use pebrel_terminal::event::EventListener;
+use pebrel_terminal::grid::{Dimensions, Scroll};
+use pebrel_terminal::term::ClipboardType;
+
+use crate::event::{ClickState, Event, EventType};
+use crate::scheduler::{TimerId, Topic};
+
+use super::{ActionContext, Processor};
+
+/// Fallback double/triple-click interval where the OS setting isn't
+/// available; Windows uses the user's control-panel value instead.
+#[cfg(not(windows))]
+const CLICK_THRESHOLD: Duration = Duration::from_millis(400);
+
+/// Multi-click interval: the user's system double-click time on Windows.
+#[cfg(windows)]
+pub(super) fn multi_click_time() -> Duration {
+    let ms = unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() };
+    Duration::from_millis(u64::from(ms))
+}
+
+#[cfg(not(windows))]
+pub(super) fn multi_click_time() -> Duration {
+    CLICK_THRESHOLD
+}
+
+/// Half the system double-click rectangle: how far apart two presses may
+/// land (per axis) and still count as one multi-click sequence.
+#[cfg(windows)]
+fn double_click_slop() -> (f32, f32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXDOUBLECLK, SM_CYDOUBLECLK,
+    };
+    let half = |v: i32| (v.max(4) as f32) / 2.0;
+    unsafe { (half(GetSystemMetrics(SM_CXDOUBLECLK)), half(GetSystemMetrics(SM_CYDOUBLECLK))) }
+}
+
+#[cfg(not(windows))]
+fn double_click_slop() -> (f32, f32) {
+    (4.0, 4.0)
+}
+
+impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
+    pub fn nebula_confirm_accept(&mut self, confirm: crate::display::NebulaConfirm) {
+        use crate::display::NebulaConfirm;
+        match confirm {
+            NebulaConfirm::EnableBackgroundImageCoverChrome => {
+                self.ctx.display().confirm_background_image_cover_chrome();
+            },
+            NebulaConfirm::EnablePanelResize => {
+                self.ctx.display().confirm_panel_resize();
+            },
+            NebulaConfirm::ClosePane { .. } => {
+                self.ctx.nebula_tab(crate::event::TabRequest::Close);
+            },
+            NebulaConfirm::CloseTab { index, .. } => {
+                self.ctx.nebula_tab(crate::event::TabRequest::CloseIndex(index));
+            },
+            NebulaConfirm::CloseWindow { .. } => {
+                self.ctx.nebula_tab(crate::event::TabRequest::CloseWindow);
+            },
+            NebulaConfirm::Paste { pane_id, text, bracketed, .. } => {
+                self.ctx.display().nebula_confirm = None;
+                // The window routes modal input to the originating pane. Keep
+                // this guard at the write boundary as a final invariant: a
+                // stale/reaped pane must never turn into a neighbouring paste.
+                if self.ctx.pane_id() == pane_id {
+                    self.ctx.paste_now(&text, bracketed);
+                }
+            },
+            NebulaConfirm::DeleteSsh { host, .. } => {
+                self.ctx.display().nebula_confirm = None;
+                if self.ctx.display().confirm_delete_ssh_host(&host) {
+                    self.schedule_ssh_delete_undo_expiry();
+                }
+            },
+            NebulaConfirm::DeleteSftp { entry } => {
+                self.ctx.display().sftp_confirm_delete(entry);
+            },
+            NebulaConfirm::DeleteFileTreePath { path, .. } => {
+                self.ctx.display().confirm_delete_file_tree(&path);
+            },
+            NebulaConfirm::InstallRequiredFont { .. } => {
+                self.ctx.display().nebula_confirm = None;
+                // 打开时现算目录：zip 包不带 fonts/ 副本，这里把内嵌字体
+                // 落盘后再开，保证目录里真有 ttf。
+                let directory = crate::font_install::ensure_bundled_font_on_disk();
+                self.ctx.open_path(&directory);
+            },
+            NebulaConfirm::BackupPassphrase { .. } => {
+                // 本地导出/恢复同步完成；远程动作返回请求，转成事件在后台
+                // 线程执行（打包、Argon2 与网络都不进 UI 线程）。
+                if let Some(request) = self.ctx.display().complete_backup_operation() {
+                    self.ctx.nebula_backup_remote(request);
+                }
+            },
+        }
+    }
+
+    /// Dismiss a confirmation without taking its primary action.
+    pub fn nebula_confirm_cancel(&mut self, confirm: crate::display::NebulaConfirm) {
+        if matches!(confirm, crate::display::NebulaConfirm::BackupPassphrase { .. }) {
+            self.ctx.display().cancel_backup_operation();
+            return;
+        }
+        if confirm.can_dismiss() {
+            self.ctx.display().nebula_confirm = None;
+        }
+    }
+
+    /// Keep timer creation and cancellation identical across keyboard, mouse,
+    /// and confirm-dialog paths. The delayed event owns only window routing;
+    /// sensitive credential state stays inside `Display`.
+    fn schedule_ssh_delete_undo_expiry(&mut self) {
+        let window_id = self.ctx.window().id();
+        let timer_id = TimerId::new(Topic::SshDeleteUndo, window_id);
+        let event = Event::new(EventType::SshDeleteUndoExpired, window_id);
+        let scheduler = self.ctx.scheduler_mut();
+        scheduler.unschedule(timer_id);
+        scheduler.schedule(event, crate::display::SSH_DELETE_UNDO_DURATION, false, timer_id);
+    }
+
+    /// Cancel expiry first so a late event cannot immediately dispose a host
+    /// that the user has just restored.
+    pub(super) fn undo_ssh_delete(&mut self) -> bool {
+        let window_id = self.ctx.window().id();
+        self.ctx.scheduler_mut().unschedule(TimerId::new(Topic::SshDeleteUndo, window_id));
+        self.ctx.display().undo_delete_ssh_host()
+    }
+
+    /// Advance the multi-click state machine for this press — exactly ONCE
+    /// per press, at the top of `on_mouse_press` (the platform's
+    /// click-count model). A press upgrades Click→Double→Triple only when it is the same
+    /// button, within the system double-click time AND within half a cell of
+    /// the previous press; anything else resets to a plain Click. The
+    /// distance gate keeps "click somewhere, then immediately click-drag
+    /// elsewhere" from being misread as a word/line drag.
+    fn advance_click_state(&mut self, button: MouseButton) -> ClickState {
+        let now = Instant::now();
+        let mouse = self.ctx.mouse();
+        let elapsed = now - mouse.last_click_timestamp;
+        let (last_x, last_y) = mouse.last_click_pos;
+        let (slop_x, slop_y) = double_click_slop();
+        let near = (mouse.x as f32 - last_x as f32).abs() <= slop_x
+            && (mouse.y as f32 - last_y as f32).abs() <= slop_y;
+        let state = match mouse.click_state {
+            _ if button != mouse.last_click_button || !near || elapsed >= multi_click_time() => {
+                ClickState::Click
+            },
+            ClickState::Click => ClickState::DoubleClick,
+            ClickState::DoubleClick => ClickState::TripleClick,
+            _ => ClickState::Click,
+        };
+        let pos = (self.ctx.mouse().x, self.ctx.mouse().y);
+        let mouse = self.ctx.mouse_mut();
+        mouse.last_click_timestamp = now;
+        mouse.last_click_button = button;
+        mouse.last_click_pos = pos;
+        mouse.click_state = state;
+        state
+    }
+
+    fn run_context_menu_action(&mut self, action: crate::display::ContextMenuAction) {
+        use crate::display::ContextMenuAction::*;
+        match action {
+            ForkAiSession(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::ForkAiSession(index));
+            },
+            DuplicateTab(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::Duplicate(index));
+            },
+            ExportTab(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::ExportTab(index));
+            },
+            SplitTabRight(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::SplitIndex {
+                    index,
+                    direction: crate::display::SplitDirection::LeftRight,
+                });
+            },
+            SplitTabDown(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::SplitIndex {
+                    index,
+                    direction: crate::display::SplitDirection::TopBottom,
+                });
+            },
+            RenameTab(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::BeginRename(index));
+            },
+            CloseTab(index) => {
+                self.ctx.nebula_tab(crate::event::TabRequest::CloseIndex(index));
+            },
+            SetTabColor { index, color } => {
+                self.ctx.nebula_tab(crate::event::TabRequest::SetColor { index, color });
+            },
+            ConnectSsh(index) => {
+                let host = self.ctx.display().nebula_ssh_hosts.get(index).cloned();
+                if let Some(host) = host {
+                    self.ctx.nebula_tab(crate::event::TabRequest::NewSsh(host));
+                }
+            },
+            OpenSftp(index) => {
+                let host = self.ctx.display().nebula_ssh_hosts.get(index).cloned();
+                if let Some(host) = host {
+                    self.ctx.nebula_open_sftp(host);
+                }
+            },
+            CopySshAddress(index) => {
+                let host = self.ctx.display().nebula_ssh_hosts.get(index).cloned();
+                if let Some(host) = host {
+                    self.ctx.clipboard_mut().store(ClipboardType::Clipboard, host);
+                }
+            },
+            EditSsh(index) => self.ctx.display().edit_ssh_host(index),
+            DeleteSsh(index) => self.ctx.display().request_delete_ssh_host(index),
+            DownloadSftp(index) => self.ctx.display().sftp_download_row(index),
+            RenameSftp(index) => self.ctx.display().sftp_begin_rename_row(index),
+            DeleteSftp(index) => self.ctx.display().sftp_request_delete_row(index),
+            RefreshSftp => self.ctx.display().sftp_refresh(),
+            UploadFilesSftp => self.ctx.display().sftp_pick_upload_files(),
+            UploadDirectorySftp => self.ctx.display().sftp_pick_upload_directory(),
+            NewDirectorySftp => self.ctx.display().sftp_begin_create_directory(),
+            OpenFileTree(row) => {
+                if let Some((path, _)) = self.ctx.display().file_tree_row_path(row) {
+                    self.ctx.open_path(&path);
+                }
+            },
+            RevealFileTree(row) => {
+                if let Some((path, _)) = self.ctx.display().file_tree_row_path(row) {
+                    self.ctx.reveal_in_file_manager(&path);
+                }
+            },
+            TerminalHereFileTree(row) => {
+                if let Some((path, is_dir)) = self.ctx.display().file_tree_row_path(row) {
+                    if is_dir {
+                        self.ctx.nebula_tab(crate::event::TabRequest::NewAtDirectory(path));
+                    }
+                }
+            },
+            CopyFileTreePath(row) => {
+                if let Some((path, _)) = self.ctx.display().file_tree_row_path(row) {
+                    self.ctx
+                        .clipboard_mut()
+                        .store(ClipboardType::Clipboard, path.display().to_string());
+                }
+            },
+            DeleteFileTree(row) => self.ctx.display().request_delete_file_tree(row),
+        }
+        self.ctx.mark_dirty();
+    }
+
+    pub(super) fn on_mouse_press(&mut self, button: MouseButton) {
+        // Multi-click bookkeeping happens here and nowhere else. It used to
+        // be advanced both by the chrome block and the terminal block below;
+        // the second advance saw elapsed≈0 and upgraded EVERY terminal click
+        // to a double/triple — plain drags selected by word or whole line.
+        self.advance_click_state(button);
+
+        let debug_id = self.ctx.mouse().debug_press_id;
+        let debug_x = self.ctx.mouse().x as f32;
+        let debug_y = self.ctx.mouse().y as f32;
+        if self.ctx.nebula_chrome_active() {
+            let window_size = self.ctx.display().ui_size_info();
+            let pane_size = self.ctx.size_info();
+            let scale = self.ctx.window().scale_factor as f32;
+            let chrome_hit = self.ctx.display().chrome_hit(debug_x, debug_y);
+            let in_chrome = crate::display::in_chrome_bar(&window_size, scale, debug_x, debug_y);
+            let tab_drag = self.ctx.display().tab_drag_armed();
+            let selection_empty = self.ctx.selection_is_empty();
+            crate::display::nebula_debug_log(format!(
+                "pointer_press id={debug_id} button={button:?} xy=({debug_x:.0},{debug_y:.0}) scale={scale:.3} window={}x{} pane={}x{} pad=({:.0},{:.0},{:.0},{:.0}) chrome_hit={chrome_hit:?} in_chrome={in_chrome} tab_drag={tab_drag} selection_empty={selection_empty} click={:?}",
+                window_size.width(),
+                window_size.height(),
+                pane_size.width(),
+                pane_size.height(),
+                window_size.padding_x(),
+                window_size.padding_right(),
+                window_size.padding_y(),
+                window_size.padding_bottom(),
+                self.ctx.mouse().click_state,
+            ));
+        }
+
+        // Window chrome is deliberately optional at the input boundary. The
+        // terminal's click-state machine is useful and testable without a GPU
+        // window; real application contexts keep the default `true` value.
+        if self.ctx.nebula_chrome_active() {
+            // Non-primary presses also release lightweight menus. Right-click on
+            // a context menu is handled below so it can naturally retarget.
+            if button != MouseButton::Left {
+                if button != MouseButton::Right && self.ctx.display().context_menu_interactive() {
+                    self.ctx.display().close_context_menu();
+                    self.ctx.mark_dirty();
+                    return;
+                }
+                if self.ctx.display().command_palette_picker_open() {
+                    self.ctx.display().close_command_palette();
+                    self.ctx.mark_dirty();
+                    return;
+                }
+                if self.ctx.display().close_settings_dropdown() {
+                    self.ctx.mark_dirty();
+                    return;
+                }
+            }
+
+            // 中键点标签 = 关闭该标签（浏览器与主流终端的惯例）。命中关闭
+            // 按钮的中键同样生效——目标一致，没必要苛求落点。
+            if button == MouseButton::Middle {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                match self.ctx.display().chrome_hit(x, y) {
+                    crate::display::ChromeHit::Tab(index)
+                    | crate::display::ChromeHit::TabClose(index) => {
+                        self.ctx.nebula_tab(crate::event::TabRequest::CloseIndex(index));
+                        return;
+                    },
+                    _ => {},
+                }
+            }
+
+            if button == MouseButton::Left && self.ctx.display().context_menu_interactive() {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                if let crate::display::ContextMenuHit::Action(action) =
+                    self.ctx.display().context_menu_click(x, y)
+                {
+                    self.run_context_menu_action(action);
+                }
+                self.ctx.mark_dirty();
+                return;
+            }
+
+            if button == MouseButton::Left && self.ctx.doc_view().is_some() {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                let area = self.ctx.display().doc_view_area();
+                let scale = self.ctx.window().scale_factor as f32;
+                if self.ctx.doc_view().is_some_and(|doc| doc.scrollbar_press(area, scale, x, y)) {
+                    self.ctx.window().set_mouse_cursor(winit::window::CursorIcon::Grabbing);
+                    self.ctx.mark_dirty();
+                    return;
+                }
+            }
+
+            if button == MouseButton::Left && self.ctx.image_view().is_some() {
+                let point = (self.ctx.mouse().x as f32, self.ctx.mouse().y as f32);
+                let area = self.ctx.display().image_view_area();
+                if self.ctx.image_view().is_some_and(|image| image.begin_drag(point, area)) {
+                    self.ctx.window().set_mouse_cursor(winit::window::CursorIcon::Grabbing);
+                    self.ctx.mark_dirty();
+                    return;
+                }
+            }
+
+            // A left press anywhere OUTSIDE the rename box ends the edit
+            // (canceling, like Esc) — the click itself still lands wherever it
+            // was aimed. Clicking inside the box is caret placement (below).
+            if button == MouseButton::Left {
+                if let Some((idx, _)) = self.ctx.display().nebula_tab_rename.clone() {
+                    let x = self.ctx.mouse().x as f32;
+                    let y = self.ctx.mouse().y as f32;
+                    if self.ctx.display().chrome_hit(x, y) != crate::display::ChromeHit::Tab(idx) {
+                        self.ctx.nebula_tab(crate::event::TabRequest::CancelRename);
+                    }
+                }
+            }
+
+            if button == MouseButton::Left && self.ctx.display().nebula_ssh_editor.is_some() {
+                if self.ctx.display().ssh_editor_active() {
+                    let x = self.ctx.mouse().x as f32;
+                    let y = self.ctx.mouse().y as f32;
+                    self.ctx.display().ssh_editor_click(x, y);
+                    self.ctx.nebula_ssh_test();
+                }
+                self.ctx.mark_dirty();
+                return;
+            }
+
+            // Nebula command palette: clicking a row runs it, clicking outside
+            // dismisses — same modal semantics as the keyboard path. Row lookup
+            // rides the layout's per-row rects (non-uniform in the picker).
+            if button == MouseButton::Left && self.ctx.display().command_palette_open() {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                let layout = self.ctx.display().command_palette_layout();
+                let (px, py, pw, ph) = layout.panel;
+                if x >= px && x < px + pw && y >= py && y < py + ph {
+                    if let Some(filter) = layout.chip_at(x, y) {
+                        self.ctx.display().palette_select_launcher_filter(filter);
+                    } else if self.ctx.display().palette_scrollbar_press(x, y, &layout) {
+                        self.ctx.window().set_mouse_cursor(winit::window::CursorIcon::Grabbing);
+                    } else if let Some(row) = layout.row_at(x, y) {
+                        if let Some(action) = self.ctx.display().palette_click(row, layout.max_rows)
+                        {
+                            self.run_palette_action(action);
+                        }
+                    }
+                } else {
+                    self.ctx.display().close_command_palette();
+                }
+                self.ctx.mark_dirty();
+                return;
+            }
+
+            // The reversible-action bar floats above drawer/chrome content. True
+            // modals still retain pointer ownership and therefore block this path.
+            let undo_pointer = (self.ctx.mouse().x as f32, self.ctx.mouse().y as f32);
+            if button == MouseButton::Left
+                && self.ctx.display().nebula_confirm.is_none()
+                && self.ctx.display().ssh_delete_undo_hit(undo_pointer.0, undo_pointer.1)
+            {
+                self.undo_ssh_delete();
+                self.ctx.mark_dirty();
+                return;
+            }
+
+            // Right-side drawer (directory tree / git): header tabs switch views,
+            // directory rows expand/collapse. Sits under the modal layers, so
+            // only when no modal owns the pointer.
+            // SSH 连接卡片：遮罩盖住整个 pane，所以卡片在场时 pane 内的点击
+            // 全归它——一个字节也不许漏进终端去起拖选（侧栏拖拽残影那个 bug
+            // 就是"未命中的按压漏进选区"）。落在卡片外的空白同样被吞掉。
+            if self.ctx.display().ssh_connect_active()
+                && !self.ctx.display().settings_open()
+                && self.ctx.display().nebula_confirm.is_none()
+            {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                if self.ctx.display().ssh_connect_covers(x, y) {
+                    if button == MouseButton::Left {
+                        use crate::display::ssh_connect::SshConnectHit;
+                        match self.ctx.display().ssh_connect_hit(x, y) {
+                            SshConnectHit::Logs => {
+                                self.ctx.display().ssh_connect_toggle_logs();
+                                self.ctx.mark_dirty();
+                            },
+                            SshConnectHit::Retry => {
+                                if let Some(destination) =
+                                    self.ctx.display().ssh_connect_destination()
+                                {
+                                    self.ctx.nebula_tab(crate::event::TabRequest::RetrySsh(
+                                        destination,
+                                    ));
+                                }
+                            },
+                            // 取消与关闭是同一个动作：这个 pane 除了这条连接
+                            // 没有别的内容，留着它没有意义。
+                            SshConnectHit::Cancel | SshConnectHit::Close => {
+                                self.ctx.nebula_tab(crate::event::TabRequest::Close);
+                            },
+                            SshConnectHit::None => {},
+                        }
+                    }
+                    return;
+                }
+            }
+
+            if button == MouseButton::Left
+                && self.ctx.display().nebula_sftp_panel.is_some()
+                && !self.ctx.display().settings_open()
+                && self.ctx.display().nebula_confirm.is_none()
+            {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                let hit = self.ctx.display().sftp_hit(x, y);
+                if hit != crate::display::sftp_panel::SftpHit::None {
+                    self.ctx.display().sftp_click(hit);
+                    self.ctx.mark_dirty();
+                    return;
+                }
+            }
+            if button == MouseButton::Left
+                && self.ctx.display().nebula_side_panel.open
+                && self.ctx.display().nebula_sftp_panel.is_none()
+                && !self.ctx.display().settings_open()
+                && self.ctx.display().nebula_confirm.is_none()
+            {
+                use crate::display::side_panel::{PanelHit, PanelView, panel_interactive_hit};
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                let layout = self.ctx.display().side_panel_layout();
+                let view = self.ctx.display().nebula_side_panel.view;
+                let custom_root = self.ctx.display().nebula_side_panel.custom_root_active();
+                let has_root = self.ctx.display().nebula_side_panel.root().is_some();
+                match panel_interactive_hit(&layout, view, custom_root, has_root, x, y) {
+                    PanelHit::None => {
+                        // Clicking anywhere outside the drawer drops search focus
+                        // and the persistent file selection.
+                        let panel = &mut self.ctx.display().nebula_side_panel;
+                        if panel.search_focus || panel.selected.is_some() {
+                            panel.search_unfocus(false);
+                            panel.selected = None;
+                            self.ctx.mark_dirty();
+                        }
+                    },
+                    hit => {
+                        match hit {
+                            PanelHit::ViewFiles => {
+                                self.ctx.display().toggle_side_panel(PanelView::Files)
+                            },
+                            PanelHit::ViewGit => {
+                                self.ctx.display().toggle_side_panel(PanelView::Git)
+                            },
+                            PanelHit::OpenDirectory => {
+                                self.ctx.display().choose_side_panel_directory();
+                            },
+                            PanelHit::RevealDirectory => {
+                                let root = self
+                                    .ctx
+                                    .display()
+                                    .nebula_side_panel
+                                    .root()
+                                    .map(std::path::Path::to_path_buf);
+                                if let Some(root) = root {
+                                    self.ctx.open_path(&root);
+                                }
+                            },
+                            PanelHit::NewTerminalHere => {
+                                let root = self
+                                    .ctx
+                                    .display()
+                                    .nebula_side_panel
+                                    .root()
+                                    .map(std::path::Path::to_path_buf);
+                                if let Some(root) = root {
+                                    self.ctx
+                                        .nebula_tab(crate::event::TabRequest::NewAtDirectory(root));
+                                }
+                            },
+                            PanelHit::FollowCurrentDirectory => {
+                                self.ctx.display().follow_focused_directory();
+                            },
+                            PanelHit::Search => {
+                                let files =
+                                    self.ctx.display().nebula_side_panel.view == PanelView::Files;
+                                if files {
+                                    // The Files view's filter box takes focus.
+                                    self.ctx.display().nebula_side_panel.search_focus = true;
+                                } else {
+                                    // Git view: that strip is the 暂存/提交/推送
+                                    // button row (or the commit-message input,
+                                    // which the keyboard owns — clicks are inert).
+                                    if !self.ctx.display().nebula_side_panel.commit_focus {
+                                        let (sx, _, sw, _) = layout.search;
+                                        let gap = 6.0 * self.ctx.window().scale_factor as f32;
+                                        let rects = crate::display::side_panel::git_button_rects(
+                                            sx, sw, gap,
+                                        );
+                                        let panel = &mut self.ctx.display().nebula_side_panel;
+                                        let action =
+                                            rects.iter().position(|(button_x, button_w)| {
+                                                x >= *button_x && x < *button_x + *button_w
+                                            });
+                                        match action {
+                                            Some(0) => panel.git_stage_all(),
+                                            Some(1) => panel.git_begin_commit(),
+                                            Some(2) => panel.git_pull(),
+                                            Some(3) => panel.git_push(),
+                                            _ => {},
+                                        }
+                                    }
+                                }
+                            },
+                            PanelHit::Row(row) => {
+                                self.ctx.display().nebula_side_panel.search_unfocus(false);
+                                let info = self
+                                    .ctx
+                                    .display()
+                                    .nebula_side_panel
+                                    .visible_row(row)
+                                    .map(|r| (r.path.clone(), r.is_dir, r.is_parent));
+                                match info {
+                                    None => {
+                                        self.ctx.display().nebula_side_panel.click_row(row);
+                                    },
+                                    // `..` 是导航项而非可拖拽目录，按下时立即完成；
+                                    // 这样鼠标松开阶段不会误展开切换后的新根目录。
+                                    Some((_, _, true)) => {
+                                        self.ctx.display().nebula_side_panel.click_row(row);
+                                    },
+                                    // Directory clicks are deferred to mouse-up:
+                                    // crossing the threshold turns them into a
+                                    // path drag without first changing the tree.
+                                    Some((path, true, false)) => {
+                                        use crate::display::side_panel::FileDrag;
+                                        let name = path
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        self.ctx.display().nebula_side_panel.drag_file =
+                                            Some(FileDrag::new(path, name, true, row, (x, y)));
+                                    },
+                                    // Files: double-click opens with the system
+                                    // handler; a single press arms a drag toward
+                                    // the terminal (drop pastes the path).
+                                    Some((path, false, false)) => {
+                                        use crate::display::side_panel::FileDrag;
+                                        let now = std::time::Instant::now();
+                                        let dbl = {
+                                            let panel = &mut self.ctx.display().nebula_side_panel;
+                                            // Click = persistent selection (until
+                                            // clicking off the panel / closing it).
+                                            panel.selected = Some(path.clone());
+                                            let dbl = panel.last_file_click.as_ref().is_some_and(
+                                                |(p, t)| {
+                                                    *p == path
+                                                        && t.elapsed()
+                                                            < std::time::Duration::from_millis(400)
+                                                },
+                                            );
+                                            if dbl {
+                                                panel.last_file_click = None;
+                                                panel.drag_file = None;
+                                            } else {
+                                                panel.last_file_click = Some((path.clone(), now));
+                                                let name = path
+                                                    .file_name()
+                                                    .map(|n| n.to_string_lossy().into_owned())
+                                                    .unwrap_or_default();
+                                                panel.drag_file = Some(FileDrag::new(
+                                                    path.clone(),
+                                                    name,
+                                                    false,
+                                                    row,
+                                                    (x, y),
+                                                ));
+                                            }
+                                            dbl
+                                        };
+                                        if dbl {
+                                            // Readable text files open in an
+                                            // in-app viewer tab; everything else
+                                            // goes to the system handler.
+                                            if crate::display::markdown_view::viewable_file(&path)
+                                                || crate::display::image_viewer::viewable_file(
+                                                    &path,
+                                                )
+                                            {
+                                                self.ctx.nebula_tab(
+                                                    crate::event::TabRequest::OpenDoc(path),
+                                                );
+                                            } else {
+                                                self.ctx.open_path(&path);
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            _ => {
+                                self.ctx.display().nebula_side_panel.search_unfocus(false);
+                            },
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                }
+            }
+
+            // Right-clicking the sidebar "+" opens the quick-launch profile menu
+            // (the familiar profile dropdown); left-click keeps opening the
+            // default shell. Tab and SSH context menus will replace the old
+            // reorder/pin shortcuts; until that menu lands, SSH right-click is
+            // consumed without changing the saved-host order.
+            if button == MouseButton::Right {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                let menu_was_open = self.ctx.display().context_menu_interactive();
+                if menu_was_open
+                    && !matches!(
+                        self.ctx.display().context_menu_hit(x, y),
+                        crate::display::ContextMenuHit::Outside
+                    )
+                {
+                    return;
+                }
+                match self.ctx.display().sftp_hit(x, y) {
+                    crate::display::sftp_panel::SftpHit::Row(index) => {
+                        let entry = self
+                            .ctx
+                            .display()
+                            .nebula_sftp_panel
+                            .as_ref()
+                            .and_then(|panel| panel.visible_entry(index));
+                        match entry {
+                            Some(entry) if !entry.is_parent => {
+                                self.ctx.display().open_sftp_context_menu(index, x, y);
+                            },
+                            Some(_) => {},
+                            None => self.ctx.display().open_sftp_panel_context_menu(x, y),
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::sftp_panel::SftpHit::Inside => {
+                        self.ctx.display().open_sftp_panel_context_menu(x, y);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    _ => {},
+                }
+                // 本地文件树（Files 视图）：右键行开菜单；面板内空白处
+                // 消费掉——右键落在树上绝不能漏进终端变成粘贴。
+                if self.ctx.display().nebula_side_panel.open
+                    && self.ctx.display().nebula_sftp_panel.is_none()
+                    && !self.ctx.display().settings_open()
+                    && self.ctx.display().nebula_confirm.is_none()
+                {
+                    use crate::display::side_panel::{PanelHit, PanelView, panel_interactive_hit};
+                    let layout = self.ctx.display().side_panel_layout();
+                    let view = self.ctx.display().nebula_side_panel.view;
+                    let custom_root = self.ctx.display().nebula_side_panel.custom_root_active();
+                    let has_root = self.ctx.display().nebula_side_panel.root().is_some();
+                    match panel_interactive_hit(&layout, view, custom_root, has_root, x, y) {
+                        PanelHit::Row(row) if view == PanelView::Files => {
+                            self.ctx.display().open_file_tree_context_menu(row, x, y);
+                            self.ctx.mark_dirty();
+                            return;
+                        },
+                        PanelHit::None => {},
+                        // 面板内非行区域（含 Git 视图、按钮、留白）：右键
+                        // 无菜单，但也不能透传给终端。
+                        _ => {
+                            if menu_was_open {
+                                self.ctx.display().close_context_menu();
+                            }
+                            self.ctx.mark_dirty();
+                            return;
+                        },
+                    }
+                }
+                match self.ctx.display().chrome_hit(x, y) {
+                    crate::display::ChromeHit::NewTab => {
+                        // Detected shells fill the menu even with no config
+                        // profiles, so always open it.
+                        let profiles = self.ctx.config().profiles.clone();
+                        self.ctx.display().open_shell_menu(&profiles);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::Tab(index)
+                    | crate::display::ChromeHit::TabClose(index) => {
+                        // 右键即选中（Windows 资源管理器/浏览器惯例）：菜单
+                        // 永远作用于当前选中的 tab，不存在「没选中也能右键
+                        // 操作」的歧义状态。
+                        self.ctx.nebula_tab(crate::event::TabRequest::Select(index));
+                        self.ctx.display().open_tab_context_menu(index, x, y);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::Host(index) => {
+                        self.ctx.display().open_ssh_context_menu(index, x, y);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    _ if menu_was_open => {
+                        self.ctx.display().close_context_menu();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    _ => {},
+                }
+            }
+
+            // Nebula chrome: intercept clicks on the custom title bar and window
+            // controls before any terminal handling.
+            if button == MouseButton::Left {
+                let x = self.ctx.mouse().x as f32;
+                let y = self.ctx.mouse().y as f32;
+                // Chrome geometry is window-relative; the pane view would misplace
+                // every hit rect in split mode (unclickable gear, wrong tabs).
+                let size = self.ctx.display().ui_size_info();
+                let scale = self.ctx.window().scale_factor as f32;
+                // Window border resize takes priority over the chrome controls.
+                let resize_enabled = self.ctx.window().allows_drag_resize();
+                if let Some(dir) = crate::display::resize_edge(&size, scale, x, y, resize_enabled) {
+                    self.ctx.window().drag_resize(dir);
+                    return;
+                }
+                // The confirm modal owns the pointer while it shows: its two
+                // buttons dispatch, any other click is swallowed (modal
+                // semantics — nothing may reach the UI behind the veil).
+                if let Some(confirm) = self.ctx.display().nebula_confirm.clone() {
+                    if let Some((primary, cancel)) = self.ctx.display().nebula_confirm_buttons {
+                        let hit = |(rx, ry, rw, rh): (f32, f32, f32, f32)| {
+                            x >= rx && x < rx + rw && y >= ry && y < ry + rh
+                        };
+                        if hit(primary) {
+                            self.nebula_confirm_accept(confirm);
+                        } else if hit(cancel) {
+                            self.nebula_confirm_cancel(confirm);
+                        }
+                    }
+                    self.ctx.mark_dirty();
+                    return;
+                }
+                // 面板分界线拖拽（设置·交互开关启用时）先于其余 chrome 命中：
+                // 分界线热区骑在侧栏行 / 抽屉内容的边上，先到先得。
+                if let Some(kind) = self.ctx.display().panel_resize_hit(x, y) {
+                    self.ctx.display().begin_panel_drag(kind);
+                    return;
+                }
+                let settings_open = self.ctx.display().settings_open();
+                let settings_section = self.ctx.display().settings_section();
+                let settings_scroll = self.ctx.display().settings_scroll();
+                let settings_dropdown = self.ctx.display().nebula_settings_dropdown;
+                let shell_picker_count = self.ctx.display().shell_picker_count();
+                let font_picker_count = self.ctx.display().font_picker_count();
+                let hidden_host_count = self.ctx.display().hidden_ssh_host_count();
+                let ssh_host_count = self.ctx.display().ssh_host_count();
+                let settings_area = self.ctx.display().terminal_card_rect();
+                let settings_hit = crate::display::settings_hit(
+                    &size,
+                    scale,
+                    settings_area,
+                    x,
+                    y,
+                    settings_open,
+                    settings_section,
+                    settings_scroll,
+                    settings_dropdown,
+                    shell_picker_count,
+                    font_picker_count,
+                    self.ctx.display().font_popup_scroll(),
+                    hidden_host_count,
+                    ssh_host_count,
+                    self.ctx.display().nebula_density,
+                    self.ctx.display().ssh_proxy_pane_state(),
+                    self.ctx.display().keymap_pane_state(),
+                    self.ctx.display().provider_count(),
+                    self.ctx.display().backup_protocol(),
+                );
+                // Keep the primary-button target for the settings renderer's
+                // HTML-like toggle active state until the matching release.
+                self.ctx.display().set_settings_pressed(settings_hit);
+                // 字体弹层滚动条先于「点击关闭下拉」接管：按 track/thumb
+                // 是滚动手势，不是关闭浮层。
+                if self.ctx.display().font_popup_scrollbar_press(x, y) {
+                    self.ctx.mark_dirty();
+                    return;
+                }
+                // 打开的下拉框独占第一击：命中不属于它（选项行或锚行）时，
+                // 这一击只负责关闭浮层，绝不让下层控件借机误触发。
+                if settings_dropdown.is_some() && !settings_dropdown_keeps_open(settings_hit) {
+                    self.ctx.display().close_settings_dropdown();
+                    self.ctx.mark_dirty();
+                    return;
+                }
+                // 键位捕获态：点击页面任何位置先撤销等待。点中别的行 =
+                // 把捕获转移过去；再点同一行 = 取消（用户要的"取消按键"）。
+                let capturing = self.ctx.display().nebula_keymap_capture;
+                self.ctx.display().keymap_cancel_capture();
+                // 同步输入框的失焦提交：点击页面上任何非本输入框的位置都
+                // 视为编辑结束（点另一个框由 focus_sync_field 内部提交）。
+                if !matches!(settings_hit, crate::display::SettingsHit::SyncInput(_)) {
+                    self.ctx.display().commit_sync_field();
+                }
+                if !matches!(settings_hit, crate::display::SettingsHit::BackupRemoteField(_)) {
+                    self.ctx.display().commit_backup_remote_field();
+                }
+                if !matches!(settings_hit, crate::display::SettingsHit::ProviderField(_)) {
+                    self.ctx.display().commit_provider_field();
+                }
+                // SSH 代理输入框同规矩：点到别处即失焦落盘。
+                if !matches!(settings_hit, crate::display::SettingsHit::SshProxyInput(_)) {
+                    self.ctx.display().commit_ssh_proxy_field();
+                }
+                if !matches!(settings_hit, crate::display::SettingsHit::KeymapSearchField) {
+                    self.ctx.display().blur_keymap_search();
+                }
+                match settings_hit {
+                    crate::display::SettingsHit::KeymapSearchField => {
+                        self.ctx.display().focus_keymap_search();
+                        // 点击即按落点放置 caret，与字体搜索一致；Shift 扩展选区。
+                        let (text_x, cell_w) = self.ctx.display().keymap_search_text_origin();
+                        let extend = self.ctx.modifiers().state().shift_key();
+                        self.ctx.display().begin_keymap_search_drag(x - text_x, cell_w, extend);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::KeymapRow(slot) => {
+                        // 槽位是过滤后的顺序，display 映射回 flat 行。点中
+                        // 正在捕获的那一行 = 取消（上面已统一撤销，不重启）。
+                        if capturing.is_none()
+                            || capturing != self.ctx.display().keymap_slot_to_flat(slot)
+                        {
+                            self.ctx.display().keymap_begin_capture_slot(slot);
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    // 只读行：hover 有色变反馈，点击与点空白同义（无动作）。
+                    crate::display::SettingsHit::KeymapReadonlyRow(_) => {},
+                    crate::display::SettingsHit::BackupSelection(index) => {
+                        self.ctx.display().toggle_backup_selection(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupExport => {
+                        self.ctx.display().start_backup_export();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupProtocolCycle => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::BackupProtocol,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupProtocolOption(index) => {
+                        self.ctx.display().set_backup_protocol_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupRemoteField(index) => {
+                        self.ctx.display().focus_backup_remote_field(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupRemotePush => {
+                        self.ctx.display().start_backup_remote(true);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupRemotePull => {
+                        self.ctx.display().start_backup_remote(false);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackupRestore => {
+                        self.ctx.display().start_backup_restore();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::Toggle => {
+                        self.ctx.nebula_tab(crate::event::TabRequest::OpenSettings);
+                        return;
+                    },
+                    crate::display::SettingsHit::Nav(section) => {
+                        self.ctx.display().select_settings_section(section);
+                        self.ctx.nebula_local_proxy_scan();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::Theme(theme) => {
+                        self.ctx.display().select_nebula_theme(theme);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::Language(language) => {
+                        self.ctx.display().set_ui_language(language);
+                        self.ctx.display().close_settings_dropdown();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::LanguageDropdown => {
+                        self.ctx
+                            .display()
+                            .toggle_settings_dropdown(crate::display::SettingsDropdown::Language);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::GhostToggle => {
+                        self.ctx.display().toggle_ghost();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ResumeAiToggle => {
+                        self.ctx.display().toggle_resume_ai();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::TrayToggle => {
+                        self.ctx.display().toggle_tray();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::AcceptCycle => {
+                        self.ctx
+                            .display()
+                            .toggle_settings_dropdown(crate::display::SettingsDropdown::Accept);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::AcceptOption(index) => {
+                        self.ctx.display().set_accept_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CompletionStyleCycle => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::CompletionStyle,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CompletionStyleOption(index) => {
+                        self.ctx.display().set_completion_style_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CursorShapeDropdown => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::CursorShape,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CursorShapeOption(index) => {
+                        if self.ctx.display().set_cursor_shape_option(index) {
+                            self.ctx.apply_default_cursor_style();
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CursorBlinkToggle => {
+                        self.ctx.display().toggle_cursor_blink();
+                        self.ctx.apply_default_cursor_style();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CopyOnSelectToggle => {
+                        self.ctx.display().toggle_copy_on_select();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::PanelResizeToggle => {
+                        self.ctx.display().request_toggle_panel_resize();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CjkBoldToggle => {
+                        self.ctx.display().toggle_cjk_bold_regular();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::TabRevealDropdown => {
+                        self.ctx
+                            .display()
+                            .toggle_settings_dropdown(crate::display::SettingsDropdown::TabReveal);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::TabRevealOption(index) => {
+                        self.ctx.display().set_tab_reveal_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::DensityDropdown => {
+                        self.ctx
+                            .display()
+                            .toggle_settings_dropdown(crate::display::SettingsDropdown::Density);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::DensityOption(index) => {
+                        self.ctx.display().set_density_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::NewTabPositionDropdown => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::NewTabPosition,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CellWidthModeDropdown => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::CellWidthMode,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::NewTabPositionOption(index) => {
+                        self.ctx.display().set_new_tab_position_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::CellWidthModeOption(index) => {
+                        let base_font = self.ctx.config().font.clone();
+                        self.ctx.display().set_cell_width_mode_option(index, &base_font);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FontSizeUp => {
+                        let ui_scale = self.ctx.display().window.scale_factor as f32;
+                        self.ctx.change_font_size(ui_scale);
+                        self.ctx.display().persist_nebula_settings();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FontSizeDown => {
+                        let ui_scale = self.ctx.display().window.scale_factor as f32;
+                        self.ctx.change_font_size(-ui_scale);
+                        self.ctx.display().persist_nebula_settings();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ShellCycle => {
+                        // Toggle inline shell picker (expand/collapse the list).
+                        self.ctx.display().toggle_shell_picker();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ShellPickerRow(index) => {
+                        self.ctx.display().set_default_shell_by_index(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::StartupDirectory => {
+                        self.ctx.display().pick_startup_directory();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::StartupDirectoryClear => {
+                        self.ctx.display().clear_startup_directory();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FontCycle => {
+                        self.ctx.display().toggle_font_picker();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FontSearchField => {
+                        // 点搜索框是定位光标，不是关掉弹层——它是这次展开里
+                        // 唯一还接受输入的东西。
+                        let (text_x, cell_w) = self.ctx.display().font_search_text_origin();
+                        let extend = self.ctx.modifiers().state().shift_key();
+                        self.ctx.display().begin_font_query_drag(x - text_x, cell_w, extend);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FontPickerRow(index) => {
+                        let base_font = self.ctx.config().font.clone();
+                        self.ctx.display().set_terminal_font_by_index(index, &base_font);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SystemThemeToggle => {
+                        self.ctx.display().toggle_system_theme_following();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::RestoreHiddenSsh(index) => {
+                        self.ctx.display().restore_hidden_ssh_host(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    // 主机行本体只承载 hover（底色 + 右缘三枚图标显形），本身
+                    // 不是动作：点空白处不该悄悄连上一台机器。
+                    crate::display::SettingsHit::SshHostRow(_) => return,
+                    crate::display::SettingsHit::SshHostConnect(index) => {
+                        let host = self.ctx.display().nebula_ssh_hosts.get(index).cloned();
+                        if let Some(host) = host {
+                            self.ctx.nebula_tab(crate::event::TabRequest::NewSsh(host));
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshHostEdit(index) => {
+                        self.ctx.display().edit_ssh_host(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshHostDelete(index) => {
+                        self.ctx.display().request_delete_ssh_host(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshImportConfig => {
+                        self.ctx.display().import_ssh_config();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshAddHost => {
+                        self.ctx.display().open_ssh_editor();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderAdd => {
+                        self.ctx.display().provider_add();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderRow(index) => {
+                        self.ctx.display().provider_select(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderField(index) => {
+                        self.ctx.display().focus_provider_field(index);
+                        let extend = self.ctx.modifiers().state().shift_key();
+                        self.ctx.display().begin_provider_field_drag(index, x, extend);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderCodexGoalsToggle => {
+                        self.ctx.display().provider_toggle_codex_goals();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderCodexRemoteToggle => {
+                        self.ctx.display().provider_toggle_codex_remote();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderApplyCodex => {
+                        self.ctx.display().provider_apply_codex();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderSave => {
+                        self.ctx.display().provider_save();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderTest => {
+                        self.ctx.display().provider_test();
+                        self.ctx.nebula_provider_test();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderDelete => {
+                        self.ctx.display().provider_delete();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ProviderEnableToggle(index) => {
+                        self.ctx.display().provider_select(index);
+                        self.ctx.display().provider_toggle_enabled();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FetchToggle => {
+                        self.ctx.display().toggle_fetch();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::PowerlineToggle => {
+                        self.ctx.display().toggle_powerline();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BlurToggle => {
+                        self.ctx.display().toggle_blur();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::KeepSessionToggle => {
+                        self.ctx.display().toggle_keep_session();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::RestoreSessionToggle => {
+                        self.ctx.display().toggle_restore_session();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SyncInput(index) => {
+                        self.ctx.display().focus_sync_field(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyModeDropdown => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::SshProxyMode,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyModeOption(index) => {
+                        self.ctx.display().set_ssh_proxy_mode(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyTest => {
+                        self.ctx.display().request_proxy_test();
+                        self.ctx.nebula_proxy_test();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyProtocolDropdown => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::SshProxyProtocol,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyProtocolOption(index) => {
+                        self.ctx.display().set_ssh_proxy_protocol(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyInput(index) => {
+                        self.ctx.display().focus_ssh_proxy_field(index);
+                        // 点击即按落点放置 caret；Shift 扩展选区。
+                        let extend = self.ctx.modifiers().state().shift_key();
+                        self.ctx.display().begin_ssh_proxy_drag(index, x, extend);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyLinkPick(index) => {
+                        self.ctx.display().set_ssh_proxy_link_pick(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyRescan => {
+                        self.ctx.display().request_local_proxy_scan();
+                        self.ctx.nebula_local_proxy_scan();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshJumpHostDropdown => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::SshJumpHost,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshJumpHostOption(index) => {
+                        self.ctx.display().set_ssh_proxy_jump_host(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SshProxyOverrideEdit(index) => {
+                        self.ctx.display().edit_ssh_proxy_override(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SyncAutoPullToggle => {
+                        self.ctx.display().toggle_sync_auto_pull();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SyncPushButton => {
+                        if self.ctx.display().begin_sync_action() {
+                            self.ctx.nebula_sync(true);
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::SyncPullButton => {
+                        if self.ctx.display().begin_sync_action() {
+                            self.ctx.nebula_sync(false);
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::OpacitySlider => {
+                        self.ctx.display().begin_settings_opacity_drag(
+                            crate::display::SettingsOpacityTarget::Terminal,
+                            x,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundColor => {
+                        // 打开色板 + 16 进制输入浮层（不再点击循环切换）。
+                        self.ctx.display().open_background_color_picker();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundSvPlane => {
+                        self.ctx.display().begin_bg_picker_drag(
+                            crate::display::BgPickerPart::Sv,
+                            x,
+                            y,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundHueBar => {
+                        self.ctx.display().begin_bg_picker_drag(
+                            crate::display::BgPickerPart::Hue,
+                            x,
+                            y,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundSwatch(index) => {
+                        self.ctx.display().set_background_color_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundHexInput => {
+                        self.ctx.display().focus_bg_hex_input();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundPopupPanel => {
+                        // 浮层内部空白：吞掉点击，浮层保持展开。
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundImage => {
+                        self.ctx.display().pick_background_image();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundImageClear => {
+                        self.ctx.display().clear_background_image();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundImageFit => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::BackgroundFit,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::FitOption(index) => {
+                        self.ctx.display().set_background_image_fit_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundImageAlignment => {
+                        self.ctx.display().toggle_settings_dropdown(
+                            crate::display::SettingsDropdown::BackgroundAlignment,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::AlignOption(index) => {
+                        self.ctx.display().set_background_image_alignment_option(index);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundImageOpacitySlider => {
+                        self.ctx.display().begin_settings_opacity_drag(
+                            crate::display::SettingsOpacityTarget::BackgroundImage,
+                            x,
+                        );
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::BackgroundImageCoverChrome => {
+                        self.ctx.display().request_toggle_background_image_cover_chrome();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::OpenConfigFile => {
+                        self.ctx.display().open_user_config_file();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::ImportTerminal => {
+                        if self.ctx.display().import_terminal_directory() {
+                            self.ctx.refresh_terminal_profiles();
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::Reset => {
+                        self.ctx.display().reset_appearance_settings();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::SettingsHit::Panel => return,
+                    crate::display::SettingsHit::None => {},
+                }
+                let chrome_hit = self.ctx.display().chrome_hit(x, y);
+                crate::display::nebula_debug_log(format!(
+                    "chrome_press hit={chrome_hit:?} xy=({x:.0},{y:.0})"
+                ));
+                if self.ctx.display().nebula_special_tab_active
+                    && matches!(
+                        chrome_hit,
+                        crate::display::ChromeHit::PanelFiles | crate::display::ChromeHit::PanelGit
+                    )
+                {
+                    return;
+                }
+                // Multi-click state was advanced once at the top of this
+                // function; read it for the tab double-click rename below.
+                let state = self.ctx.mouse().click_state;
+                match chrome_hit {
+                    crate::display::ChromeHit::NewTab => {
+                        self.ctx.nebula_tab(crate::event::TabRequest::New);
+                        return;
+                    },
+                    crate::display::ChromeHit::NewTabMenu => {
+                        // The chevron opens the shell dropdown (detected shells +
+                        // config profiles) — the familiar profile menu.
+                        let profiles = self.ctx.config().profiles.clone();
+                        self.ctx.display().open_shell_menu(&profiles);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::AddSshHost => {
+                        self.ctx.display().open_ssh_editor();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::MessageQueue => {
+                        self.ctx.display().toggle_message_queue_entry();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::TabClose(index) => {
+                        self.ctx.nebula_tab(crate::event::TabRequest::CloseIndex(index));
+                        return;
+                    },
+                    crate::display::ChromeHit::Tab(index) => {
+                        // Clicking inside the rename box places the caret there
+                        // (real text-field behaviour) instead of starting a drag.
+                        if self
+                            .ctx
+                            .display()
+                            .nebula_tab_rename
+                            .as_ref()
+                            .is_some_and(|(i, _)| *i == index)
+                        {
+                            self.ctx.display().tab_rename_click(x);
+                            self.ctx.mark_dirty();
+                            return;
+                        }
+                        // Double-click a tab to start renaming (platform convention).
+                        if state == ClickState::DoubleClick {
+                            self.ctx.nebula_tab(crate::event::TabRequest::BeginRename(index));
+                            return;
+                        }
+                        // Selection is deferred to release (a plain click becomes
+                        // TabDropAction::Click): the terminal area must keep
+                        // showing the ACTIVE tab while another tab is dragged over
+                        // it toward a dock zone.
+                        self.ctx.display().arm_tab_drag(index, x, y);
+                        return;
+                    },
+                    crate::display::ChromeHit::SidebarToggle => {
+                        self.ctx.display().toggle_sidebar();
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::Host(index) => {
+                        // Open a new tab connected to this ~/.ssh/config host.
+                        let host = self.ctx.display().nebula_ssh_hosts.get(index).cloned();
+                        if let Some(host) = host {
+                            self.ctx.nebula_tab(crate::event::TabRequest::NewSsh(host));
+                        }
+                        return;
+                    },
+                    crate::display::ChromeHit::TabsSection => {
+                        self.ctx.display().toggle_sidebar_section(false);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::HostsSection => {
+                        self.ctx.display().toggle_sidebar_section(true);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::TabsScrollbar
+                    | crate::display::ChromeHit::HostsScrollbar => {
+                        if self.ctx.display().sidebar_scrollbar_press(x, y) {
+                            self.ctx.window().set_mouse_cursor(winit::window::CursorIcon::Grabbing);
+                            self.ctx.mark_dirty();
+                        }
+                        return;
+                    },
+                    crate::display::ChromeHit::TabsArea | crate::display::ChromeHit::HostsArea => {
+                        return;
+                    },
+                    crate::display::ChromeHit::PanelFiles => {
+                        if let Some(destination) =
+                            self.ctx.nebula_ssh_destination().map(str::to_owned)
+                        {
+                            self.ctx.nebula_open_sftp(destination);
+                        } else {
+                            self.ctx
+                                .display()
+                                .toggle_side_panel(crate::display::side_panel::PanelView::Files);
+                        }
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::PanelGit => {
+                        self.ctx
+                            .display()
+                            .toggle_side_panel(crate::display::side_panel::PanelView::Git);
+                        self.ctx.mark_dirty();
+                        return;
+                    },
+                    crate::display::ChromeHit::Close => {
+                        self.ctx.nebula_tab(crate::event::TabRequest::CloseWindow);
+                        return;
+                    },
+                    crate::display::ChromeHit::Minimize => {
+                        self.ctx.window().set_minimized(true);
+                        return;
+                    },
+                    crate::display::ChromeHit::Maximize => {
+                        self.ctx.window().toggle_maximized_or_restore();
+                        return;
+                    },
+                    crate::display::ChromeHit::TitleBar => {
+                        self.ctx.window().drag_window();
+                        return;
+                    },
+                    crate::display::ChromeHit::None => {},
+                }
+
+                // A press inside the chrome band (top bar / tab sidebar) that
+                // hit no control ends here. Falling through used to reach the
+                // terminal's selection arming, which clamps the point into the
+                // nearest grid cell — dragging from the sidebar then painted a
+                // stray selection across the pane (the "drag ghost").
+                let window_size = self.ctx.display().ui_size_info();
+                let scale = self.ctx.window().scale_factor as f32;
+                if crate::display::in_chrome_bar(&window_size, scale, x, y) {
+                    crate::display::nebula_debug_log(format!(
+                        "pointer_route id={} route=chrome-unclaimed-consumed xy=({x:.0},{y:.0})",
+                        self.ctx.mouse().debug_press_id
+                    ));
+                    return;
+                }
+
+                // Nebula: grab the scrollback thumb (or jump on a track press).
+                // Only live while scrolled into history, since the bar auto-hides.
+                let view = self.ctx.size_info();
+                let display_offset = self.ctx.terminal().grid().display_offset();
+                let total_lines = self.ctx.terminal().total_lines();
+                if let Some(grab) =
+                    self.ctx.display().scrollbar_grab(&view, display_offset, total_lines, x, y)
+                {
+                    self.ctx.display().nebula_scrollbar_drag = Some(grab);
+                    let target =
+                        self.ctx.display().scrollbar_target_offset(&view, total_lines, y, grab);
+                    let delta = target as i32 - display_offset as i32;
+                    if delta != 0 {
+                        self.ctx.scroll(Scroll::Delta(delta));
+                    }
+                    self.ctx.mark_dirty();
+                    return;
+                }
+            }
+        }
+
+        if button == MouseButton::Left {
+            crate::display::nebula_debug_log(format!(
+                "pointer_route id={} route=terminal-fallthrough xy=({}, {})",
+                self.ctx.mouse().debug_press_id,
+                self.ctx.mouse().x,
+                self.ctx.mouse().y,
+            ));
+        }
+
+        // Nebula: right-click copies the selection, or pastes when there is
+        // none (platform convention), unless the app is in mouse mode.
+        if button == MouseButton::Right
+            && !self.ctx.modifiers().state().shift_key()
+            && !self.ctx.mouse_mode()
+        {
+            if self.ctx.selection_is_empty() {
+                let text = self.ctx.clipboard_mut().load(ClipboardType::Clipboard);
+                self.ctx.paste(&text, true);
+            } else {
+                self.ctx.copy_selection(ClipboardType::Clipboard);
+                self.ctx.clear_selection();
+            }
+            return;
+        }
+
+        // Handle mouse mode.
+        if !self.ctx.modifiers().state().shift_key() && self.ctx.mouse_mode() {
+            self.ctx.mouse_mut().click_state = ClickState::None;
+
+            let code = match button {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+                // Can't properly report more than three buttons..
+                MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => return,
+            };
+
+            self.mouse_report(code, ElementState::Pressed);
+        } else {
+            // Multi-click state was advanced once at the top of this function.
+            // Load mouse point, treating message bar and padding as the closest cell.
+            let point = self.ctx.mouse().point(&self.ctx.size_info(), self.ctx.terminal());
+            let (point, side) =
+                self.ctx.terminal_math_source_point(point, self.ctx.mouse().cell_side);
+            self.ctx.mouse_mut().cell_side = side;
+
+            if let MouseButton::Left = button {
+                self.on_left_click(point)
+            }
+        }
+    }
+}
+
+/// Hits that must NOT dismiss an expanded settings dropdown: its own option
+/// rows and the anchor rows (the anchor click toggles the dropdown itself).
+/// Everything else closes the floating list first — a press outside a popup
+/// never activates the control underneath it.
+fn settings_dropdown_keeps_open(hit: crate::display::SettingsHit) -> bool {
+    use crate::display::SettingsHit as Hit;
+    matches!(
+        hit,
+        Hit::ShellCycle
+            | Hit::ShellPickerRow(_)
+            | Hit::FontCycle
+            | Hit::FontPickerRow(_)
+            | Hit::FontSearchField
+            | Hit::BackgroundImageFit
+            | Hit::FitOption(_)
+            | Hit::BackgroundImageAlignment
+            | Hit::AlignOption(_)
+            | Hit::LanguageDropdown
+            | Hit::Language(_)
+            | Hit::AcceptCycle
+            | Hit::AcceptOption(_)
+            | Hit::CompletionStyleCycle
+            | Hit::CompletionStyleOption(_)
+            | Hit::BackupProtocolCycle
+            | Hit::BackupProtocolOption(_)
+            | Hit::TabRevealDropdown
+            | Hit::TabRevealOption(_)
+            | Hit::DensityDropdown
+            | Hit::DensityOption(_)
+            | Hit::NewTabPositionDropdown
+            | Hit::NewTabPositionOption(_)
+            | Hit::CellWidthModeDropdown
+            | Hit::CellWidthModeOption(_)
+            | Hit::CursorShapeDropdown
+            | Hit::CursorShapeOption(_)
+            | Hit::SshProxyModeDropdown
+            | Hit::SshProxyModeOption(_)
+            | Hit::SshProxyTest
+            | Hit::SshProxyProtocolDropdown
+            | Hit::SshProxyProtocolOption(_)
+            | Hit::SshJumpHostDropdown
+            | Hit::SshJumpHostOption(_)
+            | Hit::BackgroundColor
+            | Hit::BackgroundSvPlane
+            | Hit::BackgroundHueBar
+            | Hit::BackgroundSwatch(_)
+            | Hit::BackgroundHexInput
+            | Hit::BackgroundPopupPanel
+    )
+}

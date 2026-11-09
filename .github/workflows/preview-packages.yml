@@ -12,10 +12,10 @@ on:
       - "**/Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
-      - "nebula_app/build.rs"
-      - "nebula_app/build/**"
-      - "nebula_app/res/**"
-      - "nebula_app/windows/**"
+      - "pebrel_app/build.rs"
+      - "pebrel_app/build/**"
+      - "pebrel_app/res/**"
+      - "pebrel_app/windows/**"
       - "assets/**"
       - "packaging/**"
       - "scripts/package*"
@@ -78,7 +78,7 @@ jobs:
           PUBLIC_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
         run: |
           version="$(python3 scripts/preview_release.py \
-            --print-package-version nebula_app/Cargo.toml)"
+            --print-package-version pebrel_app/Cargo.toml)"
 
           preview_id="$REQUESTED_PREVIEW_ID"
           if [[ -z "$preview_id" ]]; then
@@ -183,10 +183,10 @@ jobs:
         run: python3 -m unittest scripts.tests.test_shell_integration -v
 
       - name: Test SSH confirmation and password dialogs
-        run: cargo test --locked -p nebula --features gpui-test-support dialog
+        run: cargo test --locked -p pebrel --features gpui-test-support dialog
 
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
 
       - name: Download pinned linuxdeploy
         env:
@@ -365,17 +365,17 @@ jobs:
           scripts.conformance.tests.test_posix_lifecycle -v
 
       - name: Test SSH confirmation and password dialogs
-        run: cargo test --locked -p nebula --features gpui-test-support dialog
+        run: cargo test --locked -p pebrel --features gpui-test-support dialog
 
       - name: Release completed test artifacts before building the package
         run: |
           df -h . "${TMPDIR:-/tmp}"
           du -sh target/debug
-          cargo clean --profile dev --package nebula
+          cargo clean --profile dev --package pebrel
           df -h . "${TMPDIR:-/tmp}"
 
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
 
       - name: Import signing credentials into a temporary keychain
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_signing == 'developer-id' }}
@@ -520,9 +520,9 @@ jobs:
       - name: Test workspace natively
         run: cargo test --locked --workspace
       - name: Test SSH confirmation and password dialogs
-        run: cargo test --locked -p nebula --features gpui-test-support dialog
+        run: cargo test --locked -p pebrel --features gpui-test-support dialog
       - name: Build GPUI comparison binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
       - name: Run Windows conformance
         env:
           NEBULA_RESIZE_TRACE: "1"

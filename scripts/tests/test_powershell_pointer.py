@@ -58,14 +58,14 @@ class PowerShellPointerTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="pebrel-pwsh-pointer-")
         self.addCleanup(temporary.cleanup)
         home = Path(temporary.name)
-        root = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty"
+        root = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty"
         script = home / "init.ps1"
         (home / "native-editor.ps1").write_text(
             (root / "completion.ps1").read_text(encoding="utf-8") + "\n" +
             (root / "pointer.ps1").read_text(encoding="utf-8"), encoding="utf-8",
         )
         bootstrap = home / "bootstrap.ps1"
-        bootstrap.write_text((root.parents[2] / "nebula_app/res/shell/powershell.ps1").read_text(encoding="utf-8"), encoding="utf-8")
+        bootstrap.write_text((root.parents[2] / "pebrel_app/res/shell/powershell.ps1").read_text(encoding="utf-8"), encoding="utf-8")
         script.write_text(
             import_module + "\n"
             "Set-PSReadLineOption -HistorySaveStyle SaveNothing\n"

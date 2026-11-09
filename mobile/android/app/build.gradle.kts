@@ -97,8 +97,8 @@ dependencies {
 
 val generateAssets by tasks.registering(Exec::class) {
     val root = rootProject.projectDir.resolve("../..").canonicalFile
-    inputs.files(root.resolve("nebula_settings/src/lib.rs"), root.resolve("nebula_settings/src/themes.rs"),
-        root.resolve("nebula_app/src/display/ui/os_icons.rs"), root.resolve("assets/fonts/MapleMono-NF-CN-Regular.ttf"),
+    inputs.files(root.resolve("pebrel_settings/src/lib.rs"), root.resolve("pebrel_settings/src/themes.rs"),
+        root.resolve("pebrel_app/src/display/ui/os_icons.rs"), root.resolve("assets/fonts/MapleMono-NF-CN-Regular.ttf"),
         root.resolve("assets/fonts/JetBrainsMono-Regular.ttf"), root.resolve("extra/logo/nebula-titanium.png"))
     inputs.dir(root.resolve("mobile/tools"))
     inputs.files(fileTree(root.resolve("mobile/relay")) { include("*.mjs", "*.json", "*.md", "*.yaml", "Caddyfile", "Dockerfile") })

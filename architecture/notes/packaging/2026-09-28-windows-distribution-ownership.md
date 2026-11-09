@@ -13,7 +13,7 @@ either channel wastes downloads and, for MSIX, attempts an invalid directory wri
 
 ## Evidence
 
-- `nebula_app/src/platform/update_installation.rs` requires an Inno uninstaller
+- `pebrel_app/src/platform/update_installation.rs` requires an Inno uninstaller
   before installation handoff; old portable copies already reject final handoff.
   The missing behavior was earlier channel-aware discovery/download and explanation,
   not a demonstrated successful overwrite of a Scoop install.

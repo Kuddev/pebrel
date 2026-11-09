@@ -179,13 +179,13 @@ class CiPlanCliTests(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             self.git(repo, "init", "-q")
-            old = repo / "nebula_terminal/src/tty/windows.rs"
+            old = repo / "pebrel_terminal/src/tty/windows.rs"
             old.parent.mkdir(parents=True)
             old.write_text("// platform fixture\n", encoding="utf-8")
             self.git(repo, "add", ".")
             self.git(repo, "commit", "-qm", "Create Windows fixture")
             base = self.git(repo, "rev-parse", "HEAD").strip()
-            self.git(repo, "mv", "nebula_terminal/src/tty/windows.rs", "nebula_terminal/src/common.rs")
+            self.git(repo, "mv", "pebrel_terminal/src/tty/windows.rs", "pebrel_terminal/src/common.rs")
             self.git(repo, "commit", "-qm", "Move platform fixture")
             payload = {"pull_request": {"draft": False, "base": {"sha": base},
                                         "head": {"sha": self.git(repo, "rev-parse", "HEAD").strip()}}}
@@ -201,7 +201,7 @@ class CiPlanCliTests(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             self.git(repo, "init", "-q")
-            source = repo / "nebula_app/src/welcome.rs"
+            source = repo / "pebrel_app/src/welcome.rs"
             source.parent.mkdir(parents=True)
             source.write_text("#[cfg(windows)]\nfn welcome() {}\n", encoding="utf-8")
             self.git(repo, "add", ".")
@@ -261,20 +261,20 @@ class PrPathPolicyTests(unittest.TestCase):
         full = {p.runner for p in PLATFORMS}
         cases = (
             (["README.md", "docs/user-guide.md", "architecture/notes/scripts/ci/example.md"], set()),
-            (["nebula_app/src/gpui_shell/settings_pane/colors.rs"], {"ubuntu-24.04"}),
-            (["nebula_terminal/src/term/mod.rs", "nebula_app/src/backup_remote.rs"], {"ubuntu-24.04"}),
-            (["nebula_terminal/src/tty/windows/mod.rs"], {"ubuntu-24.04", "windows-2022", "windows-11-arm"}),
+            (["pebrel_app/src/gpui_shell/settings_pane/colors.rs"], {"ubuntu-24.04"}),
+            (["pebrel_terminal/src/term/mod.rs", "pebrel_app/src/backup_remote.rs"], {"ubuntu-24.04"}),
+            (["pebrel_terminal/src/tty/windows/mod.rs"], {"ubuntu-24.04", "windows-2022", "windows-11-arm"}),
             (["scripts/prepare-windows-runtime.ps1"], {"ubuntu-24.04", "windows-2022", "windows-11-arm"}),
-            (["nebula_app/src/platform/macos/notifications.rs"], {"ubuntu-24.04", "macos-26", "macos-26-intel"}),
-            (["nebula_app/src/notify_macos.rs"], {"ubuntu-24.04", "macos-26", "macos-26-intel"}),
-            (["nebula_terminal/src/tty/unix.rs"], {"ubuntu-24.04", "macos-26", "macos-26-intel"}),
-            (["nebula_app/src/platform/process.rs"], full),
+            (["pebrel_app/src/platform/macos/notifications.rs"], {"ubuntu-24.04", "macos-26", "macos-26-intel"}),
+            (["pebrel_app/src/notify_macos.rs"], {"ubuntu-24.04", "macos-26", "macos-26-intel"}),
+            (["pebrel_terminal/src/tty/unix.rs"], {"ubuntu-24.04", "macos-26", "macos-26-intel"}),
+            (["pebrel_app/src/platform/process.rs"], full),
             (["Cargo.lock"], full),
-            (["nebula_terminal/Cargo.toml"], full),
+            (["pebrel_terminal/Cargo.toml"], full),
             ([".github/workflows/linux-lua.yml"], full),
             (["scripts/ci_plan.py"], full),
             (["scripts/package-macos.sh"], full),
-            (["nebula_terminal/src/scan_x86_64.rs"], full),
+            (["pebrel_terminal/src/scan_x86_64.rs"], full),
             (["architecture/dependencies.toml"], full),
             (["new_native_module/source.rs"], full),
         )
@@ -286,7 +286,7 @@ class PrPathPolicyTests(unittest.TestCase):
                     self.assertEqual({row["os"] for row in release}, expected & {"macos-26", "macos-26-intel"})
 
     def test_invalid_paths_do_not_silently_skip_validation(self) -> None:
-        for path in ("", "/absolute.rs", "../outside.rs", "nebula_app/../unknown.rs", "windows\\path.rs"):
+        for path in ("", "/absolute.rs", "../outside.rs", "pebrel_app/../unknown.rs", "windows\\path.rs"):
             with self.subTest(path=path), self.assertRaises(PlanError):
                 plan_matrices("pull_request", {"pull_request": {"draft": False}}, [path])
 

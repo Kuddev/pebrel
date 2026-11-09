@@ -1,0 +1,798 @@
+//! GPUI 壳的窗口视效：背景模糊 / 窗口透明度 / 壁纸。
+//!
+//! 语义全部对齐旧壳，但**模糊的实现手段不能照抄旧壳**（见
+//! [`background_appearance`]）：一律走 GPUI 自己的
+//! [`WindowBackgroundAppearance`]，由平台层落到各自的原生 API。
+//! - 透明度 = 壳底色与终端默认背景的 alpha（文字与彩色单元背景保持不
+//!   透明，对比度不塌——旧壳 `draw_window_backdrop` 裁定）。
+//! - 壁纸 = 底色之上、单元格之下的一层图（旧壳 `renderer::image` 的
+//!   fit/alignment/透明度语义；图自身透明度独立于窗口 opacity）。
+//!
+//! 设置来源是共享层 `pebrel_settings`（新增壁纸五键），解码结果按
+//! (路径, 文件状态) 缓存；加载在后台串行执行，绘制只复用一张纹理。
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::platform::window_material::{apply_windows_accent_policy, background_appearance};
+
+use gpui::{
+    App, Bounds, ContentMask, Corners, Hsla, IntoElement, ParentElement, Pixels, RenderImage,
+    Styled, Window, WindowBackgroundAppearance, div, fill, point, px, size,
+};
+use image::{Frame, RgbaImage};
+
+mod animated;
+mod budgets;
+mod image_loader;
+mod tab_bar;
+pub(crate) use tab_bar::{tab_bar_material_is_custom, tab_bar_surface_opacity};
+pub(crate) mod preview;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests;
+use pebrel_settings::BlurModeName;
+
+use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit, wallpaper_rect};
+
+/// App-owned wallpaper loading uses the existing GPUI executor: one job and one
+/// latest request, with generation checks before expensive work and publication.
+pub struct VisualEffects {
+    pub opacity: f32,
+    pub blur: BlurModeName,
+    tab_bar_material: pebrel_settings::TabBarMaterial,
+    wallpaper: Option<Wallpaper>,
+    generation: Arc<AtomicU64>,
+    loading: bool,
+    kind: pebrel_settings::BackgroundMediaKind,
+    layout: WallpaperLayout,
+    terminal_config: pebrel_settings::TerminalEffects,
+    terminal_reload: u64,
+    animated: animated::Animated,
+}
+
+impl gpui::Global for VisualEffects {}
+
+impl Drop for VisualEffects {
+    fn drop(&mut self) {
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+}
+
+struct Wallpaper {
+    path: PathBuf,
+    image: Option<Arc<RenderImage>>,
+    stamp: Option<image_loader::FileStamp>,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy)]
+struct WallpaperLayout {
+    fit: BackgroundImageFit,
+    alignment: BackgroundImageAlignment,
+    cover_chrome: bool,
+    opacity: f32,
+}
+
+impl Default for WallpaperLayout {
+    fn default() -> Self {
+        Self {
+            fit: BackgroundImageFit::default(),
+            alignment: BackgroundImageAlignment::default(),
+            cover_chrome: false,
+            opacity: 1.0,
+        }
+    }
+}
+
+/// Refresh prepared visual state without reading or decoding image files on the UI thread.
+pub fn refresh(cx: &mut App) {
+    let rt = pebrel_settings::RuntimeSettings::load();
+    let (opacity, blur) = cx
+        .try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| (settings.visual_opacity, settings.visual_blur))
+        .unwrap_or_else(|| effective_material(&rt));
+    update_wallpaper(&rt, opacity, blur, cx);
+    refresh_surface_opacity(cx);
+}
+
+fn update_wallpaper(
+    rt: &pebrel_settings::RuntimeSettings,
+    opacity: f32,
+    blur: BlurModeName,
+    cx: &mut App,
+) {
+    if !cx.has_global::<VisualEffects>() {
+        cx.set_global(VisualEffects {
+            opacity,
+            blur,
+            tab_bar_material: rt.tab_bar_material,
+            wallpaper: None,
+            generation: Arc::new(AtomicU64::new(0)),
+            loading: false,
+            kind: pebrel_settings::BackgroundMediaKind::Image,
+            layout: WallpaperLayout::default(),
+
+            terminal_config: pebrel_settings::TerminalEffects::default(),
+            terminal_reload: 0,
+            animated: animated::Animated::default(),
+        });
+    }
+    let desired = rt.background_image.as_ref().map(PathBuf::from);
+    let source_changed = {
+        let effects = cx.global::<VisualEffects>();
+        effects.kind != rt.background_media_kind
+            || effects.wallpaper.as_ref().map(|wp| &wp.path) != desired.as_ref()
+    };
+    let source_changed = source_changed || animated::source_failed(cx);
+    let effects = cx.global_mut::<VisualEffects>();
+    effects.opacity = opacity;
+    effects.blur = blur;
+    effects.tab_bar_material = rt.tab_bar_material;
+    effects.kind = rt.background_media_kind;
+    let retired = if source_changed {
+        let retired = effects.wallpaper.take().and_then(|wp| wp.image);
+        effects.wallpaper =
+            desired.map(|path| Wallpaper { path, image: None, stamp: None, width: 1, height: 1 });
+        retired
+    } else {
+        None
+    };
+    effects.layout = WallpaperLayout {
+        fit: rt
+            .background_image_fit
+            .as_deref()
+            .and_then(BackgroundImageFit::parse)
+            .unwrap_or_default(),
+        alignment: rt
+            .background_image_alignment
+            .as_deref()
+            .and_then(BackgroundImageAlignment::parse)
+            .unwrap_or_default(),
+        cover_chrome: rt.background_image_cover_chrome,
+        opacity: rt.background_image_opacity.clamp(0.0, 1.0),
+    };
+    effects.generation.fetch_add(1, Ordering::Release);
+    retire_image(retired, cx);
+    cx.global_mut::<VisualEffects>().terminal_config = rt.terminal_effects.clone();
+    animated::configure(rt, source_changed, cx);
+    if !rt.background_media_kind.is_animated() {
+        start_load(cx);
+    }
+}
+
+fn start_load(cx: &mut App) {
+    let effects = cx.global_mut::<VisualEffects>();
+    if effects.loading || effects.kind.is_animated() {
+        return;
+    }
+    let Some(wp) = effects.wallpaper.as_ref() else { return };
+    let request = image_loader::Request {
+        path: wp.path.clone(),
+        cached: wp.stamp.clone(),
+        generation: effects.generation.clone(),
+        version: effects.generation.load(Ordering::Acquire),
+    };
+    let version = request.version;
+    effects.loading = true;
+    let task = cx.background_executor().spawn(async move { image_loader::load(request) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        cx.update(|cx| {
+            let Some(effects) = cx.try_global::<VisualEffects>() else { return };
+            let stale = effects.generation.load(Ordering::Acquire) != version;
+            cx.global_mut::<VisualEffects>().loading = false;
+            if stale {
+                start_load(cx);
+                return;
+            }
+            match result {
+                Ok(Some(loaded)) => {
+                    let Some(wp) = cx.global_mut::<VisualEffects>().wallpaper.as_mut() else {
+                        return;
+                    };
+                    wp.width = loaded.layout_width;
+                    wp.height = loaded.layout_height;
+                    wp.stamp = Some(loaded.stamp);
+                    let image = Arc::new(RenderImage::new([Frame::new(loaded.pixels)]));
+                    let retired = wp.image.replace(image);
+                    retire_image(retired, cx);
+                    refresh_surface_opacity(cx);
+                    cx.refresh_windows();
+                },
+                Ok(None) => {},
+                Err(error) => {
+                    log::warn!("background image load failed: {error:?}");
+                    show_load_error(error, cx);
+                },
+            }
+        });
+    })
+    .detach();
+}
+
+fn refresh_surface_opacity(cx: &mut App) {
+    apply_window_effects(cx);
+    if cx.has_global::<gpui_component::Theme>()
+        && cx.has_global::<crate::gpui_shell::config::Settings>()
+    {
+        crate::gpui_shell::theme::reapply_prepared_surface_opacity(cx);
+    }
+    sync_root_background(cx);
+}
+
+/// Whether a native wallpaper layer is composited below the GPUI scene.
+pub fn native_underlay_active(cx: &App) -> bool {
+    animated::underlay_ready(cx)
+}
+
+/// Workspace paints each shell/card surface once. Keep Root transparent after
+/// every background refresh, including when no native wallpaper is active;
+/// restoring its default fill would add a second full-window surface.
+fn sync_root_background(cx: &mut App) {
+    cx.defer(move |cx| {
+        for handle in cx.windows() {
+            if let Err(error) = handle.update(cx, |_, window, cx| {
+                let Some(Some(root)) = window.root::<gpui_component::Root>() else { return };
+                root.update(cx, |root, cx| {
+                    let background = Some(gpui::Fill::from(gpui::transparent_black()));
+                    let style = gpui::Styled::style(root);
+                    if style.background != background {
+                        style.background = background;
+                        cx.notify();
+                    }
+                });
+            }) {
+                log::warn!("failed to update window root background: {error}");
+            }
+        }
+    });
+}
+
+fn retire_image(image: Option<Arc<RenderImage>>, cx: &mut App) {
+    if let Some(image) = image {
+        // Settings callbacks may have taken the current window out of App.windows.
+        // Defer until all windows are back, and invalidate cached scene replay.
+        cx.defer(move |cx| {
+            cx.drop_image(image, None);
+            cx.refresh_windows();
+        });
+    }
+}
+
+fn show_load_error(error: image_loader::LoadError, cx: &mut App) {
+    use crate::i18n::Message;
+    cx.defer(move |cx| {
+        let message = match error {
+            image_loader::LoadError::TooLarge => Message::WallpaperTooLarge,
+            _ => Message::WallpaperLoadFailed,
+        };
+        let text = crate::gpui_shell::config::ui_language(cx).text(message);
+        if let Some(handle) = cx.windows().first() {
+            let _ = handle.update(cx, |_, window, cx| {
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::gpui_shell::toast::ToastKind::Warning,
+                    text,
+                );
+            });
+        }
+    });
+}
+
+/// 当前窗口透明度（无全局时视为不透明）。
+#[allow(dead_code)]
+pub fn window_opacity(cx: &App) -> f32 {
+    cx.try_global::<VisualEffects>().map(|v| v.opacity).unwrap_or(1.0)
+}
+
+/// 拖不透明度滑块的快路径：只把新值写进视效全局。
+///
+/// 不读设置文件、不重建壁纸纹理。只有独立 Tab 材质在内容区跨过不透明边界时
+/// 才重新选择原生模糊，其余情况只改像素 alpha 与壳色 token。调用方紧接着调
+/// [`crate::gpui_shell::theme::reapply_shell_opacity`] 与 `cx.notify()`。
+pub fn set_opacity_live(opacity: f32, cx: &mut App) {
+    let previous = tab_bar::native_blur(cx);
+    if cx.has_global::<VisualEffects>() {
+        cx.global_mut::<VisualEffects>().opacity = opacity.clamp(0.0, 1.0);
+    }
+    // Only crossing the opaque-content boundary can change a tab-only backdrop.
+    if previous != tab_bar::native_blur(cx) {
+        apply_window_effects(cx);
+    }
+}
+
+/// Preserve the original extended-wallpaper scrim: shell and card surfaces
+/// retain the user's opacity, capped at 0.78, while text remains opaque.
+/// Before an image is ready (or after clearing it), use the normal surface.
+pub fn chrome_surface_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    let opacity = base_surface_opacity(effects, cx);
+    if effects.layout.cover_chrome && animated::underlay_ready(cx) {
+        return underlay_composition(opacity, effects.layout.opacity).0;
+    }
+    opacity
+}
+
+/// Card surface alpha. Equal to [`chrome_surface_opacity`] unless a native
+/// video sits below only the card.
+pub fn card_surface_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    if !effects.layout.cover_chrome && animated::underlay_ready(cx) {
+        return underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).0;
+    }
+    chrome_surface_opacity(cx)
+}
+
+fn base_surface_opacity(effects: &VisualEffects, cx: &App) -> f32 {
+    if effects.layout.cover_chrome && background_ready(effects, cx) {
+        return effects.opacity.clamp(0.0, 1.0).min(0.78);
+    }
+    effects.opacity.clamp(0.0, 1.0)
+}
+
+fn underlay_layer_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).1
+}
+
+/// A wallpaper painted above a surface of alpha `a` with opacity `w` shows
+/// `w·V + a·(1-w)·B`. A layer *below* that surface matches it exactly when the
+/// surface alpha becomes `a·(1-w)` and the layer opacity `w / (1 - a·(1-w))`.
+/// Returns `(surface alpha, layer opacity)`.
+fn underlay_composition(surface: f32, wallpaper: f32) -> (f32, f32) {
+    let surface = surface.clamp(0.0, 1.0);
+    let wallpaper = wallpaper.clamp(0.0, 1.0);
+    let surface_alpha = surface * (1.0 - wallpaper);
+    let layer = if surface_alpha >= 1.0 { 0.0 } else { wallpaper / (1.0 - surface_alpha) };
+    (surface_alpha, layer.min(1.0))
+}
+
+/// 开窗参数用。GPUI 通用层在窗口创建时就会把这个值下发到平台层
+/// （`gpui::Window::new` → `platform_window.set_background_appearance`）。
+/// Mica / Mica Alt 因此从首帧就走平台原生 backdrop，不再先挂一层普通透明背景。
+pub fn initial_background_appearance() -> WindowBackgroundAppearance {
+    let runtime = pebrel_settings::RuntimeSettings::load();
+    let (opacity, blur) = effective_material(&runtime);
+    background_appearance(
+        tab_bar::resolve_blur(blur, runtime.tab_bar_material.blur, opacity >= 1.0).0,
+    )
+}
+
+fn effective_material(runtime: &pebrel_settings::RuntimeSettings) -> (f32, BlurModeName) {
+    let resolved = crate::gpui_shell::theme::ResolvedTheme::from_runtime(runtime, runtime.theme);
+    (resolved.effective_opacity(runtime), resolved.effective_blur(runtime))
+}
+
+/// 已经真正落到窗口上的模糊档位。拖不透明度滑块会每帧走一遍 [`refresh`]，而
+/// 窗口级材质是**跨进程**调用（`SetWindowCompositionAttribute` 两次 +
+/// `DwmSetWindowAttribute`）。不做门控就等于每帧和 DWM 往返三次，滑块直接
+/// 拖成幻灯片——2026-08-21 实测。档位没变时一次都不碰。
+struct AppliedBlur {
+    blur: BlurModeName,
+    tab_bar_conflict: Option<BlurModeName>,
+    windows: HashSet<gpui::WindowId>,
+}
+
+impl gpui::Global for AppliedBlur {}
+
+/// 把窗口层效果应用到所有窗口。透明度完全由绘制像素 alpha 控制，因此模糊
+/// 开关与 0%..100% 透明度互不绑死、无需跨帧时序补丁。
+///
+/// # 必须 `defer`：否则热切换整条链路静默失效
+///
+/// 设置页开关是在**某个窗口自己的 update 回调里**点的（点击 → `toggle` →
+/// `persist` → `emit(Changed)` → `on_settings_event` → `apply_runtime_settings`
+/// → `apply_chrome_theme` → [`refresh`] → 这里），此时该窗口已经被
+/// `App::update_window` 从 slot 里 take 出来（`gpui/src/app.rs`：
+/// `cx.windows.get_mut(id)?.take()?`），对同一 handle 再 update 只会拿到
+/// `Err("window not found")`。
+///
+/// 2026-08-21 定案：这里原先写的是 `let _ = handle.update(..)`，把那个 Err 连同
+/// 整个 `set_background_appearance` 一起吞掉了——**启动时模糊有效（走
+/// `WindowOptions` 的 [`initial_background_appearance`]，不经过 update），运行中
+/// 点开关却完全没反应，且已经开着的 Acrylic 也关不掉**。这正是"关了还带模糊"
+/// 和"不切换实时生效"的同一个根因；旧壳 winit 直接对 HWND 落 API，没有这层
+/// 借用模型，所以一直是丝滑的。
+///
+/// [`App::defer`] 把应用推到本轮 effect cycle 末尾，那时窗口已归还 slot。
+/// update 失败不再静默：留 warn，避免同一个坑第三次被当成"DWM 不生效"。
+///
+/// # 模糊态没变时只处理新窗口
+///
+/// 不透明度/壁纸改动也会走到这里，但它们只影响我们自己绘制的像素，窗口级
+/// 模糊属性一个字节都不用改。透明度是滑块，一次拖拽几十上百个事件，所以这条
+/// 短路是拖拽手感的必要条件，不是可选优化。多窗口下则按 `WindowId` 补应用新窗，
+/// 避免全局档位相同就让第二个窗口漏掉原生 backdrop。
+fn apply_window_effects(cx: &mut App) {
+    // 全局缺失时按"关"处理而不是缺省档：这条路径只在极早期或异常态走到，
+    // 宁可少一层材质，也不要凭空给窗口开上模糊再被 refresh 纠正一次。
+    let (blur, tab_bar_conflict) = tab_bar::native_blur(cx);
+    let appearance = background_appearance(blur);
+    cx.defer(move |cx| {
+        if tab_bar_conflict.is_some()
+            && cx.try_global::<AppliedBlur>().and_then(|applied| applied.tab_bar_conflict)
+                != tab_bar_conflict
+        {
+            log::warn!(
+                "tab_bar_blur differs from blur while non-tab surfaces are translucent; \
+                 retaining the window material. Independent tab blur requires opaque content"
+            );
+        }
+        // 必须在 defer 后枚举：触发设置变更的窗口此时才重新放回 App 窗口表。
+        let handles = cx.windows();
+        let window_ids = handles.iter().map(|handle| handle.window_id()).collect::<HashSet<_>>();
+        let already_applied = cx
+            .try_global::<AppliedBlur>()
+            .filter(|applied| applied.blur == blur)
+            .map(|applied| applied.windows.clone())
+            .unwrap_or_default();
+        let pending = handles
+            .into_iter()
+            .filter(|handle| !already_applied.contains(&handle.window_id()))
+            .collect::<Vec<_>>();
+        let mut applied =
+            already_applied.intersection(&window_ids).copied().collect::<HashSet<_>>();
+        for handle in pending {
+            if let Err(err) = handle.update(cx, |_, window, _| {
+                crate::platform::acrylic::remove(window.window_handle().window_id());
+                window.set_background_appearance(appearance);
+                apply_windows_accent_policy(window, blur, appearance);
+                window.refresh();
+            }) {
+                log::warn!("failed to apply window visual effects: {err}");
+            } else {
+                applied.insert(handle.window_id());
+            }
+        }
+        cx.set_global(AppliedBlur { blur, tab_bar_conflict, windows: applied });
+    });
+}
+
+// ---- 以下一组只服务已停用的 [`paint_glass_overlay`]（见其文档）。按用户要求
+// ---- 保留实现，因此统一标 `dead_code`，不要因为"没人用"就删掉。
+
+/// 噪点 tile 边长（物理像素）。越大平铺次数越少、内存越高：512 时 3K 屏约
+/// 28 次 `paint_image`，1MB 纹理——两头都便宜。
+#[allow(dead_code)]
+const NOISE_TILE_PX: u32 = 512;
+/// 噪点强度。Acrylic 自带的颗粒非常细微（目测 3~5%），高于 ~8% 会从"玻璃"
+/// 变成"脏"。
+#[allow(dead_code)]
+const NOISE_ALPHA: u8 = 14;
+/// 白色 tint 浓度。暗色主题要更厚——Mica 的壁纸色调在暗色下偏沉，正是它
+/// "不够透亮"的主因；亮色主题本就够亮，加太多会过曝。
+#[allow(dead_code)]
+const TINT_ALPHA_DARK: f32 = 0.08;
+#[allow(dead_code)]
+const TINT_ALPHA_LIGHT: f32 = 0.05;
+
+thread_local! {
+    /// 噪点 tile 只依赖上面几个常量，进程内生成一次即可。用 `thread_local`
+    /// 而不是 `OnceLock`：`RenderImage` 只在渲染线程用，不必为跨线程共享去
+    /// 背 `Send + Sync` 的约束。
+    #[allow(dead_code)]
+    static NOISE_TILE: std::cell::RefCell<Option<Arc<RenderImage>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 生成（并缓存）噪点 tile。
+#[allow(dead_code)]
+fn noise_tile() -> Arc<RenderImage> {
+    NOISE_TILE.with(|slot| {
+        if let Some(tile) = slot.borrow().as_ref() {
+            return tile.clone();
+        }
+        let mut buffer = RgbaImage::new(NOISE_TILE_PX, NOISE_TILE_PX);
+        // LCG（数值出自 Numerical Recipes）：确定性、零依赖。噪点只要"看起来
+        // 随机"，不需要统计学质量；确定性还让同一台机器每次启动的颗粒一致。
+        let mut state: u32 = 0x9E37_79B9;
+        for pixel in buffer.chunks_exact_mut(4) {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            // 取高位：LCG 的低位周期极短，直接用会出现肉眼可见的条带。
+            let luma = (state >> 24) as u8;
+            // GPUI 的图像帧是预乘 alpha，颜色必须先乘进去，否则半透明噪点
+            // 整体偏亮。三通道同值，所以不必加载壁纸时那样 swap 成 BGRA。
+            let premultiplied = ((u16::from(luma) * u16::from(NOISE_ALPHA)) / 255) as u8;
+            pixel[0] = premultiplied;
+            pixel[1] = premultiplied;
+            pixel[2] = premultiplied;
+            pixel[3] = NOISE_ALPHA;
+        }
+        let tile = Arc::new(RenderImage::new([Frame::new(buffer)]));
+        *slot.borrow_mut() = Some(tile.clone());
+        tile
+    })
+}
+
+/// 【已停用，保留作参考】Mica 档的玻璃增强层：白 tint + 噪点颗粒。
+///
+/// # 为什么停用
+///
+/// 这层的前提是"系统 Mica 已经提供了壁纸模糊，我们只补噪点与 tint"。2026-08-22
+/// 实测证明前提不成立——系统 Mica 在本壳上从未生效，底下是一块纯色兜底，于是
+/// 这层只是在纯色上再刷一层雾，观感上离 Mica 更远（用户判定"明显不是 Mica"）。
+///
+/// Mica 现在由 DWM 的系统 backdrop 完整合成，噪点与 tint 不应在客户区重复叠加，
+/// 所以这层不再有调用点。代码按用户要求保留，供其他材质实验复用。
+///
+/// 调玻璃感只动本文件顶部那四个常量，不要改绘制顺序：tint 必须在噪点之下，
+/// 否则颗粒会被 tint 冲淡到看不见。
+#[allow(dead_code)]
+pub fn paint_glass_overlay(bounds: Bounds<Pixels>, window: &mut Window, cx: &App) {
+    let Some(effects) = cx.try_global::<VisualEffects>() else { return };
+    if !matches!(effects.blur, BlurModeName::Mica | BlurModeName::MicaAlt) {
+        return;
+    }
+
+    let is_light = crate::gpui_shell::theme::resolved_skin(cx).is_light;
+    let tint = if is_light { TINT_ALPHA_LIGHT } else { TINT_ALPHA_DARK };
+    window.paint_quad(fill(bounds, Hsla { h: 0.0, s: 0.0, l: 1.0, a: tint }));
+
+    // 平铺而不是"按窗口尺寸生成一张大图"：后者在 3K 屏上是 25MB 纹理，且每次
+    // resize 都要重新填充六百万像素——resize 是交互路径，不能挂这种活。
+    //
+    // `paint_image` 内部会 `bounds.scale(scale_factor)`，即入参是**逻辑**像素。
+    // tile 是按物理像素生成的，所以这里必须先除以 scale_factor 才能得到 1:1
+    // 的落点——否则在 3K/200% 屏上每个噪点会被 GPU 放大成 2×2 像素块，颗粒
+    // 糊成噪斑（旧壳"禁 GPU 拉伸"那条清晰度铁律同源）。
+    let tile = noise_tile();
+    let scale = window.scale_factor().max(0.5);
+    let step = px(NOISE_TILE_PX as f32 / scale);
+    let right = bounds.origin.x + bounds.size.width;
+    let bottom = bounds.origin.y + bounds.size.height;
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        let mut y = bounds.origin.y;
+        while y < bottom {
+            let mut x = bounds.origin.x;
+            while x < right {
+                let _ = window.paint_image(
+                    Bounds::new(point(x, y), size(step, step)),
+                    Bounds::new(point(x, y), size(step, step)),
+                    Corners::default(),
+                    tile.clone(),
+                    0,
+                    false,
+                );
+                x += step;
+            }
+            y += step;
+        }
+    });
+}
+
+/// Card-only wallpaper sits above the card background. Extended wallpaper sits
+/// below the shell/card surfaces, preserving the original visible scrim.
+/// Both modes reuse one image; opacity and layout never rebake its pixels.
+pub fn card_layer(cx: &App) -> impl IntoElement {
+    layer(false, cx)
+}
+
+pub fn window_layer(cx: &App) -> impl IntoElement {
+    layer(true, cx)
+}
+
+fn layer(under_chrome: bool, cx: &App) -> impl IntoElement {
+    let opacity = cx.try_global::<VisualEffects>().map_or(1.0, |effects| effects.layout.opacity);
+    // Canvas's style.paint does not apply element opacity in pinned GPUI;
+    // Div owns that scope for its child, without baking alpha into the image.
+    div().absolute().inset_0().opacity(opacity).child(
+        gpui::canvas(
+            |_, _, _| (),
+            move |bounds, _, window, cx| paint_wallpaper(bounds, under_chrome, window, cx),
+        )
+        .size_full(),
+    )
+}
+
+fn image_bounds(
+    wp: &Wallpaper,
+    layout: WallpaperLayout,
+    anchor: Bounds<Pixels>,
+    scale: f32,
+) -> Bounds<Pixels> {
+    let (x, y, width, height) = wallpaper_rect(
+        f32::from(anchor.size.width) * scale,
+        f32::from(anchor.size.height) * scale,
+        wp.width as f32,
+        wp.height as f32,
+        layout.fit,
+        layout.alignment,
+    );
+    Bounds::new(
+        anchor.origin + point(px(x / scale), px(y / scale)),
+        size(px(width / scale), px(height / scale)),
+    )
+}
+
+fn paint_wallpaper(bounds: Bounds<Pixels>, under_chrome: bool, window: &mut Window, cx: &mut App) {
+    let Some(effects) = cx.try_global::<VisualEffects>() else { return };
+    let layout = effects.layout;
+    // In the previous CPU crop path an offset card produced an empty overlay
+    // (negative crop offsets cast to u32). Repainting the source here would
+    // remove the visible scrim. Preserve that appearance directly, without
+    // retaining the broken crop arithmetic or an empty card-sized bitmap.
+    if layout.opacity <= 0.0 || under_chrome != layout.cover_chrome {
+        return;
+    }
+    if animated::paint(bounds, under_chrome, layout, window, cx) {
+        return;
+    }
+    let effects = cx.global::<VisualEffects>();
+    let Some(wp) = effects.wallpaper.as_ref() else { return };
+    let Some(image) = wp.image.as_ref() else { return };
+    let anchor = if layout.cover_chrome {
+        Bounds::new(point(px(0.0), px(0.0)), window.viewport_size())
+    } else {
+        bounds
+    };
+    let image_bounds = image_bounds(wp, layout, anchor, window.scale_factor().max(0.5));
+    let radius = if under_chrome { px(0.0) } else { crate::gpui_shell::theme::card_radius(cx) };
+    let corners = image_corners(bounds, image_bounds, radius);
+    if let Err(error) = window.paint_image(bounds, image_bounds, corners, image.clone(), 0, false) {
+        log::warn!("background image paint failed: {error}");
+    }
+}
+
+fn image_corners(bounds: Bounds<Pixels>, image: Bounds<Pixels>, radius: Pixels) -> Corners<Pixels> {
+    // GPUI rounds the visible intersection. Interior letterbox edges are square;
+    // only corners shared with the card inherit its radius.
+    let left = image.left() <= bounds.left();
+    let right = image.right() >= bounds.right();
+    let top = image.top() <= bounds.top();
+    let bottom = image.bottom() >= bounds.bottom();
+    Corners {
+        top_left: if left && top { radius } else { px(0.0) },
+        top_right: if right && top { radius } else { px(0.0) },
+        bottom_left: if left && bottom { radius } else { px(0.0) },
+        bottom_right: if right && bottom { radius } else { px(0.0) },
+    }
+}
+
+/// Initialize only the visual state needed by native material acceptance tests.
+#[cfg(test)]
+pub(crate) fn test_install_visual_effects(cx: &mut App, opacity: f32, blur: BlurModeName) {
+    cx.set_global(VisualEffects {
+        opacity,
+        blur,
+        tab_bar_material: pebrel_settings::TabBarMaterial::default(),
+        wallpaper: None,
+        generation: Arc::new(AtomicU64::new(0)),
+        loading: false,
+        kind: pebrel_settings::BackgroundMediaKind::Image,
+        layout: WallpaperLayout::default(),
+
+        terminal_config: pebrel_settings::TerminalEffects::default(),
+        terminal_reload: 0,
+        animated: animated::Animated::default(),
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_apply_window_effects(cx: &mut App) {
+    apply_window_effects(cx);
+}
+
+pub(super) fn video_available() -> bool {
+    animated::video_available()
+}
+
+pub(super) fn media_available(kind: pebrel_settings::BackgroundMediaKind) -> bool {
+    animated::media_available(kind)
+}
+
+pub(super) fn shader_available() -> bool {
+    animated::shader_available()
+}
+
+pub(super) fn show_shader_error(cx: &mut App) {
+    let message = if shader_available() {
+        crate::i18n::Message::WallpaperShaderFailed
+    } else {
+        crate::i18n::Message::WallpaperShaderUnavailable
+    };
+    cx.defer(move |cx| {
+        let text = crate::gpui_shell::config::ui_language(cx).text(message);
+        if let Some(handle) = cx.windows().first() {
+            let _ = handle.update(cx, |_, window, cx| {
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::gpui_shell::toast::ToastKind::Warning,
+                    text,
+                );
+            });
+        }
+    });
+}
+fn background_ready(effects: &VisualEffects, cx: &App) -> bool {
+    animated::shader_ready(cx)
+        || effects.wallpaper.as_ref().is_some_and(|wp| wp.image.is_some())
+        || animated::media_ready(cx)
+}
+pub(super) fn show_video_error(cx: &mut App) {
+    show_media_error(pebrel_settings::BackgroundMediaKind::Video, cx);
+}
+
+pub(super) fn show_media_error(kind: pebrel_settings::BackgroundMediaKind, cx: &mut App) {
+    use crate::i18n::Message;
+    let message = if kind == pebrel_settings::BackgroundMediaKind::Image {
+        Message::WallpaperLoadFailed
+    } else if kind == pebrel_settings::BackgroundMediaKind::Gif {
+        if media_available(kind) {
+            Message::WallpaperGifFailed
+        } else {
+            Message::WallpaperGifUnavailable
+        }
+    } else if video_available() {
+        Message::WallpaperVideoFailed
+    } else {
+        Message::WallpaperVideoUnavailable
+    };
+    cx.defer(move |cx| {
+        let text = crate::gpui_shell::config::ui_language(cx).text(message);
+        if let Some(handle) = cx.windows().first() {
+            let _ = handle.update(cx, |_, window, cx| {
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::gpui_shell::toast::ToastKind::Warning,
+                    text,
+                );
+            });
+        }
+    });
+}
+
+pub(super) fn terminal_effect_configuration(cx: &App) -> (pebrel_settings::TerminalEffects, u64) {
+    cx.try_global::<VisualEffects>()
+        .map(|effects| (effects.terminal_config.clone(), effects.terminal_reload))
+        .unwrap_or_default()
+}
+
+pub(super) fn reload_terminal_effects(cx: &mut App) {
+    if cx.has_global::<VisualEffects>() {
+        let effects = cx.global_mut::<VisualEffects>();
+        effects.terminal_reload = effects.terminal_reload.wrapping_add(1);
+    }
+    cx.refresh_windows();
+}
+
+pub(super) fn show_terminal_effect_error(handle: gpui::AnyWindowHandle, cx: &mut App) {
+    cx.defer(move |cx| {
+        let text = crate::gpui_shell::config::ui_language(cx)
+            .text(crate::i18n::Message::TerminalEffectFailed);
+        if let Err(error) = handle.update(cx, |_, window, cx| {
+            crate::gpui_shell::toast::toast(
+                window,
+                cx,
+                crate::gpui_shell::toast::ToastKind::Warning,
+                text,
+            );
+        }) {
+            log::debug!("effect window was released: {error}");
+        }
+    });
+}
+
+pub(super) fn reload_media(cx: &mut App) {
+    animated::reload_media(cx);
+}
+pub(super) fn reload_shader(cx: &mut App) {
+    animated::reload_shader(cx);
+}
+pub(super) fn effect_gpu_budget(cx: &mut App) -> Arc<gpui::StreamImageBudget> {
+    budgets::gpu_budget(cx)
+}
+pub(super) fn effect_compiler_budget(cx: &mut App) -> gpui::StreamImageBudgets {
+    budgets::compiler_budget(cx)
+}

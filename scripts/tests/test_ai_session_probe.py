@@ -20,7 +20,7 @@ sys.stdin.read()
 @unittest.skipUnless(sys.platform == "linux", "requires Linux procfs (also runs inside WSL)")
 class ActiveRolloutProbeTests(unittest.TestCase):
     def test_probe_binds_custom_home_to_exact_instance_and_pane(self):
-        source = (ROOT / "nebula_app/src/platform/ai_session_identity.rs").read_text()
+        source = (ROOT / "pebrel_app/src/platform/ai_session_identity.rs").read_text()
         script = source.split('const PROBE_SCRIPT: &str = r###"', 1)[1].split('"###;', 1)[0]
         with tempfile.TemporaryDirectory(prefix="pebrel-identity-") as temporary:
             codex_directory = Path(temporary) / "custom codex"

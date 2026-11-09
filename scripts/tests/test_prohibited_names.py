@@ -40,8 +40,8 @@ class ProhibitedNamesTests(unittest.TestCase):
         cases = (
             ("README.md", "Agent status works inside tmux."),
             ("architecture/notes/mobile/recovery.md", "Typed tmux commands use an independent channel."),
-            ("nebula_app/res/hooks/remote_tmux.py", 'if os.environ.get("TMUX"):'),
-            ("nebula_app/src/ai_hook/protocol.rs", 'field.strip_prefix("tmux=")'),
+            ("pebrel_app/res/hooks/remote_tmux.py", 'if os.environ.get("TMUX"):'),
+            ("pebrel_app/src/ai_hook/protocol.rs", 'field.strip_prefix("tmux=")'),
             ("mobile/android/app/src/androidTest/SshIntegrationTest.kt", "tmux capture-pane -p -t '$name'"),
             ("mobile/android/app/preview-proguard-rules.pro", "# The real tmux/IME regression"),
         )

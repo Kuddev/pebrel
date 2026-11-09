@@ -20,7 +20,7 @@ class ShellPointerTests(unittest.TestCase):
 
     def start(self, shell: str, setup: str = ""):
         session = self.editor.start(shell, setup)
-        adapter = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty/pointer.sh"
+        adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
         session.command(f"source {shlex.quote(str(adapter))}", b"\x1b]133;A\x07")
         return session
 
@@ -126,7 +126,7 @@ class ShellPointerTests(unittest.TestCase):
             session.wait(boundary)
         # Repeated prompt changes and re-sourcing must retain exactly one
         # boundary, after all printable user prompt cells.
-        adapter = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty/pointer.sh"
+        adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
         session.command(f"source {shlex.quote(str(adapter))}", boundary)
         output = session.command(":", boundary)
         self.assertEqual(output.count(b"\x1b]133;B\x07"), 1, output)
