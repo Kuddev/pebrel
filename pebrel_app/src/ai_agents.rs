@@ -612,20 +612,10 @@ fn build_cache() -> HashMap<AgentKind, CompiledManifest> {
 }
 
 fn override_path(agent: AgentKind) -> PathBuf {
-    settings_dir().join("agent-detection").join(format!("{}.toml", agent.slug()))
-}
-
-/// Same path contract as pebrel-settings, repeated here because that crate is
-/// optional in non-GPUI builds while agent semantics serve both shells.
-fn settings_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("NEBULA_CONFIG_DIR").filter(|path| !path.is_empty()) {
-        return PathBuf::from(path);
-    }
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Nebula")
+    static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| crate::platform::dirs::adopted_data_entry("agent-detection"))
+        .join(format!("{}.toml", agent.slug()))
 }
 
 fn modified(path: &std::path::Path) -> Option<SystemTime> {

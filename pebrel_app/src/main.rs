@@ -372,7 +372,7 @@ impl Drop for TemporaryFiles {
     }
 }
 
-/// Startup profiling: `NEBULA_BOOT_TRACE=1 nebula` prints a per-stage
+/// Startup profiling: `PEBREL_BOOT_TRACE=1 pebrel` prints a per-stage
 /// timeline to stderr, timed from process entry. First call sets t=0, so it
 /// must be the first statement in `main`.
 pub(crate) fn boot_trace(label: &str) {
@@ -381,7 +381,7 @@ pub(crate) fn boot_trace(label: &str) {
     static T0: OnceLock<Instant> = OnceLock::new();
     static ON: OnceLock<bool> = OnceLock::new();
     let t0 = *T0.get_or_init(Instant::now);
-    if *ON.get_or_init(|| std::env::var_os("NEBULA_BOOT_TRACE").is_some()) {
+    if *ON.get_or_init(|| std::env::var_os("PEBREL_BOOT_TRACE").is_some()) {
         eprintln!("[boot +{:>7.1}ms] {label}", t0.elapsed().as_secs_f64() * 1000.0);
     }
 }

@@ -243,9 +243,9 @@ pub fn spawn(
     let pty = tty::new(&options, window_size, 0)?;
     let shell_pid = pty.child_pid().unwrap_or(0);
 
-    // NEBULA_PTY_RECORD=1 复用 ref_test 的 conout 录制（./nebula.recording），
+    // PEBREL_PTY_RECORD=1 复用 ref_test 的 conout 录制（./nebula.recording），
     // 用于 resize 锚定问题的字节级取证。
-    let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
+    let record = std::env::var_os("PEBREL_PTY_RECORD").is_some();
     let native_prompt = proxy.events.native_prompt.clone();
     let remote_connection = proxy.remote_connection.clone();
     let mut event_loop =

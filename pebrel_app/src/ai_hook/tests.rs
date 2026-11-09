@@ -16,6 +16,19 @@ fn remote_envelope_uses_local_pane_identity() {
 }
 
 #[test]
+fn both_hook_protocol_names_parse_and_others_do_not() {
+    let body = "\n{\"type\":\"agent-turn-complete\"}";
+    for header in ["nebula-hook/1 source=codex", "pebrel-hook/1 source=codex"] {
+        let event = parse_remote_envelope(format!("{header}{body}").as_bytes(), Some(7)).unwrap();
+        assert_eq!(event.kind, AiHookKind::TurnDone);
+    }
+    assert!(
+        parse_remote_envelope(format!("other-hook/1 source=codex{body}").as_bytes(), None)
+            .is_none()
+    );
+}
+
+#[test]
 fn claude_events_carry_their_session_id_for_cold_resume() {
     let raw = b"nebula-hook/1 source=claude pane=3\n{\"session_id\":\"0199a213-c2a4-7cf5-8f6b-d746fbb6e86c\",\"hook_event_name\":\"Stop\"}";
     let event = parse_remote_envelope(raw, Some(3)).unwrap();

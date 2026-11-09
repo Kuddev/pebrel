@@ -69,7 +69,7 @@ pub(crate) fn prepare_gui_process() -> std::io::Result<()> {
             // SAFETY: main calls this while startup is still single-threaded.
             unsafe { std::env::set_var(crate::agent_env::CLI_ENV, executable) };
         }
-        if std::env::var_os("NEBULA_DETACHED_LAUNCH").is_some() {
+        if std::env::var_os("PEBREL_DETACHED_LAUNCH").is_some() {
             // Detach before either GUI event loop starts, so a launcher exiting
             // cannot take the window down with its startup console.
             unsafe { windows_sys::Win32::System::Console::FreeConsole() };

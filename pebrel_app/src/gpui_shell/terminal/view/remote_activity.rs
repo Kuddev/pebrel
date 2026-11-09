@@ -63,8 +63,13 @@ impl TerminalView {
         {
             let title: String = observation.title.chars().filter(|ch| !ch.is_control()).collect();
             let title = title.trim();
-            let title =
-                if title.is_empty() || title.starts_with("NEBULA|") { "shell" } else { title };
+            let title = if title.is_empty()
+                || pebrel_terminal::event::shell_title_payload(title).is_some()
+            {
+                "shell"
+            } else {
+                title
+            };
             if self.title != title {
                 self.title = title.into();
                 cx.emit(TerminalViewEvent::TitleChanged);

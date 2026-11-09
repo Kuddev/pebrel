@@ -106,7 +106,7 @@ pub fn config_path() -> PathBuf {
 
 /// Legacy compatibility when no enabled provider is selected in Settings.
 fn fallback_api_key() -> Option<Zeroizing<String>> {
-    for var in ["NEBULA_AI_KEY", "OPENAI_API_KEY"] {
+    for var in ["PEBREL_AI_KEY", "OPENAI_API_KEY"] {
         if let Ok(key) = std::env::var(var) {
             let key = key.trim().to_owned();
             if !key.is_empty() {

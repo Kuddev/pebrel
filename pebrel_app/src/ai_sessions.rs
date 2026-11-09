@@ -139,18 +139,8 @@ struct RegistrySession {
 }
 
 fn registry_path() -> PathBuf {
-    settings_dir().join("ai_sessions.json")
-}
-
-fn settings_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("NEBULA_CONFIG_DIR").filter(|path| !path.is_empty()) {
-        return PathBuf::from(path);
-    }
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Nebula")
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| crate::platform::dirs::adopted_data_entry("ai_sessions.json")).clone()
 }
 
 /// Upsert one hook-reported identity. The registry stores no transcript or

@@ -60,10 +60,10 @@ const ALIGN_DELAY: Duration = Duration::from_millis(120);
 /// Resize diagnostics are opt-in because PTY reads are a hot path. The trace
 /// records the local grid state at the exact stream boundaries where bytes are
 /// parsed or a resize is committed, so it can be aligned with
-/// `NEBULA_PTY_RECORD=1` without changing terminal behavior.
+/// `PEBREL_PTY_RECORD=1` without changing terminal behavior.
 fn resize_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("NEBULA_RESIZE_TRACE").is_some())
+    *ENABLED.get_or_init(|| std::env::var_os("PEBREL_RESIZE_TRACE").is_some())
 }
 
 fn trace_terminal_state<U: EventListener>(stage: &str, terminal: &Term<U>) {

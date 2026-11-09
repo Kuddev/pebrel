@@ -2096,7 +2096,7 @@ impl NebulaWorkspace {
     }
 
     /// 导出单个标签为工作区文件（旧壳 `export_workspace(Some(ix))` 同合同：
-    /// 只导出可恢复的终端标签，文件名取标签名，扩展名 `.nebula-workspace.json`，
+    /// 只导出可恢复的终端标签，文件名取标签名，扩展名 `.pebrel-workspace.json`，
     /// 落盘走共享 v4 schema）。
     fn export_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let session = self.snapshot_session(cx);

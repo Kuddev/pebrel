@@ -24,7 +24,7 @@ impl NebulaWorkspace {
         let directory =
             crate::platform::dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         let prompt =
-            cx.prompt_for_new_path(&directory, Some(&format!("{stem}.nebula-workspace.json")));
+            cx.prompt_for_new_path(&directory, Some(&format!("{stem}.pebrel-workspace.json")));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = prompt.await else { return };
             let result = crate::session::save_to(&path, &export);

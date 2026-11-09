@@ -18,7 +18,9 @@ pub(super) fn claude_style(source: &str) -> bool {
 const TURN_RESULT_MAX_CHARS: usize = 4_000;
 static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Parse one pipe message: a `nebula-hook/1 source=<s> pane=<n>` header line,
+/// Parse one pipe message: a `nebula-hook/1 source=<s> pane=<n>` header line
+/// (`pebrel-hook/1` is accepted too; emitters keep the original name so hook
+/// helpers from another installed version still reach this one),
 /// then the hook's raw JSON payload verbatim (the helper never re-encodes;
 /// all JSON work happens here, off the turn's hot path).
 pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
@@ -29,7 +31,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     let raw = &bytes[nl + 1..];
 
     let mut fields = header.split_whitespace();
-    if fields.next() != Some("nebula-hook/1") {
+    if !matches!(fields.next(), Some("nebula-hook/1" | "pebrel-hook/1")) {
         return None;
     }
     let (mut source, mut pane, mut codex_mode, mut native_event) = (None, None, None, None);

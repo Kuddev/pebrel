@@ -1504,7 +1504,7 @@ mod tests {
         let environment = wsl_cwd_report_env("wsl.exe", Some("PROMPT_COMMAND:KEEP/u"), None);
         assert_eq!(environment[1].1, "PROMPT_COMMAND:KEEP/u");
         let prompt = &environment[0].1;
-        let bash = std::env::var_os("NEBULA_BASH").unwrap_or_else(|| {
+        let bash = std::env::var_os("PEBREL_BASH").unwrap_or_else(|| {
             [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
                 .into_iter()
                 .find(|path| std::path::Path::new(path).is_file())

@@ -219,3 +219,25 @@ pub trait EventListener {
 pub struct VoidListener;
 
 impl EventListener for VoidListener {}
+
+/// Field payload of a shell-integration title (`NEBULA|cwd|branch|program`).
+///
+/// Shell scripts written into the shared data directory and remote bridges emit
+/// the original `NEBULA|` marker, so concurrently running older installs keep
+/// working. `PEBREL|` is accepted too, so a later switch is backward compatible.
+pub fn shell_title_payload(title: &str) -> Option<&str> {
+    title.strip_prefix("NEBULA|").or_else(|| title.strip_prefix("PEBREL|"))
+}
+
+#[cfg(test)]
+mod shell_title_tests {
+    use super::shell_title_payload;
+
+    #[test]
+    fn both_markers_carry_the_same_fields() {
+        assert_eq!(shell_title_payload("NEBULA|/srv|main|"), Some("/srv|main|"));
+        assert_eq!(shell_title_payload("PEBREL|/srv|main|"), Some("/srv|main|"));
+        assert_eq!(shell_title_payload("vim NEBULA|x"), None);
+        assert_eq!(shell_title_payload("nebula|/srv"), None);
+    }
+}

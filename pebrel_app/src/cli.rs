@@ -1397,7 +1397,7 @@ pub struct IpcConfig {
     /// Window ID for the new config.
     ///
     /// Use `-1` to apply this change to all windows.
-    #[clap(short, long, allow_hyphen_values = true, env = "NEBULA_WINDOW_ID")]
+    #[clap(short, long, allow_hyphen_values = true, env = "PEBREL_WINDOW_ID")]
     pub window_id: Option<i128>,
 
     /// Clear all runtime configuration changes.
@@ -1412,7 +1412,7 @@ pub struct IpcGetConfig {
     /// Window ID for the config request.
     ///
     /// Use `-1` to get the global config.
-    #[clap(short, long, allow_hyphen_values = true, env = "NEBULA_WINDOW_ID")]
+    #[clap(short, long, allow_hyphen_values = true, env = "PEBREL_WINDOW_ID")]
     pub window_id: Option<i128>,
 }
 

@@ -91,7 +91,7 @@ impl TerminalView {
             && title != agent.display_name()
             && title != self.cwd
             && Some(title) != self.ssh_destination.as_deref()
-            && !title.starts_with("NEBULA|"))
+            && pebrel_terminal::event::shell_title_payload(title).is_none())
         .then_some(title)
     }
 

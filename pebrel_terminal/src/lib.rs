@@ -25,7 +25,7 @@ pub mod zmodem;
 pub use crate::grid::Grid;
 pub use crate::term::Term;
 
-/// PTY-side startup profiling (`NEBULA_BOOT_TRACE=1`): times the ConPTY
+/// PTY-side startup profiling (`PEBREL_BOOT_TRACE=1`): times the ConPTY
 /// bring-up stages the app-side boot trace cannot see — they happen inside
 /// this crate and the console host (CreatePseudoConsole, shell attach, the
 /// host's DA1 handshake window until the first conout bytes arrive).
@@ -35,7 +35,7 @@ pub(crate) fn pty_trace(label: &str) {
     static T0: OnceLock<Instant> = OnceLock::new();
     static ON: OnceLock<bool> = OnceLock::new();
     let t0 = *T0.get_or_init(Instant::now);
-    if *ON.get_or_init(|| std::env::var_os("NEBULA_BOOT_TRACE").is_some()) {
+    if *ON.get_or_init(|| std::env::var_os("PEBREL_BOOT_TRACE").is_some()) {
         eprintln!("[pty  +{:>7.1}ms] {label}", t0.elapsed().as_secs_f64() * 1000.0);
     }
 }

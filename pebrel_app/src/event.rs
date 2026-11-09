@@ -2826,7 +2826,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         // while one runs. A local shell sends only 3 fields, so
                         // the 4th is absent and `running_program` is left to the
                         // existing OSC-133;C/last_committed path untouched.
-                        if let Some(rest) = title.strip_prefix("NEBULA|") {
+                        if let Some(rest) = pebrel_terminal::event::shell_title_payload(&title) {
                             let mut parts = rest.splitn(3, '|');
                             let cwd = parts.next().unwrap_or("").to_owned();
                             self.ctx.display.nebula_report_cwd(self.ctx.nebula_state, &cwd);

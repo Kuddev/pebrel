@@ -403,7 +403,7 @@ fn open_workspace_window_with_visibility(
         });
         workspace.update(cx, |workspace, _| workspace.window_hidden = start_hidden);
         if runtime_window_id == 1
-            && let Ok(path) = std::env::var("NEBULA_GPUI_OPEN_DOC")
+            && let Ok(path) = std::env::var("PEBREL_GPUI_OPEN_DOC")
             && !path.is_empty()
         {
             workspace.update(cx, |workspace, cx| {

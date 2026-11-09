@@ -2,7 +2,7 @@
 //!
 //! Segment timestamps for the input pipeline, logged through the same
 //! `nebula_debug_log` channel used by ad-hoc perf investigations. Off by
-//! default; set `NEBULA_INPUT_LATENCY=1` before launch to enable (checked
+//! default; set `PEBREL_INPUT_LATENCY=1` before launch to enable (checked
 //! lazily on first probe). When disabled every probe is one
 //! initialized-`OnceLock` read.
 //!
@@ -39,7 +39,7 @@ static SLOTS: Mutex<Slots> = Mutex::new(Slots { key: None, wakeup: None });
 #[inline]
 fn enabled() -> bool {
     *ENABLED.get_or_init(|| {
-        let on = std::env::var("NEBULA_INPUT_LATENCY").is_ok_and(|v| v != "0" && !v.is_empty());
+        let on = std::env::var("PEBREL_INPUT_LATENCY").is_ok_and(|v| v != "0" && !v.is_empty());
         if on {
             crate::display::nebula_debug_log("inlat enabled (key→pty / wake→frame / key→frame)");
         }

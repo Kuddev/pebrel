@@ -156,7 +156,7 @@ impl NebulaWorkspace {
         .detach();
     }
 
-    /// 调试/验收后门：`NEBULA_GPUI_OPEN_DOC=路径` 时启动即打开该文档，
+    /// 调试/验收后门：`PEBREL_GPUI_OPEN_DOC=路径` 时启动即打开该文档，
     /// 与文件树双击同一条路由（公式渲染等文档 UI 的免点击验收）。
     pub fn open_document_at_startup(
         &mut self,

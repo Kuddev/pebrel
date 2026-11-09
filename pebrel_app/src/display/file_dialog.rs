@@ -50,17 +50,18 @@ const PRIVATE_KEY_FILTERS: &[FileFilter] = &[
 ];
 const WORKSPACE_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "Nebula workspaces",
+        name: "Pebrel workspaces",
         extensions: &["json"],
-        patterns: &["*.nebula-workspace.json", "*.json"],
+        patterns: &["*.pebrel-workspace.json", "*.nebula-workspace.json", "*.json"],
     },
     ALL_FILES_FILTER,
 ];
 const BACKUP_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "Nebula encrypted backups",
-        extensions: &["nebula-backup"],
-        patterns: &["*.nebula-backup"],
+        name: "Pebrel encrypted backups",
+        // 改名前导出的 `.nebula-backup` 仍可恢复。
+        extensions: &["pebrel-backup", "nebula-backup"],
+        patterns: &["*.pebrel-backup", "*.nebula-backup"],
     },
     ALL_FILES_FILTER,
 ];
@@ -212,12 +213,12 @@ pub(super) fn pick_workspace_file(owner: &Window) -> Option<PathBuf> {
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn save_backup_file(owner: &Window) -> Option<PathBuf> {
-    platform::save_file(owner, "导出 Nebula 备份", BACKUP_FILTERS, "nebula-backup.nebula-backup")
+    platform::save_file(owner, "导出 Pebrel 备份", BACKUP_FILTERS, "pebrel-backup.pebrel-backup")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_backup_file(owner: &Window) -> Option<PathBuf> {
-    platform::pick_file(owner, "恢复 Nebula 备份", BACKUP_FILTERS)
+    platform::pick_file(owner, "恢复 Pebrel 备份", BACKUP_FILTERS)
 }
 
 #[cfg(test)]

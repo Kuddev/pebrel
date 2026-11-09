@@ -123,7 +123,7 @@ impl NebulaTheme {
     /// Static command-palette labels share theme metadata rather than a second exhaustive UI match.
     pub(crate) const fn command_label(self) -> &'static str {
         match self {
-            Self::Nebula => "Theme: Nebula",
+            Self::Nebula => "Theme: Pebrel",
             Self::SilverLight => "Theme: Silver Light",
             Self::SteelDark => "Theme: Steel Dark",
             Self::LimestoneLight => "Theme: Limestone",
@@ -148,7 +148,7 @@ impl NebulaTheme {
 
     pub(crate) fn prompt_name(self) -> &'static str {
         match self {
-            Self::Nebula => "Nebula",
+            Self::Nebula => "Pebrel",
             Self::SilverLight => "SilverLight",
             Self::SteelDark => "SteelDark",
             Self::LimestoneLight => "LimestoneLight",
@@ -175,7 +175,7 @@ impl NebulaTheme {
     /// persisted theme from `nebula_settings.txt`.
     pub(crate) fn from_prompt_name(name: &str) -> Option<Self> {
         Some(match name {
-            "Nebula" => Self::Nebula,
+            "Pebrel" | "Nebula" => Self::Nebula,
             "SilverLight" => Self::SilverLight,
             "SteelDark" => Self::SteelDark,
             "LimestoneLight" => Self::LimestoneLight,
@@ -945,7 +945,8 @@ mod tests {
     fn system_appearance_keeps_the_selected_theme_family() {
         assert_eq!(NebulaTheme::Nebula.label(), "Pebrel");
         assert_eq!(NebulaTheme::Nebula.short_label(), "Pebrel");
-        assert_eq!(NebulaTheme::Nebula.prompt_name(), "Nebula");
+        assert_eq!(NebulaTheme::Nebula.prompt_name(), "Pebrel");
+        assert_eq!(NebulaTheme::from_prompt_name("Pebrel"), Some(NebulaTheme::Nebula));
         assert_eq!(NebulaTheme::from_prompt_name("Nebula"), Some(NebulaTheme::Nebula));
         assert_eq!(NebulaTheme::Nebula.for_system_appearance(true), NebulaTheme::SilverLight);
         assert_eq!(NebulaTheme::Nebula.for_system_appearance(false), NebulaTheme::Nebula);

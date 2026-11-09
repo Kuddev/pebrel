@@ -231,6 +231,8 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
 
     // Setup shell environment.
     let window_id = window_id.to_string();
+    builder.env("PEBREL_WINDOW_ID", &window_id);
+    // `pebrel msg` from an older install in this shell still reads the old name.
     builder.env("NEBULA_WINDOW_ID", &window_id);
     builder.env("USER", user.user);
     builder.env("HOME", user.home);

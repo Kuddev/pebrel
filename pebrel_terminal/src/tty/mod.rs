@@ -151,10 +151,13 @@ pub trait EventedPty: EventedReadWrite {
 
 /// Setup environment variables.
 pub fn setup_env() {
-    // Prefer a 'nebula' terminfo entry if the user has installed one,
-    // otherwise fall back to the universally supported 'xterm-256color'.
-    // May be overridden by the user's config below.
-    let terminfo = if terminfo_exists("nebula") { "nebula" } else { "xterm-256color" };
+    // Prefer a 'pebrel' (or pre-rename 'nebula') terminfo entry if the user has
+    // installed one, otherwise fall back to the universally supported
+    // 'xterm-256color'. May be overridden by the user's config below.
+    let terminfo = ["pebrel", "nebula"]
+        .into_iter()
+        .find(|name| terminfo_exists(name))
+        .unwrap_or("xterm-256color");
     unsafe { env::set_var("TERM", terminfo) };
 
     // Advertise 24-bit color support.

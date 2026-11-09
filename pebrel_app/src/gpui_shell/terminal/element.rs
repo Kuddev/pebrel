@@ -219,7 +219,7 @@ impl Element for TerminalElement {
         static TRACE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         static TRACE_SAMPLES: std::sync::atomic::AtomicUsize =
             std::sync::atomic::AtomicUsize::new(0);
-        if *TRACE_ENABLED.get_or_init(|| std::env::var_os("NEBULA_RESIZE_TRACE").is_some())
+        if *TRACE_ENABLED.get_or_init(|| std::env::var_os("PEBREL_RESIZE_TRACE").is_some())
             && TRACE_SAMPLES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 256
         {
             crate::gpui_shell::try_write_stderr(format_args!(

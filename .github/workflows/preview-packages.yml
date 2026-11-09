@@ -220,7 +220,7 @@ jobs:
 
       - name: Run AppImage conformance under X11
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           xvfb-run -a -s "-screen 0 1600x1000x24" \
             python3 scripts/conformance/run.py \
@@ -230,7 +230,7 @@ jobs:
 
       - name: Run AppImage conformance under Wayland
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           # Weston headless has no wl_seat. A private X11 backend provides
           # input devices while DISPLAY is cleared for the Wayland client.
@@ -278,7 +278,7 @@ jobs:
 
       - name: Install and run Debian package conformance under X11
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           sudo apt-get install -y \
             "./dist/Pebrel-v$ASSET_VERSION-linux-x86_64.deb"
@@ -438,7 +438,7 @@ jobs:
 
       - name: Mount final DMG and run conformance
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           dmg="dist/Pebrel-v$ASSET_VERSION-macos-${{ matrix.architecture }}.dmg"
           mount_point="$RUNNER_TEMP/pebrel-preview-${{ matrix.architecture }}"
@@ -525,7 +525,7 @@ jobs:
         run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
       - name: Run Windows conformance
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: >-
           python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app target/release/pebrel.exe
           --platform windows-x86_64 --output dist/conformance/windows-report.json

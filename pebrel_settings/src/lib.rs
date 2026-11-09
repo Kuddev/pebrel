@@ -273,7 +273,8 @@ pub enum ThemeName {
 impl ThemeName {
     pub fn from_prompt_name(name: &str) -> Option<Self> {
         Some(match name {
-            "Nebula" => Self::Nebula,
+            // 改名前保存的键仍可读取；旧版读到 "Pebrel" 时回落的默认主题也是它。
+            "Pebrel" | "Nebula" => Self::Nebula,
             "SilverLight" => Self::SilverLight,
             "SteelDark" => Self::SteelDark,
             "LimestoneLight" => Self::LimestoneLight,
@@ -300,7 +301,7 @@ impl ThemeName {
 
     pub const fn prompt_name(self) -> &'static str {
         match self {
-            Self::Nebula => "Nebula",
+            Self::Nebula => "Pebrel",
             Self::SilverLight => "SilverLight",
             Self::SteelDark => "SteelDark",
             Self::LimestoneLight => "LimestoneLight",
@@ -1867,7 +1868,8 @@ mod tests {
 
     #[test]
     fn theme_names_roundtrip() {
-        assert_eq!(ThemeName::Nebula.prompt_name(), "Nebula");
+        assert_eq!(ThemeName::Nebula.prompt_name(), "Pebrel");
+        assert_eq!(ThemeName::from_prompt_name("Pebrel"), Some(ThemeName::Nebula));
         assert_eq!(ThemeName::from_prompt_name("Nebula"), Some(ThemeName::Nebula));
         for theme in [
             ThemeName::Nebula,

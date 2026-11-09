@@ -649,7 +649,7 @@ impl TerminalView {
         // Both shell metadata channels update completion and directory history.
         if cwd_changed
             || ((matches!(&event, TermEvent::CwdReport(_))
-                || matches!(&event, TermEvent::Title(title) if title.starts_with("NEBULA|")))
+                || matches!(&event, TermEvent::Title(title) if pebrel_terminal::event::shell_title_payload(title).is_some()))
                 && self.suggest.cwd != self.cwd)
         {
             self.suggest.cwd = self.cwd.clone();
@@ -684,7 +684,7 @@ impl TerminalView {
                 // `NEBULA|cwd|branch|program` 标题协议（与旧壳 event.rs 的
                 // 解析同构）：shell 集成把 cwd/分支塞在标题里喂玻璃 powerline
                 // 与 tab 标签，而不是真拿来当窗口标题。
-                if let Some(rest) = title.strip_prefix("NEBULA|") {
+                if let Some(rest) = pebrel_terminal::event::shell_title_payload(&title) {
                     let mut parts = rest.splitn(3, '|');
                     parts.next();
                     self.branch = parts.next().unwrap_or("").trim().to_owned();

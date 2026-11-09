@@ -199,7 +199,7 @@ jobs:
             --force
       - name: Run AppImage conformance under X11
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           xvfb-run -a -s "-screen 0 1600x1000x24" \
             python3 scripts/conformance/run.py \
@@ -208,7 +208,7 @@ jobs:
               --output dist/conformance/linux-appimage-report.json
       - name: Run AppImage conformance under Wayland
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           xvfb-run -a -s "-screen 0 1600x1000x24" bash -euo pipefail <<'WAYLAND_SESSION'
           runtime_directory="$RUNNER_TEMP/pebrel-wayland-runtime"
@@ -233,7 +233,7 @@ jobs:
           WAYLAND_SESSION
       - name: Install and run Debian conformance
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           sudo apt-get install -y "./dist/Pebrel-v$PACKAGE_VERSION-linux-x64.deb"
           test "$(dpkg-query -W -f='${Status}' pebrel)" = "install ok installed"
@@ -368,7 +368,7 @@ jobs:
             --output-directory dist --force "${signing_args[@]}"
       - name: Mount DMG and run conformance
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           dmg="dist/Pebrel-v$PACKAGE_VERSION-macos-${{ matrix.asset_architecture }}.dmg"
           mount_point="$RUNNER_TEMP/pebrel-stable-${{ matrix.architecture }}"
@@ -519,7 +519,7 @@ jobs:
       - name: Run Windows conformance
         shell: pwsh
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
           SELECTED_COMMIT: ${{ inputs.source_commit || github.sha }}
         run: |
           $actual = git rev-parse HEAD
@@ -605,8 +605,8 @@ jobs:
       - name: Run ARM64 Windows conformance
         shell: pwsh
         env:
-          NEBULA_RESIZE_TRACE: "1"
-          NEBULA_BOOT_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
+          PEBREL_BOOT_TRACE: "1"
         run: |
           python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app target/release/pebrel.exe --platform windows-aarch64 --output dist/conformance/windows-arm64-report.json
           exit $LASTEXITCODE

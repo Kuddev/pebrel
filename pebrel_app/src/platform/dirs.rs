@@ -62,9 +62,82 @@ fn resolve_data_dir() -> PathBuf {
     pebrel_settings::settings_dir()
 }
 
+/// 数据目录下的一项（文件或只含文件的目录）。AI 会话记录和 Agent 识别规则覆盖
+/// 以前各自计算路径，改名后仍写在旧的 `Nebula` 目录，启动迁移的文件清单也没有包含
+/// 它们。新位置还没有时从旧位置复制一次：不删除旧数据，也不覆盖已有的新数据。
+pub(crate) fn adopted_data_entry(name: &str) -> PathBuf {
+    let current = data_dir().join(name);
+    if let Some(legacy) = pre_rename_entry_dir() {
+        adopt_entry(&legacy.join(name), &current);
+    }
+    current
+}
+
+/// 旧计算方式的落点。设了覆盖目录时新旧都指向覆盖目录，无需复制。
+fn pre_rename_entry_dir() -> Option<PathBuf> {
+    let overridden = ["PEBREL_CONFIG_DIR", "NEBULA_CONFIG_DIR"]
+        .into_iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+    if overridden {
+        return None;
+    }
+    std::env::var_os("APPDATA")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".config")))
+        .map(|root| root.join("Nebula"))
+}
+
+fn adopt_entry(legacy: &Path, current: &Path) {
+    if legacy == current || current.exists() {
+        return;
+    }
+    let result = if legacy.is_file() {
+        std::fs::read(legacy).and_then(|bytes| crate::atomic_file::write(current, &bytes))
+    } else if legacy.is_dir() {
+        std::fs::read_dir(legacy).and_then(|entries| {
+            std::fs::create_dir_all(current)?;
+            for entry in entries.flatten().filter(|entry| entry.path().is_file()) {
+                let bytes = std::fs::read(entry.path())?;
+                crate::atomic_file::write(&current.join(entry.file_name()), &bytes)?;
+            }
+            Ok(())
+        })
+    } else {
+        return;
+    };
+    if let Err(error) = result {
+        log::warn!("could not copy {} to {}: {error}", legacy.display(), current.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adopting_copies_missing_entries_without_overwriting_or_removing() {
+        let temp = tempfile::tempdir().unwrap();
+        let (legacy, current) = (temp.path().join("Nebula"), temp.path().join("Pebrel"));
+        std::fs::create_dir_all(legacy.join("agent-detection")).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(legacy.join("ai_sessions.json"), b"old").unwrap();
+        std::fs::write(legacy.join("agent-detection/codex.toml"), b"rules").unwrap();
+
+        adopt_entry(&legacy.join("ai_sessions.json"), &current.join("ai_sessions.json"));
+        adopt_entry(&legacy.join("agent-detection"), &current.join("agent-detection"));
+        assert_eq!(std::fs::read(current.join("ai_sessions.json")).unwrap(), b"old");
+        assert_eq!(std::fs::read(current.join("agent-detection/codex.toml")).unwrap(), b"rules");
+        assert!(legacy.join("ai_sessions.json").exists());
+
+        std::fs::write(current.join("ai_sessions.json"), b"new").unwrap();
+        std::fs::write(legacy.join("ai_sessions.json"), b"older").unwrap();
+        adopt_entry(&legacy.join("ai_sessions.json"), &current.join("ai_sessions.json"));
+        assert_eq!(std::fs::read(current.join("ai_sessions.json")).unwrap(), b"new");
+
+        adopt_entry(&legacy.join("missing.json"), &current.join("missing.json"));
+        assert!(!current.join("missing.json").exists());
+    }
 
     #[test]
     fn home_dir_rejects_empty_env() {

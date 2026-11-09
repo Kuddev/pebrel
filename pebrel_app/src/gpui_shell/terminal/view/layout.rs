@@ -214,7 +214,7 @@ impl TerminalView {
                     return;
                 }
                 let gate = Self::drag_gesture_active();
-                if std::env::var_os("NEBULA_RESIZE_TRACE").is_some() {
+                if std::env::var_os("PEBREL_RESIZE_TRACE").is_some() {
                     crate::gpui_shell::try_write_stderr(format_args!(
                         "[nebula:resize-trace] settle-timer gate={gate}"
                     ));

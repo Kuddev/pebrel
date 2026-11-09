@@ -265,7 +265,7 @@ fn nebula_existing_file(path: PathBuf) -> Option<String> {
 }
 
 fn nebula_find_bash() -> Option<String> {
-    if let Some(path) = std::env::var_os("NEBULA_BASH").map(PathBuf::from) {
+    if let Some(path) = std::env::var_os("PEBREL_BASH").map(PathBuf::from) {
         if let Some(path) = nebula_existing_file(path) {
             return Some(path);
         }

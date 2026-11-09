@@ -316,7 +316,7 @@ impl CwdSniffer {
             MAX_IMAGE_PAYLOAD
         } else if self.payload.starts_with(b"777;pebrel-view;") {
             crate::inline_content::MAX_FRAME_BYTES
-        } else if self.payload.starts_with(b"777;nebula-hook;") {
+        } else if remote_hook_payload(&self.payload).is_some() {
             MAX_HOOK_PAYLOAD
         } else {
             MAX_PAYLOAD
@@ -362,7 +362,7 @@ impl CwdSniffer {
             }
             return parse_osc1337_image(rest);
         }
-        if let Some(rest) = self.payload.strip_prefix(b"777;nebula-hook;") {
+        if let Some(rest) = remote_hook_payload(&self.payload) {
             return parse_remote_hook(rest);
         }
         if let Some(rest) = self.payload.strip_prefix(b"133;") {
@@ -442,6 +442,13 @@ fn parse_user_var(rest: &[u8]) -> Option<OscEvent> {
     }
     let value = String::from_utf8(decoded).ok()?;
     Some(OscEvent::UserVar { name: name.to_owned(), value })
+}
+
+/// Remote bridges installed on a host are shared by every client version that
+/// connects to it, so they keep emitting `nebula-hook`; `pebrel-hook` is
+/// accepted for a later, backward-compatible switch.
+fn remote_hook_payload(payload: &[u8]) -> Option<&[u8]> {
+    payload.strip_prefix(b"777;nebula-hook;").or_else(|| payload.strip_prefix(b"777;pebrel-hook;"))
 }
 
 fn parse_remote_hook(rest: &[u8]) -> Option<OscEvent> {
@@ -817,6 +824,9 @@ mod tests {
             )]
         );
         assert!(events(b"\x1b]777;nebula-hook;short;AAAA\x07").is_empty());
+        let renamed = seq.replace("777;nebula-hook;", "777;pebrel-hook;");
+        assert_eq!(events(renamed.as_bytes()).len(), 1);
+        assert!(events(b"\x1b]777;pebrel-hook;short;AAAA\x07").is_empty());
     }
 
     #[test]

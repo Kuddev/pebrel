@@ -117,13 +117,19 @@ const WEAK_PASSPHRASES: &[&str] = &[
     "woaini",
     "5201314",
     "nebula",
+    "pebrel",
 ];
 
 /// Windows 凭据管理器里的条目名（`ssh_credentials` 的通用 DPAPI 存取）。
 #[cfg(windows)]
-const PASSWORD_TARGET: &str = "Nebula Sync WebDAV Password";
+const PASSWORD_TARGET: &str = "Pebrel Sync WebDAV Password";
 #[cfg(windows)]
-const PASSPHRASE_TARGET: &str = "Nebula Sync Passphrase";
+const PASSPHRASE_TARGET: &str = "Pebrel Sync Passphrase";
+/// 改名前保存的条目只读取，下次保存写到新名字下。
+#[cfg(windows)]
+const LEGACY_PASSWORD_TARGET: &str = "Nebula Sync WebDAV Password";
+#[cfg(windows)]
+const LEGACY_PASSPHRASE_TARGET: &str = "Nebula Sync Passphrase";
 
 pub fn config_path() -> PathBuf {
     crate::display::nebula_data_dir().join(CONFIG_FILE)
@@ -216,23 +222,23 @@ pub fn store_passphrase(username: &str, secret: &str) -> Result<(), String> {
 
 #[cfg(not(windows))]
 pub fn store_password(_username: &str, _secret: &str) -> Result<(), String> {
-    Err("此平台请设环境变量 NEBULA_WEBDAV_PASSWORD".to_owned())
+    Err("此平台请设环境变量 PEBREL_WEBDAV_PASSWORD".to_owned())
 }
 
 #[cfg(not(windows))]
 pub fn store_passphrase(_username: &str, _secret: &str) -> Result<(), String> {
-    Err("此平台请设环境变量 NEBULA_SYNC_PASSPHRASE".to_owned())
+    Err("此平台请设环境变量 PEBREL_SYNC_PASSPHRASE".to_owned())
 }
 
 /// WebDAV 密码：环境变量 → Windows 凭据管理器。明文永不落盘。
 fn webdav_password() -> Option<String> {
-    if let Ok(password) = std::env::var("NEBULA_WEBDAV_PASSWORD") {
+    if let Ok(password) = std::env::var("PEBREL_WEBDAV_PASSWORD") {
         if !password.trim().is_empty() {
             return Some(password.trim().to_owned());
         }
     }
     #[cfg(windows)]
-    if let Ok(Some(secret)) = crate::ssh_credentials::windows_store::load_secret(PASSWORD_TARGET) {
+    if let Some(secret) = stored_secret(PASSWORD_TARGET, LEGACY_PASSWORD_TARGET) {
         return String::from_utf8(secret).ok();
     }
     None
@@ -240,17 +246,22 @@ fn webdav_password() -> Option<String> {
 
 /// E2E 口令：环境变量 → Windows 凭据管理器。没有口令绝不上传。
 fn sync_passphrase() -> Option<String> {
-    if let Ok(passphrase) = std::env::var("NEBULA_SYNC_PASSPHRASE") {
+    if let Ok(passphrase) = std::env::var("PEBREL_SYNC_PASSPHRASE") {
         if !passphrase.trim().is_empty() {
             return Some(passphrase.trim().to_owned());
         }
     }
     #[cfg(windows)]
-    if let Ok(Some(secret)) = crate::ssh_credentials::windows_store::load_secret(PASSPHRASE_TARGET)
-    {
+    if let Some(secret) = stored_secret(PASSPHRASE_TARGET, LEGACY_PASSPHRASE_TARGET) {
         return String::from_utf8(secret).ok();
     }
     None
+}
+
+#[cfg(windows)]
+fn stored_secret(target: &str, legacy: &str) -> Option<Vec<u8>> {
+    use crate::ssh_credentials::windows_store::load_secret;
+    load_secret(target).ok().flatten().or_else(|| load_secret(legacy).ok().flatten())
 }
 
 /// 弱口令闸（硬拒绝）。返回 Some(原因) = 拒绝同步。
@@ -633,9 +644,9 @@ fn preflight() -> Result<(SyncConfig, String, String), String> {
         return Err("已拒绝：url 不是 HTTPS（自建内网服务可写 allow_http=1 豁免）".to_owned());
     }
     let password =
-        webdav_password().ok_or("缺少 WebDAV 密码：设 NEBULA_WEBDAV_PASSWORD 环境变量")?;
+        webdav_password().ok_or("缺少 WebDAV 密码：设 PEBREL_WEBDAV_PASSWORD 环境变量")?;
     let passphrase =
-        sync_passphrase().ok_or("缺少端到端加密口令：设 NEBULA_SYNC_PASSPHRASE 环境变量")?;
+        sync_passphrase().ok_or("缺少端到端加密口令：设 PEBREL_SYNC_PASSPHRASE 环境变量")?;
     if let Some(reason) = passphrase_weakness(&passphrase, &cfg.username, &password) {
         return Err(format!("已拒绝同步：{reason}"));
     }

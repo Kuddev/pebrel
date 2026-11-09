@@ -5,9 +5,8 @@ use pebrel_terminal::event::Event;
 pub(super) fn apply(current: &mut String, event: &Event) -> bool {
     let reported = match event {
         Event::CwdReport(path) => Some(path.as_str()),
-        Event::Title(title) => {
-            title.strip_prefix("NEBULA|").and_then(|rest| rest.split('|').next())
-        },
+        Event::Title(title) => pebrel_terminal::event::shell_title_payload(title)
+            .and_then(|rest| rest.split('|').next()),
         _ => None,
     };
     let Some(path) = reported else { return false };
