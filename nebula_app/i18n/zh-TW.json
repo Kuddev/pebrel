@@ -61,7 +61,8 @@
       "keymap": "按鍵對應",
       "advanced": "進階",
       "backup": "備份",
-      "agents": "Agents"
+      "agents": "Agents",
+      "plugins": "外掛"
     },
     "notifications": {
       "duration": "通知顯示時間",
@@ -216,6 +217,32 @@
       "needs_repair": "Hook 已安裝 · 需修復",
       "initialize": "請先執行一次此工具以建立設定，然後重新整理。",
       "config_path": "設定：{path}"
+    },
+    "plugins": {
+      "title": "外掛",
+      "description": "外掛只在你點它的按鈕或執行 pebrel plugin 指令時執行。外掛需要的能力在安裝時一次授權。",
+      "install": "從資料夾安裝…",
+      "installing": "正在安裝…",
+      "choose_folder": "選擇包含 plugin.toml 的外掛資料夾",
+      "refresh": "重新整理",
+      "loading": "正在讀取已安裝的外掛…",
+      "empty": "尚未安裝外掛。選擇一個外掛資料夾來安裝。",
+      "failed": "外掛操作失敗：{error}",
+      "installed": "已安裝 {name}。",
+      "themes_added": "內附的 {total} 個主題中有 {count} 個已在主題庫裡。",
+      "uninstalled": "已解除安裝 {id}。",
+      "generated": "已將「{name}」加入主題庫，可在 外觀 → 主題 中選用。",
+      "generate_tooltip": "執行這個外掛指令，把產生的主題加入主題庫，不會自動套用。",
+      "uninstall": "解除安裝",
+      "enabled": "已啟用",
+      "disabled": "已停用",
+      "granted": "已允許：{grants}",
+      "grant_title": "安裝 {name} 需要你允許：",
+      "grant_allow": "允許並安裝",
+      "grant_cancel": "取消",
+      "grant_theme_library": "向主題庫新增主題（不會自動套用）",
+      "broken": "這個外掛已無法載入：{error}",
+      "themes_kept": "解除安裝外掛時，它加入主題庫的主題會保留。"
     }
   },
   "provider": {

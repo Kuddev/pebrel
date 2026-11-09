@@ -1,7 +1,8 @@
 # Plugin command foundation
 
-This module implements an explicit, command-scoped plugin entry. It does not install packages,
-keep plugins resident, register UI panels, or start a plugin worker during normal GUI startup.
+This module implements an explicit, command-scoped plugin entry and a small install library.
+It does not keep plugins resident, register UI panels, or start a plugin worker during normal
+GUI startup. Installed plugins run only when the user invokes one of their commands.
 The entry uses vendored Luauu through the shared mlua dependency, with a VM independent of configuration.
 
 The division between optional plugins, product bug fixes and extension-point PRs is defined in
@@ -29,13 +30,55 @@ Both commands output JSON and return a nonzero exit code on failure.
 The example commands query `runtime.describe`, so execution requires a running Pebrel instance.
 The check command is offline. The examples do not create panes or modify settings.
 
+## Install library and grants
+
+```text
+pebrel plugin install nebula_app/examples/plugins/theme-generator --grant theme-library
+pebrel plugin list
+pebrel plugin run example.theme-generator ocean
+pebrel plugin disable example.theme-generator
+pebrel plugin enable example.theme-generator
+pebrel plugin uninstall example.theme-generator
+```
+
+- `install` copies only the files the manifest declares (`plugin.toml`, `entry`, `themes`) into
+  `<settings>/plugins/<id>/`, then writes the host-owned `pebrel-install.json` receipt with the
+  version, enabled state and grants. A package file with that name is never copied.
+- A grant is a host capability beyond running commands. The manifest requests it implicitly;
+  only the user grants it, with `--grant` or the Settings → Plugins confirmation. Installing fails
+  before touching the library when a requested grant is missing, and grants that were not
+  requested are not recorded. Reinstalling replaces the files and records the new answer.
+- `theme_library` is currently the only grant. It lets the plugin add themes to the theme library;
+  it never applies a theme or changes settings.
+- `run` accepts an installed ID when no path of that name exists. Disabled plugins do not run.
+  Running a package directory never carries grants.
+- `uninstall` removes the plugin's files. Themes it added stay in the theme library.
+- Settings → Plugins offers the same install, enable/disable, uninstall and theme generation.
+  Its operations run on the background executor; results carry a sequence number so a newer
+  operation discards an older one, and a closed page drops late results.
+
+## Theme contributions
+
+- `themes = ["themes/reef.pebrel-theme.zip"]` declares bundled theme packages (at most 16). They
+  are validated with the ordinary theme package checks before the install becomes visible, and
+  added to the library after install with a `metadata.package.origin` receipt whose `catalog` is
+  `plugin:<id>`. Reinstalling the same version finds those receipts instead of adding duplicates.
+- A command with `output = "theme"` must be a Luau handler. It returns either a complete theme
+  document (with `schema_version`) or a spec `{ base = "<built-in theme>", ...overrides }`; a
+  missing `base` uses the default built-in theme. The host deep-merges the overrides, records
+  `metadata.based_on` and `metadata.generator`, and validates the result like any import.
+- With the grant (an installed, enabled plugin) the theme is added to the library under a
+  collision-free name. Without it, `run` returns the validated document only, for checking.
+- Builds without the GPUI shell have no theme library; plugins that request the grant fail
+  to install there.
+
 ## Package and invocation contracts
 
 - `plugin.toml` owns `manifest_version`, `api_version`, `id`, `name`, `version`, optional `entry`,
-  `permissions`, and `commands`. Both numeric versions are currently 1; `version` is bounded
+  `permissions`, optional `themes`, and `commands`. Both numeric versions are currently 1; `version` is bounded
   package metadata, not a dependency-range expression. Unknown fields are rejected.
-- Each command declares `id`, `title`, optional object `params`, and exactly one `method` or
-  `handler`. A `method` directly invokes a declared Runtime method in Rust; a `handler` names
+- Each command declares `id`, `title`, optional object `params`, optional `output`
+  (`json` by default, or `theme`), and exactly one `method` or `handler`. A `method` directly invokes a declared Runtime method in Rust; a `handler` names
   a function in the table returned by `entry`. An entry exists exactly when Luau handlers exist.
 - Native commands never construct a plugin Luau VM, including native commands in a mixed package.
   Only a selected Luau command reads its entry and creates a VM. The VM is dropped when that
@@ -70,7 +113,8 @@ neither an installed package nor its own permissions list supplies that authoriz
 
 | Boundary | Current limit |
 | --- | --- |
-| Manifest | 32 KiB, 64 commands, 32 permissions |
+| Manifest | 32 KiB, 64 commands, 32 permissions, 16 bundled themes |
+| Bundled theme package copy | 48 MiB each; then the theme package limits apply |
 | Luau source | 256 KiB |
 | Luau allocator | 8 MiB per invocation |
 | Luau safe-point interrupts | Stop at 100000 interrupts across entry and handler |
@@ -92,6 +136,8 @@ the one-shot Runtime transport applies a cumulative deadline to its connect/writ
 This CLI driver performs that yielded Runtime request synchronously on the command process.
 It is not an asynchronous worker adapter and must not be called from a GUI callback or a shared
 resident worker. A persistent/event-driven host is a separate next slice, not implied by this CLI.
+Settings → Plugins runs a theme command as one background-executor task per click; render and
+input callbacks only start that task.
 
 `execution.lua_memory_bytes` reports the VM's current allocator usage before it is dropped;
 `engine` is `luau`; `interrupt_count` counts Luau safe points, not Lua 5.4 instructions or CPU cycles.

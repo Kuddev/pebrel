@@ -2,9 +2,41 @@
 
 mod boundary;
 pub(crate) mod cli;
+pub(crate) mod install;
 mod json;
 mod lua;
 mod package;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod themes;
+#[cfg(not(feature = "gpui-shell"))]
+mod themes {
+    //! 没有主题库的构建不接受需要主题授权的插件。
+    use super::{Error, Result};
+
+    pub(super) fn check_bundled(_: &std::path::Path, themes: &[String]) -> Result<()> {
+        if themes.is_empty() { Ok(()) } else { Err(unavailable()) }
+    }
+
+    pub(super) fn finish_for_user(
+        _: serde_json::Value,
+        _: &super::Package,
+        _: &str,
+        _: Option<&[super::package::Grant]>,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    pub(super) fn install_bundled_for_user(
+        _: &super::install::Library,
+        _: &str,
+    ) -> Result<serde_json::Value> {
+        Ok(serde_json::json!([]))
+    }
+
+    fn unavailable() -> Error {
+        Error::new("theme_library_unavailable", "this build has no theme library")
+    }
+}
 
 use std::fmt;
 use std::time::Duration;
@@ -12,6 +44,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+pub(crate) use package::Grant;
 use package::Package;
 
 const MAX_JSON_BYTES: usize = 64 * 1024;
@@ -22,7 +55,7 @@ const MAX_LUAU_INTERRUPTS: usize = 100_000;
 const MAX_RUNTIME_CALLS: usize = 16;
 
 #[derive(Clone, Debug, Serialize)]
-struct Error {
+pub(crate) struct Error {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,7 +80,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 type RuntimeCall<'a> = dyn FnMut(&str, Value, Duration) -> Result<Value> + 'a;
 
 #[derive(Debug, Serialize)]
@@ -100,5 +133,29 @@ fn execute(
     )
 }
 
+/// The one-shot Runtime transport shared by the CLI and the settings page.
+/// It blocks, so GUI callers run it on a background executor.
+fn runtime_call(method: &str, params: Value, timeout: Duration) -> Result<Value> {
+    let response =
+        crate::runtime_api::request_once_bounded(method, params, timeout).map_err(runtime_error)?;
+    if !response.ok {
+        let error = response
+            .error
+            .ok_or_else(|| Error::new("invalid_runtime_response", "missing error"))?;
+        return Err(runtime_error(error));
+    }
+    response.result.ok_or_else(|| Error::new("invalid_runtime_response", "missing result"))
+}
+
+fn runtime_error(error: crate::runtime_api::ApiError) -> Error {
+    let mut result = Error::new(error.code, error.message);
+    // 部分完成与清理回执属于 Runtime 的结果，插件适配层不得将它们折叠成字符串。
+    result.details = error.details;
+    result
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod install_tests;

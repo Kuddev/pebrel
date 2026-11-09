@@ -273,6 +273,8 @@ mod tests {
         assert_eq!(matching_sections("123", zh), vec![9]);
         assert_eq!(matching_sections("手机", zh), vec![MOBILE_SECTION]);
         assert_eq!(matching_sections("pairing", en), vec![MOBILE_SECTION]);
+        assert_eq!(matching_sections("插件", zh), vec![PLUGINS_SECTION]);
+        assert_eq!(matching_sections("luau", en), vec![PLUGINS_SECTION]);
         assert_eq!(matching_sections("透度", zh).first(), Some(&1));
         assert!(matching_sections("no such setting", en).is_empty());
         assert_eq!(matching_sections("", en), visible_nav_sections().collect::<Vec<_>>());

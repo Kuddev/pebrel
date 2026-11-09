@@ -1172,8 +1172,48 @@ _arguments "${_arguments_options[@]}" : \
 '--pretty[Pretty-print the JSON result]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':path:_files' \
+':path -- A package directory, or the ID of an installed plugin when no such path exists:_files' \
 ':command:_default' \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'*--grant=[Grant a capability the manifest requests\: \`theme-library\`]:GRANTS:_default' \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
+&& ret=0
+;;
+(uninstall)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
 && ret=0
 ;;
 (help)
@@ -1193,6 +1233,26 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uninstall)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1688,6 +1748,26 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uninstall)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -2671,6 +2751,11 @@ _pebrel__help__plugin_commands() {
     local commands; commands=(
 'check:Validate package metadata and entry paths without executing Luau' \
 'run:Invoke one declared native or Luau command; no resident plugin is started' \
+'install:Copy a package into the plugin library and record the grants given here' \
+'list:List installed plugins, their grants and theme commands' \
+'enable:Let an installed plugin run again' \
+'disable:Stop an installed plugin from running; its files and themes stay' \
+'uninstall:Remove an installed plugin. Themes it added stay in the theme library' \
     )
     _describe -t commands 'pebrel help plugin commands' commands "$@"
 }
@@ -2679,10 +2764,35 @@ _pebrel__help__plugin__check_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help plugin check commands' commands "$@"
 }
+(( $+functions[_pebrel__help__plugin__disable_commands] )) ||
+_pebrel__help__plugin__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin disable commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__enable_commands] )) ||
+_pebrel__help__plugin__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin enable commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__install_commands] )) ||
+_pebrel__help__plugin__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin install commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__list_commands] )) ||
+_pebrel__help__plugin__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin list commands' commands "$@"
+}
 (( $+functions[_pebrel__help__plugin__run_commands] )) ||
 _pebrel__help__plugin__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help plugin run commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__uninstall_commands] )) ||
+_pebrel__help__plugin__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin uninstall commands' commands "$@"
 }
 (( $+functions[_pebrel__help__predict_commands] )) ||
 _pebrel__help__predict_commands() {
@@ -2924,6 +3034,11 @@ _pebrel__plugin_commands() {
     local commands; commands=(
 'check:Validate package metadata and entry paths without executing Luau' \
 'run:Invoke one declared native or Luau command; no resident plugin is started' \
+'install:Copy a package into the plugin library and record the grants given here' \
+'list:List installed plugins, their grants and theme commands' \
+'enable:Let an installed plugin run again' \
+'disable:Stop an installed plugin from running; its files and themes stay' \
+'uninstall:Remove an installed plugin. Themes it added stay in the theme library' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel plugin commands' commands "$@"
@@ -2933,11 +3048,26 @@ _pebrel__plugin__check_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin check commands' commands "$@"
 }
+(( $+functions[_pebrel__plugin__disable_commands] )) ||
+_pebrel__plugin__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin disable commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__enable_commands] )) ||
+_pebrel__plugin__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin enable commands' commands "$@"
+}
 (( $+functions[_pebrel__plugin__help_commands] )) ||
 _pebrel__plugin__help_commands() {
     local commands; commands=(
 'check:Validate package metadata and entry paths without executing Luau' \
 'run:Invoke one declared native or Luau command; no resident plugin is started' \
+'install:Copy a package into the plugin library and record the grants given here' \
+'list:List installed plugins, their grants and theme commands' \
+'enable:Let an installed plugin run again' \
+'disable:Stop an installed plugin from running; its files and themes stay' \
+'uninstall:Remove an installed plugin. Themes it added stay in the theme library' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel plugin help commands' commands "$@"
@@ -2947,20 +3077,60 @@ _pebrel__plugin__help__check_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin help check commands' commands "$@"
 }
+(( $+functions[_pebrel__plugin__help__disable_commands] )) ||
+_pebrel__plugin__help__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help disable commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__enable_commands] )) ||
+_pebrel__plugin__help__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help enable commands' commands "$@"
+}
 (( $+functions[_pebrel__plugin__help__help_commands] )) ||
 _pebrel__plugin__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin help help commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__install_commands] )) ||
+_pebrel__plugin__help__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help install commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__list_commands] )) ||
+_pebrel__plugin__help__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help list commands' commands "$@"
 }
 (( $+functions[_pebrel__plugin__help__run_commands] )) ||
 _pebrel__plugin__help__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin help run commands' commands "$@"
 }
+(( $+functions[_pebrel__plugin__help__uninstall_commands] )) ||
+_pebrel__plugin__help__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help uninstall commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__install_commands] )) ||
+_pebrel__plugin__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin install commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__list_commands] )) ||
+_pebrel__plugin__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin list commands' commands "$@"
+}
 (( $+functions[_pebrel__plugin__run_commands] )) ||
 _pebrel__plugin__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin run commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__uninstall_commands] )) ||
+_pebrel__plugin__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin uninstall commands' commands "$@"
 }
 (( $+functions[_pebrel__predict_commands] )) ||
 _pebrel__predict_commands() {
