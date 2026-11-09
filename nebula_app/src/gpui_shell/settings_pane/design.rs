@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use gpui::{Animation, AnimationExt as _, ElementId, FontWeight, ease_out_quint, relative};
+use gpui::{Animation, AnimationExt as _, ElementId, FontWeight, ease_out_quint};
 
 use super::*;
 
@@ -15,6 +15,11 @@ use super::*;
 pub(super) const DESC_SCALE: f32 = 0.82;
 /// Parent headings stay above item labels in the visual hierarchy.
 const GROUP_TITLE_SCALE: f32 = 16.0 / 14.0;
+/// 卡外分组标题比卡内条目略小、更淡：卡片本身已经说明了“这是一组”。
+const CARD_TITLE_SCALE: f32 = 12.5 / 14.0;
+const CARD_RADIUS: f32 = 10.0;
+/// 卡内行的左右留白，同时是行间细线的内缩量。
+const CARD_PAD_X: f32 = 16.0;
 /// label ↔ 说明。这 4px 在说"这两行是同一件事"。
 const LABEL_DESC_GAP: f32 = 4.0;
 /// 标准密度沿用原紧凑档的行留白；间距只由行内 padding 提供。
@@ -22,7 +27,7 @@ const ROW_PAD_Y: f32 = 12.0;
 /// 紧凑档只再收紧少量留白，字号与控件命中区域保持不变。
 const ROW_PAD_Y_COMPACT: f32 = 10.0;
 /// 组与组。
-pub(super) const GROUP_GAP: f32 = 48.0;
+pub(super) const GROUP_GAP: f32 = 28.0;
 /// 轨道宽度。
 const RAIL_W: f32 = 2.0;
 /// 内容相对轨道的缩进。标题左对齐轨道本身、行内容缩进这么多——标题是命名者
@@ -62,21 +67,26 @@ impl SettingsPane {
         }
     }
 
-    /// 一组设置的开头：标题出线。轨道不在这里画——它由组内每一行自己接续，
-    /// 这样才能做到"同一条线，某几段是亮的"。
-    pub(crate) fn group(&self, title: &'static str, cx: &Context<Self>) -> gpui::Div {
-        let base_px = self.font_size_px(cx);
-        // 组间距归 section 容器的 `gap`（HTML 原型里就是 `.a-main` 自己
-        // `gap:24`），组不自带 `pt`：自带的话，首个元素不是分组的页会拿不到
-        // 那段留白而直接贴住页头线，而首组又会拿到"正文上留白 + 组上留白"的
-        // 双份。间距是**容器**的事，不是组的事。
-        // 这里**不能**写 `w_full()`。`width:100%` 依赖父的已解析宽度，链条上
-        // 任何一层是 auto / max-content，100% 就解析成内容宽——于是每个分组、
-        // 每一行各按自己的文字长度取宽，控件右缘参差不齐（宽窗口下差到 280px，
-        // 窄窗口反而齐，因为那时被可用宽度压住了）。
-        //
-        // 不设宽度则走 flex 交叉轴 stretch：布局算法直接拉伸，不依赖父宽解析。
-        v_flex().w_full().child(group_heading(title, base_px, cx).pb(px(20.0)))
+    /// 一组设置：标题在卡外，行在卡内。返回的构建器照常 `.child(row)`。
+    pub(crate) fn group(&self, title: &'static str, cx: &Context<Self>) -> SettingsGroup {
+        SettingsGroup::new(Some(title), self.font_size_px(cx), cx)
+    }
+
+    /// 属于导航子项的分组：标题取自子项本身；选中别的子项时整组不参与布局。
+    /// 搜索时不按子项筛选，命中项必须都看得到。
+    pub(super) fn nav_group(&self, child: NavChild, cx: &Context<Self>) -> SettingsGroup {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let mut group = SettingsGroup::new(Some(child.label(language)), self.font_size_px(cx), cx);
+        group.hidden = self.visible_nav_child(cx).is_some_and(|active| active != child);
+        group
+    }
+
+    /// 当前生效的子项筛选；子项不属于当前大类（例如从别处跳转进来）时不筛选。
+    pub(super) fn visible_nav_child(&self, cx: &App) -> Option<NavChild> {
+        if !self.settings_search_input.read(cx).value().trim().is_empty() {
+            return None;
+        }
+        self.active_nav_child.filter(|child| nav_children(self.active_section).contains(child))
     }
 
     /// 组与组之间的间隔。
@@ -314,8 +324,7 @@ impl SettingsPane {
             .relative()
             .w_full()
             .flex_shrink_0()
-            .pl(px(RAIL_INDENT))
-            .pr_4()
+            .px(px(CARD_PAD_X))
             .py(px(pad_y))
             // 竖线整条让给状态，不再画常驻的灰轨道。
             //
@@ -333,16 +342,89 @@ impl SettingsPane {
                     div()
                         .absolute()
                         .left_0()
-                        .bottom_0()
+                        .top(px(10.0))
+                        .bottom(px(10.0))
                         .w(px(RAIL_W))
+                        .rounded_r(px(RAIL_W))
                         .bg(crate::gpui_shell::theme::settings_mark(cx))
                         .with_animation(
                             ElementId::Name(format!("settings-mark-{label}").into()),
                             Animation::new(MARK_RISE).with_easing(ease_out_quint()),
-                            |mark, t| mark.h(relative(t)),
+                            |mark, t| mark.opacity(t),
                         ),
                 )
             })
             .child(columns)
+    }
+}
+
+/// 设置分组卡。`ParentElement` 把子元素收进卡内，调用点保持
+/// `self.group(title, cx).child(row)` 的写法；行之间插内缩细线。
+#[derive(IntoElement)]
+pub(crate) struct SettingsGroup {
+    title: Option<&'static str>,
+    rows: Vec<gpui::AnyElement>,
+    pub(super) hidden: bool,
+    title_size: f32,
+    title_color: Hsla,
+    fill: Hsla,
+    shadow: Vec<gpui::BoxShadow>,
+    divider: Hsla,
+}
+
+impl SettingsGroup {
+    fn new(title: Option<&'static str>, base_px: f32, cx: &App) -> Self {
+        let theme = cx.theme();
+        Self {
+            title,
+            rows: Vec::new(),
+            hidden: false,
+            title_size: base_px * CARD_TITLE_SCALE,
+            title_color: theme.muted_foreground.blend(theme.foreground.opacity(0.55)),
+            fill: crate::gpui_shell::theme::raised_fill(cx),
+            shadow: crate::gpui_shell::theme::settings_card_shadow(cx),
+            divider: crate::gpui_shell::theme::settings_hairline(cx),
+        }
+    }
+}
+
+impl gpui::ParentElement for SettingsGroup {
+    fn extend(&mut self, elements: impl IntoIterator<Item = gpui::AnyElement>) {
+        self.rows.extend(elements);
+    }
+}
+
+impl gpui::RenderOnce for SettingsGroup {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        // `hidden` 走 display:none：不占位，也不吃父容器的 gap。
+        if self.hidden {
+            return div().hidden();
+        }
+        let divider = self.divider;
+        let mut card = v_flex()
+            .w_full()
+            .bg(self.fill)
+            .rounded(px(CARD_RADIUS))
+            .shadow(self.shadow);
+        for (ix, row) in self.rows.into_iter().enumerate() {
+            if ix > 0 {
+                card = card.child(div().h(px(1.0)).mx(px(CARD_PAD_X)).flex_shrink_0().bg(divider));
+            }
+            card = card.child(row);
+        }
+        v_flex()
+            .w_full()
+            .when_some(self.title, |group, title| {
+                group.child(
+                    div()
+                        .pl(px(4.0))
+                        .pb(px(8.0))
+                        .text_size(px(self.title_size))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.title_color)
+                        .child(title),
+                )
+            })
+            .child(card)
     }
 }

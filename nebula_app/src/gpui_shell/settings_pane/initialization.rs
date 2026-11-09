@@ -673,6 +673,7 @@ impl SettingsPane {
             runtime,
             launch_at_login: crate::platform::startup::launch_at_login(),
             active_section: 1,
+            active_nav_child: None,
             agents: agents::AgentSettingsState::new(cx),
             mobile: mobile::MobileState::new(window, cx),
             plugins: plugins::PluginsState::new(),

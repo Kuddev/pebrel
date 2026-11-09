@@ -60,6 +60,16 @@
     "font": {
       "loading": "Cargando fuentes del sistema…",
       "no_matches": "No hay fuentes coincidentes"
+    },
+    "nav": {
+      "workspace": "Espacio de trabajo",
+      "connections": "Conexiones",
+      "system": "Sistema",
+      "startup": "Inicio",
+      "alerts": "Avisos",
+      "completion": "Autocompletado",
+      "mouse_selection": "Ratón y selección",
+      "tabs_windows": "Pestañas y ventanas"
     }
   },
   "common": {

@@ -243,6 +243,16 @@
       "grant_theme_library": "向主題庫新增主題（不會自動套用）",
       "broken": "這個外掛已無法載入：{error}",
       "themes_kept": "解除安裝外掛時，它加入主題庫的主題會保留。"
+    },
+    "nav": {
+      "workspace": "工作區",
+      "connections": "連線",
+      "system": "系統",
+      "startup": "啟動",
+      "alerts": "提醒",
+      "completion": "補全",
+      "mouse_selection": "滑鼠與選取",
+      "tabs_windows": "分頁與視窗"
     }
   },
   "provider": {

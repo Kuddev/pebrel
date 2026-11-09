@@ -13,7 +13,7 @@ impl SettingsPane {
         let wallpaper_opacity: SharedString =
             format!("{:.0}%", self.runtime.background_image_opacity * 100.0).into();
         let custom_background = self
-            .group(language.text(crate::i18n::Message::SettingsAppearanceCustomBackground), cx)
+            .nav_group(NavChild::Background, cx)
             .child(self.background_color_row(cx))
             .child(self.select_row(
                 "background_media_kind",
@@ -59,7 +59,7 @@ impl SettingsPane {
             ))
             .child(self.custom_effect_settings(window, cx));
         let cursor = self
-            .group(language.text(crate::i18n::Message::CommonCursor), cx)
+            .nav_group(NavChild::Cursor, cx)
             .child(self.select_row(
                 "cursor_motion",
                 language.text(crate::i18n::Message::SettingsCursorMotionTitle),
@@ -80,7 +80,7 @@ impl SettingsPane {
                 cx,
             ));
         let interface = self
-            .group(language.text(crate::i18n::Message::ThemeEditorPreviewInterface), cx)
+            .nav_group(NavChild::Interface, cx)
             .child(self.row(
                 language.text(crate::i18n::Message::SettingsFontUiFamily),
                 language.text(crate::i18n::Message::SettingsFontUiFamilyDescription),
@@ -128,7 +128,7 @@ impl SettingsPane {
                 cx,
             ));
         let terminal = self
-            .group(language.text(crate::i18n::Message::SettingsAppearanceTerminalAppearance), cx)
+            .nav_group(NavChild::TerminalLook, cx)
             .child(self.row(
                 language.text(crate::i18n::Message::SettingsFontEnglish),
                 help("font_family", language),

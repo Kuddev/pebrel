@@ -63,6 +63,7 @@ mod keymap;
 mod launcher_actions;
 mod localization;
 mod mobile;
+mod nav_view;
 mod navigation;
 mod notifications;
 mod plugins;
@@ -119,6 +120,8 @@ pub struct SettingsPane {
     launch_at_login: bool,
     /// 当前分区（`SECTIONS` 下标）；默认落在应用主页。
     active_section: usize,
+    /// 导航子项筛选；只在属于当前大类时生效，见 `visible_nav_child`。
+    active_nav_child: Option<NavChild>,
     agents: agents::AgentSettingsState,
     mobile: mobile::MobileState,
     plugins: plugins::PluginsState,
@@ -1288,7 +1291,7 @@ impl SettingsPane {
     fn section_profiles(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let terminal = self
-            .group(language.pick("启动", "Startup"), cx)
+            .nav_group(NavChild::Startup, cx)
             .child(self.shell_select_row(cx))
             .child(self.startup_directory_row(cx))
             .when(
@@ -1304,7 +1307,7 @@ impl SettingsPane {
                 },
             );
         let alerts = self
-            .group(language.pick("提醒", "Alerts"), cx)
+            .nav_group(NavChild::Alerts, cx)
             .child(self.switch_row(
                 "ai_toasts",
                 language.text(crate::i18n::Message::SettingsNotificationsAiMessages),
@@ -1325,7 +1328,7 @@ impl SettingsPane {
                 cx,
             ));
         let completion = self
-            .group(language.pick("补全", "Completion"), cx)
+            .nav_group(NavChild::Completion, cx)
             .child(self.switch_row(
                 "ghost",
                 language.pick("启用命令补全", "Enable command completion"),
@@ -1351,7 +1354,7 @@ impl SettingsPane {
             .w_full()
             .gap(px(GROUP_GAP))
             .child(
-                self.group(language.pick("鼠标与选区", "Mouse and selection"), cx)
+                self.nav_group(NavChild::Mouse, cx)
                     .child(
                         self.switch_row(
                             "focus_follows_mouse",
@@ -1394,7 +1397,7 @@ impl SettingsPane {
                     )),
             )
             .child(
-                self.group(language.pick("标签与窗口", "Tabs and windows"), cx)
+                self.nav_group(NavChild::Tabs, cx)
                     .child(self.select_row(
                         "tabs_position",
                         language.pick("标签栏位置", "Tab bar position"),
@@ -1433,7 +1436,8 @@ impl SettingsPane {
         // 平台没实现的开关整行不画：开着却没效果比没有更糟（见
         // `platform::capabilities` 的说明）。
         let caps = crate::platform::CAPABILITIES;
-        self.group(language.pick("会话生命周期", "Session lifecycle"), cx)
+        let lifecycle = self
+            .group(language.pick("会话生命周期", "Session lifecycle"), cx)
             .when(caps.launch_at_login, |group| {
                 group.child(self.switch_row(
                     "launch_at_login",
@@ -1486,7 +1490,8 @@ impl SettingsPane {
                     self.runtime.tray,
                     cx,
                 ))
-            })
+            });
+        v_flex().w_full().child(lifecycle)
     }
 
     fn section_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1520,110 +1525,6 @@ impl SettingsPane {
             _ => self.section_backup(window, cx),
         }
         .into_any_element()
-    }
-
-    fn render_nav(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        use gpui::IntoElement as _;
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        // 选中底直接取 workspace 侧栏那一枚 token。两处都是"当前在哪"的
-        // 指示，中间只隔着一条 hairline，用两种蓝会读成两套系统。
-        let active_bg = theme.sidebar_accent;
-        let active_fg = theme.sidebar_accent_foreground;
-        let active_icon = theme.primary;
-        let foreground = theme.foreground;
-        let hover_bg = crate::gpui_shell::theme::settings_hover_bg(cx, false);
-        let hairline = crate::gpui_shell::theme::settings_hairline(cx);
-        // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
-        let mut nav = v_flex()
-            .w(px(SETTINGS_NAV_WIDTH))
-            .h_full()
-            .flex_shrink_0()
-            .px_2()
-            .pt(px(12.0))
-            .pb(px(8.0))
-            .gap(px(2.0))
-            .text_sm()
-            .line_height(px(20.0))
-            .border_r_1()
-            .border_color(hairline)
-            .child(
-                div()
-                    .id("settings-back")
-                    .mx_1()
-                    .mb(px(10.0))
-                    .h(px(SETTINGS_NAV_ROW_HEIGHT))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_color(muted)
-                    .hover(move |item| item.bg(hover_bg).text_color(foreground))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsPaneEvent::Close)))
-                    .child(Icon::new(IconName::ArrowLeft).size(px(SETTINGS_NAV_ICON_SIZE)))
-                    .child(language.pick("返回工作区", "Back to workspace")),
-            )
-            .child(self.render_nav_search(window, cx));
-        let searching = !self.settings_search_input.read(cx).value().trim().is_empty();
-        let mut previous_group = None;
-        for ix in self.matching_settings_sections(cx) {
-            let group = NAV_GROUPS.iter().position(|(_, sections)| sections.contains(&ix));
-            if !searching && previous_group.is_some() && previous_group != group {
-                nav = nav.child(div().h(px(10.0)).flex_shrink_0());
-            }
-            previous_group = group;
-            let active = ix == self.active_section;
-            nav = nav.child(
-                div()
-                    .id(("settings-nav", ix))
-                    .debug_selector(move || format!("settings-nav-{ix}"))
-                    .px(px(10.0))
-                    .ml_1()
-                    .mr_1()
-                    .h(px(SETTINGS_NAV_ROW_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .rounded_md()
-                    .cursor_pointer()
-                    // 底色和墨色表达选中，避免中文导航因字重匹配而突然变粗。
-                    .font_weight(gpui::FontWeight::NORMAL)
-                    .when(active, |item| item.bg(active_bg).text_color(active_fg))
-                    .when(!active, |item| item.text_color(muted).hover(|s| s.bg(hover_bg)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.active_section = ix;
-                        this.about_sponsor_open = false;
-                        cx.notify();
-                    }))
-                    .child(
-                        Icon::default()
-                            .path(section_icon(ix))
-                            .size(px(SETTINGS_NAV_ICON_SIZE))
-                            .flex_shrink_0()
-                            .text_color(if active { active_icon } else { muted }),
-                    )
-                    .child(section_label(ix, language)),
-            );
-        }
-        nav.child(div().flex_1().min_h(px(24.0)))
-            .child(
-                Button::new("settings-restore-defaults")
-                    .icon(IconName::Undo2)
-                    .label(language.pick("恢复默认设置", "Restore defaults"))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .h(px(SETTINGS_NAV_ROW_HEIGHT))
-                    .justify_start()
-                    .px_3()
-                    .text_color(muted)
-                    .tooltip(language.pick("恢复设置与快捷键；保留 SSH 主机、凭据和历史，并备份原设置。", "Restores settings and shortcuts. Keeps SSH hosts, credentials and history, and backs up current settings."))
-                    .on_click(cx.listener(|this, _, window, cx| this.confirm_reset_all_settings(window, cx))),
-            )
-            .into_any_element()
     }
 }
 
@@ -1704,6 +1605,9 @@ impl Render for SettingsPane {
                     .flex_1()
                     .min_w_0()
                     .h_full()
+                    // 正文是板：浅色微压暗让分组卡浮起，深色保持板色。
+                    .bg(crate::gpui_shell::theme::settings_canvas_tint(cx))
+                    .rounded_r(crate::gpui_shell::theme::card_radius(cx))
                     .child(
                         v_flex()
                             .flex_1()

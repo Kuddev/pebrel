@@ -4,7 +4,10 @@ use crate::font_install::{FontSource, REQUIRED_FONT_FAMILY};
 
 const FONT_PICKER_LIST_PREFERRED_HEIGHT: f32 = 220.0;
 const FONT_PICKER_PANEL_WIDTH: f32 = 360.0;
-const FONT_PICKER_PANEL_CHROME_HEIGHT: f32 = 74.0;
+/// 面板除候选列表外的高度：上下内边距 24 + 标题 + 说明 + 两处 gap。说明在 360
+/// 宽里会折成两行，实测 103.5（2026-11-08）。原值 74 只算了一行，触发框恰好落在
+/// 下方剩余 294–324 之间时会判定“下方放得下”，面板随后被贴边逻辑推上来盖住输入框。
+const FONT_PICKER_PANEL_CHROME_HEIGHT: f32 = 104.0;
 const FONT_PICKER_OFFSET_Y: f32 = 6.0;
 const FONT_PICKER_WINDOW_MARGIN: f32 = 8.0;
 

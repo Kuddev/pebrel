@@ -177,8 +177,11 @@ impl NebulaWorkspace {
         // 数量 chip 数字：旧壳独用 ink_faint（比 ink_dim 再暗一档），chip 背
         // 景 surface 洗色不变——数字不该和标题抢层级。
         let faint = crate::gpui_shell::theme::faint_ink(cx);
-        let active_bg = theme.sidebar_accent;
-        let active_fg = theme.sidebar_accent_foreground;
+        // 选中 tab 与内容板同材质地浮起（浮起底 + 极淡环线与投影），读作
+        // “它就是右边那块”；不再用强调色水洗。
+        let active_bg = crate::gpui_shell::theme::raised_fill(cx);
+        let active_shadow = crate::gpui_shell::theme::raised_shadow(cx);
+        let active_fg = theme.foreground;
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
@@ -205,7 +208,8 @@ impl NebulaWorkspace {
         let (tabs_scroll, tabs_show) = self.tabs_visible_window();
         // 行的确定宽度：侧栏宽 − 侧栏 p_2 两边 − 列表右侧滚动条留白。
         // 与下面 `label_avail` 同一份减法口径，两者不能各算一套。
-        let row_w = (self.sidebar_width - 16.0 - tab_scroll::TAB_SCROLL_GUTTER).max(1.0);
+        // 再左右各让 1px：列表容器 overflow_hidden，选中行的浮起环线贴边会被裁掉。
+        let row_w = (self.sidebar_width - 16.0 - tab_scroll::TAB_SCROLL_GUTTER - 2.0).max(1.0);
         let items = (0..self.tabs.len())
             .filter(|&ix| tab_scroll::index_visible(ix, tabs_scroll, tabs_show))
             .map(|ix| {
@@ -342,6 +346,7 @@ impl NebulaWorkspace {
                 // （用户 08-19 报的侧栏 tab 宽度乱跳）。双击重命名"看起来正常"
                 // 只是因为 Input 恰好把容器撑满，不是宽度真的对了。
                 .w(px(row_w))
+                .ml(px(1.0))
                 // 内容再宽也不许把行撑开：截断后的标题若比测量值宽一两像素，
                 // 撑开的行会重新引入上面那个症状。
                 .overflow_hidden()
@@ -356,7 +361,9 @@ impl NebulaWorkspace {
                 // tab chrome 使用终端 Regular face，所有子文本从这里继承常规字重。
                 .font_weight(FontWeight::NORMAL)
                 .cursor_pointer()
-                .when(active, |item| item.bg(active_bg).text_color(active_fg))
+                .when(active, |item| {
+                    item.bg(active_bg).shadow(active_shadow.clone()).text_color(active_fg)
+                })
                 .when(!active && !dragged, |item| {
                     item.text_color(muted).hover(|style| style.bg(hover_bg))
                 })

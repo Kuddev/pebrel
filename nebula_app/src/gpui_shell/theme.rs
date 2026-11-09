@@ -536,6 +536,118 @@ pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
     wash(Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, alpha))
 }
 
+// ── 表面层级 ────────────────────────────────────────────────────────────
+//
+// 窗框（侧栏、设置导航）最暗，正文板居中，浮起的选中行与设置分组卡最亮。
+// 层级靠明度阶梯建立；阴影只用两档：浮起行 `raised_shadow`、分组卡
+// `settings_card_shadow`。浅色用极淡的环线加投影，深色改用黑色环线与 1px
+// 顶部内高光——同样的投影落在深底上看不见，只会把边缘弄脏。
+
+/// 浮起面：侧栏选中 tab、设置导航选中项、设置分组卡共用。
+pub fn raised_fill(cx: &App) -> Hsla {
+    let sk = resolved_skin(cx);
+    let base = solid(sk.panel);
+    if sk.is_light {
+        base.blend(hsla(0.0, 0.0, 1.0, 0.86))
+    } else {
+        base.blend(hsla(0.0, 0.0, 1.0, 0.065))
+    }
+}
+
+fn ring_and_drop(cx: &App, drop_alpha: f32, drop_y: f32, drop_blur: f32) -> Vec<gpui::BoxShadow> {
+    let light = resolved_skin(cx).is_light;
+    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32, inset: bool| gpui::BoxShadow {
+        color,
+        offset: point(px(0.0), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset,
+    };
+    if light {
+        vec![
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.06), 0.0, 0.0, 1.0, false),
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, drop_alpha), drop_y, drop_blur, 0.0, false),
+        ]
+    } else {
+        vec![
+            shadow(hsla(0.0, 0.0, 0.0, 0.30), 0.0, 0.0, 1.0, false),
+            shadow(hsla(0.0, 0.0, 1.0, 0.05), 1.0, 0.0, 0.0, true),
+        ]
+    }
+}
+
+/// 选中行浮起：与内容板同材质，读作“它就是右边那块”。
+pub fn raised_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    ring_and_drop(cx, 0.07, 1.0, 2.0)
+}
+
+/// 设置分组卡。比选中行多一层柔和的远投影。
+pub fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    ring_and_drop(cx, 0.08, 4.0, 12.0)
+}
+
+/// 浮层（弹窗、菜单）：环线 + 近处投影 + 远处大投影，比分组卡再高一级。
+pub fn float_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    let light = resolved_skin(cx).is_light;
+    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32| gpui::BoxShadow {
+        color,
+        offset: point(px(0.0), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+    };
+    if light {
+        vec![
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.08), 0.0, 0.0, 1.0),
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.06), 2.0, 6.0, 0.0),
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.16), 18.0, 40.0, -8.0),
+        ]
+    } else {
+        vec![
+            shadow(hsla(0.0, 0.0, 1.0, 0.07), 0.0, 0.0, 1.0),
+            shadow(hsla(0.0, 0.0, 0.0, 0.35), 2.0, 8.0, 0.0),
+            shadow(hsla(0.0, 0.0, 0.0, 0.55), 20.0, 44.0, -8.0),
+        ]
+    }
+}
+
+/// 选中卡片的外圈：1px 强调色描边之外再加一圈柔和的同色晕，描边宽度不变，
+/// 选中与否卡内内容都不位移。
+pub fn selected_halo(cx: &App) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color: cx.theme().primary.opacity(0.20),
+        offset: point(px(0.0), px(0.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(3.0),
+        inset: false,
+    }]
+}
+
+/// 设置导航铺在内容板上的压暗层：导航读作窗框，正文读作板。
+pub fn settings_nav_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.045)
+    } else {
+        hsla(0.0, 0.0, 0.0, 0.18)
+    }
+}
+
+/// 设置正文的下沉层：浅色微微压暗，让白卡浮起；深色保持板色，卡片自己提亮。
+pub fn settings_canvas_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
+    } else {
+        hsla(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+/// 中性 hover：强调色只留给选中、开启、主操作与焦点。
+pub fn neutral_hover(cx: &App) -> Hsla {
+    let mut color = ink(resolved_skin(cx).ink);
+    color.a = 0.05;
+    color
+}
+
 /// 按运行时主题重建窗口 chrome：先切组件库深浅模式垫底（未映射的长尾
 /// token 落在正确的底色系上），再用旧壳 [`Skin`] 覆写全部关键 token——
 /// 所有主题（含 Nord / Nord Light / Warm Sand）共用同一条 token 应用路径。启动、设置变更、系统外观变化

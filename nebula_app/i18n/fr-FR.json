@@ -110,6 +110,16 @@
       "hide_config_host": "Masquer (les sources de configuration ne peuvent pas être supprimées)",
       "empty_hint": "Utilisez « + Ajouter un hôte » ou gérez les alias dans ~/.ssh/config",
       "shared_data_hint": "Partage les données avec l’ancienne interface. Supprimer un alias de configuration le masque ; il peut être restauré."
+    },
+    "nav": {
+      "workspace": "Espace de travail",
+      "connections": "Connexions",
+      "system": "Système",
+      "startup": "Démarrage",
+      "alerts": "Alertes",
+      "completion": "Complétion",
+      "mouse_selection": "Souris et sélection",
+      "tabs_windows": "Onglets et fenêtres"
     }
   },
   "common": {
