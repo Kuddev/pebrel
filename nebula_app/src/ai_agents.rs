@@ -663,15 +663,41 @@ const MEMO_SLOTS: usize = 8;
 /// 按 `(program, screen)` 键的检测记忆（评审 3：单槽在多 pane 交替时互相
 /// 逐出，「同屏多 pane 各自命中」根本不成立——同 agent 的两个 pane 交替
 /// 就是纯逐出）。manifest 世代一变整表作废。
-static DETECT_MEMO: LazyLock<Mutex<(u64, HashMap<(String, String), Option<Detection>>)>> =
-    LazyLock::new(|| Mutex::new((0, HashMap::new())));
+static DETECT_MEMO: LazyLock<Mutex<DetectMemo>> = LazyLock::new(Default::default);
+
+#[derive(Default)]
+struct DetectMemo {
+    generation: u64,
+    slots: HashMap<(String, String), Option<Detection>>,
+}
+
+impl DetectMemo {
+    /// `None` is a miss; the inner `Option` is the remembered detection.
+    fn lookup(
+        &mut self,
+        generation: u64,
+        program: &str,
+        screen: &str,
+    ) -> Option<Option<Detection>> {
+        if self.generation != generation {
+            self.generation = generation;
+            self.slots.clear();
+            return None;
+        }
+        self.slots.get(&(program.to_owned(), screen.to_owned())).cloned()
+    }
+
+    fn publish(&mut self, program: &str, screen: &str, result: Option<Detection>) {
+        if self.slots.len() >= MEMO_SLOTS {
+            self.slots.clear();
+        }
+        self.slots.insert((program.to_owned(), screen.to_owned()), result);
+    }
+}
 
 /// `identify` 没有 program 维度，键就是屏幕串本身。
 static IDENTIFY_MEMO: LazyLock<Mutex<(u64, HashMap<String, Option<AgentKind>>)>> =
     LazyLock::new(|| Mutex::new((0, HashMap::new())));
-
-#[cfg(test)]
-static DETECT_MEMO_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Match one live screen snapshot. No match is `None`: callers retain their
 /// higher-confidence hook/process state rather than fabricating idle.
@@ -682,23 +708,19 @@ pub fn detect(program: &str, screen: &str) -> Option<Detection> {
     // A concurrent override must not label an old result with a new generation.
     let manifests = cache().read().ok()?;
     let generation = manifests.generation;
+    if let Some(hit) = DETECT_MEMO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lookup(generation, program, screen)
     {
-        let mut memo = DETECT_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if memo.0 != generation {
-            memo.0 = generation;
-            memo.1.clear();
-        } else if let Some(hit) = memo.1.get(&(program.to_owned(), screen.to_owned())) {
-            #[cfg(test)]
-            DETECT_MEMO_HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            return hit.clone();
-        }
+        return hit;
     }
     let result = detect_from_manifests(&manifests.manifests, agent, screen);
-    let mut memo = DETECT_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if memo.1.len() >= MEMO_SLOTS {
-        memo.1.clear();
-    }
-    memo.1.insert((program.to_owned(), screen.to_owned()), result.clone());
+    DETECT_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).publish(
+        program,
+        screen,
+        result.clone(),
+    );
     result
 }
 
@@ -1241,17 +1263,17 @@ mod tests {
                       ❯ 
                       ────────────────────────────────────────
                         ⏵⏵ bypass permissions on (shift+tab to cycle)";
-        super::DETECT_MEMO_HITS.store(0, std::sync::atomic::Ordering::SeqCst);
-        let a1 = detect("claude", idle_screen);
-        let b1 = detect("claude", working_screen);
-        let a2 = detect("claude", idle_screen);
-        let b2 = detect("claude", working_screen);
-        assert_eq!(a1, a2);
-        assert_eq!(b1, b2);
-        assert!(
-            super::DETECT_MEMO_HITS.load(std::sync::atomic::Ordering::SeqCst) >= 2,
-            "alternating panes must hit their own memo slots"
-        );
+        // 用独立的记忆表：并行测试共用全局表，第 9 个屏幕就会把它清空。
+        let idle = detect("claude", idle_screen);
+        let working = detect("claude", working_screen);
+        let mut memo = super::DetectMemo::default();
+        memo.publish("claude", idle_screen, idle.clone());
+        memo.publish("claude", working_screen, working.clone());
+        for _ in 0..2 {
+            assert_eq!(memo.lookup(0, "claude", idle_screen), Some(idle.clone()));
+            assert_eq!(memo.lookup(0, "claude", working_screen), Some(working.clone()));
+        }
+        assert_eq!(memo.lookup(1, "claude", idle_screen), None, "a reload invalidates every slot");
     }
 
     #[test]
