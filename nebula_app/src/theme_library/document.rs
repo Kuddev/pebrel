@@ -323,6 +323,22 @@ impl ThemeDocument {
         Self::from_value(value)
     }
 
+    /// Deep-merge a partial document over this one, for generators that only
+    /// change a few values. Identity keys stay with this document, and the
+    /// result records it as `metadata.based_on`.
+    pub fn with_overrides(&self, overrides: &Map<String, Value>) -> Result<Self, DocumentError> {
+        reject_reserved_keys(overrides)?;
+        let mut value = self.value.clone();
+        let overrides = Value::Object(overrides.clone());
+        merge_value(&mut value, &overrides, &["id", "revision", "builtin", "schema_version"]);
+        value["builtin"] = Value::Bool(false);
+        if !value.get("metadata").is_some_and(Value::is_object) {
+            value["metadata"] = json!({});
+        }
+        value["metadata"]["based_on"] = json!(self.name());
+        Self::from_value(value)
+    }
+
     pub fn with_id_and_revision(&self, id: impl Into<String>, revision: u64) -> Self {
         let mut value = self.value.clone();
         if let Some(object) = value.as_object_mut() {

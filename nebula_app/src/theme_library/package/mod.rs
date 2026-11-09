@@ -76,6 +76,24 @@ pub(crate) struct Resource {
     pub sha256: String,
 }
 
+/// Catalog provenance stored in an installed theme's package receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Origin {
+    pub catalog: String,
+    pub id: String,
+    pub version: String,
+    pub sha256: String,
+}
+
+impl Origin {
+    /// Read the receipt of a library document; absent or malformed receipts
+    /// mean "not installed from a catalog", never an error.
+    pub(crate) fn of(document: &crate::theme_library::ThemeDocument) -> Option<Self> {
+        let value = document.to_value();
+        serde_json::from_value(value.get("metadata")?.get("package")?.get("origin")?.clone()).ok()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {

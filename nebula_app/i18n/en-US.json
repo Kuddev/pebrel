@@ -211,7 +211,8 @@
         "advanced": "advanced session tray restore startup autostart login silent",
         "backup": "backup cloud sync export restore webdav s3 sftp 123 nextcloud synology nas r2 minio snapshots",
         "agents": "agents agent hook hooks claude codex opencode cursor kimi pi omp copilot grok",
-        "mobile": "mobile phone android ios remote pairing qr lan relay"
+        "mobile": "mobile phone android ios remote pairing qr lan relay",
+        "plugins": "plugins plugin extension extensions luau install grant generate"
       }
     },
     "opacity": {
@@ -270,7 +271,8 @@
       "keymap": "Key Bindings",
       "advanced": "Advanced",
       "backup": "Backup",
-      "agents": "Agents"
+      "agents": "Agents",
+      "plugins": "Plugins"
     },
     "notifications": {
       "duration": "Notification duration",
@@ -539,6 +541,32 @@
       "needs_repair": "Hook installed · needs repair",
       "initialize": "Run this agent once to create its configuration, then refresh.",
       "config_path": "Configuration: {path}"
+    },
+    "plugins": {
+      "title": "Plugins",
+      "description": "Plugins run only when you click one of their buttons or run a pebrel plugin command. Each capability a plugin needs is granted once, when you install it.",
+      "install": "Install from folder…",
+      "installing": "Installing…",
+      "choose_folder": "Choose a plugin folder containing plugin.toml",
+      "refresh": "Refresh",
+      "loading": "Loading installed plugins…",
+      "empty": "No plugins installed. Choose a plugin folder to install one.",
+      "failed": "Plugin operation failed: {error}",
+      "installed": "Installed {name}.",
+      "themes_added": "{count} of {total} bundled themes are in your theme library.",
+      "uninstalled": "Uninstalled {id}.",
+      "generated": "Added “{name}” to your theme library. Choose it in Appearance → Theme.",
+      "generate_tooltip": "Run this plugin command and add the theme it generates to your library. Nothing is applied.",
+      "uninstall": "Uninstall",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "granted": "Allowed: {grants}",
+      "grant_title": "{name} needs your permission to install:",
+      "grant_allow": "Allow and install",
+      "grant_cancel": "Cancel",
+      "grant_theme_library": "Add themes to your theme library (never applied automatically)",
+      "broken": "This plugin can no longer be loaded: {error}",
+      "themes_kept": "Uninstalling a plugin keeps the themes it added to your theme library."
     },
     "about": {
       "checking_for_updates": "Checking for updates...",
@@ -1886,6 +1914,35 @@
       "edit_copy": "Edit a copy",
       "failed": "Could not complete the operation: {detail}",
       "changed": "The package changed after inspection. Choose the file again before installing."
+    },
+    "community": {
+      "filter": "Community",
+      "loading": "Loading community themes…",
+      "empty": "No community themes are listed yet.",
+      "skipped": "{count} listings could not be read and are hidden.",
+      "retry": "Retry",
+      "install": "Install",
+      "installing": "Installing…",
+      "installed": "Installed",
+      "select": "Preview",
+      "install_version": "Install {version}",
+      "author": "by {author}",
+      "download_size": "{size} download",
+      "no_preview": "No preview",
+      "notice": "From the pebrel-community/themes catalog. Downloads are checked against the catalog's SHA-256 and added to your library without being applied.",
+      "added": "{name} was added to your library. Preview it here, then choose Use this theme.",
+      "install_failed": "Could not install {name}: {error}",
+      "error": {
+        "dns": "Could not resolve GitHub or the proxy address. Check your network and proxy settings, then retry.",
+        "tls": "Could not establish a secure connection. Check your system clock and whether a proxy intercepts TLS.",
+        "timeout": "The request timed out. Check your network or proxy, then retry.",
+        "proxy": "Could not connect through the configured proxy. Check Network settings.",
+        "network": "Could not reach the community catalog. Check your network, then retry.",
+        "http": "The server returned HTTP {status}.",
+        "integrity": "The download does not match the size and SHA-256 recorded in the catalog, so it was not installed.",
+        "catalog": "The community catalog could not be read: {detail}",
+        "package": "The theme package was rejected: {detail}"
+      }
     }
   },
   "ssh.ports.button": "Ports",

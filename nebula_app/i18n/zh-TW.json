@@ -61,7 +61,8 @@
       "keymap": "按鍵對應",
       "advanced": "進階",
       "backup": "備份",
-      "agents": "Agents"
+      "agents": "Agents",
+      "plugins": "外掛"
     },
     "notifications": {
       "duration": "通知顯示時間",
@@ -216,6 +217,32 @@
       "needs_repair": "Hook 已安裝 · 需修復",
       "initialize": "請先執行一次此工具以建立設定，然後重新整理。",
       "config_path": "設定：{path}"
+    },
+    "plugins": {
+      "title": "外掛",
+      "description": "外掛只在你點它的按鈕或執行 pebrel plugin 指令時執行。外掛需要的能力在安裝時一次授權。",
+      "install": "從資料夾安裝…",
+      "installing": "正在安裝…",
+      "choose_folder": "選擇包含 plugin.toml 的外掛資料夾",
+      "refresh": "重新整理",
+      "loading": "正在讀取已安裝的外掛…",
+      "empty": "尚未安裝外掛。選擇一個外掛資料夾來安裝。",
+      "failed": "外掛操作失敗：{error}",
+      "installed": "已安裝 {name}。",
+      "themes_added": "內附的 {total} 個主題中有 {count} 個已在主題庫裡。",
+      "uninstalled": "已解除安裝 {id}。",
+      "generated": "已將「{name}」加入主題庫，可在 外觀 → 主題 中選用。",
+      "generate_tooltip": "執行這個外掛指令，把產生的主題加入主題庫，不會自動套用。",
+      "uninstall": "解除安裝",
+      "enabled": "已啟用",
+      "disabled": "已停用",
+      "granted": "已允許：{grants}",
+      "grant_title": "安裝 {name} 需要你允許：",
+      "grant_allow": "允許並安裝",
+      "grant_cancel": "取消",
+      "grant_theme_library": "向主題庫新增主題（不會自動套用）",
+      "broken": "這個外掛已無法載入：{error}",
+      "themes_kept": "解除安裝外掛時，它加入主題庫的主題會保留。"
     }
   },
   "provider": {
@@ -1041,5 +1068,36 @@
   "terminal.ssh_reconnect": "重新連線 (R)",
   "startup": {
     "handover_unconfirmed": "執行中的 Pebrel 未確認開啟請求，分頁或視窗可能已經建立。請先檢查現有視窗，再決定是否重試；本次啟動不會重複傳送請求。"
+  },
+  "theme": {
+    "community": {
+      "filter": "社群",
+      "loading": "正在取得社群主題…",
+      "empty": "社群目錄裡還沒有主題。",
+      "skipped": "有 {count} 個項目無法讀取，已隱藏。",
+      "retry": "重試",
+      "install": "安裝",
+      "installing": "正在安裝…",
+      "installed": "已安裝",
+      "select": "預覽",
+      "install_version": "安裝 {version}",
+      "author": "作者 {author}",
+      "download_size": "下載 {size}",
+      "no_preview": "暫無預覽圖",
+      "notice": "來自 pebrel-community/themes 社群目錄。下載內容會依目錄登記的 SHA-256 驗證，只加入主題庫，不會自動套用。",
+      "added": "{name} 已加入主題庫。可以在這裡預覽，滿意後按「使用此主題」。",
+      "install_failed": "無法安裝 {name}：{error}",
+      "error": {
+        "dns": "無法解析 GitHub 或代理位址。請檢查網路和代理設定後重試。",
+        "tls": "無法建立安全連線。請檢查系統時間，以及代理是否攔截了 TLS 連線。",
+        "timeout": "要求逾時。請檢查網路或代理後重試。",
+        "proxy": "無法透過已設定的代理連線。請檢查「網路」設定。",
+        "network": "無法連線社群目錄。請檢查網路後重試。",
+        "http": "伺服器回傳 HTTP {status}。",
+        "integrity": "下載內容與目錄登記的大小和 SHA-256 不一致，沒有安裝。",
+        "catalog": "無法讀取社群目錄：{detail}",
+        "package": "主題包未通過驗證：{detail}"
+      }
+    }
   }
 }

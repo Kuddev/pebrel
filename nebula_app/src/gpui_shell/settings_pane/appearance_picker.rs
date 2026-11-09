@@ -44,7 +44,7 @@ impl AppearanceSelection {
                 .filter(|theme| match filter {
                     1 => chrome_theme(*theme).palette().is_light,
                     2 => !chrome_theme(*theme).palette().is_light,
-                    3 => false,
+                    3 | super::theme_community::COMMUNITY_FILTER => false,
                     _ => true,
                 })
                 .map(Self::Theme)
@@ -79,6 +79,8 @@ pub(super) struct AppearancePicker {
     /// selected theme's declared foreground; it is persisted only on apply.
     pub(super) foreground_override: Option<nebula_settings::Rgb8>,
     pub(super) initial_foreground_override: Option<nebula_settings::Rgb8>,
+    /// Created on the first visit to the Community filter, dropped with the picker.
+    pub(super) community: Option<super::theme_community::Community>,
 }
 
 impl AppearancePicker {
@@ -86,6 +88,21 @@ impl AppearancePicker {
         self.draft_touched = true;
         self.foreground_override = foreground;
         self.error = None;
+    }
+
+    /// Add a theme installed while the picker is open, without reloading the
+    /// library snapshot that other cards' indices refer to.
+    pub(super) fn adopt_custom_theme(
+        &mut self,
+        document: crate::theme_library::ThemeDocument,
+        definition: nebula_settings::ThemeDefinition,
+        focus: FocusHandle,
+    ) -> usize {
+        let index = self.custom_themes.len();
+        self.custom_themes.push(document);
+        self.custom_definitions.push(definition);
+        self.options.push((AppearanceSelection::Custom(index), focus));
+        index
     }
 
     pub(super) fn choices(&self) -> Vec<AppearanceSelection> {
@@ -98,7 +115,7 @@ impl AppearancePicker {
                     .filter(|(_, document)| match self.filter {
                         1 => document.appearance() == "light",
                         2 => document.appearance() == "dark",
-                        3 => true,
+                        super::theme_community::COMMUNITY_FILTER => false,
                         _ => true,
                     })
                     .map(|(index, _)| AppearanceSelection::Custom(index)),
@@ -254,6 +271,7 @@ impl SettingsPane {
             error: None,
             foreground_override,
             initial_foreground_override: foreground_override,
+            community: None,
         });
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
@@ -555,7 +573,7 @@ impl SettingsPane {
         }
     }
 
-    fn choose_appearance_draft(
+    pub(super) fn choose_appearance_draft(
         &mut self,
         choice: AppearanceSelection,
         window: &mut Window,
@@ -647,6 +665,7 @@ impl SettingsPane {
                 Message::ThemePickerLight,
                 Message::ThemePickerDark,
                 Message::ThemePickerCustom,
+                Message::ThemeCommunityFilter,
             ]
         } else {
             &[
@@ -657,7 +676,13 @@ impl SettingsPane {
                 Message::ThemePickerGreen,
             ]
         };
-        let count = picker.choices().len();
+        let count = if picker.draft.is_theme()
+            && picker.filter == super::theme_community::COMMUNITY_FILTER
+        {
+            picker.community.as_ref().map_or(0, |community| community.count())
+        } else {
+            picker.choices().len()
+        };
         h_flex()
             .mx(px(if compact { 19.0 } else { 27.0 }))
             .pb(px(15.0))
@@ -687,11 +712,17 @@ impl SettingsPane {
                             .rounded_full()
                             .text_color(if selected { colors.ink } else { colors.secondary })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(picker) = this.appearance_picker.as_mut() {
-                                    if picker.apply_busy {
-                                        return;
-                                    }
-                                    picker.filter = index;
+                                let Some(picker) = this.appearance_picker.as_mut() else {
+                                    return;
+                                };
+                                if picker.apply_busy {
+                                    return;
+                                }
+                                picker.filter = index;
+                                if picker.draft.is_theme()
+                                    && index == super::theme_community::COMMUNITY_FILTER
+                                {
+                                    this.load_community(false, cx);
                                 }
                                 cx.notify();
                             }))

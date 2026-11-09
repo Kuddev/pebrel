@@ -35,6 +35,10 @@ pub(crate) enum Command {
     Import { path: PathBuf },
     /// Print the authoritative package byte limits.
     Limits,
+    /// Fetch the community theme catalog and show which entries are installed.
+    Catalog,
+    /// Download a community theme, verify its pinned SHA-256, and add it to the library without applying it.
+    Install { id: String },
 }
 
 pub(crate) fn run(options: Options) -> i32 {
@@ -72,6 +76,48 @@ fn execute(command: Command) -> Result<serde_json::Value> {
             let document = CheckedPackage::open(&path)?.install(&ThemeLibraryStore::default())?;
             Ok(serde_json::json!({"id": document.id(), "name": document.name(), "applied": false}))
         },
+        Command::Catalog => {
+            use crate::theme_library::community::{self, Installed};
+            let listing = community::fetch_catalog().map_err(community_error)?;
+            let library = ThemeLibraryStore::default().list().map_err(community_error)?.custom;
+            let themes: Vec<_> = listing
+                .entries
+                .iter()
+                .map(|entry| {
+                    let mut value = serde_json::to_value(entry).unwrap_or_default();
+                    value["installed"] = match community::installed(entry, &library) {
+                        Installed::Current(id) => serde_json::json!(id),
+                        Installed::Other => serde_json::json!("other_version"),
+                        Installed::No => serde_json::Value::Null,
+                    };
+                    value
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "catalog": community::CATALOG,
+                "themes": themes,
+                "skipped": listing.skipped,
+            }))
+        },
+        Command::Install { id } => {
+            use crate::theme_library::community;
+            let listing = community::fetch_catalog().map_err(community_error)?;
+            let entry = listing
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| PackageError(format!("{id} is not in the community catalog")))?;
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let document = community::install(entry, &ThemeLibraryStore::default(), &cancel)
+                .map_err(community_error)?;
+            Ok(serde_json::json!({
+                "id": document.id(),
+                "name": document.name(),
+                "catalog_id": entry.id,
+                "version": entry.version,
+                "applied": false,
+            }))
+        },
         Command::Pack { theme, output, author, github, license, version, preview } => {
             let mut input = std::fs::File::open(&theme)?;
             let mut bytes = Vec::new();
@@ -108,4 +154,8 @@ fn execute(command: Command) -> Result<serde_json::Value> {
             Ok(serde_json::json!({"path": output, "name": document.name()}))
         },
     }
+}
+
+fn community_error(error: impl std::fmt::Display) -> PackageError {
+    PackageError(error.to_string())
 }
