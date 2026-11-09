@@ -1,4 +1,5 @@
 //! 显式启用后才在后台读取和编译；绘制阶段只接收已验证的字节码。
+use crate::gpui_shell::shader_source::{self, Language, SOURCE_LIMIT};
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use nebula_settings::{BackgroundEffectRequest, BackgroundEffects};
 use std::{io::Read, sync::Arc};
@@ -6,7 +7,6 @@ use std::{io::Read, sync::Arc};
 mod native;
 use native::compile as native_compile;
 
-const SOURCE_LIMIT: usize = 64 * 1024;
 const GRAIN: &str = r#"
 @fragment
 fn main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
@@ -23,6 +23,7 @@ pub(super) struct Program {
 
 pub(super) fn compile(settings: &BackgroundEffects) -> Result<Option<Program>> {
     let request = settings.request().map_err(|error| anyhow!(error))?;
+    let mut language = Language::Wgsl;
     let (source, periodic) = match request {
         BackgroundEffectRequest::Disabled => return Ok(None),
         BackgroundEffectRequest::Grain => (GRAIN.to_owned(), false),
@@ -33,22 +34,21 @@ pub(super) fn compile(settings: &BackgroundEffects) -> Result<Option<Program>> {
         BackgroundEffectRequest::LiquidSilk => (include_str!("liquid_silk.wgsl").to_owned(), true),
         BackgroundEffectRequest::Wgsl(path) => {
             let path = nebula_settings::settings_dir().join(path);
-            let file = std::fs::File::open(path).context("open background WGSL")?;
-            ensure!(file.metadata()?.is_file(), "background WGSL must be a regular file");
+            language = Language::for_path(&path);
+            let file = std::fs::File::open(path).context("open background shader")?;
+            ensure!(file.metadata()?.is_file(), "background shader must be a regular file");
             let mut bytes = Vec::new();
             file.take((SOURCE_LIMIT + 1) as u64).read_to_end(&mut bytes)?;
-            ensure!(bytes.len() <= SOURCE_LIMIT, "background WGSL exceeds 64 KiB");
-            (String::from_utf8(bytes).context("background WGSL must use UTF-8")?, false)
+            ensure!(bytes.len() <= SOURCE_LIMIT, "background shader exceeds 64 KiB");
+            (String::from_utf8(bytes).context("background shader must use UTF-8")?, false)
         },
     };
-    let (hlsl, entry, animated) = translate(&source)?;
+    let (hlsl, entry, animated) = translate_source(&source, language)?;
     Ok(Some(Program { bytecode: native_compile(&hlsl, &entry)?, animated, periodic }))
 }
 
-fn translate(source: &str) -> Result<(String, String, bool)> {
-    ensure!(source.len() <= SOURCE_LIMIT, "background WGSL exceeds 64 KiB");
-    let module = naga::front::wgsl::parse_str(source)
-        .map_err(|error| anyhow!(error.emit_to_string(source)))?;
+fn translate_source(source: &str, language: Language) -> Result<(String, String, bool)> {
+    let module = shader_source::background(source, language)?;
     let vec4 = |ty: naga::Handle<naga::Type>| {
         matches!(
             module.types[ty].inner,
@@ -140,6 +140,10 @@ fn translate(source: &str) -> Result<(String, String, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn translate(source: &str) -> Result<(String, String, bool)> {
+        translate_source(source, Language::Wgsl)
+    }
 
     #[test]
     fn builtins_translate_with_the_declared_time_abi() {

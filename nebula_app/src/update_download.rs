@@ -321,31 +321,20 @@ fn download_with_agent(
 
 /// 网络错误用稳定类别解释；不把代理 URL、认证信息或 CDN 查询串拼进 UI。
 fn network_error_text(error: ureq::Error, language: UiLanguage) -> String {
-    use std::io::ErrorKind;
-    use ureq::Error;
+    use crate::update_proxy::NetworkFailure;
 
-    let message = match error {
-        Error::HostNotFound => Message::UpdateDownloadDns,
-        Error::Tls(_) | Error::Rustls(_) | Error::TlsRequired => Message::UpdateDownloadTls,
-        Error::Timeout(_) => Message::UpdateDownloadTimeout,
-        Error::Io(ref io) if io.kind() == ErrorKind::ConnectionRefused => {
-            Message::UpdateDownloadRefused
-        },
-        Error::Io(ref io) if io.kind() == ErrorKind::TimedOut => Message::UpdateDownloadTimeout,
-        Error::Io(ref io)
-            if matches!(
-                io.kind(),
-                ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe
-            ) =>
-        {
-            Message::UpdateDownloadInterrupted
-        },
-        Error::ConnectProxyFailed(_) | Error::InvalidProxyUrl => Message::UpdateDownloadProxy,
-        Error::StatusCode(status) => {
+    let message = match crate::update_proxy::classify(&error) {
+        NetworkFailure::Dns => Message::UpdateDownloadDns,
+        NetworkFailure::Tls => Message::UpdateDownloadTls,
+        NetworkFailure::Timeout => Message::UpdateDownloadTimeout,
+        NetworkFailure::Refused => Message::UpdateDownloadRefused,
+        NetworkFailure::Interrupted => Message::UpdateDownloadInterrupted,
+        NetworkFailure::Proxy => Message::UpdateDownloadProxy,
+        NetworkFailure::Status(status) => {
             return language
                 .format(Message::UpdateDownloadHttp, &[("status", &status.to_string())]);
         },
-        _ => Message::UpdateDownloadNetwork,
+        NetworkFailure::Other => Message::UpdateDownloadNetwork,
     };
     language.text(message).to_owned()
 }

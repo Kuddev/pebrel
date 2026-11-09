@@ -123,6 +123,11 @@ impl AgentSession {
             None if agent == crate::ai_agents::AgentKind::Claude => {
                 Some("claude --continue".to_owned())
             },
+            // opencode 的插件默认不装，缺 id 是常态（#651）；它的 `--continue`
+            // 同样按目录取最近会话（1.19.0 实测，非 git 目录也是）。
+            None if agent == crate::ai_agents::AgentKind::OpenCode => {
+                Some("opencode --continue".to_owned())
+            },
             // codex 没有按目录 continue 的形式，缺 id 只能放弃接续。
             _ => None,
         }
@@ -564,6 +569,15 @@ mod tests {
             Some("codex resume b5f6c1c2-1111-2222-3333-444455556666")
         );
         assert_eq!(agent("codex", None).resume_command(), None);
+        assert_eq!(
+            agent("opencode", Some("ses_e4c1029e1ffeyJshk44b1N5nP1")).resume_command().as_deref(),
+            Some("opencode --session ses_e4c1029e1ffeyJshk44b1N5nP1")
+        );
+        assert_eq!(
+            agent("opencode", None).resume_command().as_deref(),
+            Some("opencode --continue")
+        );
+        assert_eq!(agent("opencode", Some("x; calc")).resume_command(), None);
         assert_eq!(
             agent("gemini", Some("abc")).resume_command().as_deref(),
             Some("gemini --resume abc")

@@ -202,7 +202,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         if let Some(ix) = self.tabs.iter().position(
-            |tab| matches!(tab, WorkspaceTab::Image { view } if view.read(cx).path == path),
+            |tab| matches!(tab, WorkspaceTab::Image { view } if view.read(cx).is_local_path(&path)),
         ) {
             if let Some(WorkspaceTab::Image { view }) = self.tabs.get(ix) {
                 view.clone().update(cx, |view, cx| view.reload(cx));
@@ -224,7 +224,25 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let location = crate::ssh_sftp::document::RemoteLocation { destination, path };
+        if crate::display::image_viewer::viewable_file(std::path::Path::new(&location.path)) {
+            if let Some(index) = self.tabs.iter().position(|tab| matches!(tab, WorkspaceTab::Image { view } if view.read(cx).is_remote_location(&location))) {
+                if let WorkspaceTab::Image { view } = &self.tabs[index] {
+                    view.update(cx, |view, cx| view.reload(cx));
+                }
+                self.activate_tab(index, window, cx);
+                return;
+            }
+            let view =
+                cx.new(|cx| crate::gpui_shell::doc_tabs::ImageTabView::new_remote(location, cx));
+            self.insert_new_tab(WorkspaceTab::Image { view });
+            self.focus_active(window, cx);
+            cx.notify();
+            return;
+        }
         if let Some(index) = self.tabs.iter().position(|tab| matches!(tab, WorkspaceTab::Document { view, .. } if view.read(cx).is_remote_location(&location))) {
+            if let WorkspaceTab::Document { view, .. } = &self.tabs[index] {
+                view.update(cx, |view, cx| view.reload(window, cx));
+            }
             self.activate_tab(index, window, cx);
             return;
         }

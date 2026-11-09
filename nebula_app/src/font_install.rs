@@ -417,6 +417,17 @@ mod tests {
         }
     }
 
+    /// GPUI's macOS loader skips every face without an `m` glyph, so the
+    /// symbol family must keep Maple's `m` or macOS icons render as tofu (#870).
+    #[test]
+    fn symbol_face_keeps_the_m_glyph_required_by_the_macos_loader() {
+        let symbols = ttf_parser::Face::parse(SYMBOL_FONT_BYTES, 0).unwrap();
+        let original = ttf_parser::Face::parse(REQUIRED_FONT_BYTES, 0).unwrap();
+        let glyph = symbols.glyph_index('m').expect("macOS GPUI rejects faces without 'm'");
+        let old = original.glyph_index('m').unwrap();
+        assert_eq!(symbols.glyph_hor_advance(glyph), original.glyph_hor_advance(old));
+    }
+
     fn sys(name: &str, monospaced: bool) -> SystemFontFamily {
         SystemFontFamily { name: name.to_owned(), monospaced }
     }

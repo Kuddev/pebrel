@@ -418,6 +418,7 @@ impl Bridge {
                 "nebula.js",
                 OPENCODE_PLUGIN_JS,
                 &[
+                    "137965614dc3d04892209a7419dbfd40e42a285493398b4e989c64ff7a13cb0e",
                     "f42225dac77b7f9e577b6a025309c44f8b35a830a60dee475eefc68f00c30190",
                     "e81481ed990d205911f22096a34aff5bbbda3d220450a3b39230b121ca158075",
                     "5f155e7330a9ef51c5ad1a048e27bedf6f48ade94e0bbe0624d76e632b545a06",
