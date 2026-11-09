@@ -171,6 +171,17 @@ class ProhibitedNamesTests(unittest.TestCase):
             )
         )
 
+    def test_notice_derivation_is_allowed_only_in_third_party_notices(self) -> None:
+        line = "pebrel_app/src/agent_detection derives from Herdr"
+        self.assertFalse(check_prohibited_names.prohibited_source_line("THIRD-PARTY-NOTICES", line))
+        self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", line))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            "THIRD-PARTY-NOTICES", "Herdr users should switch; this derives from Herdr"
+        ))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            "THIRD-PARTY-NOTICES", "derives from Herdr, which is slower than Pebrel"
+        ))
+
     def test_protocol_identifiers_are_allowed(self) -> None:
         text = (FIXTURES / "protocol.rs").read_text(encoding="utf-8")
         self.assertFalse(check_prohibited_names.prohibited_source_line("src/protocol.rs", text))

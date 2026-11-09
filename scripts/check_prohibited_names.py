@@ -79,6 +79,7 @@ LEGAL_ATTRIBUTION_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+NOTICE_DERIVATION_PATTERN = re.compile(r"\bderives from [A-Z][A-Za-z0-9-]*\s*$")
 DEPENDENCY_REFERENCE_PATTERNS = (
     re.compile(r"\bgit\s*=\s*[\"']https?://[^\"']+[\"']", re.IGNORECASE),
     re.compile(r"\bsource\s*=\s*[\"']git\+https?://[^\"']+[\"']", re.IGNORECASE),
@@ -188,6 +189,9 @@ def prohibited(text: str) -> bool:
 def source_without_allowed_occurrences(path: str, text: str) -> str:
     for pattern in LEGAL_ATTRIBUTION_PATTERNS:
         text = pattern.sub("", text)
+    if path == "THIRD-PARTY-NOTICES":
+        # 许可证要求的来源声明：只放行行尾的“derives from 上游名”，同行其他文字仍检查。
+        text = NOTICE_DERIVATION_PATTERN.sub("", text)
     if Path(path).name in {"Cargo.toml", "Cargo.lock"} and any(
         pattern.search(text) for pattern in DEPENDENCY_REFERENCE_PATTERNS
     ):
