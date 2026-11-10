@@ -4,7 +4,7 @@ use gpui::{Context, EventEmitter as _};
 use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::{Column, Line, Point};
 
-use crate::ai_agents::{AgentStatus, AgentStatusSource};
+use crate::ai_agents::{AgentKind, AgentStatus, AgentStatusSource};
 use crate::ai_hook::{AiHookEvent, AiHookKind};
 
 use super::{TerminalView, TerminalViewEvent, notifications};
@@ -241,16 +241,32 @@ impl TerminalView {
     }
 
     fn observe_agent_screen(&mut self, screen: &str, cx: &mut Context<Self>) {
-        let detected = notifications::screen_identity_allowed(self.running_program.as_deref())
-            .then(|| crate::ai_agents::identify(screen))
-            .flatten();
+        let passthrough = self.screen_passthrough();
+        let (screen, detected) = if passthrough {
+            super::remote_activity::passthrough_identity(screen)
+        } else {
+            // The shell boundary owns the lifecycle again once the relay is gone.
+            self.remote_activity.passthrough = None;
+            self.remote_activity.passthrough_missing = None;
+            let detected = notifications::screen_identity_allowed(self.running_program.as_deref())
+                .then(|| crate::ai_agents::identify(screen))
+                .flatten();
+            (screen, detected)
+        };
+        if passthrough && self.release_passthrough_agent(detected, cx) {
+            return;
+        }
         let Some(program) =
-            notifications::screen_program(self.running_program.as_deref(), detected)
+            notifications::screen_program(self.running_program.as_deref(), detected, passthrough)
         else {
             self.agent_activity.reset_screen_samples();
             return;
         };
         if self.running_program.as_deref() != Some(program.as_str()) {
+            if passthrough && self.running_program.as_deref().and_then(AgentKind::parse).is_none() {
+                self.remote_activity.passthrough = Some(self.running_program.clone());
+                self.remote_activity.passthrough_missing = None;
+            }
             self.running_program = Some(program.clone());
             self.agent_activity.identify(AgentStatusSource::Screen);
             cx.emit(TerminalViewEvent::TitleChanged);

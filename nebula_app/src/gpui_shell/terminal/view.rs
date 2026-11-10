@@ -3,6 +3,7 @@
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod activity_tests;
 mod agent_activity;
+mod application_mouse;
 mod broadcast;
 mod completion;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -373,6 +374,9 @@ pub struct TerminalView {
     /// shell 与 console plumbing 时置位，转圈据此熄灭（issue #42）。判据与
     /// 节流都在 `runtime::reconcile_shell_activity`，裁定理由见那里。
     command_running_disproved: bool,
+    /// 前台命令是用户提交的交互式 SSH 登录（`ssh host`，无远端命令）。只在确知
+    /// 提交行的边界判定，命令结束即清除；粘贴等看不到命令行的提交不判定（#857）。
+    interactive_login: bool,
     /// `command_running` 置位的时刻，进程树探测的节流窗口从这里起算。
     command_started: Option<std::time::Instant>,
     /// 上次跑进程树探测的时刻，用于节流。
@@ -490,6 +494,7 @@ pub struct TerminalView {
     copy_on_select: bool,
     /// 鼠标模式下最后上报的单元格：move 事件按"进入新单元格"去重。
     last_report_point: Option<TermPoint>,
+    application_mouse: Option<application_mouse::Gesture>,
     /// GPUI 没有旧壳 scheduler 的 `BlinkCursor` 事件，视图自己只维护可见相位；
     /// 光标是否允许闪烁仍由共享 `Term::cursor_style()` 裁定。
     cursor_visible: bool,
@@ -613,6 +618,7 @@ impl TerminalView {
     ) {
         if !visible {
             self.shell_pointer.invalidate();
+            self.cancel_pointer_gesture();
             self.clear_output_hover(cx);
         }
         if self.output_visible != visible {
@@ -890,6 +896,8 @@ impl TerminalView {
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
         self.shell_pointer.revoke();
+        self.application_mouse = None;
+        self.cancel_pointer_gesture();
         self.clear_output_hover(cx);
         self.reading.cancel_query();
         self.reading.cancel_copy();

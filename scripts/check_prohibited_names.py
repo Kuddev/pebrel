@@ -21,7 +21,6 @@ PROHIBITED_PATTERNS = (
     re.compile(r"(?<![A-Za-z0-9_])herdr(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])kaku(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])orca(?![A-Za-z0-9_])", re.IGNORECASE),
-    re.compile(r"(?<![A-Za-z0-9_])tmux(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])wezterm(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])windows[-_ ]?terminal(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])alacritty(?![A-Za-z0-9_])", re.IGNORECASE),
@@ -54,7 +53,6 @@ PROHIBITED_EXAMPLES = (
     "herdr",
     "kaku",
     "orca",
-    "tmux",
     "wezterm",
     "Windows Terminal",
     "Alacritty",
@@ -89,14 +87,13 @@ PROTOCOL_COMPATIBILITY_PATTERNS = (
     re.compile(r"\bkitty\s+(?:graphics\s+protocol\b|图形协议)", re.IGNORECASE),
     re.compile(r"\bKITTY_[A-Z0-9_]+\b"),
     re.compile(r"\bkitty_(?:keyboard|seq|event|release|escape|input)[A-Za-z0-9_]*\b", re.IGNORECASE),
-    re.compile(r"\b(?:kitty|tmux)/(?:legacy|style|protocol)\b", re.IGNORECASE),
-    re.compile(r"\b(?:kitty|tmux)\s+(?:keyboard|protocol|escape|sequence)\b", re.IGNORECASE),
+    re.compile(r"\bkitty/(?:legacy|style|protocol)\b", re.IGNORECASE),
+    re.compile(r"\bkitty\s+(?:keyboard|protocol|escape|sequence)\b", re.IGNORECASE),
     re.compile(r"\bThemeFormat::(?:WindowsTerminal|Kitty|Ghostty|WezTerm|Alacritty)\b"),
     re.compile(
         r"unsupported theme format; use Pebrel JSON, Windows Terminal JSON, Kitty, Ghostty, WezTerm or Alacritty",
         re.IGNORECASE,
     ),
-    re.compile(r"\\x1bPtmux;"),
 )
 
 # 移动端的原生依赖路径和远端命令是构建/兼容接口；只剔除这些确切引用，
@@ -109,14 +106,11 @@ MOBILE_BUILD_REFERENCE_PATTERNS = tuple(re.compile(pattern) for pattern in (
     r"[\"']include/ghostty/vt\.h[\"']",
 ))
 REMOTE_SESSION_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r"\bSshSessionMode\.(?:TMUX|HERDR)\b",
-    r"\b(?:exec )?tmux (?:new-session -A -s|kill-session -t) '[^'\n]+'",
+    r"\bSshSessionMode\.HERDR\b",
     r"\bexec herdr(?=[\"'\s])",
     r"\bherdr session (?:attach|stop) '[^'\n]+'",
-    r"\bcommand -v (?:tmux|herdr)(?=\s+>)",
+    r"\bcommand -v herdr(?=\s+>)",
     r"\bGet-Command herdr(?= -ErrorAction\b)",
-    r"\btmux (?:-u )?(?:list-sessions|list-windows|list-clients)(?= -[a-zA-Z]\b)",
-    r"\btmux (?:select-window -t|select-pane -t|display-message -p -t|attach-session -t|has-session -t)(?= )",
     r"\bherdr session list --json\b",
     r"\bherdr session attach(?= \$\{psQuote\()",
     r"\bherdr --session(?= \$\{(?:quote|psQuote)\()",
@@ -124,34 +118,21 @@ REMOTE_SESSION_PATTERNS = tuple(re.compile(pattern) for pattern in (
 # 发现器的类型标签是线协议的一部分；只允许明确的构造/分派位置，
 # 不放行任意字符串字面量，更不能吞掉同行的说明、链接或比较文案。
 REMOTE_DISCOVERY_TAG_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r'\bdata\["(?:tmux|herdr)"\]',
-    r'\bSshSessionMode\.TMUX\s+->\s+"tmux"',
+    r'\bdata\["herdr"\]',
     r'\bSshSessionMode\.HERDR\s+->\s+"herdr"',
-    r'^\s*"(?:tmux|herdr)"(?= ->)',
+    r'^\s*"herdr"(?= ->)',
     r'\bwarnings \+= "herdr"',
     r"\[char\]30 \+ 'herdr'(?= \+ \[char\]10)",
 ))
 # Model tags belong to the remote-session consumers and their behavioral tests,
 # not to arbitrary labels or UI strings elsewhere in the mobile tree.
 REMOTE_MODEL_REFERENCE_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r'\bRemoteSession\("(?:tmux|herdr)"(?=,)',
-    r'\b(?:session|it)\??\.kind (?:==|!=) "(?:tmux|herdr)"',
+    r'\bRemoteSession\("herdr"(?=,)',
+    r'\b(?:session|it)\??\.kind (?:==|!=) "herdr"',
 ))
 REMOTE_MODEL_CONSUMERS = (
     "/connection/RemoteSessions.kt", "/connection/TmuxSessionControl.kt",
     "/session/SessionRepository.kt",
-)
-REMOTE_CONTROL_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r"\btmux copy-mode(?= -t )",
-    r"\btmux send-keys -X(?= -(?:N|t) )",
-))
-REMOTE_DISCOVERY_TEST_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r'\bProcessBuilder\("tmux", "-V"\)',
-    r'\bcommand\("tmux", (?="-f", "/dev/null", "new-session"|"kill-server"\))',
-    r'\bremove\("TMUX"\)',
-))
-REMOTE_PROCESS_FIXTURE_PATTERN = re.compile(
-    r"^\s*[0-9]+ [0-9]+ (?:pts/[0-9]+|\?) tmux: (?:client|server)\b"
 )
 
 
@@ -160,37 +141,12 @@ def remote_reference_remainder(path: str, text: str) -> str:
     model_test = is_test and path.endswith("Test.kt") and any(
         part in path for part in ("/connection/", "/session/")
     )
-    if path.endswith("/connection/TmuxEndpoint.kt"):
-        # Executable defaults, process-name comparisons and executable path regexes
-        # are interface data. Only remove the matched tokens, never the whole line.
-        text = re.sub(r'\bexecutable: String = "tmux"', "", text)
-        text = re.sub(r'== "(?:tmux|tmux:)"', "", text)
-        text = text.replace(r"\/tmux${'$'}/", "").replace(r"\/tmux\)$/", "")
-    if path.endswith("/connection/SshPtyIdentity.kt"):
-        text = re.sub(r'\bit\.command == "tmux"', "", text)
-        text = re.sub(r'\bit\.command\.startsWith\("tmux:"\)', "", text)
-    if is_test and path.endswith(("/connection/TmuxSessionControlTest.kt", "/connection/TmuxRecoveryCommandTest.kt")):
-        text = re.sub(r'\bTmuxEndpoint\("(?:tmux|/[^"\n]*/tmux)"(?=,)', lambda m: m[0].replace("tmux", ""), text)
-        text = re.sub(r'"/tmp/tmux-[0-9]+/[^"\n]+"', lambda m: m[0].replace("tmux", ""), text)
-        text = re.sub(r'(?<=\\n)[0-9]+ [0-9]+ (?:pts/[0-9]+|\?) tmux: (?:client|server)(?=\\n)', "", text)
-    if is_test and path.endswith("/connection/TmuxRecoveryCommandTest.kt"):
-        text = re.sub(r'\brun\("tmux", "-S", socket, (?="(?:-f|display-message|has-session|kill-server)")', "", text)
-        for pattern in REMOTE_DISCOVERY_TEST_PATTERNS:
-            text = pattern.sub("", text)
     if path.endswith(REMOTE_MODEL_CONSUMERS) or model_test:
         for pattern in REMOTE_MODEL_REFERENCE_PATTERNS:
             text = pattern.sub("", text)
     if path.endswith("/connection/RemoteSessions.kt"):
         for pattern in REMOTE_DISCOVERY_TAG_PATTERNS:
             text = pattern.sub("", text)
-    if path.endswith(("/connection/TmuxSessionControl.kt", "/connection/TmuxSessionControlTest.kt")):
-        for pattern in REMOTE_CONTROL_PATTERNS:
-            text = pattern.sub("", text)
-    if is_test and path.endswith("/connection/TmuxDiscoveryTest.kt"):
-        for pattern in REMOTE_DISCOVERY_TEST_PATTERNS:
-            text = pattern.sub("", text)
-    if is_test and path.endswith("/connection/SshPtyIdentityTest.kt"):
-        text = REMOTE_PROCESS_FIXTURE_PATTERN.sub("", text)
     for pattern in REMOTE_SESSION_PATTERNS:
         text = pattern.sub("", text)
     return text
@@ -217,7 +173,7 @@ def mobile_reference_remainder(path: str, text: str) -> str:
     if path.startswith("mobile/android/app/src/") and path.endswith(".kt"):
         text = remote_reference_remainder(path, text)
         if path.endswith("/connection/SshSessionMode.kt"):
-            text = text.replace('TMUX("tmux")', "").replace('HERDR("herdr")', "")
+            text = text.replace('HERDR("herdr")', "")
     return text
 
 
@@ -239,31 +195,6 @@ def source_without_allowed_occurrences(path: str, text: str) -> str:
             text = pattern.sub("", text)
     for pattern in PROTOCOL_COMPATIBILITY_PATTERNS:
         text = pattern.sub("", text)
-    # The desktop SSH adapter owns the same typed endpoint contract as mobile.
-    # Strip exact interface fragments only; the remainder still goes through the gate.
-    if path == "nebula_app/src/ssh_session/resume.rs":
-        text = text.replace('executable: "tmux".into()', "")
-    if path == "nebula_app/src/ssh_session/resume/identity.rs":
-        text = re.sub(r'\bcommand == "(?:tmux|tmux:)"', "", text)
-        text = text.replace('command.ends_with("/tmux")', "")
-    if path == "nebula_app/src/ssh_session/resume/discover.sh":
-        text = re.sub(r'\$3 == "(?:tmux|tmux:)"', "", text)
-        text = text.replace(r"/\/tmux$/", "").replace(r"\/tmux\)$/", "")
-    if path == "nebula_app/src/ssh_session/resume/tests.rs":
-        text = re.sub(r'(?<=\\n)[0-9]+ pts/[0-9]+ tmux: client(?=\\n)', "", text)
-    if path in {"nebula_app/res/hooks/remote_bridge.py", "nebula_app/res/hooks/remote_tmux.py"}:
-        text = re.sub(r'\bos\.environ\.get\("TMUX"(?:, "")?\)', "", text)
-    if path == "nebula_app/res/hooks/remote_tmux.py":
-        text = text.replace(' / "tmux-routes"', "")
-    if path == "nebula_app/res/hooks/remote_bridge.py":
-        text = text.replace('header += " tmux="', "")
-    if path == "nebula_app/src/ai_hook/protocol.rs":
-        text = text.replace('field.strip_prefix("tmux=")', "")
-    if path == "nebula_app/src/gpui_shell/terminal/view/activity_tests.rs":
-        # These fixtures exercise actual process identity. Labels and explanatory
-        # prose are not interfaces, and appended text must remain checked.
-        text = text.replace('view.running_program = Some("tmux".into())', "")
-        text = text.replace('for program in ["tmux", "screen"]', "")
     return mobile_reference_remainder(path, text)
 
 

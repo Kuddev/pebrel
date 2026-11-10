@@ -5,6 +5,9 @@
 Implemented for the desktop candidate on 2026-11-02. Native UI acceptance is
 separate from the real Linux PTY/multiplexer delivery exercise described below.
 
+Partially superseded by [2026-11-05-unobserved-multiplexer-evidence.md](2026-11-05-unobserved-multiplexer-evidence.md)
+for panes without a current observation.
+
 ## Context
 
 The remote Hook bridge wrote OSC 777 to `/dev/tty`. Inside a multiplexer this is

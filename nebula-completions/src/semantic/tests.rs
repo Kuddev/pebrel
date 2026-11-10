@@ -302,6 +302,61 @@ fn common_commands_select_the_correct_cli_and_argument_roles() {
 }
 
 #[test]
+fn editor_file_arguments_have_path_roles_without_guessing_option_values() {
+    for syntax in
+        [ShellSyntax::Posix, ShellSyntax::Literal, ShellSyntax::PowerShell, ShellSyntax::Cmd]
+    {
+        for line in [
+            "nvim ",
+            "nvim first.txt second",
+            "nvim -R fi",
+            "nvim -u config.vim fi",
+            "nvim -u conf",
+            "nvim -c quit fi",
+            "nvim -- -file",
+            "code ",
+            "code --diff first.txt second",
+            "code --profile work fi",
+            "code -- -file",
+        ] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::Paths { directories_only: false },
+                "{syntax:?}: {line}"
+            );
+        }
+        for line in [
+            "nvim -c ",
+            "nvim --cmd ",
+            "nvim --listen ",
+            "nvim --unknown ",
+            "code --profile ",
+            "code --install-extension ",
+            "code --unknown ",
+        ] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::None,
+                "{syntax:?}: {line}"
+            );
+        }
+        let line = "code --user-data-dir ";
+        assert_eq!(
+            Context::parse(line, line.len(), syntax).unwrap().source,
+            Source::Paths { directories_only: true }
+        );
+    }
+    for (line, syntax) in
+        [("NVIM.EXE fi", ShellSyntax::PowerShell), ("CODE.CMD fi", ShellSyntax::Cmd)]
+    {
+        assert_eq!(
+            Context::parse(line, line.len(), syntax).unwrap().source,
+            Source::Paths { directories_only: false }
+        );
+    }
+}
+
+#[test]
 fn branches_respect_argument_roles_directories_and_worktrees() {
     for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
         for line in [

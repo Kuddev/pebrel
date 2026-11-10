@@ -92,6 +92,12 @@ impl NebulaWorkspace {
                     events.push(event);
                 }
 
+                // 空批不进主线程：空闲时这个 120ms 泵是纯空转（同 ai_hook
+                // 泵的短路，见 agents.rs），cx.update 本身就占用一次主线程
+                // 调度与 GPUI 实体锁。
+                if events.is_empty() {
+                    continue;
+                }
                 cx.update(|cx| {
                     crate::gpui_shell::workspace::windowing::dispatch_shell_events(events, cx)
                 });

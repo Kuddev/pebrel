@@ -15,12 +15,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -170,7 +169,7 @@ internal fun sessionCards(sessions: List<LocalSession>, desktops: List<DesktopWo
 private fun DesktopSessionThumbnail(desktop: DesktopWorkspace, pane: DesktopPane?, modifier: Modifier, tab: DesktopTab? = null, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val status = statusLabel(desktop.status)
-    Column(modifier.workspaceFrame().clickable(onClick = onClick)) {
+    Column(modifier.workspaceFrame().clickable(role = Role.Button, onClick = onClick)) {
         Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Glyph(tab?.let(::tabIcon) ?: R.drawable.ic_monitor, Modifier.size(14.dp))
@@ -199,7 +198,7 @@ private fun SessionThumbnail(session: LocalSession, modifier: Modifier, onClick:
     val colors = MaterialTheme.colorScheme
     val source = if (session.source == "Local") stringResource(R.string.local_device) else session.source
     val status = statusLabel(session.status)
-    Column(modifier.workspaceFrame().clickable(onClick = onClick)) {
+    Column(modifier.workspaceFrame().clickable(role = Role.Button, onClick = onClick)) {
         Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).semantics { stateDescription = status }, contentAlignment = Alignment.Center) {
@@ -267,7 +266,9 @@ fun ComputerRows(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>, o
                     val relay = computer.relay
                     val profileId = desktops.find { it.id == computer.id }?.host?.id ?: computer.id
                     val saved = relays.find { it.id == profileId }
-                    ComputerRow(computer.title, computer.status, computer.transport, computer.address, computer.icon,
+                    val transport = if (saved?.alternate != null && computer.status !in setOf("ready", "connecting", "approval"))
+                        stringResource(R.string.computer_lan_relay) else computer.transport
+                    ComputerRow(computer.title, computer.status, transport, computer.address, computer.icon,
                         onForget = if (saved != null && onForget != null) ({ removing = saved }) else null) {
                         if (relay == null) onDesktop(computer.id) else onRelay(relay)
                     }

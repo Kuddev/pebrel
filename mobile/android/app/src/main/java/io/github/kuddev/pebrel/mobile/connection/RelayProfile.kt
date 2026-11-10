@@ -11,6 +11,8 @@ class RelayProfile(val url: String, val device: String, val token: String, val n
         internal set
     @Volatile var hostOs: String = "term"
         internal set
+    @Volatile internal var alternate: RelayProfile? = null
+        private set
     val version: Int = if (secure == null) 1 else 2
     internal val legacyId: String = digest("$url/$device" + (tlsPin?.let { "/$it" } ?: "") + (secure?.let { "/${it.host}" } ?: ""))
     // 地址、房间和授权可以轮换；电脑身份只跟随 Noise 公钥，认证成功前不写入保存记录。
@@ -24,6 +26,18 @@ class RelayProfile(val url: String, val device: String, val token: String, val n
             first?.invitation == second?.invitation
     }
     internal val canRediscover: Boolean get() = mode == "lan" && tlsPin != null && secure?.invitation == false
+
+    internal fun connectionRoutes(): List<RelayProfile> = listOfNotNull(this, alternate).sortedBy { it.mode != "lan" }
+
+    // Called only for authenticated saved records, never for an imported invitation.
+    internal fun retainRoutes(previous: RelayProfile?) {
+        if (previous == null || id != previous.id || secure?.invitation != false || previous.secure?.invitation != false) return
+        alternate = if (mode == previous.mode) alternate ?: previous.alternate else
+            RelayProfile(previous.url, previous.device, previous.token, previous.name, previous.tlsPin, previous.mode, previous.secure)
+                .also { it.hostOs = previous.hostOs }
+    }
+
+    internal fun toStoredJson(): JSONObject = toJson().apply { alternate?.let { put("alternate", it.toJson()) } }
 
     internal fun discoveredAt(computer: PairingComputer): RelayProfile? {
         // mDNS 不是授权来源：只移动已配对且 SPKI 匹配的端点，绝不采纳广播中的新凭据。
@@ -56,8 +70,29 @@ class RelayProfile(val url: String, val device: String, val token: String, val n
             .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
         // 保存列表按成功连接时间追加；旧版留下的同机记录应保留最后一次有效连接。
-        internal fun latestByComputer(profiles: List<RelayProfile>): List<RelayProfile> =
-            profiles.asReversed().distinctBy { it.id }.asReversed()
+        internal fun latestByComputer(profiles: List<RelayProfile>): List<RelayProfile> {
+            val computers = linkedMapOf<String, RelayProfile>()
+            for (profile in profiles) {
+                profile.retainRoutes(computers.remove(profile.id))
+                computers[profile.id] = profile
+            }
+            return computers.values.toList()
+        }
+
+        internal fun parseStored(text: String): RelayProfile {
+            require(text.length <= 16384)
+            val data = JSONObject(text)
+            val alternate = data.remove("alternate")
+            return parse(data.toString()).also { profile ->
+                if (alternate != null) {
+                    require(alternate is JSONObject && !alternate.has("alternate"))
+                    val route = parse(alternate.toString())
+                    require(profile.id == route.id && profile.mode != route.mode &&
+                        profile.secure?.invitation == false && route.secure?.invitation == false)
+                    profile.retainRoutes(route)
+                }
+            }
+        }
 
         fun parse(text: String): RelayProfile {
             require(text.length <= 8192)

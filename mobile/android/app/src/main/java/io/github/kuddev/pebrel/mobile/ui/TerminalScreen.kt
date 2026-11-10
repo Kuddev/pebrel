@@ -124,9 +124,10 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     DesktopTerminalTheme(if (output.target == identity) output.frame else null) {
     if (!focused) TerminalHeader(pane.displayTitle, desktop.host.name, desktop.status, onBack, onSessions,
         onGit = onGit.takeIf { pane.sshDestination == null }, gitEnabled = desktop.status == "ready",
-        onDetails = { showDetails = true }, onConversation = onConversation.takeIf { pane.agent != null },
+        onDetails = { showDetails = true },
         wrapLines = wrapLines, onToggleWrap = { repository.display.update { it.copy(desktopWrapLines = !it.desktopWrapLines) } })
     Column(Modifier.fillMaxSize()) {
+        if (!focused && pane.agent != null && onConversation != null) SessionModeTabs(conversation = false, onSwitch = onConversation)
         if (desktop.status != "ready") Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             val recovering = desktop.hasConnected && desktop.relayProfile != null && DesktopReconnect.retryable(desktop.failure)
@@ -203,16 +204,21 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
                            onRemoteSessions: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     val connection = "$endpoint · ${statusLabel(status)}"
-    Row(Modifier.fillMaxWidth().height(48.dp).background(MaterialTheme.colorScheme.background), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().then(if (conversationActive) Modifier.heightIn(min = 64.dp) else Modifier.height(48.dp))
+        .background(MaterialTheme.colorScheme.background), verticalAlignment = Alignment.CenterVertically) {
         GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
         Row(Modifier.weight(1f).heightIn(min = 48.dp)
             .clickable(onClickLabel = stringResource(R.string.switch_session), onClick = onSessions)
             .semantics { contentDescription = connection },
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             if (status == "connecting") CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
-            else Glyph(if (status == "ready") R.drawable.ic_terminal else R.drawable.ic_info, Modifier.size(15.dp),
+            else Glyph(if (status != "ready") R.drawable.ic_info else if (conversationActive) R.drawable.ic_chat else R.drawable.ic_terminal, Modifier.size(15.dp),
                 if (status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-            Text(title, fontSize = 13.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+            if (conversationActive) Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(connection, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            } else Text(title, fontSize = 13.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Glyph(R.drawable.ic_down, Modifier.size(12.dp))
         }

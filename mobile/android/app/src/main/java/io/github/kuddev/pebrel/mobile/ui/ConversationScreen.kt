@@ -86,8 +86,9 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
         }
     }
     Column(Modifier.fillMaxSize()) {
-        TerminalHeader(pane.displayTitle, desktop.host.name, desktop.status, onTerminal, onTabs,
-            onConversation = onTerminal, conversationActive = true)
+        TerminalHeader(pane.displayTitle, "${desktop.host.name} · ${desktop.transport}", desktop.status,
+            onTerminal, onTabs, conversationActive = true)
+        SessionModeTabs(conversation = true, onSwitch = onTerminal)
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             HelperText("$agentName · ${if (desktop.status == "ready") statusLabel(page.state) else statusLabel(desktop.status)}", Modifier.weight(1f))
             if (page.before != null) TextButton({
@@ -137,7 +138,7 @@ fun ConversationScreen(desktop: DesktopWorkspace, pane: DesktopPane, identity: C
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (error: Exception) { failure = conversationFailureCode(error); refresh++ }
                 }
-            }, shortcutsEnabled = allowed && page.identity.epoch != null && !choosing, send = { text ->
+            }, shortcutsEnabled = allowed && page.identity.epoch != null && !choosing, conversation = true, send = { text ->
                 try { client.send(text); failure = null; refresh++; true }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) {

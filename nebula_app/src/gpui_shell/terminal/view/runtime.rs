@@ -72,6 +72,10 @@ impl TerminalView {
                 .is_some();
             self.agent_activity.begin_command(agent);
         }
+        if !self.command_running {
+            // 已由 Enter/粘贴确立的命令沿用当时的判定：粘贴不会刷新 `last_committed`。
+            self.classify_submitted_command();
+        }
         self.mark_command_running();
         self.probe_missing_codex_session(cx);
         // 首个词就是一个交互式 shell（`cmd`、`wsl`、裸 `bash`）：133;C
@@ -118,6 +122,7 @@ impl TerminalView {
             self.pending_runtime_submit = None;
             self.pending_shell_command = None;
             self.command_running = false;
+            self.interactive_login = false;
             self.command_started = None;
             self.confirmation.invalidate();
             self.answer_reader = None;
@@ -156,6 +161,7 @@ impl TerminalView {
         }
         self.command_running = false;
         self.command_running_disproved = false;
+        self.interactive_login = false;
         self.command_started = None;
         self.last_process_probe = None;
         self.prompt_process_probe = None;
@@ -360,7 +366,7 @@ impl TerminalView {
             return SidebarActivity::CommandFailed;
         }
         match state {
-            crate::runtime_api::RuntimeTaskState::Running if self.fullscreen_tool_owns_pane() => {
+            crate::runtime_api::RuntimeTaskState::Running if self.foreground_waits_for_user() => {
                 SidebarActivity::Idle
             },
             crate::runtime_api::RuntimeTaskState::Running => SidebarActivity::Running,
@@ -380,11 +386,12 @@ impl TerminalView {
     }
 
     /// 普通全屏 TUI（lazygit、btop、vim、终端复用器……）占据 alternate screen 时是在等
-    /// 人操作，它自己的界面就是进度；spinner 表达的「等它跑完」不成立（#805）。
+    /// 人操作，它自己的界面就是进度；spinner 表达的「等它跑完」不成立（#805）。停在
+    /// 主屏的交互式 SSH 登录同理：前台是远端 shell，不是一件会跑完的任务（#857）。
     /// 只改 badge：RuntimeTaskState 仍是 Running，关闭确认与 agent.wait 不受影响。
-    /// Agent（不论屏幕形态）、OSC 7501 状态和未就绪的 SSH 连接照常转圈；OSC 9;4
-    /// 进度在 `sidebar_activity` 更早处已经接管。
-    fn fullscreen_tool_owns_pane(&self) -> bool {
+    /// Agent（不论屏幕形态）、OSC 7501 状态、远端集成上报的程序和未就绪的 SSH 连接
+    /// 照常转圈；OSC 9;4 进度在 `sidebar_activity` 更早处已经接管。
+    fn foreground_waits_for_user(&self) -> bool {
         self.effective_program_status().is_none()
             && self.agent_activity.status() == crate::ai_agents::AgentStatus::Unknown
             && !self
@@ -395,7 +402,25 @@ impl TerminalView {
                 .ssh_stage
                 .as_ref()
                 .is_none_or(|stage| matches!(stage, crate::ssh_session::SshStage::Ready))
-            && self.term_mode().contains(TermMode::ALT_SCREEN)
+            && (self.term_mode().contains(TermMode::ALT_SCREEN)
+                || self.interactive_login_in_foreground())
+    }
+
+    /// 前台仍是提交时判定的交互式 SSH 登录（`ssh host`、`pebrel ssh host`）。远端集成
+    /// 一旦上报别的程序（`NEBULA|…|make`），身份就不再是 SSH 客户端本身。
+    fn interactive_login_in_foreground(&self) -> bool {
+        self.interactive_login
+            && self
+                .running_program
+                .as_deref()
+                .is_none_or(|program| matches!(program, "ssh" | "pebrel" | "nebula"))
+    }
+
+    /// 在确知提交行的边界判定交互式 SSH 登录：`ssh host make`、`-N`/`-T`/`-W` 等
+    /// 没有登录 shell 的形态和复合命令都不算，保持原来的运行态与 spinner。
+    pub(super) fn classify_submitted_command(&mut self) {
+        self.interactive_login =
+            crate::ssh::ssh_destination(&self.suggest.last_committed).is_some();
     }
 
     /// 认出「刚刚进入完成」这个边沿，并让对勾在闪现窗口结束后自己沉降为圆点。
@@ -636,6 +661,7 @@ impl TerminalView {
         self.last_run = None;
         self.mark_command_running();
         self.suggest.last_committed.clone_from(&command);
+        self.classify_submitted_command();
         self.write_input(bytes, cx);
         cx.emit(TerminalViewEvent::TitleChanged);
         Ok(run_id)
@@ -717,6 +743,10 @@ impl TerminalView {
             // 本身先建立 Running 边沿，保证 prompt --wait 的 after_seq 不会
             // 仍盯着提交前 Idle；真实 shell/hook 结束事件负责把它归位。
             self.awaiting_input = false;
+            if !self.command_running {
+                // 只有开始新命令的提交才是 shell 命令行；前台程序已在运行时它是输入。
+                self.classify_submitted_command();
+            }
             self.mark_command_running();
             if let Some(agent) = agent {
                 self.agent_activity.submitted_text(&agent.kind, &text);
@@ -1434,7 +1464,7 @@ fn local_context_refusal(origin: InputOrigin, ssh_destination: Option<&str>) -> 
     })
 }
 
-fn runtime_chat_agent_kind(
+pub(super) fn runtime_chat_agent_kind(
     running_program: Option<&str>,
     command_running_disproved: bool,
 ) -> Option<crate::ai_agents::AgentKind> {

@@ -85,5 +85,6 @@ fn endpoint_metadata_is_bounded_validated_and_literal() {
     );
 }
 
+// These run the generated startup and probe scripts through a real POSIX sh.
 #[cfg(unix)]
 mod startup;
