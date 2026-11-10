@@ -378,8 +378,10 @@ fn sidebar_panes_keep_their_full_surface_and_center_the_title(cx: &mut TestAppCo
             });
             settle(&mut window);
             let title = window.debug_bounds("active-pane-title").unwrap();
+            let slot = window.debug_bounds("active-pane-title-slot").unwrap();
             let broadcast = window.debug_bounds("toolbar-broadcast").unwrap();
-            assert!((f32::from(title.center().x) - width / 2.0).abs() < 1.0);
+            assert!((f32::from(title.center().x - slot.center().x)).abs() < 1.0);
+            assert!(title.left() >= slot.left() + px(8.0));
             assert!(title.right() <= broadcast.left());
         }
     }

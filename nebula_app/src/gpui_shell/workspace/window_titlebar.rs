@@ -109,6 +109,7 @@ fn title_bar_frame() -> gpui::Div {
 /// 标题栏右侧工具组；右缘留白由平台层决定（见 `RIGHT_CONTROLS_INSET`）。
 pub(super) fn title_bar_right_controls() -> gpui::Div {
     title_bar_panel_controls()
+        .debug_selector(|| "titlebar-right-controls".into())
         .gap(px(8.0))
         .pr(px(crate::platform::window_chrome::RIGHT_CONTROLS_INSET))
 }
@@ -234,6 +235,13 @@ mod tests {
             let find = window.debug_bounds("terminal-find").unwrap();
             let commands = window.debug_bounds("command-manager-toggle").unwrap();
             assert!(find.right() < commands.left(), "{position:?}");
+            let controls = window.debug_bounds("titlebar-right-controls").unwrap();
+            let last_button = window.debug_bounds("toggle-right-sidebar").unwrap();
+            assert_eq!(
+                controls.right() - last_button.right(),
+                px(crate::platform::window_chrome::RIGHT_CONTROLS_INSET),
+                "{position:?}: toolbar actions keep their gap before the native controls"
+            );
         }
     }
 

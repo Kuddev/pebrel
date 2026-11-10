@@ -76,8 +76,8 @@ pub(crate) fn configure(_window: &Window) {
     macos::configure(_window);
 }
 
-/// macOS leaves no system control reserve on the right edge, so toolbar buttons need an inset.
-pub(crate) const RIGHT_CONTROLS_INSET: f32 = if cfg!(target_os = "macos") { 12.0 } else { 0.0 };
+/// Separate toolbar actions from right-side window controls; macOS keeps its edge inset.
+pub(crate) const RIGHT_CONTROLS_INSET: f32 = if cfg!(target_os = "macos") { 12.0 } else { 16.0 };
 
 /// Height and left inset when native controls determine the titlebar geometry.
 pub(crate) fn layout(_window: &Window) -> Option<(f32, f32)> {
