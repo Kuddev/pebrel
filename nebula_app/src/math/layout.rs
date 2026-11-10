@@ -309,7 +309,9 @@ impl LayoutBuilder<'_> {
                 MathNode::Fenced { open, close, body, .. } => {
                     self.layout_fenced(index, open, close, body)?
                 },
-                MathNode::Accent { accent, body, .. } => self.layout_accent(index, accent, body)?,
+                MathNode::Accent { accent, stretchy, body, .. } => {
+                    self.layout_accent(index, accent, stretchy, body)?
+                },
                 MathNode::Matrix { rows, alignments, .. } => {
                     self.layout_matrix(index, rows, alignments)?
                 },
@@ -622,9 +624,10 @@ impl LayoutBuilder<'_> {
         let mut sub_shift = self.constant(MathConstant::SubscriptShiftDown, pixel_size)?;
         if let Some(superscript) = superscript {
             let sup = self.plans[superscript.0 as usize].metrics;
+            let base_height = self.unaccented_base_height(base);
             sup_shift = sup_shift
                 .max(
-                    base_plan.metrics.height
+                    base_height
                         - self.constant(MathConstant::SuperscriptBaselineDropMax, pixel_size)?,
                 )
                 .max(sup.depth + self.constant(MathConstant::SuperscriptBottomMin, pixel_size)?);
@@ -849,10 +852,25 @@ impl LayoutBuilder<'_> {
         Ok(Geometry { metrics, class: Some(AtomClass::Inner), italic_correction: 0.0 })
     }
 
+    fn unaccented_base_height(&self, mut node: NodeId) -> f32 {
+        loop {
+            match self.formula.arena.node(node) {
+                MathNode::Accent { body, .. } => node = *body,
+                MathNode::Row(range) => {
+                    let [child] = self.formula.arena.children(*range) else { break };
+                    node = *child;
+                },
+                _ => break,
+            }
+        }
+        self.plans[node.0 as usize].metrics.height
+    }
+
     fn layout_accent(
         &mut self,
         index: usize,
         accent: char,
+        stretchy: bool,
         body: NodeId,
     ) -> Result<Geometry, MathError> {
         let body_plan = self.plans[body.0 as usize];
@@ -881,18 +899,23 @@ impl LayoutBuilder<'_> {
             .glyph_id(accent)
             .map_err(|_| MathError::new(MathErrorKind::MissingGlyph, 0))?;
         let glyph_start = self.glyphs.len();
-        let accent_box = self.horizontal_glyph_box(glyph, body_plan.metrics.width, pixel_size)?;
-        let gap = (self.constant(MathConstant::AccentBaseHeight, pixel_size)?
-            - body_plan.metrics.height)
-            .max(0.0);
-        let x = ((body_plan.metrics.width - accent_box.metrics.width) * 0.5).max(0.0);
-        let baseline = -body_plan.metrics.height - gap - accent_box.metrics.depth;
-        self.shift_glyphs(glyph_start, x, baseline);
-        self.place(body, 0.0, 0.0);
+        let target_width = if stretchy {
+            body_plan.metrics.width.max(pixel_size * 0.7)
+        } else {
+            pixel_size * 0.52
+        };
+        let accent_box = self.horizontal_glyph_box(glyph, target_width, pixel_size)?;
+        let accent_base_height = self.constant(MathConstant::AccentBaseHeight, pixel_size)?;
+        let baseline = -(body_plan.metrics.height - accent_base_height).max(0.0);
+        let width = body_plan.metrics.width.max(accent_box.metrics.width);
+        let body_x = (width - body_plan.metrics.width) * 0.5;
+        let accent_x = (width - accent_box.metrics.width) * 0.5;
+        self.shift_glyphs(glyph_start, accent_x, baseline);
+        self.place(body, body_x, 0.0);
         let mut metrics = self.empty_metrics(index)?;
-        include_child(&mut metrics, body_plan.metrics, 0.0, 0.0);
-        include_metrics(&mut metrics, accent_box.metrics, x, baseline);
-        metrics.width = metrics.width.max(body_plan.metrics.width);
+        include_child(&mut metrics, body_plan.metrics, body_x, 0.0);
+        include_metrics(&mut metrics, accent_box.metrics, accent_x, baseline);
+        metrics.width = metrics.width.max(width);
         Ok(Geometry {
             metrics,
             class: Some(AtomClass::Ord),
@@ -1012,9 +1035,14 @@ impl LayoutBuilder<'_> {
         let metrics = self.glyph_metrics(glyph, pixel_size)?;
         let x = (-metrics.x_min).max(0.0);
         self.push_glyph(LocalGlyph { glyph_id: glyph, x, baseline_y: 0.0, pixel_size })?;
+        let right = if metrics.advance > 0.0 {
+            (x + metrics.advance).max(x + metrics.x_max)
+        } else {
+            x + metrics.x_max
+        };
         Ok(Geometry {
             metrics: MathMetrics {
-                width: (x + metrics.advance.max(metrics.x_max)).max(0.0),
+                width: right.max(0.0),
                 height: metrics.height.max(0.0),
                 depth: metrics.depth.max(0.0),
                 axis: 0.0,
@@ -1397,5 +1425,53 @@ mod tests {
         let limits = MathLimits { max_ops: 2, ..DEFAULT_LIMITS };
         let error = layout_formula(&formula("abc", false), 18.0, 1.0, limits).unwrap_err();
         assert_eq!(error.kind, MathErrorKind::OpLimit);
+    }
+
+    #[test]
+    fn combining_accents_and_superscripts_avoid_double_shift_and_collision() {
+        let font = MathFont::load().unwrap();
+        let unaccented =
+            layout_formula(&formula(r"\kappa_i^\top", false), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+        let accented =
+            layout_formula(&formula(r"\hat{\kappa}_i^\top", false), 20.0, 1.0, DEFAULT_LIMITS)
+                .unwrap();
+        let hat = accented.glyphs[0];
+        let top = accented.glyphs[2];
+        assert_ne!(
+            hat.glyph_id,
+            font.glyph_id('\u{0302}').unwrap().0,
+            "single-letter hat should pick the medium math variant rather than the tiny base mark"
+        );
+        assert!(
+            (hat.baseline_y).abs() < 0.01,
+            "x-height base should not shift combining accent above its designed AccentBaseHeight"
+        );
+        let hat_metrics = font.glyph_metrics(GlyphId(hat.glyph_id), hat.pixel_size).unwrap();
+        let top_metrics = font.glyph_metrics(GlyphId(top.glyph_id), top.pixel_size).unwrap();
+        let hat_right = hat.x + hat_metrics.x_max;
+        let top_left = top.x + top_metrics.x_min;
+        assert!(
+            top_left > hat_right,
+            "superscript should clear the hat horizontally: hat_right={hat_right}, top_left={top_left}"
+        );
+        assert!(
+            (accented.metrics.height - unaccented.metrics.height).abs() < 0.01,
+            "accent on x-height base should not inflate side-superscript shift"
+        );
+
+        let tilde_k =
+            layout_formula(&formula(r"\tilde{k}_{g,i}", false), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+        assert_ne!(tilde_k.glyphs[0].glyph_id, font.glyph_id('\u{0303}').unwrap().0);
+        assert!(tilde_k.metrics.height < 20.0);
+
+        let vec_v = layout_formula(&formula(r"\vec{v}", false), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+        assert_eq!(vec_v.glyphs.len(), 2);
+        assert_ne!(vec_v.glyphs[0].glyph_id, font.glyph_id('\u{20d7}').unwrap().0);
+
+        let narrow_hat =
+            layout_formula(&formula(r"\hat{a}", false), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+        let wide_hat =
+            layout_formula(&formula(r"\widehat{ab}", false), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+        assert_ne!(narrow_hat.glyphs[0].glyph_id, wide_hat.glyphs[0].glyph_id);
     }
 }
