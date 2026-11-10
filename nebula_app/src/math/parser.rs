@@ -687,9 +687,9 @@ impl Builder {
             PendingKind::Scripts { ty, placement, style_override } => {
                 if matches!(ty, ScriptType::Superscript)
                     && matches!(placement, ScriptPlacement::AboveBelow)
-                    && let Some(accent) = self.single_character(children[1])
+                    && let Some((accent, stretchy)) = self.single_accent(children[1])
                 {
-                    MathNode::Accent { accent, body: children[0], style_override }
+                    MathNode::Accent { accent, stretchy, body: children[0], style_override }
                 } else {
                     let (subscript, superscript) = match ty {
                         ScriptType::Subscript => (Some(children[1]), None),
@@ -709,14 +709,17 @@ impl Builder {
         self.add_node(node)
     }
 
-    fn single_character(&self, node: NodeId) -> Option<char> {
+    fn single_accent(&self, node: NodeId) -> Option<(char, bool)> {
         match self.arena.node(node) {
-            MathNode::Glyph { character, .. } | MathNode::Operator { character, .. } => {
-                Some(*character)
+            MathNode::Glyph { character, stretchy, .. } => {
+                normalize_accent_char(*character).map(|accent| (accent, *stretchy))
+            },
+            MathNode::Operator { character, .. } => {
+                normalize_accent_char(*character).map(|accent| (accent, false))
             },
             MathNode::Row(range) => {
                 let [child] = self.arena.children(*range) else { return None };
-                self.single_character(*child)
+                self.single_accent(*child)
             },
             _ => None,
         }
@@ -1016,6 +1019,28 @@ fn is_limit_operator(name: &str) -> bool {
     )
 }
 
+fn normalize_accent_char(accent: char) -> Option<char> {
+    match accent {
+        '`' | '\u{0300}' => Some('\u{0300}'),
+        '\u{00b4}' | '\u{0301}' => Some('\u{0301}'),
+        '^' | '\u{02c6}' | '\u{0302}' => Some('\u{0302}'),
+        '~' | '\u{02dc}' | '\u{0303}' => Some('\u{0303}'),
+        '\u{00af}' | '\u{0304}' | '\u{203e}' => Some('\u{203e}'),
+        '\u{02d8}' | '\u{0306}' => Some('\u{0306}'),
+        '\u{02d9}' | '\u{0307}' => Some('\u{0307}'),
+        '\u{00a8}' | '\u{0308}' => Some('\u{0308}'),
+        '\u{02da}' | '\u{030a}' => Some('\u{030a}'),
+        '\u{02c7}' | '\u{030c}' => Some('\u{030c}'),
+        '\u{20d6}' | '\u{2190}' => Some('\u{20d6}'),
+        '\u{20d7}' | '\u{2192}' => Some('\u{20d7}'),
+        '\u{20e1}' | '\u{2194}' => Some('\u{20e1}'),
+        '\u{20d0}' | '\u{21bc}' => Some('\u{20d0}'),
+        '\u{20d1}' | '\u{21c0}' => Some('\u{20d1}'),
+        '\u{21d2}' | '\u{23dc}' | '\u{23de}' | '\u{23e0}' => Some(accent),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1171,8 +1196,23 @@ mod tests {
 
     #[test]
     fn accents_and_display_movable_limits_stay_distinct() {
-        let accent = parse(r"\hat{x}");
-        assert!(matches!(accent.arena.node(root_children(&accent)[0]), MathNode::Accent { .. }));
+        let hat = parse(r"\hat{x}");
+        assert!(matches!(
+            hat.arena.node(root_children(&hat)[0]),
+            MathNode::Accent { accent: '\u{0302}', stretchy: false, .. }
+        ));
+
+        let wide_tilde = parse(r"\widetilde{ab}");
+        assert!(matches!(
+            wide_tilde.arena.node(root_children(&wide_tilde)[0]),
+            MathNode::Accent { accent: '\u{0303}', stretchy: true, .. }
+        ));
+
+        let overset = parse(r"\overset{?}{=}");
+        assert!(matches!(
+            overset.arena.node(root_children(&overset)[0]),
+            MathNode::Scripts { placement: ScriptPlacement::AboveBelow, .. }
+        ));
 
         let display = parse_formula(r"\sum_{i=0}^{n}", true, DEFAULT_LIMITS).unwrap();
         let MathNode::Scripts { placement, .. } = display.arena.node(root_children(&display)[0])
