@@ -1487,6 +1487,28 @@ impl SettingsPane {
                     cx,
                 ))
             })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .pt_3()
+                    .child(
+                        NebulaButton::new("quit-pebrel")
+                            .label(language.text(crate::i18n::Message::LifecycleQuit))
+                            .danger()
+                            .disabled(super::workspace::windowing::quit_pending(cx))
+                            .on_click(|_, window, cx| {
+                                super::workspace::windowing::confirm_quit(window, cx);
+                            }),
+                    )
+                    .child(
+                        NebulaButton::new("restart-pebrel")
+                            .label(language.text(crate::i18n::Message::LifecycleRestart))
+                            .disabled(super::workspace::windowing::quit_pending(cx))
+                            .on_click(|_, window, cx| {
+                                super::workspace::windowing::confirm_restart(window, cx);
+                            }),
+                    ),
+            )
     }
 
     fn section_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {

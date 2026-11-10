@@ -178,6 +178,7 @@ use crate::macos::locale;
 use crate::polling::{IoListener, ipc};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let restart_args = platform::restart::accept_replacement()?;
     #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
     if let Some(code) = update_download::handoff::macos::run_helper_if_requested() {
         std::process::exit(code);
@@ -206,7 +207,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Load command line options.
-    let options = Options::new();
+    let options = match restart_args {
+        Some(args) => Options::from_args(args),
+        None => Options::new(),
+    };
     if let Err(error) = nebula_settings::migrate_legacy_data() {
         platform::startup::report_error(&error, options.subcommands.is_none());
         return Err(error.into());

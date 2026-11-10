@@ -251,6 +251,7 @@ pub fn run_shell(
         // per-process hook pipe before the first TerminalView spawns.
         let ai_events = crate::ai_hook::spawn_gpui_server();
         init(cx, startup_window);
+        cx.set_global(workspace::windowing::RestartConfiguration(config_file.clone()));
         if initial_cwd.is_some()
             || initial_command.is_some()
             || shell_id.is_some()
