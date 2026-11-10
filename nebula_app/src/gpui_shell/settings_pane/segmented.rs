@@ -70,11 +70,13 @@ impl RenderOnce for SettingsSegments {
             .border_1()
             .border_color(cx.theme().border.opacity(0.7))
             .bg(thumb)
-            .shadow(vec![gpui::BoxShadow {
-                offset: gpui::point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                ..crate::gpui_shell::theme::card_shadow(cx)
-            }]);
+            .when(!cx.theme().is_dark(), |indicator| {
+                indicator.shadow(vec![gpui::BoxShadow {
+                    offset: gpui::point(px(0.0), px(1.0)),
+                    blur_radius: px(3.0),
+                    ..crate::gpui_shell::theme::card_shadow(cx)
+                }])
+            });
         let indicator = animate_segment_indicator(
             format!("settings-indicator-{key}").into(),
             indicator,

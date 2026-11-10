@@ -11,6 +11,31 @@ use nebula_settings::ThemeName;
 
 use super::{ResolvedTheme, apply_skin_tokens};
 
+#[gpui::test]
+fn dark_surfaces_keep_selection_without_shadows(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        for name in ThemeName::BUILTIN {
+            let mut runtime = nebula_settings::RuntimeSettings::from_raw(
+                &nebula_settings::RawSettings::from_text(""),
+            );
+            runtime.theme = name;
+            runtime.follow_system_theme = false;
+            cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(name, runtime));
+            let light = super::resolved_skin(cx).is_light;
+            for shadows in [
+                super::raised_shadow(cx),
+                super::settings_card_shadow(cx),
+                super::float_shadow(cx),
+                super::selected_halo(cx),
+            ] {
+                assert_eq!(shadows.is_empty(), !light, "{name:?}");
+            }
+            assert_ne!(super::raised_fill(cx), super::settings_nav_tint(cx), "{name:?}");
+        }
+    });
+}
+
 fn apply_reader_theme(name: ThemeName, cx: &mut App) {
     let chrome = ResolvedTheme::builtin(name, None);
     let mode = if chrome.skin().is_light { ThemeMode::Light } else { ThemeMode::Dark };

@@ -538,10 +538,8 @@ pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
 
 // ── 表面层级 ────────────────────────────────────────────────────────────
 //
-// 窗框（侧栏、设置导航）最暗，正文板居中，浮起的选中行与设置分组卡最亮。
-// 层级靠明度阶梯建立；阴影只用两档：浮起行 `raised_shadow`、分组卡
-// `settings_card_shadow`。浅色用极淡的环线加投影，深色改用黑色环线与 1px
-// 顶部内高光——同样的投影落在深底上看不见，只会把边缘弄脏。
+// 选中行与设置分组卡通过表面明度区分；设置导航与正文共用底色。
+// 深色只用明度阶梯区分表面；浅色的选中行、分组卡和浮层使用轻阴影。
 
 /// 浮起面：侧栏选中 tab、设置导航选中项、设置分组卡共用。
 pub fn raised_fill(cx: &App) -> Hsla {
@@ -569,10 +567,7 @@ fn ring_and_drop(cx: &App, drop_alpha: f32, drop_y: f32, drop_blur: f32) -> Vec<
             shadow(hsla(220.0 / 360.0, 0.4, 0.14, drop_alpha), drop_y, drop_blur, 0.0, false),
         ]
     } else {
-        vec![
-            shadow(hsla(0.0, 0.0, 0.0, 0.30), 0.0, 0.0, 1.0, false),
-            shadow(hsla(0.0, 0.0, 1.0, 0.05), 1.0, 0.0, 0.0, true),
-        ]
+        Vec::new()
     }
 }
 
@@ -603,17 +598,15 @@ pub fn float_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
             shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.16), 18.0, 40.0, -8.0),
         ]
     } else {
-        vec![
-            shadow(hsla(0.0, 0.0, 1.0, 0.07), 0.0, 0.0, 1.0),
-            shadow(hsla(0.0, 0.0, 0.0, 0.35), 2.0, 8.0, 0.0),
-            shadow(hsla(0.0, 0.0, 0.0, 0.55), 20.0, 44.0, -8.0),
-        ]
+        Vec::new()
     }
 }
 
-/// 选中卡片的外圈：1px 强调色描边之外再加一圈柔和的同色晕，描边宽度不变，
-/// 选中与否卡内内容都不位移。
+/// 浅色主题的选中卡片外圈；深色保留卡片本身的描边。选中时内容不位移。
 pub fn selected_halo(cx: &App) -> Vec<gpui::BoxShadow> {
+    if !resolved_skin(cx).is_light {
+        return Vec::new();
+    }
     vec![gpui::BoxShadow {
         color: cx.theme().primary.opacity(0.20),
         offset: point(px(0.0), px(0.0)),
