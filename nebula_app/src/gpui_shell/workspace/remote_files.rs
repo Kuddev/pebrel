@@ -609,7 +609,6 @@ impl NebulaWorkspace {
             .overflow_hidden()
             .occlude()
             .relative()
-            .group(drop_overlay::DROP_GROUP)
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 cx.stop_propagation();
                 this.drop_upload_paths(paths.paths().to_owned(), None, window, cx);
@@ -792,7 +791,7 @@ impl NebulaWorkspace {
                     ),
             )
             .child(transfer_status)
-            // 最后一个子元素：画在列表之上，但不注册命中区。
+            // 覆盖层不阻挡下层命中区，目录行仍可接收投放。
             .child(self.render_remote_drop_overlay(cx))
             .into_any_element()
     }
