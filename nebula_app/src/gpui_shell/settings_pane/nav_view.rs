@@ -1,15 +1,15 @@
 //! 设置导航：组名 + 当前大类原地展开子项。
 //!
-//! 导航铺一层压暗色，读作窗框；正文是板，分组卡浮在板上。选中项用与分组卡
-//! 同材质的浮起底，hover 一律中性——强调色只留给选中项的图标和子项指示条。
+//! 导航与正文共用底色。选中项用与分组卡同材质的底色，hover 一律中性；
+//! 强调色用于选中项的图标和子项指示条。
 //! 子项只在其大类处于选中状态时展开，同一时间最多一棵；搜索时收起全部子项
 //! 并隐去组名，结果按命中顺序平铺。
 
 use super::*;
 
 /// 子项缩进：竖向引导线对齐大类图标的中心。
-const CHILD_INDENT: f32 = 30.0;
-const CHILD_GUIDE_X: f32 = 21.0;
+const CHILD_INDENT: f32 = 20.0;
+const CHILD_GUIDE_X: f32 = 18.0;
 
 impl SettingsPane {
     pub(super) fn render_nav(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -26,13 +26,14 @@ impl SettingsPane {
         let guide = crate::gpui_shell::theme::settings_hairline(cx);
         let radius = crate::gpui_shell::theme::card_radius(cx);
         // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
-        let mut nav = v_flex()
+        let nav = v_flex()
             .w(px(SETTINGS_NAV_WIDTH))
             .h_full()
+            .min_h_0()
             .flex_shrink_0()
-            .bg(crate::gpui_shell::theme::settings_nav_tint(cx))
+            .bg(crate::gpui_shell::theme::settings_canvas_tint(cx))
             .rounded_l(radius)
-            .px_2()
+            .px(px(8.0))
             .pt(px(12.0))
             .pb(px(8.0))
             .gap(px(2.0))
@@ -41,9 +42,10 @@ impl SettingsPane {
             .child(
                 div()
                     .id("settings-back")
-                    .mx_1()
+                    .debug_selector(|| "settings-back".into())
                     .mb(px(10.0))
                     .h(px(SETTINGS_NAV_ROW_HEIGHT))
+                    .flex_shrink_0()
                     .px(px(10.0))
                     .flex()
                     .items_center()
@@ -57,6 +59,15 @@ impl SettingsPane {
                     .child(language.pick("返回工作区", "Back to workspace")),
             )
             .child(self.render_nav_search(window, cx));
+
+        let mut sections = v_flex()
+            .id("settings-nav-scroll")
+            .debug_selector(|| "settings-nav-scroll".into())
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.nav_scroll)
+            .pb(px(8.0))
+            .gap(px(4.0));
 
         let searching = !self.settings_search_input.read(cx).value().trim().is_empty();
         let matching = self.matching_settings_sections(cx);
@@ -73,10 +84,11 @@ impl SettingsPane {
         let mut previous_group = None;
         for (group, ix) in ordered {
             if group.is_some() && group != previous_group {
-                nav = nav.child(
+                sections = sections.child(
                     div()
+                        .flex_shrink_0()
                         .px(px(14.0))
-                        .pt(px(if previous_group.is_some() { 14.0 } else { 4.0 }))
+                        .pt(px(if previous_group.is_some() { 16.0 } else { 4.0 }))
                         .pb(px(4.0))
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -89,13 +101,13 @@ impl SettingsPane {
             let selected = ix == self.active_section;
             // 有子项的大类在展开后由子项承担“选中”，大类自身只加深文字。
             let raised_row = selected && children.is_empty();
-            nav = nav.child(
+            sections = sections.child(
                 div()
                     .id(("settings-nav", ix))
                     .debug_selector(move || format!("settings-nav-{ix}"))
                     .px(px(10.0))
-                    .mx_1()
                     .h(px(SETTINGS_NAV_ROW_HEIGHT))
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
                     .gap(px(10.0))
@@ -136,7 +148,7 @@ impl SettingsPane {
                     }),
             );
             if selected && !children.is_empty() {
-                nav = nav.child(self.render_nav_children(
+                sections = sections.child(self.render_nav_children(
                     ix,
                     children,
                     active_child,
@@ -145,15 +157,36 @@ impl SettingsPane {
                 ));
             }
         }
-        nav.child(div().flex_1().min_h(px(24.0)))
+        nav.child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(sections)
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right(px(-8.0))
+                        .bottom_0()
+                        .w(px(16.0))
+                        .child(
+                            gpui_component::scroll::Scrollbar::vertical(&self.nav_scroll)
+                                .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always),
+                        ),
+                ),
+        )
             .child(
                 Button::new("settings-restore-defaults")
+                    .debug_selector(|| "settings-restore-defaults".into())
                     .icon(IconName::Undo2)
                     .label(language.pick("恢复默认设置", "Restore defaults"))
                     .ghost()
                     .small()
                     .w_full()
                     .h(px(SETTINGS_NAV_ROW_HEIGHT))
+                    .flex_shrink_0()
+                    .mt(px(8.0))
                     .justify_start()
                     .px_3()
                     .text_color(muted)
@@ -174,10 +207,10 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let mut list = v_flex()
             .relative()
+            .flex_shrink_0()
             .pl(px(CHILD_INDENT))
-            .pr_1()
             .py(px(2.0))
-            .gap(px(1.0))
+            .gap(px(2.0))
             .child(
                 div()
                     .absolute()
@@ -195,7 +228,8 @@ impl SettingsPane {
                     .debug_selector(move || format!("settings-nav-child-{section}-{order}"))
                     .relative()
                     .h(px(SETTINGS_NAV_CHILD_HEIGHT))
-                    .px(px(10.0))
+                    .flex_shrink_0()
+                    .px(px(16.0))
                     .flex()
                     .items_center()
                     .rounded(px(7.0))

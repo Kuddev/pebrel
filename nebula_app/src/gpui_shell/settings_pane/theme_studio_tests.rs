@@ -295,6 +295,111 @@ fn open_theme_editor(cx: &mut VisualTestContext) {
     assert!(cx.debug_bounds("theme-editor-dialog").is_some());
 }
 
+#[gpui::test]
+fn settings_navigation_scrolls_without_squeezing_rows_or_moving_fixed_controls(
+    cx: &mut TestAppContext,
+) {
+    let _fixture_guard = lock_theme_studio();
+    let (pane, mut window) = open_settings(cx);
+    window.simulate_resize(size(px(1000.0), px(560.0)));
+    draw(&mut window);
+    let viewport = window.debug_bounds("settings-nav-scroll").unwrap();
+    let back = window.debug_bounds("settings-back").unwrap();
+    let restore = window.debug_bounds("settings-restore-defaults").unwrap();
+    let first = window.debug_bounds("settings-nav-0").unwrap();
+    let child = window.debug_bounds("settings-nav-child-1-0").unwrap();
+    assert_eq!(first.size.height, px(SETTINGS_NAV_ROW_HEIGHT));
+    assert_eq!(child.size.height, px(SETTINGS_NAV_CHILD_HEIGHT));
+    assert_eq!(first.size.width, px(SETTINGS_NAV_WIDTH - 16.0));
+    assert_eq!(child.size.width, first.size.width - px(20.0));
+    assert!(back.bottom() <= viewport.top());
+    assert!(viewport.bottom() <= restore.top());
+    assert!(restore.bottom() <= px(560.0));
+
+    window.simulate_event(gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-1000.0))),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::default(),
+    });
+    draw(&mut window);
+    assert!(pane.read_with(&window, |pane, _| pane.nav_scroll.offset().y) < px(0.0));
+    assert_eq!(window.debug_bounds("settings-back").unwrap(), back);
+    assert_eq!(window.debug_bounds("settings-restore-defaults").unwrap(), restore);
+    let backup = window.debug_bounds("settings-nav-9").unwrap();
+    assert!(backup.top() >= viewport.top() && backup.bottom() <= viewport.bottom());
+    assert_eq!(backup.size.height, px(SETTINGS_NAV_ROW_HEIGHT));
+    click("settings-nav-9", &mut window);
+    assert_eq!(pane.read_with(&window, |pane, _| pane.active_section), 9);
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("prediction", window, cx));
+        });
+    });
+    draw(&mut window);
+    let result = window.debug_bounds("settings-nav-3").unwrap();
+    assert!(result.top() >= viewport.top() && result.bottom() <= viewport.bottom());
+    assert_eq!(pane.read_with(&window, |pane, _| pane.nav_scroll.offset().y), px(0.0));
+}
+
+#[gpui::test]
+fn settings_cards_keep_the_prototype_column_and_outer_spacing(cx: &mut TestAppContext) {
+    let _fixture_guard = lock_theme_studio();
+    let (pane, mut window) = open_settings(cx);
+    pane.update(&mut window, |pane, cx| {
+        pane.active_nav_child = Some(NavChild::Theme);
+        cx.notify();
+    });
+    for width in [1400.0, 900.0, 620.0] {
+        window.simulate_resize(size(px(width), px(1000.0)));
+        draw(&mut window);
+        let area = window.debug_bounds("settings-content-area").unwrap();
+        let column = window.debug_bounds("settings-content-column").unwrap();
+        let card = window.debug_bounds("settings-group-card").unwrap();
+        assert_eq!(column.size.width, area.size.width.min(px(design::CONTENT_MAX_WIDTH)));
+        assert!((f32::from(column.center().x - area.center().x)).abs() < 1.0);
+        assert_eq!(card.left() - column.left(), px(design::CONTENT_PAD_X));
+        assert_eq!(column.right() - card.right(), px(design::CONTENT_PAD_X));
+        assert!(card.top() - column.top() >= px(design::CONTENT_PAD_TOP));
+        assert!(column.bottom() - card.bottom() >= px(design::CONTENT_PAD_BOTTOM));
+        let switch = window.debug_bounds("nebula-switch-follow_system_theme").unwrap();
+        assert!(switch.size.height >= px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE));
+        assert!(switch.left() >= card.left() && switch.right() <= card.right());
+    }
+}
+
+#[gpui::test]
+fn modified_setting_reset_remains_clickable_away_from_hover_and_disappears_after_reset(
+    cx: &mut TestAppContext,
+) {
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    let (pane, mut window) = open_settings(cx);
+    let default = SettingsPane::factory_defaults().copy_on_select;
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.active_section = 6;
+            pane.active_nav_child = Some(NavChild::Mouse);
+            pane.toggle("copy_on_select", !default, window, cx);
+        });
+    });
+    draw(&mut window);
+    let label = window
+        .read(|cx| crate::gpui_shell::config::ui_language(cx).pick("选中即复制", "Copy on select"));
+    let selector = Box::leak(format!("setting-reset-{label}").into_boxed_str());
+    window.simulate_mouse_move(gpui::point(px(2.0), px(2.0)), None, Modifiers::default());
+    draw(&mut window);
+    let reset = window.debug_bounds(selector).expect("modified setting has a reset button");
+    assert!(reset.size.height >= px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE));
+    // MouseDown/Up without a preceding hover must still activate the reset.
+    click_point(reset.center(), &mut window);
+    assert_eq!(pane.read_with(&window, |pane, _| pane.runtime.copy_on_select), default);
+    assert_eq!(RuntimeSettings::load().copy_on_select, default);
+    assert!(window.debug_bounds(selector).is_none());
+}
+
 fn reveal_editor_control(selector: &'static str, cx: &mut VisualTestContext) {
     let viewport = cx
         .debug_bounds("theme-editor-fields-scroll")
@@ -1198,13 +1303,26 @@ fn native_theme_picker_visual_review() {
     let config = PathBuf::from(std::env::var_os("PEBREL_CONFIG_DIR").expect("isolated config"));
     let output = PathBuf::from(std::env::var_os("PEBREL_THEME_QA_DIR").expect("QA output"));
     let mode = std::env::var("PEBREL_THEME_QA_MODE").unwrap_or_else(|_| "cards".into());
+    let theme = if std::env::var("PEBREL_THEME_QA_LIGHT").as_deref() == Ok("1") {
+        "NordLight"
+    } else {
+        "Nord"
+    };
+    let width = std::env::var("PEBREL_THEME_QA_WIDTH")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1100.0);
+    let height = std::env::var("PEBREL_THEME_QA_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(690.0);
     assert!(config.is_absolute() && output.is_absolute());
     assert!(!config.join("pebrel_settings.txt").exists(), "use a fresh isolated config");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(
         config.join("pebrel_settings.txt"),
-        "theme=Nord\nfollow_system_theme=0\nlanguage=zh-CN\nfont_size=14\n",
+        format!("theme={theme}\nfollow_system_theme=0\nlanguage=zh-CN\nfont_size=14\n"),
     )
     .unwrap();
     gpui_platform::application().with_assets(crate::gpui_shell::NebulaAssets).run(move |cx| {
@@ -1215,7 +1333,7 @@ fn native_theme_picker_visual_review() {
                 gpui::WindowOptions {
                     window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
                         gpui::point(px(30.0), px(20.0)),
-                        size(px(1100.0), px(690.0)),
+                        size(px(width), px(height)),
                     ))),
                     focus: false,
                     show: true,
@@ -1225,7 +1343,18 @@ fn native_theme_picker_visual_review() {
                     let settings = cx.new(|cx| SettingsPane::new(window, cx));
                     settings.update(cx, |settings, cx| {
                         settings.active_section = 1;
-                        if mode != "appearance" {
+                        if mode == "settings" {
+                            settings.active_section = 6;
+                            settings.active_nav_child = Some(NavChild::Mouse);
+                            settings.toggle(
+                                "copy_on_select",
+                                !SettingsPane::factory_defaults().copy_on_select,
+                                window,
+                                cx,
+                            );
+                        } else if mode == "appearance" {
+                            settings.active_nav_child = Some(NavChild::TerminalLook);
+                        } else {
                             settings.open_appearance_picker(true, window, cx);
                         }
                     });
@@ -1248,10 +1377,34 @@ fn native_theme_picker_visual_review() {
             })
             .unwrap();
             cx.background_executor().timer(Duration::from_millis(800)).await;
+            let bounds = cx
+                .update_window(handle.into(), |_, window, _| {
+                    [
+                        "settings-content-column",
+                        "settings-group-card",
+                        "settings-nav-scroll",
+                        "setting-reset-选中即复制",
+                        "nebula-switch-copy_on_select",
+                    ]
+                    .into_iter()
+                    .filter_map(|selector| {
+                        let b = window.debug_bounds_for_selector(selector)?;
+                        Some((
+                            selector.to_owned(),
+                            serde_json::json!({"x": f32::from(b.left()),
+                            "y": f32::from(b.top()), "width": f32::from(b.size.width),
+                            "height": f32::from(b.size.height)}),
+                        ))
+                    })
+                    .collect::<serde_json::Map<_, _>>()
+                })
+                .unwrap();
             std::fs::write(
                 output.join("ready.json"),
                 serde_json::to_vec(&serde_json::json!({
-                    "pid": std::process::id(), "mode": mode,
+                    "pid": std::process::id(), "mode": mode, "theme": theme,
+                    "width": width, "height": height,
+                    "bounds": bounds,
                 }))
                 .unwrap(),
             )

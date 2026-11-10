@@ -128,7 +128,7 @@ impl SettingsPane {
         let selected = state.read(cx).selected_index(cx).map(|index| index.row).unwrap_or(0);
         let labels =
             localized_select_labels(key, values, crate::gpui_shell::config::ui_language(cx));
-        let height = (cx.theme().font_size * 2.0).max(px(28.0));
+        let height = settings_control_height(cx);
         Some(
             SettingsSegments {
                 key,

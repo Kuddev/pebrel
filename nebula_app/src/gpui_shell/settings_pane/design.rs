@@ -4,9 +4,7 @@
 //! 垂直居中。标准密度沿用原紧凑间距，紧凑档只再微收；字号、命中区域和窗口
 //! 标题栏不随内容密度缩小。分组通过留白表达，不添加标题下横线。
 
-use std::time::Duration;
-
-use gpui::{Animation, AnimationExt as _, ElementId, FontWeight, ease_out_quint};
+use gpui::FontWeight;
 
 use super::*;
 
@@ -28,16 +26,16 @@ const ROW_PAD_Y: f32 = 12.0;
 const ROW_PAD_Y_COMPACT: f32 = 10.0;
 /// 组与组。
 pub(super) const GROUP_GAP: f32 = 28.0;
-/// 轨道宽度。
-const RAIL_W: f32 = 2.0;
+pub(super) const CONTENT_MAX_WIDTH: f32 = 720.0;
+pub(super) const CONTENT_PAD_X: f32 = 40.0;
+pub(super) const CONTENT_PAD_TOP: f32 = 36.0;
+pub(super) const CONTENT_PAD_BOTTOM: f32 = 64.0;
 /// 内容相对轨道的缩进。标题左对齐轨道本身、行内容缩进这么多——标题是命名者
 /// 而不是组员，这个位置差比任何字重都更能表达层级。
 pub(super) const RAIL_INDENT: f32 = 13.0;
 /// 控件列宽。够放下最宽的下拉（220）加一点余量；开关这类窄控件在列内右对齐，
 /// 右缘与下拉保持一致。文字列允许收缩换行，避免窄窗口被旧的 320px 下限撑宽。
 const CTRL_COL_W: f32 = 232.0;
-/// 脏值段升起的时长。
-const MARK_RISE: Duration = Duration::from_millis(260);
 
 #[derive(Clone, Copy)]
 pub(super) enum RowLayout {
@@ -108,14 +106,10 @@ impl SettingsPane {
         control: impl IntoElement,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        self.row_shell(label, desc.into(), None, false, RowLayout::Standard, control, cx)
+        self.row_shell(label, desc.into(), None, RowLayout::Standard, control, cx)
     }
 
-    /// 带撤销的设置行：该项被覆盖过时，左侧轨道这一段亮起来，行内出现 ↶。
-    ///
-    /// 两个信号的时态不同，所以显示时机也不同：
-    /// - 轨道亮色是**状态**（"这台机器上我动过它"），必须常显才能一眼扫完；
-    /// - ↶ 是**动作**，只有真想撤销时才有用，常显就是噪音——所以 hover 才现。
+    /// 偏离默认值的设置项常驻显示恢复按钮，恢复后移除。
     pub(crate) fn row_with_reset(
         &self,
         label: &'static str,
@@ -138,35 +132,25 @@ impl SettingsPane {
         control: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let hover_group = Self::row_hover_group(label);
         let reset = dirty.then(|| {
-            div()
-                .id(SharedString::from(format!("setting-reset-{label}")))
-                .size(px(32.0))
+            let action = crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::SettingsPaneRestoreDefault);
+            Button::new(SharedString::from(format!("setting-reset-{label}")))
+                .debug_selector(move || format!("setting-reset-{label}"))
+                .ghost()
+                .icon(IconName::Undo2)
+                .size(px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE))
                 .rounded_md()
-                .flex()
-                .items_center()
-                .justify_center()
                 .cursor_pointer()
-                .invisible()
-                .group_hover(hover_group, |el| el.visible())
-                .hover(|el| el.bg(cx.theme().list_hover))
-                .tooltip(|window, cx| {
-                    gpui_component::tooltip::Tooltip::new(
-                        crate::gpui_shell::config::ui_language(cx)
-                            .text(crate::i18n::Message::SettingsPaneRestoreDefault),
-                    )
-                    .build(window, cx)
-                })
+                .aria_label(action)
+                .tooltip(action)
                 .on_click(cx.listener(move |this, _, window, cx| on_reset(this, window, cx)))
-                .child(Icon::new(IconName::Undo2).size(px(16.0)))
                 .into_any_element()
         });
-        self.row_shell(label, desc.into(), reset, dirty, layout, control, cx)
+        self.row_shell(label, desc.into(), reset, layout, control, cx)
     }
 
-    /// 行 hover 组名。↶ 要跟着**整行**的 hover 显形，而不是自己被指到才现
-    /// ——后者等于让用户先找到一个看不见的东西。
+    /// 行内文字共用中性的悬停反馈。
     fn row_hover_group(label: &'static str) -> SharedString {
         SharedString::from(format!("settings-row-{label}"))
     }
@@ -217,7 +201,6 @@ impl SettingsPane {
         label: &'static str,
         desc: SettingHelp,
         reset: Option<gpui::AnyElement>,
-        dirty: bool,
         layout: RowLayout,
         control: impl IntoElement,
         cx: &Context<Self>,
@@ -258,7 +241,7 @@ impl SettingsPane {
                             Button::new(SharedString::from(format!("settings-help-{label}")))
                                 .icon(IconName::Info)
                                 .ghost()
-                                .size(px(32.0))
+                                .size(px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE))
                                 .text_color(theme.muted_foreground)
                                 .accessibility_id(SharedString::from(format!(
                                     "settings-help-{label}"
@@ -307,53 +290,31 @@ impl SettingsPane {
                     .child(text.flex_1().min_w(px(180.0)))
                     .child(h_flex().flex_grow(1.0).justify_end().max_w_full().child(control))
             },
-            RowLayout::Standard => {
-                h_flex().w_full().items_center().gap_4().child(text.flex_1().min_w_0()).child(
+            RowLayout::Standard => h_flex()
+                .w_full()
+                .items_center()
+                .flex_wrap()
+                .gap_4()
+                .child(text.flex_1().min_w(px(180.0)))
+                .child(
                     h_flex()
                         .w(px(CTRL_COL_W))
+                        .max_w_full()
                         .flex_shrink_0()
                         .justify_end()
                         .items_center()
                         .child(control),
-                )
-            },
+                ),
         };
         div()
             .id(label)
+            .debug_selector(move || format!("settings-row-{label}"))
             .group(Self::row_hover_group(label))
             .relative()
             .w_full()
             .flex_shrink_0()
             .px(px(CARD_PAD_X))
             .py(px(pad_y))
-            // 竖线整条让给状态，不再画常驻的灰轨道。
-            //
-            // 灰线原本表达"这几行是一组"，但那件事组标题说了一遍、24px 组间
-            // 距又说了一遍，第三遍是冗余；而"这行被改过"没有别的元素在说。
-            // 一个视觉通道只能有一个主人，所以给不可替代的那个。
-            //
-            // 何况暗色下灰线必须淡到几乎看不见才不抢戏，一旦提亮到能看清，就
-            // 会和左侧导航的分割线形成两条平行的近距离竖线——页面开始变格子。
-            //
-            // 组的层级仍然成立：标题的字重与颜色、组间距、以及行内容相对标题
-            // 的 13px 缩进。缩进不需要一条线来证明自己存在。
-            .when(dirty, |row| {
-                row.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top(px(10.0))
-                        .bottom(px(10.0))
-                        .w(px(RAIL_W))
-                        .rounded_r(px(RAIL_W))
-                        .bg(crate::gpui_shell::theme::settings_mark(cx))
-                        .with_animation(
-                            ElementId::Name(format!("settings-mark-{label}").into()),
-                            Animation::new(MARK_RISE).with_easing(ease_out_quint()),
-                            |mark, t| mark.opacity(t),
-                        ),
-                )
-            })
             .child(columns)
     }
 }
@@ -402,6 +363,7 @@ impl gpui::RenderOnce for SettingsGroup {
         }
         let divider = self.divider;
         let mut card = v_flex()
+            .debug_selector(|| "settings-group-card".into())
             .w_full()
             .bg(self.fill)
             .rounded(px(CARD_RADIUS))

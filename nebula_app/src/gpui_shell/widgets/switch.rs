@@ -135,7 +135,7 @@ impl RenderOnce for NebulaSwitch {
             .disabled(self.disabled)
             .custom(ButtonCustomVariant::new(cx))
             .w(px(if small { 32.0 } else { 44.0 }))
-            .h(px(32.0))
+            .h(px(if small { 32.0 } else { super::SETTINGS_HIT_SIZE }))
             .px_0()
             .rounded(px(6.0))
             .child(div().when(self.disabled, |track| track.opacity(0.4)).child(track))

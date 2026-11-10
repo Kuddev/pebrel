@@ -122,6 +122,7 @@ pub struct SettingsPane {
     active_section: usize,
     /// 导航子项筛选；只在属于当前大类时生效，见 `visible_nav_child`。
     active_nav_child: Option<NavChild>,
+    nav_scroll: gpui::ScrollHandle,
     agents: agents::AgentSettingsState,
     mobile: mobile::MobileState,
     plugins: plugins::PluginsState,
@@ -903,9 +904,9 @@ impl SettingsPane {
                     cx,
                 )
                 .into_any_element(),
-            None => self
-                .row_shell(label, desc.into(), None, false, layout, control, cx)
-                .into_any_element(),
+            None => {
+                self.row_shell(label, desc.into(), None, layout, control, cx).into_any_element()
+            },
         }
     }
 
@@ -1556,6 +1557,7 @@ impl Render for SettingsPane {
         let provider_drawer = self.provider_drawer(window, cx);
         let application_page = self.active_section == 0;
         let mobile_page = self.active_section == MOBILE_SECTION;
+        let form_page = matches!(self.active_section, 1 | 2 | 5 | 6 | 8);
 
         div()
             .size_full()
@@ -1612,53 +1614,27 @@ impl Render for SettingsPane {
                         v_flex()
                             .flex_1()
                             .min_h_0()
-                            .px_5()
-                            // 内容与页头线之间的一口气。分组之间的 24 由各
-                            // section 容器的 `gap` 提供，不放在这里，也不放在
-                            // 组自己身上——组自带 `pt` 时，首个元素不是分组的
-                            // 页（按键映射开头是搜索框）就会直接贴到线上。
-                            .pt(px(20.0))
-                            .pb(px(22.0))
-                            .when(!application_page, |content| content.pt(px(28.0)).pb(px(30.0)))
-                            .when(mobile_page, |content| content.p_0())
-                            .when(self.active_section == 3, |content| content.p_0())
-                            // 注意这层包装 `v_flex` 的 `w_full` 不能删（2026-08-23
-                            // 又栽了一次）：`overflow_y_scrollbar` 把内容层清成
-                            // `Display::Block`，而 flex 容器在 block 父里
-                            // `width:auto` 是 shrink-to-fit——不写 `w_full` 就退回
-                            // 按内容取宽，每行各算一个宽度。判据是"窗口拖宽拖窄
-                            // 都齐、卡在中间某个宽度不齐"：内容自然宽超过可用宽
-                            // 时被压住反而对齐，没超过就各取各的。
-                            //
-                            // 不设行宽上限：内容跟着窗口延伸。标签与值离得
-                            // 太远的问题由控件列定宽 + 右对齐解决（见
-                            // design::CTRL_COL_W），不靠把整页钉窄。
-                            // 正文继承设置根的统一主字号；只有说明、徽标、
-                            // 快捷键提示等次级信息在各自元素上显式缩小。
                             .overflow_y_scrollbar()
-                            // 这层 v_flex 不能省。`overflow_y_scrollbar` 不是
-                            // 就地加滚动条：它把本容器的样式 clone 到自己新建
-                            // 的外层 div，再把这层样式清空、只补 flex_1（见
-                            // gpui-component scroll/scrollable.rs）。于是真正
-                            // 承载正文的那层退回 gpui 默认的 Display::Block，
-                            // 各分组的 `w_full` 不再撑满，而是各自按内容取宽：
-                            // 2026-08-17 A/B 实测，去掉这层后预览组右缘停在
-                            // 1356 而主题组到 1762，一组一个宽度，控件既不贴左
-                            // 也不贴右。补一层竖向 flex 后分组走交叉轴 stretch
-                            // 取宽，症状消失。
-                            //
-                            // 行宽上限：控件贴的是这个上限的右边，不是窗口的右
-                            // 边。没有它时标签在最左、值在最右，1080px 宽的窗口
-                            // 里眼睛要横跨一整屏才能把"这一项"和"它现在是什么"
-                            // 配上，扫到第三行就串行。窗口再宽只是两侧留白变多。
+                            // Scrollable 重建外层样式；显式全宽 flex 保证分组共用
+                            // 同一列宽。表单列按原型限宽居中，四周留白随内容滚动。
                             .child(
                                 div()
+                                    .debug_selector(|| "settings-content-area".into())
                                     .w_full()
                                     .flex()
                                     .justify_center()
                                     .child(
                                         v_flex()
+                                            .debug_selector(|| "settings-content-column".into())
                                             .w_full()
+                                            .px(px(24.0))
+                                            .pt(px(design::CONTENT_PAD_TOP))
+                                            .pb(px(design::CONTENT_PAD_BOTTOM))
+                                            .when(form_page, |content| {
+                                                content.max_w(px(design::CONTENT_MAX_WIDTH))
+                                                    .px(px(design::CONTENT_PAD_X))
+                                            })
+                                            .when(mobile_page || self.active_section == 3, |content| content.p_0())
                                             .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION | PLUGINS_SECTION), |content| {
                                                 content.items_center()
                                             })

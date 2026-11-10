@@ -713,7 +713,7 @@ impl SettingsPane {
                             .toggled(selected)
                             .label(language.text(*message))
                             .ghost()
-                            .h(px(26.0))
+                            .h(settings_control_height(cx))
                             .px(px(if compact { 7.0 } else { 10.0 }))
                             .text_size(px(11.5))
                             .rounded_full()
@@ -770,7 +770,14 @@ impl SettingsPane {
         let padding = if compact { 19.0 } else { 27.0 };
         let width = (f32::from(viewport.width) - if compact { 24.0 } else { 64.0 }).min(860.0);
         // 上下各留出一口气，弹窗不再顶到窗口边缘。
-        let height = (f32::from(viewport.height) - if compact { 32.0 } else { 96.0 }).min(720.0);
+        let vertical_margin = if compact {
+            32.0
+        } else if f32::from(viewport.height) < 740.0 {
+            64.0
+        } else {
+            96.0
+        };
+        let height = (f32::from(viewport.height) - vertical_margin).min(720.0);
         let title = if draft.is_theme() {
             language.text(Message::ThemePickerTitle)
         } else {
@@ -835,7 +842,7 @@ impl SettingsPane {
                             .debug_selector(|| "close-appearance-picker".to_owned())
                             .icon(IconName::Close)
                             .ghost()
-                            .size(px(28.0))
+                            .size(px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE))
                             .text_color(colors.secondary)
                             .tooltip(language.text(Message::ThemeTransferClose))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -884,7 +891,7 @@ impl SettingsPane {
                             .label(language.text(Message::ThemePickerCustomize))
                             .disabled(picker.apply_busy || picker.custom_loading)
                             .ghost()
-                            .h(px(31.0))
+                            .h(settings_control_height(cx))
                             .px(px(if compact { 8.0 } else { 10.0 }))
                             .text_size(px(if compact { 10.0 } else { 11.0 }))
                             .rounded_full()
@@ -914,7 +921,7 @@ impl SettingsPane {
                                 Button::new("cancel-appearance-picker")
                                     .debug_selector(|| "cancel-appearance-picker".to_owned())
                                     .label(language.text(Message::ThemePickerCancel))
-                                    .h(px(33.0))
+                                    .h(settings_control_height(cx))
                                     .px(px(if compact { 11.0 } else { 16.0 }))
                                     .text_size(px(12.0))
                                     .rounded(px(6.0))
@@ -929,7 +936,7 @@ impl SettingsPane {
                                 Button::new("apply-appearance-picker")
                                     .debug_selector(|| "apply-appearance-picker".to_owned())
                                     .label(apply_label)
-                                    .h(px(33.0))
+                                    .h(settings_control_height(cx))
                                     .px(px(if compact { 11.0 } else { 16.0 }))
                                     .text_size(px(12.0))
                                     .rounded(px(6.0))

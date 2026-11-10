@@ -60,6 +60,7 @@ impl Render for SettingsPaneHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
+            .bg(super::theme::settings_content_bg(cx))
             .child(self.pane.clone())
             // 模态层高于功能浮层和组件弹出框，鼠标事件才能到达真正的确认按钮。
             .child(
