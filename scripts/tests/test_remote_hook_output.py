@@ -7,7 +7,11 @@ import os
 import unittest
 from unittest.mock import patch
 
-from .test_remote_hooks import module, TOKEN
+if __package__:
+    from .test_remote_hooks import module, TOKEN
+else:
+    # CI discovery loads tests as top-level modules; keep package runs working too.
+    from test_remote_hooks import module, TOKEN
 
 
 @unittest.skipUnless(os.name == "posix", "POSIX remote hook sender")
