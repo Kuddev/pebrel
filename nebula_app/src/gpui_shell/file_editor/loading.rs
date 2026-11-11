@@ -12,6 +12,15 @@ impl TextFileView {
         }
         self.cancel_object_edit(cx);
         self.loading = true;
+        self.live_edit = None;
+        self.last_edit_cursor = None;
+        self.resume_edit = false;
+        let preview_top = self.scroll.logical_scroll_top();
+        if self.markdown {
+            // Clear the old byte ranges before replacing their source buffer.
+            self.stop_preview_selection_scroll();
+            self.apply_outline(Outline::default(), cx);
+        }
         self.document = None;
         self.dirty = false;
         self.notice = None;
@@ -67,9 +76,6 @@ impl TextFileView {
                     view.progress_task = None;
                     match loaded {
                         Ok((document, outline)) => {
-                            view.live_edit = None;
-                            view.last_edit_cursor = None;
-                            view.resume_edit = false;
                             view.history.reset(&document.text);
                             view.input.update(cx, |input, cx| {
                                 let offset = input.scroll_offset();
@@ -80,7 +86,7 @@ impl TextFileView {
                             view.dirty = false;
                             view.notice = None;
                             if let Some(outline) = outline {
-                                view.apply_outline(outline, cx);
+                                view.apply_outline_at(outline, preview_top, cx);
                             }
                             if view.preview && view.focus.is_focused(window) {
                                 view.begin_live_edit(0, window, cx);
