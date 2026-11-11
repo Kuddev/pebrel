@@ -201,14 +201,19 @@ class SshIntegrationTest {
             }
             @Suppress("UNREACHABLE_CODE") ""
         }
-        suspend fun stopFixture() = withContext(Dispatchers.IO + NonCancellable) {
+        suspend fun fixtureCommand(command: String) = withContext(Dispatchers.IO) {
             connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
                 cleanup.connect()
-                val command = if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'"
-                cleanup.query(command).getInt("status")
+                // A fresh connection is waiting for its first channel. Queries
+                // only run alongside an open terminal or exec channel.
+                cleanup.openExec("timeout 8s $command")
+                val output = cleanup.input().readBytes().toString(Charsets.UTF_8)
+                cleanup.awaitExit() to output
             }
         }
+        val stop = if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'"
         val retry = checkNotNull(target.reconnectCommand())
+        var completed = false
         try {
             val (first, ssh) = opened()
             val pid = try {
@@ -223,8 +228,8 @@ class SshIntegrationTest {
                 assertTrue(second.sendText("printf '\\115UX_SECOND:%s:%s\\n' \"\$PEBREL_QA_TOKEN\" \"\$\$\"\r"))
                 assertEquals("MUX_SECOND:$name:$pid", output(second, Regex("MUX_SECOND:$name:[0-9]+")))
             } finally { second.finishIfRunning() }
+            assertEquals("The remote fixture stop command must succeed", 0, fixtureCommand(stop).first)
             if (mode == SshSessionMode.HERDR) {
-                assertEquals(0, stopFixture())
                 val ended = CompletableDeferred<Unit>()
                 val missing = TerminalSession(SshTerminalTransport(connection(), retry), object : TerminalCallbacks() {
                     override fun onSessionFinished(session: TerminalSession) { ended.complete(Unit) }
@@ -234,21 +239,19 @@ class SshIntegrationTest {
                     withTimeout(15_000) { ended.await() }
                     assertNull(missing.failureCause)
                 } finally { missing.finishIfRunning() }
-                withContext(Dispatchers.IO) {
-                    connection(host.copy(fingerprint = expectedFingerprint)).use { inspect ->
-                        inspect.connect()
-                        val inventory = inspect.query("herdr session list --json")
-                        assertEquals(0, inventory.getInt("status"))
-                        val sessions = org.json.JSONObject(inventory.getString("stdout")).getJSONArray("sessions")
-                        assertFalse((0 until sessions.length()).any {
-                            val session = sessions.getJSONObject(it)
-                            session.getString("name") == name && session.optBoolean("running")
-                        })
-                    }
-                }
+                val (status, inventory) = fixtureCommand("herdr session list --json")
+                assertEquals(0, status)
+                val sessions = org.json.JSONObject(inventory).getJSONArray("sessions")
+                assertFalse((0 until sessions.length()).any {
+                    val session = sessions.getJSONObject(it)
+                    session.getString("name") == name && session.optBoolean("running")
+                })
             }
+            completed = true
         } finally {
-            stopFixture()
+            if (!completed) withContext(NonCancellable) {
+                runCatching { fixtureCommand(stop) }
+            }
         }
     }
 
