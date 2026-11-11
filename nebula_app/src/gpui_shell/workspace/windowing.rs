@@ -5,7 +5,10 @@
 //! 变更投递到对应 workspace，避免多个 receiver 竞争消费同一事件流。
 
 mod shutdown;
-pub(crate) use shutdown::{quit_all, quit_for_update, schedule_update};
+pub(crate) use shutdown::{
+    RestartConfiguration, confirm_quit, confirm_restart, quit_all, quit_for_update, quit_pending,
+    schedule_update,
+};
 mod startup;
 pub(crate) use startup::open_initial_window;
 use startup::{initial_startup, runtime_window_startup};

@@ -4,6 +4,16 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## Unreleased / 未发布
+
+### English
+
+- Add confirmed safe quit and restart actions at the bottom of Advanced settings. Restart respects recovery preferences, opens a visible window, and preserves scheduled updates without installing them on that restart.
+
+### 简体中文
+
+- 在高级设置底部添加带确认的安全退出与普通重启操作。重启遵守恢复偏好并显示窗口，本次不安装已预约更新，也不取消预约。
+
 ## 2.5.0 - 2026-11-09
 
 ```text

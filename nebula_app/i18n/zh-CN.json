@@ -2071,6 +2071,13 @@
   "terminal.ssh_session_stopped": "会话已结束。",
   "terminal.ssh_session_keys": "按 R 重新连接，按 Enter 关闭此终端。",
   "terminal.ssh_reconnecting": "正在重新连接…",
+  "lifecycle": {
+    "quit": "终止pebrel",
+    "quit_body": "关闭所有窗口并结束终端会话？退出前将处理未保存文档并保存可恢复的会话状态。终端中运行的任务将结束。",
+    "restart": "重启pebrel",
+    "restart_body": "关闭所有窗口并结束终端会话，然后重新打开 Pebrel？会话恢复遵循现有设置。本次跳过已预约的更新安装，但不会取消预约。",
+    "restart_failed": "无法准备重启：{error}"
+  },
   "startup": {
     "handover_unconfirmed": "运行中的 Pebrel 未确认打开请求，标签页或窗口可能已经创建。请先检查已有窗口，再决定是否重试；本次启动不会重复发送请求。"
   }

@@ -2071,6 +2071,13 @@
   "terminal.ssh_session_stopped": "Session stopped.",
   "terminal.ssh_session_keys": "Press R to reconnect. Press Enter to close this terminal.",
   "terminal.ssh_reconnecting": "Reconnecting…",
+  "lifecycle": {
+    "quit": "Quit Pebrel",
+    "quit_body": "Close all windows and end terminal sessions? Unsaved documents will be checked and restorable session state saved before exiting. Running terminal tasks will end.",
+    "restart": "Restart Pebrel",
+    "restart_body": "Close all windows and end terminal sessions, then reopen Pebrel? Session recovery follows your settings. Any scheduled update will be skipped this time, not cancelled.",
+    "restart_failed": "Could not prepare restart: {error}"
+  },
   "startup": {
     "handover_unconfirmed": "The running Pebrel instance did not confirm the open request. It may already have opened the tab or window. Check the existing window before trying again; this launch will not retry."
   }

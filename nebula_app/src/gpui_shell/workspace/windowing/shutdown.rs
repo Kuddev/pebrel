@@ -3,12 +3,59 @@ use super::*;
 use crate::i18n::Message;
 use gpui::SharedString;
 
+pub(crate) fn quit_pending(cx: &App) -> bool {
+    cx.try_global::<WindowRegistry>().is_some_and(|registry| registry.quit_pending)
+}
+
+pub(crate) struct RestartConfiguration(pub Option<PathBuf>);
+impl Global for RestartConfiguration {}
+
+pub(crate) fn confirm_quit(window: &mut Window, cx: &mut App) {
+    confirm_exit(false, window, cx);
+}
+
+pub(crate) fn confirm_restart(window: &mut Window, cx: &mut App) {
+    confirm_exit(true, window, cx);
+}
+
+fn confirm_exit(restart: bool, window: &mut Window, cx: &mut App) {
+    if quit_pending(cx) {
+        return;
+    }
+    cx.global_mut::<WindowRegistry>().quit_pending = true;
+    let language = crate::gpui_shell::config::ui_language(cx);
+    let action = if restart { Message::LifecycleRestart } else { Message::LifecycleQuit };
+    let body = if restart { Message::LifecycleRestartBody } else { Message::LifecycleQuitBody };
+    let prompt = window.prompt(
+        gpui::PromptLevel::Warning,
+        language.text(action),
+        Some(language.text(body)),
+        &[
+            gpui::PromptButton::Cancel(language.text(Message::CommonCancel).into()),
+            gpui::PromptButton::Other(language.text(action).into()),
+        ],
+        cx,
+    );
+    cx.refresh_windows();
+    cx.spawn(async move |cx| {
+        let confirmed = matches!(prompt.await, Ok(1));
+        cx.update(|cx| {
+            cx.global_mut::<WindowRegistry>().quit_pending = false;
+            if confirmed {
+                request_quit(None, restart, cx);
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+}
+
 pub(crate) fn quit_all(cx: &mut App) {
-    request_quit(None, cx);
+    request_quit(None, false, cx);
 }
 
 pub(crate) fn quit_for_update(asset: crate::update_check::UpdateAsset, cx: &mut App) {
-    request_quit(Some(asset), cx);
+    request_quit(Some(asset), false, cx);
 }
 
 pub(crate) fn schedule_update(
@@ -24,14 +71,14 @@ pub(crate) fn schedule_update(
     crate::update_download::handoff::schedule(asset, &windows)
 }
 
-fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) {
+fn request_quit(update: Option<crate::update_check::UpdateAsset>, restart: bool, cx: &mut App) {
     if cx.global::<WindowRegistry>().quit_pending {
         return;
     }
     cx.global_mut::<WindowRegistry>().quit_pending = true;
     cx.spawn(async move |cx| {
         let Some(approved) = approve_documents(cx).await else {
-            cx.update(|cx| cx.global_mut::<WindowRegistry>().quit_pending = false);
+            cx.update(clear_quit_pending);
             return;
         };
         let panes = cx.update(|cx| {
@@ -62,7 +109,7 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                 false
             };
             if !approved {
-                cx.update(|cx| cx.global_mut::<WindowRegistry>().quit_pending = false);
+                cx.update(clear_quit_pending);
                 return;
             }
             true
@@ -83,6 +130,37 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
         } else {
             None
         };
+        let mut replacement = if restart {
+            let config_file = cx.update(|cx| {
+                cx.try_global::<RestartConfiguration>().and_then(|config| config.0.clone())
+            });
+            let prepared = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::platform::restart::PreparedRestart::prepare(config_file.as_deref())
+                })
+                .await;
+            match prepared {
+                Ok(prepared) => Some(prepared),
+                Err(error) => {
+                    cx.update(|cx| abort_restart(&error.to_string(), cx));
+                    return;
+                },
+            }
+        } else {
+            None
+        };
+        if let Some(mut child) = replacement.take() {
+            let armed =
+                cx.background_executor().spawn(async move { child.commit().map(|()| child) }).await;
+            match armed {
+                Ok(child) => replacement = Some(child),
+                Err(error) => {
+                    cx.update(|cx| abort_restart(&error.to_string(), cx));
+                    return;
+                },
+            }
+        }
         cx.update(|cx| {
             // Recheck the current pane set after asynchronous preparation. A
             // window/pane opened during the handshake also needs a native target.
@@ -127,14 +205,44 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                     return;
                 }
             }
+            if let Some(replacement) = replacement.as_mut()
+                && let Err(error) = replacement.release()
+            {
+                cx.global_mut::<WindowRegistry>().session_persistence.cancel_quit();
+                abort_restart(&error.to_string(), cx);
+                return;
+            }
             finish_quit_all(cx);
         });
+        // Cancelling a prepared process may wait for its OS teardown, never on the UI thread.
+        cx.background_executor().spawn(async move { drop(replacement) }).await;
     })
     .detach();
 }
 
-fn abort_update(error: &str, cx: &mut App) {
+fn clear_quit_pending(cx: &mut App) {
     cx.global_mut::<WindowRegistry>().quit_pending = false;
+    cx.refresh_windows();
+}
+
+fn abort_restart(error: &str, cx: &mut App) {
+    clear_quit_pending(cx);
+    for entry in cx.global::<WindowRegistry>().entries.clone() {
+        let _ = entry.handle.update(cx, |_, window, cx| {
+            let language = crate::gpui_shell::config::ui_language(cx);
+            crate::gpui_shell::toast::banner(
+                window,
+                cx,
+                crate::display::ToastKind::Warning,
+                language.format(Message::LifecycleRestartFailed, &[("error", error)]),
+            );
+        });
+    }
+    cx.refresh_windows();
+}
+
+fn abort_update(error: &str, cx: &mut App) {
+    clear_quit_pending(cx);
     for entry in cx.global::<WindowRegistry>().entries.clone() {
         let _ = entry.handle.update(cx, |_, window, cx| {
             let language = crate::gpui_shell::config::ui_language(cx);
@@ -145,7 +253,7 @@ fn abort_update(error: &str, cx: &mut App) {
 }
 
 fn abort_quit(message: Message, cx: &mut App) {
-    cx.global_mut::<WindowRegistry>().quit_pending = false;
+    clear_quit_pending(cx);
     for entry in cx.global::<WindowRegistry>().entries.clone() {
         let _ = entry.handle.update(cx, |_, window, cx| {
             let language = crate::gpui_shell::config::ui_language(cx);

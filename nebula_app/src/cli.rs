@@ -92,7 +92,11 @@ pub struct Options {
 
 impl Options {
     pub fn new() -> Self {
-        let mut options = Self::parse();
+        Self::from_args(std::env::args_os())
+    }
+
+    pub(crate) fn from_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Self {
+        let mut options = Self::parse_from(args);
 
         // Parse CLI config overrides.
         options.config_options = options.window_options.config_overrides();

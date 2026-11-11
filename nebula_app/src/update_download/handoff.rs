@@ -225,6 +225,9 @@ pub(crate) fn restore_ticket() -> Option<Vec<Session>> {
 /// A validated path can travel through the authenticated elevated launch handover.
 /// Discovery does not consume the ticket or increment its recovery attempt count.
 pub(crate) fn pending_restore_path() -> Option<PathBuf> {
+    if crate::platform::restart::is_restart() {
+        return None;
+    }
     let root = super::state_directory("").ok()?;
     let path = std::env::var_os("PEBREL_UPDATE_RESTORE")
         .map(PathBuf::from)
@@ -415,7 +418,9 @@ fn scheduled_windows() -> Result<Vec<Session>, String> {
 /// Before resident resources/windows exist, apply an explicitly armed update.
 /// A failed attempt is disarmed and normal startup remains available.
 pub(crate) fn apply_scheduled() -> bool {
-    if crate::platform::distribution::current().externally_managed() {
+    if crate::platform::restart::is_restart()
+        || crate::platform::distribution::current().externally_managed()
+    {
         return false;
     }
     let Ok(root) = super::state_directory("") else { return false };
