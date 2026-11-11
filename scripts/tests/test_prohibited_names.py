@@ -171,6 +171,17 @@ class ProhibitedNamesTests(unittest.TestCase):
             )
         )
 
+    def test_notice_derivation_is_allowed_only_in_third_party_notices(self) -> None:
+        line = "pebrel_app/src/agent_detection derives from Herdr"
+        self.assertFalse(check_prohibited_names.prohibited_source_line("THIRD-PARTY-NOTICES", line))
+        self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", line))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            "THIRD-PARTY-NOTICES", "Herdr users should switch; this derives from Herdr"
+        ))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            "THIRD-PARTY-NOTICES", "derives from Herdr, which is slower than Pebrel"
+        ))
+
     def test_protocol_identifiers_are_allowed(self) -> None:
         text = (FIXTURES / "protocol.rs").read_text(encoding="utf-8")
         self.assertFalse(check_prohibited_names.prohibited_source_line("src/protocol.rs", text))
@@ -369,6 +380,51 @@ class ProhibitedNamesTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Ghostty", result.stderr)
+
+    def moved_file_repository(self, directory: str) -> tuple[Path, str]:
+        repository = Path(directory)
+        run_git(repository, "init", "-q")
+        run_git(repository, "config", "user.name", "CI test")
+        run_git(repository, "config", "user.email", "ci@example.invalid")
+        source = repository / "old_app" / "notes.md"
+        source.parent.mkdir()
+        lines = [f"line {number}" for number in range(20)] + ["Compare with Ghostty.", "use old_app::config;"]
+        source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        run_git(repository, "add", ".")
+        run_git(repository, "commit", "-qm", "baseline")
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+        run_git(repository, "mv", "old_app", "new_app")
+        moved = repository / "new_app" / "notes.md"
+        moved.write_text(moved.read_text(encoding="utf-8").replace("old_app::", "new_app::"), encoding="utf-8")
+        run_git(repository, "add", ".")
+        return repository, base
+
+    def test_moved_file_checks_only_its_changed_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository, base = self.moved_file_repository(directory)
+            self.assertEqual(self.check_staged(repository).returncode, 0)
+            run_git(repository, "commit", "-qm", "move the application directory")
+            check = [sys.executable, str(CHECKER), "range", "--base", base, "--head", "HEAD"]
+            result = subprocess.run(check, cwd=repository, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_moved_file_still_rejects_added_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository, base = self.moved_file_repository(directory)
+            moved = repository / "new_app" / "notes.md"
+            moved.write_text(moved.read_text(encoding="utf-8") + "Faster than WezTerm.\n", encoding="utf-8")
+            run_git(repository, "add", ".")
+            staged = self.check_staged(repository)
+            self.assertEqual(staged.returncode, 1, staged.stderr)
+            self.assertIn("new_app/notes.md", staged.stderr)
+            self.assertNotIn("Ghostty", staged.stderr)
+            run_git(repository, "commit", "-qm", "move and add a comparison")
+            check = [sys.executable, str(CHECKER), "range", "--base", base, "--head", "HEAD"]
+            result = subprocess.run(check, cwd=repository, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("new_app/notes.md", result.stderr)
+            self.assertIn("WezTerm", result.stderr)
+            self.assertNotIn("Ghostty", result.stderr)
 
     def test_range_scans_a_commit_message_even_when_text_is_legal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

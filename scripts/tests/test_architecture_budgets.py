@@ -1,5 +1,6 @@
 from pathlib import Path
 import io
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -139,6 +140,72 @@ class LineBudgetTests(unittest.TestCase):
         self.write("app/src/legacy.rs", 2100)
         budget = self.policy("app/src/legacy.rs 2100")
         self.assertIn("no source in base", check(self.root, budget, budget, lambda name: None)[0][0])
+
+    def moved(self, exceptions=""):
+        shutil.rmtree(self.root / "app", ignore_errors=True)
+        return Budget.parse(f"limit 2000\nroot renamed\nmoved app renamed\n{exceptions}")
+
+    def test_moved_root_keeps_every_base_source(self):
+        self.write("renamed/src/view.rs", 1)
+        self.write("renamed/src/data.json", 1)
+        listing = lambda directory: ["app/src/view.rs", "app/src/data.json"]
+        self.assertEqual(check(self.root, self.moved(), self.policy(), None, listing)[0], [])
+
+    def test_moved_root_cannot_drop_or_rename_sources(self):
+        self.write("renamed/src/view.rs", 1)
+        listing = lambda directory: ["app/src/view.rs", "app/src/gone.rs"]
+        errors = check(self.root, self.moved(), self.policy(), None, listing)[0]
+        self.assertEqual(errors, ["app/src/gone.rs: moved root lost renamed/src/gone.rs"])
+
+    def test_moved_root_requires_base_listing_and_absent_source(self):
+        self.write("renamed/src/view.rs", 1)
+        self.assertIn("cannot verify", check(self.root, self.moved(), self.policy())[0][0])
+        budget = self.moved()
+        self.write("app/src/view.rs", 1)
+        self.assertIn("still exists", check(self.root, budget)[0][0])
+
+    def test_moved_exception_keeps_base_allowance(self):
+        self.write("renamed/src/legacy.rs", 2100)
+        listing = lambda directory: ["app/src/legacy.rs"]
+        base = lambda name: b"line\n" * 2050 if name == "app/src/legacy.rs" else None
+        previous = self.policy("app/src/legacy.rs 2100")
+        errors = check(self.root, self.moved("renamed/src/legacy.rs 2100"), previous, base, listing)[0]
+        self.assertEqual(errors, ["renamed/src/legacy.rs: 2100 lines > 2050; split by responsibility"])
+        increased = check(self.root, self.moved("renamed/src/legacy.rs 2101"), previous, base, listing)[0]
+        self.assertIn("new or increased", increased[0])
+
+    def test_move_cannot_claim_unrelated_or_existing_roots(self):
+        self.write("renamed/src/view.rs", 1)
+        listing = lambda directory: []
+        previous = Budget.parse("limit 2000\nroot app\nroot renamed")
+        errors = check(self.root, self.moved(), previous, None, listing)[0]
+        self.assertIn("already a source root", errors[0])
+        stale = Budget.parse("limit 2000\nroot renamed\nmoved other renamed")
+        errors, notices, _ = check(self.root, stale, Budget.parse("limit 2000\nroot renamed"), None, listing)
+        self.assertEqual(errors, [])
+        self.assertIn("stale move record", notices[0])
+        errors = check(self.root, stale, self.policy(), None, listing)[0]
+        self.assertIn("may not be removed", errors[0])
+
+    def test_record_left_after_merge_does_not_remap_exceptions(self):
+        self.write("renamed/src/legacy.rs", 2100)
+        merged = Budget.parse("limit 2000\nroot renamed\nrenamed/src/legacy.rs 2100")
+        current = self.moved("renamed/src/legacy.rs 2100")
+        base = lambda name: b"line\n" * 2100 if name == "renamed/src/legacy.rs" else None
+        errors, notices, _ = check(self.root, current, merged, base, lambda directory: [])
+        self.assertEqual(errors, [])
+        self.assertIn("stale move record", notices[0])
+
+    def test_invalid_move_records_fail(self):
+        for text in (
+            "limit 2000\nroot renamed\nmoved app", "limit 2000\nroot renamed\nmoved app other",
+            "limit 2000\nroot app\nmoved app app", "limit 2000\nroot renamed\nroot app\nmoved app renamed",
+            "limit 2000\nroot renamed\nmoved renamed/src renamed", "limit 2000\nroot renamed\nmoved ../app renamed",
+            "limit 2000\nroot renamed\nroot two\nmoved app renamed\nmoved app two",
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    Budget.parse(text)
 
     def test_invalid_base_is_not_treated_as_bootstrap(self):
         with patch("scripts.check_architecture.subprocess.run", side_effect=subprocess.CalledProcessError(128, "git")):
