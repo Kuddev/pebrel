@@ -264,7 +264,11 @@ impl TextFileView {
         }
         let text = edit.input.read(cx).value();
         let source = self.input.read(cx).text();
-        if !source.try_slice(edit.range.clone()).is_ok_and(|slice| slice == edit.source.as_str()) {
+        if !source_range_in_bounds(source, &edit.range)
+            || !source
+                .try_slice(edit.range.clone())
+                .is_ok_and(|slice| slice == edit.source.as_str())
+        {
             self.finish_live_edit(cx);
             return;
         }
