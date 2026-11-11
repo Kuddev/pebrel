@@ -4,6 +4,48 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.3 - 2026-11-12
+
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.3-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.3-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.3-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.3-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.3-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.3-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.3-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.3-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.3-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.3-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.3-windows-x64.zip
+```
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Added
+
+- Added an option to keep existing PowerShell commands and aliases for `ls`, `ll`, and `dir` on Windows. Set `builtin_ls=0` in `pebrel_settings.txt` and open a new PowerShell tab. Addresses [#549](https://github.com/Kuddev/nebula/issues/549).
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 新增选项，在 Windows 上保留 PowerShell 中已有的 `ls`、`ll` 和 `dir` 命令及别名。在 `pebrel_settings.txt` 中设置 `builtin_ls=0`，再打开新的 PowerShell 标签页。对应 [#549](https://github.com/Kuddev/nebula/issues/549)。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/WilliamWang1721"><img src="https://avatars.githubusercontent.com/u/140129782?v=4&amp;s=96" width="48" height="48" alt="WilliamWang1721" title="WilliamWang1721" /></a>
+</p>
+
+Thanks to [WilliamWang1721](https://github.com/WilliamWang1721).
+
+感谢 [WilliamWang1721](https://github.com/WilliamWang1721)。
+
 ## 2.5.2 - 2026-11-12
 
 ```text
