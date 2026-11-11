@@ -4,7 +4,7 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.5.0 - 2026-11-09
+## 2.5.0 - 2026-11-12
 
 ```text
 PENDING FINAL BUILD  Pebrel-v2.5.0-android-universal-preview.apk
@@ -21,46 +21,54 @@ PENDING FINAL BUILD  Pebrel-v2.5.0-windows-x64.zip
 ```
 
 ### English
-
 macOS, Linux, and Android downloads are Preview builds.
 
 #### Added
 
-- Add a Community page to the theme picker for browsing, previewing, and installing community themes.
-- Add `pebrel theme catalog` and `pebrel theme install` for community themes.
-- Add a Plugins page in Settings to install plugins from a folder, enable, disable, and uninstall them.
-- Add `pebrel plugin install`, `list`, `enable`, `disable`, and `uninstall`.
-- Add plugins that bundle or generate themes, with theme library access granted at install and nothing applied automatically.
-- Add Shift+Insert paste on Windows and Linux. ([#814](https://github.com/Kuddev/pebrel/pull/814))
-- Add a Japanese README. ([#872](https://github.com/Kuddev/pebrel/pull/872))
+- Added a Community page to the theme picker for browsing, previewing, and installing community themes.
+- Added `pebrel theme catalog` and `pebrel theme install` for community themes.
+- Added a Plugins page in Settings to install plugins from a folder, enable, disable, and uninstall them.
+- Added `pebrel plugin install`, `list`, `enable`, `disable`, and `uninstall`.
+- Added plugins that bundle or generate themes, with theme library access granted at install and nothing applied automatically.
+- Added Shift+Insert paste on Windows and Linux. ([#814](https://github.com/Kuddev/pebrel/pull/814))
+- Added a Japanese README. ([#872](https://github.com/Kuddev/pebrel/pull/872))
 
 #### Fixed
 
-- Fix OpenCode sessions not resuming when no session ID was captured. Addresses [#651](https://github.com/Kuddev/nebula/issues/651).
-- Fix saved Antigravity conversations not resuming. ([#852](https://github.com/Kuddev/pebrel/pull/852))
-- Fix duplicate OpenCode completions and false progress from unreported permission replies.
-- Fix Agent recognition inside multiplexers whose panes cannot be observed.
-- Fix tabs spinning while an interactive SSH login waits for input.
-- Fix idle built-in SSH sessions ending after about a minute of silence. Addresses [#816](https://github.com/Kuddev/nebula/issues/816).
-- Fix stray `PEBREL_PTY` output after JumpServer direct logins. Addresses [#856](https://github.com/Kuddev/nebula/issues/856).
-- Fix panes hanging on remote `rz` and `sz` by cancelling the unsupported ZMODEM session and suggesting scp or SFTP. Addresses [#806](https://github.com/Kuddev/nebula/issues/806).
-- Fix the mouse pointer flickering on every keystroke on Windows. Addresses [#868](https://github.com/Kuddev/nebula/issues/868).
-- Fix wrong CJK glyphs in bold and italic text on Windows. Addresses [#744](https://github.com/Kuddev/nebula/issues/744).
-- Fix file-tree icons showing as missing glyph boxes on macOS. Addresses [#870](https://github.com/Kuddev/nebula/issues/870).
-- Fix Cmd+M not minimizing the window on macOS. ([#814](https://github.com/Kuddev/pebrel/pull/814))
-- Fix application mouse drags being lost when the pointer crosses a pane boundary or leaves the reportable area.
-- Fix mouse-wheel paging in full-screen Pi. ([#854](https://github.com/Kuddev/pebrel/pull/854))
-- Fix editor commands such as `nvim` and `code` suggesting stale history instead of files in the current directory. ([#847](https://github.com/Kuddev/pebrel/pull/847))
-- Fix undeclared plugin Runtime calls reporting success when wrapped in `pcall`.
-- Fix paired LAN and relay connections not being retained on Android. ([#855](https://github.com/Kuddev/pebrel/pull/855))
-- Fix Android terminal input stopping when IME composition starts while viewing tmux history.
-- Fix Android conversation refreshes resetting the reader.
+- Fixed saved AI sessions failing to resume when no session ID was captured. Addresses [#651](https://github.com/Kuddev/nebula/issues/651).
+- Fixed resuming saved AI conversations from their stored launch information. ([#852](https://github.com/Kuddev/pebrel/pull/852))
+- Fixed duplicate AI completion notices and false progress from unreported permission replies.
+- Fixed Agent recognition inside multiplexers whose panes cannot be observed.
+- Fixed tabs spinning while an interactive SSH login waits for input.
+- Fixed idle built-in SSH sessions ending after about a minute of silence. Addresses [#816](https://github.com/Kuddev/nebula/issues/816).
+- Fixed direct SSH gateway logins printing internal `PEBREL_PTY` output. Addresses [#856](https://github.com/Kuddev/nebula/issues/856).
+- Fixed panes hanging on remote `rz` and `sz` by cancelling the unsupported ZMODEM session and suggesting scp or SFTP. Addresses [#806](https://github.com/Kuddev/nebula/issues/806).
+- Fixed the mouse pointer flickering on every keystroke on Windows. Addresses [#868](https://github.com/Kuddev/nebula/issues/868).
+- Fixed wrong CJK glyphs in bold and italic text on Windows. Addresses [#744](https://github.com/Kuddev/nebula/issues/744).
+- Fixed file-tree icons showing as missing glyph boxes on macOS. Addresses [#870](https://github.com/Kuddev/nebula/issues/870).
+- Fixed Cmd+M not minimizing the window on macOS. ([#814](https://github.com/Kuddev/pebrel/pull/814))
+- Fixed application mouse drags being lost when the pointer crosses a pane boundary or leaves the reportable area.
+- Fixed mouse-wheel paging in full-screen AI sessions that handle their own scrolling. ([#854](https://github.com/Kuddev/pebrel/pull/854))
+- Fixed editor commands suggesting stale command history instead of files in the current directory. ([#847](https://github.com/Kuddev/pebrel/pull/847))
+- Fixed undeclared plugin Runtime calls reporting success when wrapped in `pcall`.
+- Fixed paired LAN and relay connections not being retained on Android. ([#855](https://github.com/Kuddev/pebrel/pull/855))
+- Fixed Android terminal input stopping when IME composition starts while viewing tmux history.
+- Fixed Android conversation refreshes resetting the reader.
+- Fixed closing a detached AI session leaving its terminal status running.
+- Fixed Windows launches from a directory ignoring the saved window size.
+- Fixed Windows PowerShell reporting the old working directory until the next command.
+- Fixed the Windows file tree becoming unresponsive while moving items to the Recycle Bin.
+- Fixed stale highlights after reloading a Markdown document.
+- Fixed top tabs sitting out of line with the native macOS window controls.
+- Fixed accent placement, uppercase subscripts, and matrix rows in rendered formulas.
 
 #### Improved
 
-- Improve sidebar mode with a centered hover grip for moving panes and the active pane name centered in the title area.
-- Improve fresh Android installs by defaulting to MintLight while keeping saved themes.
-- Improve the Android SSH overflow menu icon with solid dots.
+- Improved sidebar mode with a centered hover grip for moving panes and the active pane name centered in the title area.
+- Improved fresh Android installs by defaulting to MintLight while keeping saved themes.
+- Improved the Android SSH overflow menu icon with solid dots.
+- Improved Settings with grouped cards, visible reset actions, and controls that wrap in narrow windows.
+- Improved Git history by showing full branch names on hover.
 
 ### 中文
 
@@ -78,31 +86,40 @@ macOS、Linux 和 Android 下载为预览版。
 
 #### 修复
 
-- 修复未捕获会话 ID 时无法恢复 OpenCode 会话的问题。 对应 [#651](https://github.com/Kuddev/nebula/issues/651)。
-- 修复已保存的 Antigravity 对话无法恢复的问题。 ([#852](https://github.com/Kuddev/pebrel/pull/852))
-- 修复 OpenCode 重复报告完成，以及未上报的权限回复造成虚假进度的问题。
+- 修复未捕获会话 ID 时无法恢复已保存 AI 会话的问题。 对应 [#651](https://github.com/Kuddev/nebula/issues/651)。
+- 修复使用保存的启动信息恢复 AI 对话失败的问题。 ([#852](https://github.com/Kuddev/pebrel/pull/852))
+- 修复 AI 重复报告完成，以及未上报的权限回复造成虚假进度的问题。
 - 修复无法观察窗格的终端复用器内 Agent 识别失败的问题。
 - 修复交互式 SSH 登录等待输入时标签一直转圈的问题。
 - 修复内置 SSH 会话空闲约一分钟无响应后被断开的问题。 对应 [#816](https://github.com/Kuddev/nebula/issues/816)。
-- 修复 JumpServer 直连登录后出现多余 `PEBREL_PTY` 输出的问题。 对应 [#856](https://github.com/Kuddev/nebula/issues/856)。
+- 修复直连 SSH 网关登录时显示内部 `PEBREL_PTY` 输出的问题。 对应 [#856](https://github.com/Kuddev/nebula/issues/856)。
 - 修复远程 `rz`、`sz` 导致窗格卡死的问题：现在会取消不支持的 ZMODEM 会话，并提示改用 scp 或 SFTP。 对应 [#806](https://github.com/Kuddev/nebula/issues/806)。
 - 修复 Windows 上每次按键鼠标指针都闪烁的问题。 对应 [#868](https://github.com/Kuddev/nebula/issues/868)。
 - 修复 Windows 上中日韩粗体和斜体文字显示成错误字形的问题。 对应 [#744](https://github.com/Kuddev/nebula/issues/744)。
 - 修复 macOS 上文件树图标显示为缺字方框的问题。 对应 [#870](https://github.com/Kuddev/nebula/issues/870)。
 - 修复 macOS 上 Cmd+M 无法最小化窗口的问题。 ([#814](https://github.com/Kuddev/pebrel/pull/814))
 - 修复指针越过窗格边界或离开可上报区域时，应用内鼠标拖动丢失的问题。
-- 修复全屏 Pi 中的鼠标滚轮翻页。 ([#854](https://github.com/Kuddev/pebrel/pull/854))
-- 修复 `nvim`、`code` 等编辑器命令补全到过期历史、而不是当前目录文件的问题。 ([#847](https://github.com/Kuddev/pebrel/pull/847))
+- 修复自行处理滚动的全屏 AI 会话无法用鼠标滚轮翻页的问题。 ([#854](https://github.com/Kuddev/pebrel/pull/854))
+- 修复编辑器命令补全显示过期历史而非当前目录文件的问题。 ([#847](https://github.com/Kuddev/pebrel/pull/847))
 - 修复插件用 `pcall` 包裹未声明的 Runtime 调用时仍报告成功的问题。
 - 修复 Android 未保留已配对的局域网和中转连接的问题。 ([#855](https://github.com/Kuddev/pebrel/pull/855))
 - 修复 Android 在查看 tmux 历史时开始输入法组字后终端输入中断的问题。
 - 修复 Android 刷新对话时阅读状态被重置的问题。
+- 修复关闭已分离的 AI 会话后，终端仍显示运行中的问题。
+- 修复在 Windows 上从目录启动时未使用已保存窗口尺寸的问题。
+- 修复 Windows PowerShell 切换目录后，直到下一条命令才上报新目录的问题。
+- 修复 Windows 文件树将项目移到回收站时界面无响应的问题。
+- 修复重新加载 Markdown 文档后仍显示旧高亮的问题。
+- 修复顶部标签与 macOS 原生窗口按钮对不齐的问题。
+- 修复公式渲染中的重音位置、大写变量下标和矩阵行。
 
 #### 改进
 
 - 改进侧栏模式：用居中的悬停手柄拖动窗格，活动窗格名称居中显示在标题区。
 - 改进 Android 全新安装：默认使用 MintLight，已保存的主题保持不变。
 - 改进 Android SSH 溢出菜单图标，改用实心圆点。
+- 改进设置页的分组卡片，直接显示恢复按钮，并让控件在窄窗口中自动换行。
+- 改进 Git 历史分支标签，悬停时显示完整分支名。
 
 ### Contributors
 
@@ -112,11 +129,12 @@ macOS、Linux 和 Android 下载为预览版。
   <a href="https://github.com/YinBuLiao"><img src="https://avatars.githubusercontent.com/u/35324248?v=4&amp;s=96" width="48" height="48" alt="YinBuLiao" title="YinBuLiao" /></a>
   <a href="https://github.com/onlynet"><img src="https://avatars.githubusercontent.com/u/21923781?v=4&amp;s=96" width="48" height="48" alt="onlynet" title="onlynet" /></a>
   <a href="https://github.com/eltociear"><img src="https://avatars.githubusercontent.com/u/22633385?v=4&amp;s=96" width="48" height="48" alt="eltociear" title="eltociear" /></a>
+  <a href="https://github.com/qingtianjun"><img src="https://avatars.githubusercontent.com/u/56997414?v=4&amp;s=96" width="48" height="48" alt="qingtianjun" title="qingtianjun" /></a>
 </p>
 
-Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [YinBuLiao](https://github.com/YinBuLiao), [onlynet](https://github.com/onlynet), and [eltociear](https://github.com/eltociear).
+Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [YinBuLiao](https://github.com/YinBuLiao), [onlynet](https://github.com/onlynet), [eltociear](https://github.com/eltociear), and [qingtianjun](https://github.com/qingtianjun).
 
-感谢 [Kuddev](https://github.com/Kuddev)、[Aschenbath](https://github.com/Aschenbath)、[YinBuLiao](https://github.com/YinBuLiao)、[onlynet](https://github.com/onlynet)、[eltociear](https://github.com/eltociear)。
+感谢 [Kuddev](https://github.com/Kuddev)、[Aschenbath](https://github.com/Aschenbath)、[YinBuLiao](https://github.com/YinBuLiao)、[onlynet](https://github.com/onlynet)、[eltociear](https://github.com/eltociear)、[qingtianjun](https://github.com/qingtianjun)。
 
 ## 2.4.0 - 2026-11-03
 
