@@ -21,6 +21,7 @@ PENDING FINAL BUILD  Pebrel-v2.5.0-windows-x64.zip
 ```
 
 ### English
+
 macOS, Linux, and Android downloads are Preview builds.
 
 #### Added
