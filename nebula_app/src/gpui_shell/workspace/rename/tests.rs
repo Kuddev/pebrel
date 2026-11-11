@@ -380,6 +380,13 @@ fn sidebar_panes_keep_their_full_surface_and_center_the_title(cx: &mut TestAppCo
             let title = window.debug_bounds("active-pane-title").unwrap();
             let slot = window.debug_bounds("active-pane-title-slot").unwrap();
             let broadcast = window.debug_bounds("toolbar-broadcast").unwrap();
+            let left_edge = if collapsed {
+                window.debug_bounds("titlebar-left-tools").unwrap().right()
+            } else {
+                window.debug_bounds("workspace-sidebar").unwrap().right()
+            };
+            assert_eq!(slot.left(), left_edge, "align to the visible sidebar edge");
+            assert_eq!(slot.right(), broadcast.left(), "stop before the first right tool");
             assert!((f32::from(title.center().x - slot.center().x)).abs() < 1.0);
             assert!(title.left() >= slot.left() + px(8.0));
             assert!(title.right() <= broadcast.left());

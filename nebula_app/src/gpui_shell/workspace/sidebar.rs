@@ -647,6 +647,7 @@ impl NebulaWorkspace {
         let count: SharedString = self.tabs.len().to_string().into();
 
         let sidebar = v_flex()
+            .debug_selector(|| "workspace-sidebar".into())
             .w(px(self.sidebar_width))
             .h_full()
             .flex_shrink_0()
@@ -859,6 +860,30 @@ impl NebulaWorkspace {
             .into_any_element()
     }
 
+    fn sidebar_fold_widths(&self, cx: &App) -> Option<(f32, f32)> {
+        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
+            return None;
+        }
+        let width = self.sidebar_closing_width.unwrap_or(self.sidebar_width);
+        Some(if self.sidebar_collapsed { (width, 0.0) } else { (0.0, width) })
+    }
+
+    fn animate_sidebar_width(
+        &self,
+        element: gpui::Div,
+        id: &'static str,
+        (from, to): (f32, f32),
+        apply_width: impl Fn(gpui::Div, f32) -> gpui::Div + 'static,
+    ) -> gpui::AnyElement {
+        element
+            .with_animation(
+                (id, self.sidebar_collapsed as usize),
+                Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
+                move |element, t| apply_width(element, from + (to - from) * t),
+            )
+            .into_any_element()
+    }
+
     /// 侧栏槽位：宽度在 0..持久化宽度间以 ease-out 滑动，近似旧壳
     /// response=0.14 的 swift-out 弹簧；内容保持固定宽、由槽位裁剪，
     /// 终端卡随 flex 布局自然滑移收编空间（对齐旧壳"卡骑在折叠动画上"
@@ -868,35 +893,26 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let collapsed = self.sidebar_collapsed;
-        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
-            return if collapsed {
+        let Some(widths) = self.sidebar_fold_widths(cx) else {
+            return if self.sidebar_collapsed {
                 div().into_any_element()
             } else {
                 self.render_sidebar(window, cx).into_any_element()
             };
-        }
-        let width = self.sidebar_closing_width.unwrap_or(self.sidebar_width);
-        let (from, to) = if collapsed { (width, 0.0) } else { (0.0, width) };
-        div()
-            .h_full()
-            .flex_shrink_0()
-            .overflow_hidden()
-            .child(self.render_sidebar(window, cx))
-            .with_animation(
-                ("sidebar-fold", collapsed as usize),
-                Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
-                move |slot, t| slot.w(px(from + (to - from) * t)),
-            )
-            .into_any_element()
+        };
+        self.animate_sidebar_width(
+            div().h_full().flex_shrink_0().overflow_hidden().child(self.render_sidebar(window, cx)),
+            "sidebar-fold",
+            widths,
+            |slot, width| slot.w(px(width)),
+        )
     }
 
-    /// 侧栏模式的标题栏：左边侧栏开关 + 齿轮，右边共享详情侧栏，中间在侧栏
-    /// 折叠时顶上活动 tab 的名字。与顶部 tab 模式的 [`Self::render_top_title_bar`]
-    /// 对称——两种布局各自持有自己那条标题带的全部内容。
+    /// 侧栏模式的标题在终端区上方，位于侧栏右缘和右侧工具之间。
     pub(super) fn render_sidebar_title_bar(
         &self,
         settings_active: bool,
+        leading_inset: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         // 颜色先取出来：`cx.theme()` 不可变借着 cx，后面每个 `cx.listener`
@@ -904,22 +920,18 @@ impl NebulaWorkspace {
         let secondary = cx.theme().secondary;
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
-        let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
+        let reader_focus = self.reader_focus_active(cx);
+        let sidebar_visible = !self.sidebar_collapsed && !reader_focus;
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
         let broadcast_button = self.render_toolbar_broadcast(cx);
-        h_flex()
-            .size_full()
-            .items_center()
-            .justify_between()
+        let left_tools = h_flex()
+            .debug_selector(|| "titlebar-left-tools".into())
+            .gap(px(8.0))
+            .flex_shrink_0()
+            .occlude()
             .child(
-                h_flex()
-                    // Keep toolbar gaps independent of the UI font/rem size.
-                    .gap(px(8.0))
-                    .items_center()
-                    .occlude()
-                    .child(
-                        toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
+                toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
                             .selected(sidebar_visible)
@@ -936,19 +948,36 @@ impl NebulaWorkspace {
                                 this.sidebar_fold_armed = !tab_reveal_instant(cx);
                                 cx.notify();
                             })),
-                    )
-                    .child(
-                        toolbar_button("open-settings", IconName::Settings, false)
-                            .selected(settings_active)
-                            .when(settings_active, |button| {
-                                button.bg(settings_active_bg).text_color(settings_active_fg)
-                            })
-                            .tooltip(language.text(Message::ChromeSettingsShortcut))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_settings(window, cx);
-                            })),
-                    ),
             )
+            .child(
+                toolbar_button("open-settings", IconName::Settings, false)
+                    .selected(settings_active)
+                    .when(settings_active, |button| {
+                        button.bg(settings_active_bg).text_color(settings_active_fg)
+                    })
+                    .tooltip(language.text(Message::ChromeSettingsShortcut))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_settings(window, cx);
+                    })),
+            );
+        let left = h_flex().child(left_tools);
+        // Two 32px buttons and their 8px gap still fit when the sidebar is hidden.
+        // A narrow window may shrink the reserved width before crowding the right tools.
+        let fit_sidebar = move |left: gpui::Div, width: f32| {
+            left.w(px((width - leading_inset).max(72.0))).min_w(px(72.0))
+        };
+        let left = if settings_active || reader_focus {
+            left.into_any_element()
+        } else if let Some(widths) = self.sidebar_fold_widths(cx) {
+            self.animate_sidebar_width(left, "sidebar-title-fold", widths, fit_sidebar)
+        } else if sidebar_visible {
+            fit_sidebar(left, self.sidebar_width).into_any_element()
+        } else {
+            left.into_any_element()
+        };
+        h_flex()
+            .size_full()
+            .child(left)
             .child(self.render_active_pane_title(cx))
             .child(
                 window_titlebar::title_bar_right_controls()
