@@ -406,6 +406,70 @@ mod tests {
     }
 
     #[test]
+    fn terminal_recovers_the_numeric_matrix_row_from_issue_772() {
+        let damaged = r"\mathbf{p}{\mathrm{clip}}
+=\mathbf{P}\mathbf{V}\mathbf{M}
+\begin{bmatrix}
+\mathbf{p}{\mathrm{local}}\1
+\end{bmatrix}";
+        let original = damaged.replace(r"\1", r"\\1");
+        let expected = compile_formula_source(&original, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the matrix has two rows");
+        let recovered = compile_formula(damaged, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the terminal can recover the numeric row");
+        assert_eq!(recovered, expected);
+
+        assert!(compile_formula_source(damaged, true, 18.0, 1.0, DEFAULT_LIMITS).is_err());
+        for literal in [
+            r"x\1",
+            r"\begin{bmatrix}x{\1}\end{bmatrix}",
+            r"\begin{bmatrix}\begin{gathered}x\1\end{gathered}\end{bmatrix}",
+        ] {
+            assert!(
+                compile_formula(literal, true, 18.0, 1.0, DEFAULT_LIMITS).is_err(),
+                "{literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_recovers_the_rotation_matrix_rows_from_issue_772() {
+        let damaged = r"\begin{bmatrix}x'\y'\end{bmatrix}
+\begin{bmatrix}
+\cos\theta&-\sin\theta\
+\sin\theta&\cos\theta
+\end{bmatrix}
+\begin{bmatrix}x\y\end{bmatrix}";
+        let original = damaged.replace(r"\y", r"\\y").replace("\\\n", "\\\\\n");
+        let expected = compile_formula_source(&original, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the rotation has three two-row matrices");
+        let recovered = compile_formula(damaged, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the terminal can recover the collapsed letter rows");
+        assert_eq!(recovered, expected);
+        assert!(compile_formula_source(damaged, true, 18.0, 1.0, DEFAULT_LIMITS).is_err());
+        for literal in [
+            r"x\y",
+            r"\begin{bmatrix}x{\y}\end{bmatrix}",
+            r"\begin{bmatrix}\begin{gathered}x\y\end{gathered}\end{bmatrix}",
+            r"\begin{bmatrix}x\unknown\end{bmatrix}",
+        ] {
+            assert!(
+                compile_formula(literal, true, 18.0, 1.0, DEFAULT_LIMITS).is_err(),
+                "{literal}"
+            );
+        }
+        let symbols = r"\begin{bmatrix}\P&x\1&\S\end{bmatrix}";
+        let intact = symbols.replace(r"\1", r"\\1");
+        let expected = compile_formula_source(&intact, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("one-letter control words are supported");
+        assert_eq!(
+            compile_formula(symbols, true, 18.0, 1.0, DEFAULT_LIMITS),
+            Ok(expected),
+            "supported one-letter control words retain their meaning during recovery"
+        );
+    }
+
+    #[test]
     fn transport_entities_are_decoded_without_inventing_matrix_rows() {
         let encoded = r"A=\begin{pmatrix}1&amp;2&amp;3\\&nbsp;4&amp;5&amp;6\\&#160;7&amp;8&amp;9\end{pmatrix}";
         let normalized = normalize_formula_source(encoded, DEFAULT_LIMITS).unwrap();
