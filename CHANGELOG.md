@@ -7,17 +7,17 @@ Every release entry is provided in English and Simplified Chinese.
 ## 2.5.1 - 2026-11-12
 
 ```text
-PENDING FINAL BUILD  Pebrel-v2.5.1-android-universal-preview.apk
-PENDING FINAL BUILD  Pebrel-v2.5.1-linux-x64-preview.AppImage
-PENDING FINAL BUILD  Pebrel-v2.5.1-linux-x64-preview.deb
-PENDING FINAL BUILD  Pebrel-v2.5.1-linux-x64-preview.tar.gz
-PENDING FINAL BUILD  Pebrel-v2.5.1-macos-arm64-preview.dmg
-PENDING FINAL BUILD  Pebrel-v2.5.1-macos-x64-preview.dmg
-PENDING FINAL BUILD  Pebrel-v2.5.1-relay-manual.tar.gz
-PENDING FINAL BUILD  Pebrel-v2.5.1-windows-arm64-setup.exe
-PENDING FINAL BUILD  Pebrel-v2.5.1-windows-arm64.zip
-PENDING FINAL BUILD  Pebrel-v2.5.1-windows-x64-setup.exe
-PENDING FINAL BUILD  Pebrel-v2.5.1-windows-x64.zip
+f2408729588ff766c2f3fd18775a46754b63ae93cc07ce1ec999a442f1d1226a  Pebrel-v2.5.1-android-universal-preview.apk
+bb7e2437d209f0b7fe0e1a44ec7ade4f358e59760511c1f99501ce832d807c0d  Pebrel-v2.5.1-linux-x64-preview.AppImage
+32f5af60360b247103bf7b28aaabcdfec27e244023d22066cb3a4c28ff960252  Pebrel-v2.5.1-linux-x64-preview.deb
+0582bfe7d1ccda7d8adf49f87285e9a1094804bbc19a88e9010bf6339c214891  Pebrel-v2.5.1-linux-x64-preview.tar.gz
+250d4ce30842696d88bb06bd2ebad8ec227245f1cc7b04698133f7de12c0f4c2  Pebrel-v2.5.1-macos-arm64-preview.dmg
+0b2b50cd7a4eac12653e062ccc23bc0d494734302d7d9efa8e852113a20afb8f  Pebrel-v2.5.1-macos-x64-preview.dmg
+6ce94a3eba4fa3b92cf5d587fc6ba07d12dc1ee9279b3882c512657dc0a72ee6  Pebrel-v2.5.1-relay-manual.tar.gz
+446af533d29e4fcdf7111b73ac9265cc4c20f5abab6a252f62d9da6183d3657b  Pebrel-v2.5.1-windows-arm64-setup.exe
+7311ed7c46bf0d160d11794a7f71927515c33680a80464256ef45f7bc04e577b  Pebrel-v2.5.1-windows-arm64.zip
+2a0b209e3f63942fe1f60ebf9b2e5d7be7ec87b63b2fc147b370b650d207a51f  Pebrel-v2.5.1-windows-x64-setup.exe
+aeabe89f422c6b23ce10b79d873dc42386699fb921cba7f653f00094b1ce85cd  Pebrel-v2.5.1-windows-x64.zip
 ```
 
 ### English
