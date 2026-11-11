@@ -92,6 +92,7 @@ mod ssh_reconnect;
 mod tab_drag;
 mod tab_duplication;
 mod tab_menu;
+mod tab_menu_surface;
 mod tab_presentation;
 use tab_presentation::TabMeta;
 use tab_presentation::TabPresentation;
@@ -184,6 +185,7 @@ fn title_bar_panel_controls() -> gpui::Div {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     keyboard_bindings::init(cx);
+    tab_menu_surface::bind_keys(cx);
 }
 
 /// 一个终端 pane：视图实体 + 宿主订阅。id 即 `TerminalView::pane_id`
@@ -382,13 +384,6 @@ const TAB_CLOSE_SIZE: f32 = 20.0;
 /// Match the compact Tabs header in the prototype, with a larger hit area than the glyph.
 const SIDEBAR_HEADER_ACTION: f32 = 28.0;
 const SIDEBAR_HEADER_ICON: f32 = 15.0;
-
-/// 侧栏文字的字号档位，**乘在终端字号上**（旧壳 chrome 同源）：标签行走
-/// BODY(1.0)——旧壳 `draw_ui_text_tracked(.., 1.0, ..)`，分组标题与右侧
-/// shell 短标各压一档。硬编码 `text_sm`(14px) 时侧栏比旧壳整体小一号，
-/// 且用户调大字号也不跟——那是用户报的"按钮比旧版小太多"。
-const SIDEBAR_TITLE_SCALE: f32 = 0.82;
-const SIDEBAR_TAG_SCALE: f32 = 0.80;
 
 /// 侧栏 tab 标签的水平预算（逻辑 px）：外层 `p_2`、行内 `px_2`、行内
 /// `gap_2` 与右侧状态槽都从侧栏宽里扣掉，剩下的除以实测 cell 宽就是可用

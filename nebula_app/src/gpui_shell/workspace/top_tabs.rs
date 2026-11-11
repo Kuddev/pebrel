@@ -275,7 +275,7 @@ impl NebulaWorkspace {
 
                 let row = h_flex()
                     .id(("top-tab", ix))
-                    .when_some(tooltip, |row, text| row.tooltip(move |window, cx| {
+                    .when_some(tooltip.filter(|_| self.tab_menu.is_none()), |row, text| row.tooltip(move |window, cx| {
                         super::tab_presentation::tooltip(text.clone(), window, cx)
                     }))
                     .debug_selector(|| format!("top-tab-{ix}"))

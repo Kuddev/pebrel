@@ -17,13 +17,13 @@
 //! 越厚」的全部原因，与打包资源和用户配置都无关。
 //!
 //! 所以这里跟 `file_tree.rs` 用同一套载体：标签行只记锚点和下标，菜单由
-//! workspace 根上唯一一份 `deferred(anchored)` 画，组件自带的 popover 阴影
-//! 因此保持单层。
+//! workspace 根上唯一一份 `deferred(anchored)` 画，浮层阴影因此保持单层。
 
 use gpui::{
-    Anchor, AnyElement, App, Context, DismissEvent, Entity, Focusable as _,
+    Anchor, AnyElement, AnyView, App, Context, DismissEvent, Entity, EventEmitter, Focusable,
     InteractiveElement as _, IntoElement as _, MouseButton, ParentElement as _, Pixels, Point,
-    Styled as _, Subscription, Window, anchored, deferred, div, prelude::FluentBuilder as _, px,
+    Render, Styled as _, Subscription, Window, anchored, deferred, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::menu::PopupMenuItem;
 
@@ -36,13 +36,13 @@ use nebula_split::SplitDirection;
 
 use super::{
     CloseActiveTerminal, MoveTabLeft, MoveTabRight, NebulaWorkspace, RenameActiveTab, SplitDown,
-    SplitRight, WorkspaceTab,
+    SplitRight, WorkspaceTab, tab_menu_surface::TabMenuSurface,
 };
 
 /// 标签右键菜单的宿主。画在 workspace 根上，不进标签行的子孙树——理由见
 /// 模块头。
 pub(super) struct TabContextMenu {
-    menu: Entity<PopupMenu>,
+    menu: AnyView,
     position: Point<Pixels>,
     /// 菜单里每条命令捕获的都是下标。标签集合在菜单挂着的时候变了（远端
     /// 或 AI 侧自动关标签），这一份就不该再画。
@@ -117,7 +117,7 @@ impl NebulaWorkspace {
         let copy_cwd =
             self.tabs[ix].focused_view().map(|view| copy_working_directory_item(view, cx));
         let workspace = cx.entity().downgrade();
-        let menu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
+        let menu = TabMenuSurface::build(cx, px(228.0), move |mut menu| {
             if let Some(view) = choose_session {
                 menu = menu.item(
                     PopupMenuItem::new(language.text(Message::SessionChooseConversation)).on_click(
@@ -137,25 +137,21 @@ impl NebulaWorkspace {
             if let Some(copy_cwd) = copy_cwd {
                 menu = menu.item(copy_cwd).separator();
             }
-            Self::tab_popup_menu(
-                menu.external_link_icon(false),
-                workspace,
-                ix,
-                terminal,
-                ai_fork,
-                color,
-                tab_count,
-                language,
-            )
+            Self::tab_popup_menu(menu, workspace, ix, terminal, ai_fork, color, tab_count, language)
+        });
+        let returning = menu.clone();
+        window.defer(cx, move |window, cx| {
+            let focus = window.focused(cx);
+            returning.update(cx, |menu, _| menu.remember_focus(focus));
         });
         self.show_context_menu(menu, ix, None, position, window, cx);
     }
 
     /// Pane menus share the window's single popup host with tab menus, so a
     /// hover-only grip can disappear without taking its open menu with it.
-    pub(super) fn show_context_menu(
+    pub(super) fn show_context_menu<M: Render + Focusable + EventEmitter<DismissEvent>>(
         &mut self,
-        menu: Entity<PopupMenu>,
+        menu: Entity<M>,
         ix: usize,
         pane: Option<u64>,
         position: Point<Pixels>,
@@ -170,8 +166,13 @@ impl NebulaWorkspace {
             this.tab_menu = None;
             cx.notify();
         });
-        self.tab_menu =
-            Some(TabContextMenu { menu, position, ix, pane, _subscription: subscription });
+        self.tab_menu = Some(TabContextMenu {
+            menu: menu.into(),
+            position,
+            ix,
+            pane,
+            _subscription: subscription,
+        });
         cx.notify();
     }
 
@@ -200,7 +201,7 @@ impl NebulaWorkspace {
     /// 标签行右键命令表。条目、分组与键帽对齐旧壳 Tab 目标。
     #[allow(clippy::too_many_arguments)]
     fn tab_popup_menu(
-        mut menu: PopupMenu,
+        mut menu: TabMenuSurface,
         workspace: gpui::WeakEntity<Self>,
         ix: usize,
         terminal: bool,
@@ -208,21 +209,19 @@ impl NebulaWorkspace {
         color: Option<Rgb>,
         tab_count: usize,
         language: UiLanguage,
-    ) -> PopupMenu {
+    ) -> TabMenuSurface {
         if ai_fork {
             let target = workspace.clone();
             menu = menu
-                .item(
-                    PopupMenuItem::new(language.text(Message::TabMenuForkAiSession))
-                        .icon(IconName::Bot)
-                        .on_click(move |_, window, cx| {
-                            if let Some(workspace) = target.upgrade() {
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.fork_ai_session(ix, window, cx);
-                                });
-                            }
-                        }),
-                )
+                .item(PopupMenuItem::new(language.text(Message::TabMenuForkAiSession)).on_click(
+                    move |_, window, cx| {
+                        if let Some(workspace) = target.upgrade() {
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.fork_ai_session(ix, window, cx);
+                            });
+                        }
+                    },
+                ))
                 .separator();
         }
         if terminal {
@@ -232,7 +231,7 @@ impl NebulaWorkspace {
             let split_right = workspace.clone();
             let split_down = workspace.clone();
             menu = menu
-                .item(PopupMenuItem::new(language.text(Message::CommonDuplicateTab)).icon(IconName::Copy).on_click(
+                .item(PopupMenuItem::new(language.text(Message::CommonDuplicateTab)).on_click(
                     move |_, window, cx| {
                         if let Some(workspace) = duplicate.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -243,7 +242,6 @@ impl NebulaWorkspace {
                 ))
                 .item(
                     PopupMenuItem::new(language.text(Message::TabMenuMoveToNewWindow))
-                        .icon(IconName::ExternalLink)
                         .on_click(move |_, _, cx| {
                             if let Some(workspace) = move_to_window.upgrade() {
                                 workspace.update(cx, |workspace, cx| {
@@ -252,7 +250,7 @@ impl NebulaWorkspace {
                             }
                         }),
                 )
-                .item(PopupMenuItem::new(language.text(Message::TabMenuExportAsWorkspace)).icon(IconName::Inbox).on_click(
+                .item(PopupMenuItem::new(language.text(Message::TabMenuExportAsWorkspace)).on_click(
                     move |_, window, cx| {
                         if let Some(workspace) = export.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -262,11 +260,9 @@ impl NebulaWorkspace {
                     },
                 ))
                 .separator()
-                // `action` 只用来渲染键帽：handler 存在时组件不会 dispatch
-                // 它（见 PopupMenu::confirm），所以命令仍然作用在 `ix` 上。
+                // The action supplies the shortcut label; the handler targets this tab.
                 .item(
                     PopupMenuItem::new(language.text(Message::TabMenuSplitLeftRight))
-                        .icon(IconName::PanelRight)
                         .action(Box::new(SplitRight))
                         .on_click(move |_, window, cx| {
                             if let Some(workspace) = split_right.upgrade() {
@@ -283,7 +279,6 @@ impl NebulaWorkspace {
                 )
                 .item(
                     PopupMenuItem::new(language.text(Message::TabMenuSplitTopBottom))
-                        .icon(IconName::PanelBottom)
                         .action(Box::new(SplitDown))
                         .on_click(move |_, window, cx| {
                             if let Some(workspace) = split_down.upgrade() {
@@ -310,7 +305,6 @@ impl NebulaWorkspace {
             // 更难认。
             .item(
                 PopupMenuItem::new(language.text(Message::TabMenuMoveLeft))
-                    .icon(IconName::ArrowLeft)
                     .action(Box::new(MoveTabLeft))
                     .disabled(ix == 0)
                     .on_click(move |_, window, cx| {
@@ -324,7 +318,6 @@ impl NebulaWorkspace {
             )
             .item(
                 PopupMenuItem::new(language.text(Message::TabMenuMoveRight))
-                    .icon(IconName::ArrowRight)
                     .action(Box::new(MoveTabRight))
                     .disabled(ix + 1 >= tab_count)
                     .on_click(move |_, window, cx| {
@@ -339,7 +332,6 @@ impl NebulaWorkspace {
             .separator()
             .item(
                 PopupMenuItem::new(language.text(Message::CommonRename))
-                    .icon(IconName::ALargeSmall)
                     .action(Box::new(RenameActiveTab))
                     .on_click(move |_, window, cx| {
                         if let Some(workspace) = rename.upgrade() {
@@ -351,7 +343,6 @@ impl NebulaWorkspace {
             )
             .item(
                 PopupMenuItem::new(language.text(Message::CommonClose))
-                    .icon(IconName::Close)
                     .action(Box::new(CloseActiveTerminal))
                     .on_click(move |_, window, cx| {
                         if let Some(workspace) = close.upgrade() {
@@ -367,12 +358,12 @@ impl NebulaWorkspace {
     /// 标签颜色行（旧壳菜单尾部的色板）：首槽 `A` = 无色，其后是 7 枚品牌
     /// 色。当前色带一圈选中环，再点一次同色即取消。
     fn tab_color_items(
-        menu: PopupMenu,
+        menu: TabMenuSurface,
         workspace: gpui::WeakEntity<Self>,
         ix: usize,
         current: Option<Rgb>,
         language: UiLanguage,
-    ) -> PopupMenu {
+    ) -> TabMenuSurface {
         menu.separator().item(PopupMenuItem::label(language.text(Message::TabMenuTabColor))).item(
             PopupMenuItem::element(move |_, cx| {
                 let swatches = std::iter::once(None)

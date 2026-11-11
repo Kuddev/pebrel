@@ -1632,6 +1632,7 @@
   "chrome": {
     "tab_grouping": {
       "label": "标签分组",
+      "section": "分组",
       "none": "不分组",
       "project": "按项目目录",
       "shell": "按 Shell",

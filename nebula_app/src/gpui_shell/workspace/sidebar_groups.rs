@@ -1,8 +1,9 @@
 //! A visual grouping of the existing tabs, shared by rendering and row geometry.
 
+use super::tab_menu_surface::TabMenuSurface;
 use super::*;
 use crate::i18n::{Message, UiLanguage};
-use gpui_component::menu::PopupMenuItem;
+use gpui_component::{button::ButtonCustomVariant, menu::PopupMenuItem, popover::Popover};
 use std::{collections::BTreeMap, ops::Range};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -167,18 +168,38 @@ impl NebulaWorkspace {
         }))
     }
 
-    pub(super) fn sidebar_group_control(&self, cx: &Context<Self>) -> gpui::AnyElement {
+    pub(super) fn sidebar_group_control(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         let label = language.text(Message::ChromeTabGroupingLabel);
         let grouping = self.sidebar_grouping;
         let workspace = cx.weak_entity();
-        let icon = Icon::new(Icon::empty())
+        let menu_width = px((self.sidebar_width - 16.0).max(154.0));
+        let content =
+            window.use_keyed_state("sidebar-group-menu", cx, |_, _| None::<Entity<TabMenuSurface>>);
+        let dismiss_content = content.clone();
+        let palette = cx.theme();
+        let ink = palette.foreground;
+        let chrome = crate::gpui_shell::theme::tab_bar_background(cx);
+        let hover_group: SharedString = "sidebar-filter-hover".into();
+        let icon = gpui::svg()
             .path(crate::gpui_shell::assets::nav::TAB_GROUPING)
-            .with_size(px(SIDEBAR_HEADER_ICON));
-        Button::new("sidebar-tab-grouping")
+            .size(px(SIDEBAR_HEADER_ICON))
+            .text_color(palette.muted_foreground)
+            .group_hover(hover_group.clone(), |style| style.text_color(ink));
+        let trigger = Button::new("sidebar-tab-grouping")
             .debug_selector(|| "sidebar-tab-grouping".into())
-            .ghost()
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(palette.muted_foreground)
+                    .hover(palette.list_hover)
+                    .active(ink.opacity(0.13)),
+            )
             .xsmall()
+            .rounded(px(8.0))
             .relative()
             .size(px(SIDEBAR_HEADER_ACTION))
             .px_0()
@@ -192,32 +213,73 @@ impl NebulaWorkspace {
                         .absolute()
                         .top(px(4.0))
                         .right(px(4.0))
-                        .size(px(5.0))
+                        .size(px(10.0))
                         .rounded_full()
-                        .bg(cx.theme().primary),
+                        .border_2()
+                        .border_color(chrome)
+                        .bg(palette.primary),
                 )
-            })
-            .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
-                [SidebarGrouping::None, SidebarGrouping::Project, SidebarGrouping::Shell]
-                    .into_iter()
-                    .fold(menu, |menu, choice| {
-                        let workspace = workspace.clone();
-                        menu.item(
-                            PopupMenuItem::new(language.text(choice.message()))
-                                .checked(grouping == choice)
-                                .on_click(move |_, _, cx| {
-                                    let _ = workspace.update(cx, |this, cx| {
-                                        this.sidebar_grouping = choice;
-                                        this.tab_menu = None;
-                                        this.tabs_scroll = 0;
-                                        this.tabs_scroll_grab = None;
-                                        this.reveal_active_tab(cx);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
+            });
+        div()
+            .id("sidebar-filter-hit-area")
+            .size(px(SIDEBAR_HEADER_ACTION))
+            .flex_shrink_0()
+            .group(hover_group)
+            .child(
+                Popover::new("sidebar-group-menu-popover")
+                    .trigger(trigger)
+                    .anchor(gpui::Anchor::TopRight)
+                    .appearance(false)
+                    .overlay_closable(false)
+                    .on_open_change(move |open, _, cx| {
+                        if !open {
+                            dismiss_content.update(cx, |menu, _| *menu = None);
+                        }
                     })
-            })
+                    .content(move |_, window, cx| {
+                        if let Some(menu) = content.read(cx) {
+                            return menu.clone();
+                        }
+                        let menu = TabMenuSurface::build(cx, menu_width, |menu| {
+                            let menu = menu.item(PopupMenuItem::label(
+                                language.text(Message::ChromeTabGroupingSection),
+                            ));
+                            [
+                                SidebarGrouping::None,
+                                SidebarGrouping::Project,
+                                SidebarGrouping::Shell,
+                            ]
+                            .into_iter()
+                            .fold(menu, |menu, choice| {
+                                let workspace = workspace.clone();
+                                menu.item(
+                                    PopupMenuItem::new(language.text(choice.message()))
+                                        .checked(grouping == choice)
+                                        .on_click(move |_, _, cx| {
+                                            let _ = workspace.update(cx, |this, cx| {
+                                                this.sidebar_grouping = choice;
+                                                this.tab_menu = None;
+                                                this.tabs_scroll = 0;
+                                                this.tabs_scroll_grab = None;
+                                                this.reveal_active_tab(cx);
+                                                cx.notify();
+                                            });
+                                        }),
+                                )
+                            })
+                        });
+                        let popover = cx.weak_entity();
+                        window
+                            .subscribe(&menu, cx, move |_, _: &gpui::DismissEvent, window, cx| {
+                                let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
+                                window.refresh();
+                            })
+                            .detach();
+                        content.update(cx, |current, _| *current = Some(menu.clone()));
+                        menu.focus_handle(cx).focus(window, cx);
+                        menu
+                    }),
+            )
             .into_any_element()
     }
 }

@@ -164,12 +164,11 @@ impl NebulaWorkspace {
     }
 
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let grouping_control = self.sidebar_group_control(window, cx);
         let row_height = tab_scroll::tab_row_height(self.density);
         let row_pitch = self.tab_row_pitch();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        // 数量 chip 数字：旧壳独用 ink_faint（比 ink_dim 再暗一档），chip 背
-        // 景 surface 洗色不变——数字不该和标题抢层级。
         let faint = crate::gpui_shell::theme::faint_ink(cx);
         // 选中 tab 与内容板同材质地浮起（浮起底 + 极淡环线与投影），读作
         // “它就是右边那块”；不再用强调色水洗。
@@ -187,8 +186,10 @@ impl NebulaWorkspace {
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
-        // 界面字号独立于终端缩放。
-        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
+        // Preserve the prototype's type hierarchy when the UI font size changes.
+        let ui_scale = f32::from(theme.font_size) / 14.0;
+        let label_px = 13.0 * ui_scale;
+        let tag_px = 11.0 * ui_scale;
 
         let rows = self.sidebar_tab_rows(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
@@ -224,7 +225,7 @@ impl NebulaWorkspace {
                             .child(line())
                             .child(div().max_w(px(row_w * 0.62)).truncate()
                                 .font_family(chrome_family.clone())
-                                .text_size(px(label_px * 0.75)).font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(10.5 * ui_scale)).font_weight(FontWeight::SEMIBOLD)
                                 .text_color(muted).child(group.label(language)))
                             .child(line());
                         if let Some(path) = group.directory_path() {
@@ -256,7 +257,7 @@ impl NebulaWorkspace {
                     window,
                     shell_tag.as_ref(),
                     &metadata_family,
-                    label_px * SIDEBAR_TAG_SCALE,
+                    tag_px,
                     TAB_STATUS_SLOT_W,
                     row_w * 0.45,
                 );
@@ -332,7 +333,7 @@ impl NebulaWorkspace {
                         Self::shell_status_label(
                             tag,
                             metadata_family.clone(),
-                            label_px * SIDEBAR_TAG_SCALE,
+                            tag_px,
                             status_color,
                         )
                         .into_any_element()
@@ -354,7 +355,7 @@ impl NebulaWorkspace {
                 let row = h_flex()
                 .id(("sidebar-tab", ix))
                 .debug_selector(move || format!("sidebar-tab-{ix}"))
-                .when_some(tooltip, |row, text| row.tooltip(move |window, cx| {
+                .when_some(tooltip.filter(|_| self.tab_menu.is_none()), |row, text| row.tooltip(move |window, cx| {
                     tab_presentation::tooltip(text.clone(), window, cx)
                 }))
                 .group(hover_group.clone())
@@ -675,10 +676,9 @@ impl NebulaWorkspace {
             // workspace 根保持透明，侧栏自己只铺一层壳色；否则终端卡会
             // 叠到根底色上，把 Acrylic 的目标透明度二次增浓。
             .bg(crate::gpui_shell::theme::tab_bar_background(cx))
-            // 上边距为零：侧栏 / 终端卡 / 右侧抽屉三列顶边一律贴 chrome 下沿
-            // （用户 08-26 裁定「左侧 tab 抬到和文件树顶部一致」）。左右和底部
-            // 仍是旧壳的 8px。
+            // The sidebar surface meets the title bar; its content starts below it.
             .px_2()
+            .pt(px(8.0))
             .pb_2()
             .gap(px(tab_scroll::tab_row_gap(self.density)))
             // 待命阶段（未过阈值）的指针跟踪；激活后由根部罩层独占接管。
@@ -698,31 +698,26 @@ impl NebulaWorkspace {
                         h_flex()
                             .h_full()
                             .items_center()
+                            .gap(px(6.0))
                             .font_family(chrome_family.clone())
                             .pr_1()
                             .child(
-                                div()
-                                    .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
-                                    .font_weight(FontWeight::NORMAL)
+                                h_flex()
+                                    .id("sidebar-tabs-caption")
+                                    .role(gpui::Role::Label)
+                                    .aria_label("TABS")
+                                    .gap(px(0.9 * ui_scale))
+                                    .text_size(px(11.0 * ui_scale))
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(muted)
-                                    .child("TABS"),
+                                    .children(["T", "A", "B", "S"]),
                             )
                             .child(
-                                // chip 尺寸贴旧壳公式：h = max(cell_h×0.82×1.18, 11)
-                                // ≈ 18-19px（不是 22），1 位数宽 max(adv+8, h×1.25)。
-                                // 数字 ink_faint。
-                                h_flex()
-                                    .ml_2()
-                                    .h(px((label_px * 1.22 * SIDEBAR_TITLE_SCALE * 1.18).max(11.0)))
-                                    .min_w(px(label_px * 0.62 + 8.0))
-                                    .px_2()
-                                    .justify_center()
-                                    .items_center()
-                                    .rounded_full()
-                                    .bg(theme.muted)
-                                    .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
+                                div()
+                                    .font_family(metadata_family.clone())
+                                    .text_size(px(10.0 * ui_scale))
                                     .font_weight(FontWeight::NORMAL)
-                                    .text_color(faint)
+                                    .text_color(faint.opacity(0.72))
                                     .child(count),
                             ),
                     )
@@ -741,7 +736,7 @@ impl NebulaWorkspace {
                                         this.add_terminal(window, cx);
                                     }),
                                 )
-                                    .rounded_md()
+                                    .rounded(px(8.0))
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
@@ -755,7 +750,7 @@ impl NebulaWorkspace {
                                         Icon::new(IconName::Plus).with_size(px(SIDEBAR_HEADER_ICON)),
                                     ),
                             )
-                            .child(self.sidebar_group_control(cx))
+                            .child(grouping_control)
                             .child(
                                 h_flex()
                                     .id("sidebar-tabs-menu")
@@ -763,7 +758,7 @@ impl NebulaWorkspace {
                                     .flex_shrink_0()
                                     .items_center()
                                     .justify_center()
-                                    .rounded_md()
+                                    .rounded(px(8.0))
                                     .cursor_pointer()
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))

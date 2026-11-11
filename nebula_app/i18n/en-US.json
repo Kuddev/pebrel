@@ -1632,6 +1632,7 @@
   "chrome": {
     "tab_grouping": {
       "label": "Group tabs",
+      "section": "GROUP",
       "none": "No grouping",
       "project": "By project directory",
       "shell": "By shell",
