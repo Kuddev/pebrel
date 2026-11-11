@@ -8,7 +8,6 @@ use gpui::{FontWeight, Pixels, RenderOnce, relative};
 use gpui_component::button::ButtonCustomVariant;
 
 const TRACK_INSET: f32 = 2.0;
-const SEGMENT_RADIUS: f32 = 6.0;
 
 #[derive(IntoElement)]
 struct SettingsSegments {
@@ -48,7 +47,8 @@ impl RenderOnce for SettingsSegments {
             })
             .fold(px(48.0), |width, next| width.max(next));
         let width = slot_width * self.labels.len() as f32;
-        // 短选项沿用原稿的小圆角分段条；宽度按文字排版，空间不足时整组换行。
+        // 短选项保留胶囊轮廓，空间不足时整组换行。
+        let radius = self.height / 2.0;
         let key = self.key;
         let count = self.buttons.len() as f32;
         let target = self.selected as f32 / count;
@@ -67,7 +67,7 @@ impl RenderOnce for SettingsSegments {
             .bottom_0()
             .left(relative(target))
             .w(relative(1.0 / count))
-            .rounded(px(SEGMENT_RADIUS))
+            .rounded(radius)
             .border_1()
             .border_color(cx.theme().border.opacity(0.7))
             .bg(thumb)
@@ -93,7 +93,7 @@ impl RenderOnce for SettingsSegments {
             .border_1()
             .border_color(cx.theme().border)
             .p(px(TRACK_INSET - 1.0))
-            .rounded(px(SEGMENT_RADIUS + TRACK_INSET))
+            .rounded(radius + px(TRACK_INSET))
             .bg(track)
             .child(
                 h_flex().relative().w_full().h(self.height).child(indicator).children(self.buttons),
@@ -150,7 +150,7 @@ impl SettingsPane {
                             .small()
                             .h(height)
                             .px(px(12.0))
-                            .rounded(px(SEGMENT_RADIUS))
+                            .rounded(height / 2.0)
                             .custom(
                                 ButtonCustomVariant::new(cx)
                                     .foreground(if active {
