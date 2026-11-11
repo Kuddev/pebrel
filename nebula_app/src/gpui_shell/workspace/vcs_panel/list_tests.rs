@@ -120,6 +120,7 @@ fn git_list_repaints_visible_rows_and_clicks_the_scrolled_path(cx: &mut TestAppC
                 full_hash: "child".into(),
                 parent_hashes: vec!["parent".into()],
                 author: "Alice".into(),
+                decorations: "refs/remotes/origin/feature/similar-分支-one, refs/remotes/origin/feature/similar-分支-two".into(),
                 ..Default::default()
             },
             crate::display::side_panel::GitCommit {
@@ -140,6 +141,20 @@ fn git_list_repaints_visible_rows_and_clicks_the_scrolled_path(cx: &mut TestAppC
     let child = cx.debug_bounds("git-history-0").unwrap();
     let parent = cx.debug_bounds("git-history-1").unwrap();
     assert_eq!(child.bottom(), parent.top(), "history graph rows must join without padding");
+    let first = cx.debug_bounds("git-history-ref-0-0").unwrap();
+    let second = cx.debug_bounds("git-history-ref-0-1").unwrap();
+    let text = cx.debug_bounds("git-history-ref-text-0-1").unwrap();
+    assert!(second.size.width <= px(72.0));
+    assert_eq!(second.center().y, first.center().y);
+    assert!((second.center().y - text.center().y).abs() <= px(1.0));
+
+    cx.simulate_mouse_move(second.center(), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.executor().advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds("git-ref-tooltip-origin/feature/similar-分支-two").is_some());
+    assert!(cx.debug_bounds("git-ref-tooltip-origin/feature/similar-分支-one").is_none());
 }
 
 #[test]
