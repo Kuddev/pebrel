@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const USER_AGENT: &str = "pebrel-community";
-const PREVIEW_WIDTH: u32 = 480;
+const PREVIEW_EDGE: u32 = 480;
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -90,8 +90,12 @@ pub(crate) fn fetch_catalog() -> Result<Listing, Error> {
 
 /// Download a preview and reduce it to a card-sized RGBA thumbnail, so the
 /// view keeps only small decoded frames.
-pub(crate) fn fetch_preview(url: &str) -> Result<image::RgbaImage, Error> {
-    preview_with(&agent(url, Duration::from_secs(30))?, url)
+pub(crate) fn fetch_preview(url: &str, cancel: &AtomicBool) -> Result<image::RgbaImage, Error> {
+    check_cancel(cancel)?;
+    let agent = agent(url, Duration::from_secs(30))?;
+    let bytes = get_small(&agent, url, "image/*", MAX_PREVIEW_BYTES, cancel)?;
+    check_cancel(cancel)?;
+    decode_preview(bytes)
 }
 
 /// Download the pinned archive, verify its size and digest while streaming,
@@ -101,17 +105,29 @@ pub(crate) fn install(
     store: &ThemeLibraryStore,
     cancel: &AtomicBool,
 ) -> Result<ThemeDocument, Error> {
+    install_with_progress(entry, store, cancel, &mut |_| {})
+}
+
+pub(crate) fn install_with_progress(
+    entry: &Entry,
+    store: &ThemeLibraryStore,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<ThemeDocument, Error> {
+    check_cancel(cancel)?;
     let agent = agent(&entry.archive.url, Duration::from_secs(10 * 60))?;
-    install_with(&agent, &entry.archive.url, entry, store, cancel)
+    install_with(&agent, &entry.archive.url, entry, store, cancel, progress)
 }
 
 pub(super) fn catalog_with(agent: &ureq::Agent, url: &str) -> Result<Listing, Error> {
-    Listing::parse(&get_small(agent, url, "application/json", MAX_CATALOG_BYTES)?)
-        .map_err(Error::Catalog)
-}
-
-pub(super) fn preview_with(agent: &ureq::Agent, url: &str) -> Result<image::RgbaImage, Error> {
-    decode_preview(get_small(agent, url, "image/*", MAX_PREVIEW_BYTES)?)
+    Listing::parse(&get_small(
+        agent,
+        url,
+        "application/json",
+        MAX_CATALOG_BYTES,
+        &AtomicBool::new(false),
+    )?)
+    .map_err(Error::Catalog)
 }
 
 pub(super) fn decode_preview(bytes: Vec<u8>) -> Result<image::RgbaImage, Error> {
@@ -130,13 +146,10 @@ pub(super) fn decode_preview(bytes: Vec<u8>) -> Result<image::RgbaImage, Error> 
     limits.max_alloc = Some(128 * 1024 * 1024);
     reader.limits(limits);
     let image = reader.decode().map_err(invalid)?;
-    let height = (u64::from(image.height()) * u64::from(PREVIEW_WIDTH)
-        / u64::from(image.width().max(1)))
-    .clamp(1, u64::from(PREVIEW_WIDTH)) as u32;
-    Ok(if image.width() > PREVIEW_WIDTH {
-        image::imageops::thumbnail(&image.to_rgba8(), PREVIEW_WIDTH, height)
+    Ok(if image.width().max(image.height()) > PREVIEW_EDGE {
+        image.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE).into_rgba8()
     } else {
-        image.to_rgba8()
+        image.into_rgba8()
     })
 }
 
@@ -146,6 +159,7 @@ pub(super) fn install_with(
     entry: &Entry,
     store: &ThemeLibraryStore,
     cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<ThemeDocument, Error> {
     let mut response = request(agent, url, "application/octet-stream")?;
     if response.body().content_length().is_some_and(|length| length != entry.archive.bytes) {
@@ -158,8 +172,10 @@ pub(super) fn install_with(
         entry.archive.bytes,
         &entry.archive.sha256,
         cancel,
+        progress,
     )?;
     file.as_file().sync_all()?;
+    check_cancel(cancel)?;
     install_file(file.path(), entry, store)
 }
 
@@ -182,14 +198,13 @@ pub(super) fn copy_verified(
     expected: u64,
     sha256: &str,
     cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<(), Error> {
     let mut buffer = vec![0_u8; 64 * 1024];
     let mut digest = Sha256::new();
     let mut total = 0_u64;
     loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
-        }
+        check_cancel(cancel)?;
         let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
@@ -200,6 +215,7 @@ pub(super) fn copy_verified(
         }
         digest.update(&buffer[..read]);
         writer.write_all(&buffer[..read]).map_err(|error| Error::Package(error.to_string()))?;
+        progress(total);
     }
     let actual: String = digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
     if total != expected || actual != sha256 {
@@ -221,13 +237,33 @@ fn request(
         .call()?)
 }
 
-fn get_small(agent: &ureq::Agent, url: &str, accept: &str, limit: u64) -> Result<Vec<u8>, Error> {
+fn check_cancel(cancel: &AtomicBool) -> Result<(), Error> {
+    if cancel.load(Ordering::Relaxed) { Err(Error::Cancelled) } else { Ok(()) }
+}
+
+fn get_small(
+    agent: &ureq::Agent,
+    url: &str,
+    accept: &str,
+    limit: u64,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, Error> {
+    check_cancel(cancel)?;
     let mut response = request(agent, url, accept)?;
     if response.body().content_length().is_some_and(|length| length > limit) {
         return Err(Error::TooLarge);
     }
     let mut bytes = Vec::new();
-    response.body_mut().as_reader().take(limit + 1).read_to_end(&mut bytes)?;
+    let mut reader = response.body_mut().as_reader().take(limit + 1);
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        check_cancel(cancel)?;
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
     if bytes.len() as u64 > limit {
         return Err(Error::TooLarge);
     }

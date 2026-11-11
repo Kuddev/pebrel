@@ -417,7 +417,7 @@ impl SettingsPane {
         else {
             return;
         };
-        let updates = match draft {
+        let mut updates = match draft {
             AppearanceSelection::Custom(index) => {
                 let Some(document) = self
                     .appearance_picker
@@ -455,6 +455,18 @@ impl SettingsPane {
             },
             AppearanceSelection::Icon(icon) => AppearanceSelection::Icon(icon).updates(),
         };
+        if draft.is_theme()
+            && let Some(active_id) = self.runtime.custom_theme.as_deref()
+            && let Some(previous) = self.appearance_picker.as_ref().and_then(|picker| {
+                picker.custom_themes.iter().find(|document| document.id() == Some(active_id))
+            })
+        {
+            crate::theme_library::preferences::release_community_wallpaper(
+                previous,
+                self.runtime.background_image.as_deref(),
+                &mut updates,
+            );
+        }
         let session_seq = self
             .appearance_picker
             .as_ref()

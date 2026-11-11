@@ -16,11 +16,13 @@ fn install_fixture(
     entry: &Entry,
     store: &ThemeLibraryStore,
     _cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<ThemeDocument, community::Error> {
     if entry.id.ends_with("/broken") {
         return Err(community::Error::Integrity);
     }
     let archive = ARCHIVE.lock().unwrap().clone().expect("fixture archive");
+    progress(entry.archive.bytes);
     community::install_file(&archive, entry, store)
 }
 
@@ -67,7 +69,11 @@ fn community_install_adds_a_previewed_theme_and_applies_only_on_confirmation(
     let _fixture_guard = lock_theme_studio();
     let _settings_guard = SettingsBytesGuard::capture();
     std::fs::create_dir_all(nebula_settings::settings_dir()).unwrap();
-    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS).unwrap();
+    std::fs::write(
+        nebula_settings::settings_path(),
+        format!("{TEST_SETTINGS}background_image=personal-wallpaper.png\n"),
+    )
+    .unwrap();
     let mut cleanup = CustomThemeCleanup::default();
     let dir = tempfile::tempdir().unwrap();
     let name = format!("Community fixture {}", std::process::id());
@@ -118,13 +124,53 @@ fn community_install_adds_a_previewed_theme_and_applies_only_on_confirmation(
     assert_eq!(runtime_snapshot(), before, "installing never applies the theme");
     assert_eq!(settings_file_snapshot(), settings_before);
 
-    // A second click on the installed card is inert; no duplicate is created.
-    click("community-action-0", &mut window);
+    click("appearance-filter-0", &mut window);
+    click_first_theme_option(&mut window);
+    click("appearance-filter-4", &mut window);
+    assert!(window.debug_bounds("community-action-0").is_none());
+    let card = window.debug_bounds("community-theme-0").unwrap();
+    // Use the image area, away from the footer's Preview label.
+    click_point(gpui::point(card.left() + px(12.0), card.top() + px(14.0)), &mut window);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().unwrap();
+        let AppearanceSelection::Custom(index) = picker.draft else {
+            panic!("the installed card's image selects its preview");
+        };
+        assert_eq!(picker.custom_themes[index].id(), installed.id());
+    });
+    assert_eq!(settings_file_snapshot(), settings_before, "selecting a card is preview only");
+
+    click("appearance-filter-0", &mut window);
+    click_first_theme_option(&mut window);
+    click("appearance-filter-4", &mut window);
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            let picker = pane.appearance_picker.as_ref().unwrap();
+            let index =
+                picker.custom_themes.iter().position(|doc| doc.id() == installed.id()).unwrap();
+            let focus = &picker
+                .options
+                .iter()
+                .find(|(choice, _)| *choice == AppearanceSelection::Custom(index))
+                .unwrap()
+                .1;
+            window.focus(focus, cx);
+        });
+    });
+    press("enter", &mut window);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().unwrap();
+        let AppearanceSelection::Custom(index) = picker.draft else {
+            panic!("Enter on the installed card selects its preview");
+        };
+        assert_eq!(picker.custom_themes[index].id(), installed.id());
+    });
     let copies = custom_theme_documents().iter().filter(|doc| doc.name() == name).count();
     assert_eq!(copies, 1);
 
     click("apply-appearance-picker", &mut window);
     assert_eq!(runtime_snapshot().custom_theme.as_deref(), installed.id());
+    assert_eq!(RuntimeSettings::load().background_image, None);
     let store = ThemeLibraryStore::default();
     let id = installed.id().unwrap();
     store.delete(id, store.load(id).unwrap().revision()).unwrap();

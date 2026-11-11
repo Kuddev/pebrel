@@ -1094,7 +1094,7 @@
       "author": "作者 {author}",
       "download_size": "下載 {size}",
       "no_preview": "暫無預覽圖",
-      "notice": "來自 pebrel-community/themes 社群目錄。下載內容會依目錄登記的 SHA-256 驗證，只加入主題庫，不會自動套用。",
+      "notice": "來自 pebrel-community/themes。安裝後可預覽，確認使用才會套用。",
       "added": "{name} 已加入主題庫。可以在這裡預覽，滿意後按「使用此主題」。",
       "install_failed": "無法安裝 {name}：{error}",
       "error": {
