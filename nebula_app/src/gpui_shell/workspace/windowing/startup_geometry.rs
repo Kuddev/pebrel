@@ -95,10 +95,15 @@ pub(super) fn load_restore(
     has_regular_window: bool,
     cx: &mut App,
 ) {
-    if role != WindowRole::Regular || crate::platform::elevation::requires_isolation() {
+    if role != WindowRole::Regular {
         return;
     }
-    load_restore_from(id, startup, has_regular_window, cx, || {
+    let restore_directory_size =
+        crate::platform::CAPABILITIES.restore_directory_window_size && !has_regular_window;
+    load_restore_from(id, startup, restore_directory_size, cx, || {
+        if crate::platform::elevation::requires_isolation() {
+            return None;
+        }
         crate::session::load().and_then(|session| session.startup_window_state())
     });
 }
@@ -106,15 +111,13 @@ pub(super) fn load_restore(
 fn load_restore_from(
     id: u64,
     startup: &WorkspaceStartup,
-    has_regular_window: bool,
+    restore_directory_size: bool,
     cx: &mut App,
     load: impl FnOnce() -> Option<crate::session::WindowState>,
 ) {
     let size_only = match startup {
         WorkspaceStartup::RestoreOrDefault if id == 1 => false,
-        WorkspaceStartup::NewTerminal { cwd: Some(_) } if cfg!(windows) && !has_regular_window => {
-            true
-        },
+        WorkspaceStartup::NewTerminal { cwd: Some(_) } if restore_directory_size => true,
         _ => return,
     };
     if cx.has_global::<StartupWindow>() {
@@ -403,7 +406,7 @@ mod tests {
         });
     }
 
-    #[cfg(all(windows, feature = "gpui-test-support"))]
+    #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
     fn directory_launch_uses_saved_size_without_restoring_the_old_window(
         cx: &mut gpui::TestAppContext,
@@ -425,7 +428,7 @@ mod tests {
                 (3, runtime_window_startup(cwd.clone(), None).unwrap()),
             ] {
                 assert!(matches!(&launch, WorkspaceStartup::NewTerminal { cwd: actual } if actual == &cwd));
-                load_restore_from(id, &launch, false, cx, || Some(saved));
+                load_restore_from(id, &launch, true, cx, || Some(saved));
                 assert!(restored_size(id, cx));
                 assert!(!restored_size(id + 1, cx));
                 let options = regular_options(id, false, 230.0, cx);
@@ -434,7 +437,7 @@ mod tests {
                 };
                 assert_eq!(bounds.size, size(px(900.0), px(650.0)));
                 assert_eq!(restored_window(id, cx.global::<StartupWindow>()).unwrap().position, None);
-                load_restore_from(id + 1, &launch, true, cx, || {
+                load_restore_from(id + 1, &launch, false, cx, || {
                     panic!("an existing workspace owns the current window geometry")
                 });
                 assert!(!restored_size(id + 1, cx));
