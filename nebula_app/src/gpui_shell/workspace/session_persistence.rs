@@ -22,7 +22,7 @@ impl Default for SessionPersistence {
             latest: None,
             saved: None,
             quitting: false,
-            isolated: crate::platform::elevation::requires_isolation(),
+            isolated: crate::platform::startup::instance::is_private(),
         }
     }
 }

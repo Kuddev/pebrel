@@ -11,7 +11,9 @@ pub(crate) fn open_initial_window(
     shell_id: Option<String>,
     launched_at_login: bool,
 ) {
-    if let Some(sessions) = crate::update_download::handoff::restore_ticket() {
+    if !crate::platform::startup::instance::explicitly_requested()
+        && let Some(sessions) = crate::update_download::handoff::restore_ticket()
+    {
         if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
             log::error!("Could not reopen updated workspace: {}", error.message);
             assert!(
@@ -33,7 +35,7 @@ pub(crate) fn open_initial_window(
         initial_startup(
             initial_cwd,
             initial_command,
-            crate::platform::elevation::requires_isolation(),
+            crate::platform::startup::instance::is_private(),
         )
     };
     let start_hidden = initial_window_hidden(
@@ -94,6 +96,10 @@ pub(super) fn initial_startup(
         WorkspaceStartup::RestoreOrDefault
     }
 }
+
+#[cfg(test)]
+#[path = "new_instance_tests.rs"]
+mod new_instance_tests;
 
 #[cfg(test)]
 mod startup_tests {
