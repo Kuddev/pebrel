@@ -33,6 +33,11 @@ use std::path::{Path, PathBuf};
 
 use crate::platform::{Platform, local_paths};
 
+#[path = "file_uri/osc8_repair.rs"]
+mod osc8_repair;
+
+pub use osc8_repair::{has_utf8_replacement_corruption, repair_corrupted_file_uri_with_text};
+
 /// Decode a file URI or local path into a native filesystem PathBuf.
 ///
 /// Returns `None` when the input is not a local file path or recognized `file:`
@@ -187,6 +192,42 @@ pub fn classify_link_target_with_cwd(raw: &str, cwd: Option<&Path>) -> LinkTarge
     LinkTargetKind::Unrecognized(target.to_string())
 }
 
+/// Classify a link target originating from a confirmed OSC 8 hyperlink.
+///
+/// Exact matching on `raw` runs first so literal filenames containing `U+FFFD` retain priority.
+/// Only when `raw` is a missing explicit local `file:` URI containing `U+FFFD` replacement
+/// corruption does classification consult `repaired_uri` or bounded parent-directory recovery.
+pub fn classify_osc8_link_target_with_cwd(
+    raw: &str,
+    repaired_uri: Option<&str>,
+    cwd: Option<&Path>,
+) -> LinkTargetKind {
+    match classify_link_target_with_cwd(raw, cwd) {
+        LinkTargetKind::LocalMissing(missing)
+            if strip_scheme(extract_link_target(raw)).is_some()
+                && missing.to_string_lossy().contains('\u{FFFD}') =>
+        {
+            if let Some(candidate) = repaired_uri {
+                match classify_link_target_with_cwd(candidate, cwd) {
+                    LinkTargetKind::LocalExisting(repaired) => {
+                        return LinkTargetKind::LocalExisting(repaired);
+                    },
+                    LinkTargetKind::LocalMissing(repaired) => {
+                        return LinkTargetKind::LocalMissing(repaired);
+                    },
+                    _ => {},
+                }
+            }
+            if let Some(repaired) = osc8_repair::repair_corrupted_local_path_on_disk(&missing) {
+                LinkTargetKind::LocalExisting(repaired)
+            } else {
+                LinkTargetKind::LocalMissing(missing)
+            }
+        },
+        other => other,
+    }
+}
+
 // A bare hint can stop at the space in `(121 行)`, leaving only `(121`.
 // Only a missing target may fall back; literal filenames retain priority.
 fn path_without_line_count(path: &Path) -> Option<PathBuf> {
@@ -275,7 +316,20 @@ pub fn try_open_local_link_with_cwd(
     text: &str,
     cwd: Option<&Path>,
 ) -> Option<Result<(), LocalLinkError>> {
-    match classify_link_target_with_cwd(text, cwd) {
+    open_classified_link(classify_link_target_with_cwd(text, cwd))
+}
+
+/// Try to open a local `file:` link originating from a confirmed OSC 8 hyperlink.
+pub fn try_open_osc8_local_link_with_cwd(
+    text: &str,
+    repaired_uri: Option<&str>,
+    cwd: Option<&Path>,
+) -> Option<Result<(), LocalLinkError>> {
+    open_classified_link(classify_osc8_link_target_with_cwd(text, repaired_uri, cwd))
+}
+
+fn open_classified_link(kind: LinkTargetKind) -> Option<Result<(), LocalLinkError>> {
+    match kind {
         LinkTargetKind::LocalExisting(path) => {
             Some(open_local_path(&path).map_err(|e| LocalLinkError::OpenFailed(e.to_string())))
         },

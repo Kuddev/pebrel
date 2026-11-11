@@ -441,6 +441,10 @@ fn link_gesture_opens_regex_files_and_osc8_with_or_without_mouse_reporting(
         ("file:///tmp/pebrel-notes.md", "file:///tmp/pebrel-notes.md"),
         ("[notes](./notes.md)", "[notes](./notes.md)"),
         ("\x1b]8;;https://example.com/osc8\x1b\\site\x1b]8;;\x1b\\", "https://example.com/osc8"),
+        (
+            "\x1b]8;;file:///tmp/3_批号更新现\u{FFFD}\x1b\\记录_v2.xlsx/tmp/3_批号更新现有记录_v2.xlsx\x1b]8;;\x1b\\",
+            "file:///tmp/3_批号更新现\u{FFFD}",
+        ),
     ] {
         for mouse_mode in [false, true] {
             let output = if mouse_mode {

@@ -33,3 +33,4 @@
 - Windows Acrylic 的运行库回退与窗口生命周期见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-controller.md)。
 - Windows Acrylic 的动画期间透明回退与计时边界见 [`窗口状态切换`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-window-transitions.md)。
 - 登录项的启动意图与首窗静默边界见 [`登录启动`](../architecture/notes/nebula_app/platform/startup/2026-10-10-login-launch-intent.md)。
+- OSC 8 本地 `file:` 链接遭 UTF-8 C1（`0x9C`）截断或替换损坏时的纯内存预览修复与后台唯一匹配兜底边界见 [`file_uri`](../architecture/notes/nebula_app/file_uri/2026-11-11-c1-corrupted-osc8-file-links.md)。
