@@ -1,29 +1,23 @@
+use super::sidebar_groups::SidebarTabRow;
 use super::*;
 use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
-
-/// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
-const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
 
 /// 状态图形与 hover 关闭按钮共用的方形槽，中心不随图形宽度改变。
 const TAB_STATUS_ICON_SIDE: f32 = 24.0;
 
 /// 侧栏新建入口的生产命中区；鼠标测试直接复用，避免只验证一个近似按钮。
 pub(super) fn sidebar_new_tab_control(
-    header_group: SharedString,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     h_flex()
         .id("sidebar-new-tab")
-        .size(px(SIDEBAR_PLUS_SIZE))
+        .size(px(SIDEBAR_HEADER_ACTION))
         .flex_shrink_0()
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .invisible()
-        .group_hover(header_group, |button| button.visible())
-        // 标题整行也可点击折叠；必须在按下阶段截断，不能等 Click
-        // 才处理，否则父行已经收到同一次起手。
+        // Header controls own the entire gesture, including mouse-down.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(on_click)
 }
@@ -196,23 +190,51 @@ impl NebulaWorkspace {
         // 界面字号独立于终端缩放。
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
 
+        let rows = self.sidebar_tab_rows(cx);
+        let language = crate::gpui_shell::config::ui_language(cx);
         // 受约束拖拽的渲染参数：激活后被拖行骑指针位移，落点槽位由位移换算。
         let drag = self
             .tab_drag
             .as_ref()
             .filter(|d| d.active && d.axis == TabDragAxis::Vertical)
-            .map(|d| (d.source, Self::drag_slot(d, self.tabs.len()), d.offset));
+            .and_then(|d| {
+                let target = Self::sidebar_drag_slot(d, &rows);
+                Some((rows.index_of(d.source)?, rows.index_of(target)?, d.offset))
+            });
 
-        // 折叠只裁剪槽位，不改窗口算法：旧壳 `tabs_avail` 与 `tabs_open`
-        // 分开——折起来时行矩形为零，但可用高度仍按面板剩余算。
-        let (tabs_scroll, tabs_show) = self.tabs_visible_window();
+        let (tabs_scroll, tabs_show) = self.tabs_visible_window(rows.len());
         // 行的确定宽度：侧栏宽 − 侧栏 p_2 两边 − 列表右侧滚动条留白。
         // 与下面 `label_avail` 同一份减法口径，两者不能各算一套。
         // 再左右各让 1px：列表容器 overflow_hidden，选中行的浮起环线贴边会被裁掉。
         let row_w = (self.sidebar_width - 16.0 - tab_scroll::TAB_SCROLL_GUTTER - 2.0).max(1.0);
-        let items = (0..self.tabs.len())
-            .filter(|&ix| tab_scroll::index_visible(ix, tabs_scroll, tabs_show))
-            .map(|ix| {
+        let items = (tabs_scroll..tabs_scroll + tabs_show)
+            .filter_map(|slot| rows.row(slot).map(|item| (slot, item)))
+            .map(|(slot, item)| {
+                let ix = match item {
+                    SidebarTabRow::Tab(ix) => ix,
+                    SidebarTabRow::Group(group) => {
+                        let line = || div().flex_1().min_w(px(12.0)).h(px(1.0)).bg(theme.border);
+                        let mut heading = h_flex()
+                            .id(("sidebar-tab-group", slot))
+                            .w(px(row_w))
+                            .h(px(row_height))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .child(line())
+                            .child(div().max_w(px(row_w * 0.62)).truncate()
+                                .font_family(chrome_family.clone())
+                                .text_size(px(label_px * 0.75)).font_weight(FontWeight::SEMIBOLD)
+                                .text_color(muted).child(group.label(language)))
+                            .child(line());
+                        if let Some(path) = group.directory_path() {
+                            heading = heading.tooltip(move |window, cx| {
+                                Tooltip::new(path.clone()).build(window, cx)
+                            });
+                        }
+                        return heading.into_any_element();
+                    },
+                };
                 let active = ix == self.active;
                 let TabPresentation {
                     title,
@@ -320,11 +342,11 @@ impl NebulaWorkspace {
                 // 源与落点之间的行向反方向让一个槽位，其余不动。存储顺序在
                 // 拖拽期间不变，释放时一次性提交。
                 let (dragged, shift) = match drag {
-                    Some((src, _, _)) if ix == src => (true, 0.0),
-                    Some((src, tgt, _)) if src < tgt && ix > src && ix <= tgt => {
+                    Some((src, _, _)) if slot == src => (true, 0.0),
+                    Some((src, tgt, _)) if src < tgt && slot > src && slot <= tgt => {
                         (false, -row_pitch)
                     },
-                    Some((src, tgt, _)) if src > tgt && ix >= tgt && ix < src => {
+                    Some((src, tgt, _)) if src > tgt && slot >= tgt && slot < src => {
                         (false, row_pitch)
                     },
                     _ => (false, 0.0),
@@ -643,7 +665,6 @@ impl NebulaWorkspace {
             })
             .collect::<Vec<_>>();
 
-        let header_group: SharedString = "sidebar-tabs-header-hover".into();
         let count: SharedString = self.tabs.len().to_string().into();
 
         let sidebar = v_flex()
@@ -666,50 +687,19 @@ impl NebulaWorkspace {
             }))
             .child(
                 h_flex()
-                    .id("sidebar-tabs-toggle")
-                    .debug_selector(|| "sidebar-tabs-toggle".into())
-                    .group(header_group.clone())
+                    .id("sidebar-tabs-header")
+                    .debug_selector(|| "sidebar-tabs-header".into())
                     .w_full()
                     .h(px(row_height))
                     .pb_1()
-                    // 旧壳标题文字从 panel_x + 16px 起；侧栏根已有 8px
-                    // padding，这里再补 8px，箭头不会贴住左边缘。
                     .pl_2()
                     .items_center()
-                    .cursor_pointer()
-                    // `ChromeHit::TabsSection` 命中整条 tabs_header。监听必须
-                    // 挂在标题行根节点，右侧空白区同样可以折叠，而不是只有
-                    // 箭头、标题和数量这一小段能点。
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_tabs_section(cx);
-                    }))
                     .child(
-                        // 箭头、TABS 和计数仍作为一个排版段；折叠命中已经
-                        // 提升到外层整行。右侧 +/⋯ 自己停止冒泡。
                         h_flex()
                             .h_full()
                             .items_center()
                             .font_family(chrome_family.clone())
                             .pr_1()
-                            .child(
-                                // 折叠三角用组件库线性 Chevron（lucide 细线），
-                                // 不再用 Nerd Font 实心字位——后者在侧栏标题
-                                // 上偏重、和右侧 +/⋯ 的 SVG 不一套语言。
-                                h_flex()
-                                    .w(px(TABS_DISCLOSURE_SLOT_W))
-                                    .h_full()
-                                    .flex_shrink_0()
-                                    .items_center()
-                                    .child(
-                                        Icon::new(if self.tabs_section_collapsed {
-                                            IconName::ChevronRight
-                                        } else {
-                                            IconName::ChevronDown
-                                        })
-                                        .xsmall()
-                                        .text_color(muted),
-                                    ),
-                            )
                             .child(
                                 div()
                                     .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
@@ -746,7 +736,6 @@ impl NebulaWorkspace {
                                 // 旧壳 `ChromeHit::NewTab`：直接开设置里的默认
                                 // shell，不经过选择器。三点才是 NewTabMenu。
                                 sidebar_new_tab_control(
-                                    header_group,
                                     cx.listener(|this, _, window, cx| {
                                         cx.stop_propagation();
                                         this.add_terminal(window, cx);
@@ -766,11 +755,11 @@ impl NebulaWorkspace {
                                         Icon::new(IconName::Plus).with_size(px(SIDEBAR_HEADER_ICON)),
                                     ),
                             )
+                            .child(self.sidebar_group_control(cx))
                             .child(
                                 h_flex()
                                     .id("sidebar-tabs-menu")
-                                    .w(px(SIDEBAR_MENU_W))
-                                    .h(px(SIDEBAR_PLUS_SIZE))
+                                    .size(px(SIDEBAR_HEADER_ACTION))
                                     .flex_shrink_0()
                                     .items_center()
                                     .justify_center()
@@ -796,68 +785,8 @@ impl NebulaWorkspace {
                             ),
                     ),
             )
-            .child(self.render_tabs_section(items, cx));
+            .child(self.wrap_tabs_scroll_list(items, rows.len(), cx));
         sidebar
-    }
-
-    /// 与旧壳 `nebula_tabs_section_open` 同义：点标题整行折叠/展开。
-    /// 卷帘只裁剪槽位，视口高度在动画期间冻结，避免量到裁剪高后把溢出
-    /// 列表锁成一行滚动区。
-    fn toggle_tabs_section(&mut self, cx: &mut Context<Self>) {
-        self.tabs_section_collapsed = !self.tabs_section_collapsed;
-        // 卷帘一动，菜单锚定的那一行就不在原处了。
-        self.tab_menu = None;
-        self.tabs_fold_armed = true;
-        self.tabs_fold_seq = self.tabs_fold_seq.wrapping_add(1).max(1);
-        let seq = self.tabs_fold_seq;
-        self.tabs_fold_frozen = true;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(250)).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.tabs_fold_seq == seq {
-                    this.tabs_fold_frozen = false;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// Tab 列表槽位。展开时列表是侧栏 `v_flex` 的 `flex_1` 子项，视口等于
-    /// 面板剩余高度（旧壳 `tabs_avail`）。折叠动画只按**上次量到的剩余
-    /// 高度**卷帘，绝不按全部行高，也不把裁剪高度写回窗口。
-    fn render_tabs_section<I>(&self, items: I, cx: &mut Context<Self>) -> gpui::AnyElement
-    where
-        I: IntoIterator,
-        I::Item: IntoElement,
-    {
-        let collapsed = self.tabs_section_collapsed;
-        let list =
-            self.wrap_tabs_scroll_list(items.into_iter().map(|item| item.into_any_element()), cx);
-        if collapsed && !self.tabs_fold_frozen {
-            return div().into_any_element();
-        }
-        if !self.tabs_fold_armed || !self.tabs_fold_frozen {
-            return if collapsed { div().into_any_element() } else { list };
-        }
-        let slot_h = self.tabs_viewport_h;
-        let (from, to) = if collapsed { (slot_h, 0.0) } else { (0.0, slot_h) };
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_hidden()
-            .child(list)
-            .with_animation(
-                ("tabs-fold", collapsed as usize),
-                Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
-                move |slot, t| {
-                    let height = from + (to - from) * t;
-                    if !collapsed && t >= 1.0 { slot } else { slot.max_h(px(height)) }
-                },
-            )
-            .into_any_element()
     }
 
     fn sidebar_fold_widths(&self, cx: &App) -> Option<(f32, f32)> {

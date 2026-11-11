@@ -153,10 +153,8 @@ mod sidebar_new_tab_tests {
 
     impl Render for SidebarNewTabProbe {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let hover_group: SharedString = "sidebar-new-tab-test-hover".into();
             h_flex()
                 .id("sidebar-new-tab-test-parent")
-                .group(hover_group.clone())
                 .w(px(200.0))
                 .h(px(34.0))
                 .on_mouse_down(
@@ -166,13 +164,10 @@ mod sidebar_new_tab_tests {
                 .on_click(cx.listener(|this, _, _, _| this.parent_clicks += 1))
                 .child(div().flex_1())
                 .child(
-                    super::sidebar::sidebar_new_tab_control(
-                        hover_group,
-                        cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.new_tabs += 1;
-                        }),
-                    )
+                    super::sidebar::sidebar_new_tab_control(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.new_tabs += 1;
+                    }))
                     .debug_selector(|| "sidebar-new-tab-probe".to_owned())
                     .child("+"),
                 )
@@ -180,9 +175,7 @@ mod sidebar_new_tab_tests {
     }
 
     #[gpui::test]
-    fn sidebar_new_tab_click_after_header_hover_reaches_the_real_call_site(
-        cx: &mut TestAppContext,
-    ) {
+    fn sidebar_new_tab_click_reaches_the_real_call_site(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         let (probe, cx) = cx.add_window_view(|_, _| SidebarNewTabProbe::default());
         let bounds = cx.debug_bounds("sidebar-new-tab-probe").expect("sidebar plus bounds");
@@ -191,15 +184,14 @@ mod sidebar_new_tab_tests {
             bounds.origin.y + bounds.size.height * 0.5,
         );
 
-        cx.simulate_mouse_move(center, None, Modifiers::default());
         cx.simulate_click(center, Modifiers::default());
 
         let (parent_mouse_downs, parent_clicks, new_tabs) = probe.read_with(cx, |probe, _| {
             (probe.parent_mouse_downs, probe.parent_clicks, probe.new_tabs)
         });
-        assert_eq!(new_tabs, 1, "hover 后点击侧栏加号必须创建标签");
-        assert_eq!(parent_mouse_downs, 0, "加号按下不得给 TABS 分区标题上膛");
-        assert_eq!(parent_clicks, 0, "加号点击不得同时折叠 TABS 分区");
+        assert_eq!(new_tabs, 1, "点击侧栏加号必须创建标签");
+        assert_eq!(parent_mouse_downs, 0, "加号应接收自己的按下事件");
+        assert_eq!(parent_clicks, 0, "加号点击不得触发父容器");
     }
 }
 

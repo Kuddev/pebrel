@@ -49,7 +49,7 @@ impl NebulaWorkspace {
             if let Some(meta) = self.tab_meta.get_mut(ix) {
                 meta.has_bell = false;
             }
-            self.reveal_active_tab();
+            self.reveal_active_tab(cx);
             self.focus_active(window, cx);
             self.sync_side_panel_to_active(true, cx);
             cx.notify();
@@ -123,7 +123,7 @@ impl NebulaWorkspace {
         let from = self.active;
         self.move_tab(from, to, window, cx);
         // 顶栏模式下标签可能刚被挪出可视窗口；侧栏模式同样按整行窗口对齐。
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         cx.notify();
     }
 

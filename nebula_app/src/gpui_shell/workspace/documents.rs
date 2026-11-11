@@ -211,7 +211,7 @@ impl NebulaWorkspace {
             return;
         }
         let view = cx.new(|cx| crate::gpui_shell::doc_tabs::ImageTabView::new(path, cx));
-        self.insert_new_tab(WorkspaceTab::Image { view });
+        self.insert_new_tab(WorkspaceTab::Image { view }, cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -234,7 +234,7 @@ impl NebulaWorkspace {
             }
             let view =
                 cx.new(|cx| crate::gpui_shell::doc_tabs::ImageTabView::new_remote(location, cx));
-            self.insert_new_tab(WorkspaceTab::Image { view });
+            self.insert_new_tab(WorkspaceTab::Image { view }, cx);
             self.focus_active(window, cx);
             cx.notify();
             return;
@@ -248,7 +248,7 @@ impl NebulaWorkspace {
         }
         let view = cx.new(|cx| TextFileView::new_remote(location, window, cx));
         let subscription = cx.subscribe_in(&view, window, Self::on_document_event);
-        self.insert_new_tab(WorkspaceTab::Document { view, _subscription: subscription });
+        self.insert_new_tab(WorkspaceTab::Document { view, _subscription: subscription }, cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -273,7 +273,7 @@ impl NebulaWorkspace {
         }
         let view = cx.new(|cx| crate::gpui_shell::doc_tabs::DocTabView::new(path, window, cx));
         let subscription = cx.subscribe_in(&view, window, Self::on_document_event);
-        self.insert_new_tab(WorkspaceTab::Document { view, _subscription: subscription });
+        self.insert_new_tab(WorkspaceTab::Document { view, _subscription: subscription }, cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -295,7 +295,7 @@ impl NebulaWorkspace {
         }
         let view = cx.new(|cx| crate::gpui_shell::code_tab::CodeTabView::new(path, window, cx));
         let subscription = cx.subscribe(&view, Self::on_code_tab_event);
-        self.insert_new_tab(WorkspaceTab::Code { view, _subscription: subscription });
+        self.insert_new_tab(WorkspaceTab::Code { view, _subscription: subscription }, cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -328,7 +328,7 @@ impl NebulaWorkspace {
             )
         });
         let subscription = cx.subscribe(&view, Self::on_code_tab_event);
-        self.insert_new_tab(WorkspaceTab::Code { view, _subscription: subscription });
+        self.insert_new_tab(WorkspaceTab::Code { view, _subscription: subscription }, cx);
         self.focus_active(window, cx);
         cx.notify();
     }

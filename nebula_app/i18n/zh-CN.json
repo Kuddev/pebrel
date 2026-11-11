@@ -1630,6 +1630,15 @@
     "tab_color": "标签颜色"
   },
   "chrome": {
+    "tab_grouping": {
+      "label": "标签分组",
+      "none": "不分组",
+      "project": "按项目目录",
+      "shell": "按 Shell",
+      "agents": "Agents",
+      "terminal": "终端",
+      "files": "文件"
+    },
     "local_administrator": "本机 Pebrel 进程正以 Windows 管理员身份运行",
     "new_terminal_ctrl_shift_t": "新建终端 (Ctrl+Shift+T)",
     "more": "更多",

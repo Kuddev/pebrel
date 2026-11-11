@@ -43,8 +43,7 @@ pub(super) fn rows_h(n: usize, pitch: f32, gap: f32) -> f32 {
 
 /// 视口里能放下几行。尚未量到高度时先展示全部，避免首帧空列表。
 ///
-/// 与旧壳 `chrome_tab_layout` 同一条规则：不够一行就是 0，**绝不**退成
-/// 一行。折叠动画若把裁剪高度写回来，强制 1 行会把整列锁成一行滚动区。
+/// 不够一行时不显示部分可点击的行。
 pub(super) fn visible_count(want: usize, avail_h: f32, pitch: f32, gap: f32) -> usize {
     if want == 0 {
         return 0;
@@ -67,6 +66,7 @@ pub(super) fn clamp_scroll(scroll: usize, max: usize) -> usize {
     scroll.min(max)
 }
 
+#[cfg(test)]
 pub(super) fn index_visible(ix: usize, scroll: usize, show: usize) -> bool {
     show > 0 && ix >= scroll && ix < scroll + show
 }
@@ -129,8 +129,7 @@ impl NebulaWorkspace {
         tab_row_height(self.density) + tab_row_gap(self.density)
     }
 
-    fn tabs_window(&self) -> TabsWindow {
-        let want = self.tabs.len();
+    fn tabs_window(&self, want: usize) -> TabsWindow {
         let show = visible_count(
             want,
             self.tabs_viewport_h,
@@ -142,22 +141,16 @@ impl NebulaWorkspace {
         TabsWindow { scroll, show, max, want }
     }
 
-    pub(super) fn tabs_visible_window(&self) -> (usize, usize) {
-        let window = self.tabs_window();
+    pub(super) fn tabs_visible_window(&self, want: usize) -> (usize, usize) {
+        let window = self.tabs_window(want);
         (window.scroll, window.show)
     }
 
-    pub(super) fn clamp_tabs_scroll(&mut self) {
-        let max = self.tabs_window().max;
-        let next = clamp_scroll(self.tabs_scroll, max);
-        if next != self.tabs_scroll {
-            self.tabs_scroll = next;
-        }
-    }
-
-    pub(super) fn reveal_active_tab(&mut self) {
-        let window = self.tabs_window();
-        let next = reveal_index(self.active, window.scroll, window.show);
+    pub(super) fn reveal_active_tab(&mut self, cx: &gpui::App) {
+        let rows = self.sidebar_tab_rows(cx);
+        let window = self.tabs_window(rows.len());
+        let slot = rows.index_of(self.active).unwrap_or(0);
+        let next = reveal_index(slot, window.scroll, window.show);
         self.tabs_scroll = clamp_scroll(next, window.max);
         self.top_tabs_scroll.scroll_to_item(if self.settings_open {
             self.tabs.len()
@@ -166,11 +159,8 @@ impl NebulaWorkspace {
         });
     }
 
-    fn tabs_overlay_bar(&self) -> Option<OverlayScrollbar> {
-        if self.tabs_section_collapsed {
-            return None;
-        }
-        let window = self.tabs_window();
+    fn tabs_overlay_bar(&self, want: usize) -> Option<OverlayScrollbar> {
+        let window = self.tabs_window(want);
         if window.show == 0 || window.want <= window.show {
             return None;
         }
@@ -195,23 +185,25 @@ impl NebulaWorkspace {
         )
     }
 
-    fn press_tabs_scrollbar(&mut self, event: &MouseDownEvent) -> bool {
-        let Some(bar) = self.tabs_overlay_bar() else { return false };
+    fn press_tabs_scrollbar(&mut self, event: &MouseDownEvent, cx: &gpui::App) -> bool {
+        let want = self.sidebar_tab_rows(cx).len();
+        let Some(bar) = self.tabs_overlay_bar(want) else { return false };
         let (x, y) = self.local_tabs_point(event.position);
         if !bar.hit_test(x, y) {
             return false;
         }
         let grab = if point_in_rect(bar.thumb, x, y) { y - bar.thumb.1 } else { bar.thumb.3 * 0.5 };
         self.tabs_scroll_grab = Some(grab);
-        self.tabs_scroll = bar.target_offset(y, grab, self.tabs_window().max);
+        self.tabs_scroll = bar.target_offset(y, grab, self.tabs_window(want).max);
         true
     }
 
-    fn drag_tabs_scrollbar_to(&mut self, position: Point<Pixels>) -> bool {
+    fn drag_tabs_scrollbar_to(&mut self, position: Point<Pixels>, cx: &gpui::App) -> bool {
         let Some(grab) = self.tabs_scroll_grab else { return false };
-        let Some(bar) = self.tabs_overlay_bar() else { return false };
+        let want = self.sidebar_tab_rows(cx).len();
+        let Some(bar) = self.tabs_overlay_bar(want) else { return false };
         let (_, y) = self.local_tabs_point(position);
-        let next = bar.target_offset(y, grab, self.tabs_window().max);
+        let next = bar.target_offset(y, grab, self.tabs_window(want).max);
         if next == self.tabs_scroll {
             return false;
         }
@@ -234,8 +226,8 @@ impl NebulaWorkspace {
         if rows == 0 {
             return;
         }
-        let max = self.tabs_window().max;
-        let next = apply_wheel(self.tabs_scroll, max, rows);
+        let window = self.tabs_window(self.sidebar_tab_rows(cx).len());
+        let next = apply_wheel(window.scroll, window.max, rows);
         if next != self.tabs_scroll {
             self.tabs_scroll = next;
             cx.notify();
@@ -247,9 +239,10 @@ impl NebulaWorkspace {
     pub(super) fn wrap_tabs_scroll_list(
         &self,
         items: impl IntoIterator<Item = gpui::AnyElement>,
+        want: usize,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let bar = self.tabs_overlay_bar();
+        let bar = self.tabs_overlay_bar(want);
         let dragging = self.tabs_scroll_grab.is_some();
         let show_thumb = bar.is_some() && (self.tabs_list_hot || dragging);
         let workspace = cx.entity().downgrade();
@@ -309,7 +302,7 @@ impl NebulaWorkspace {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                if this.press_tabs_scrollbar(event) {
+                                if this.press_tabs_scrollbar(event, cx) {
                                     cx.stop_propagation();
                                     cx.notify();
                                 }
@@ -330,16 +323,9 @@ impl NebulaWorkspace {
         if !height_changed && !width_changed {
             return;
         }
-        // 折叠中/已折叠：裁剪高度不是 `tabs_avail`。写回去会让
-        // `visible_count` 按 20–40px 算出 0/1 行，展开后整列锁死。
-        if !self.tabs_section_collapsed
-            && !self.tabs_fold_frozen
-            && h >= tab_row_height(self.density)
-        {
-            self.tabs_viewport_h = h;
-        }
+        self.tabs_viewport_h = h;
         self.tabs_list_width = w;
-        self.clamp_tabs_scroll();
+        self.tabs_scroll = self.tabs_window(self.sidebar_tab_rows(cx).len()).scroll;
         cx.notify();
     }
 
@@ -356,7 +342,7 @@ impl NebulaWorkspace {
                 .inset_0()
                 .occlude()
                 .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                    if this.drag_tabs_scrollbar_to(event.position) {
+                    if this.drag_tabs_scrollbar_to(event.position, cx) {
                         cx.notify();
                     }
                 }))

@@ -216,7 +216,7 @@ fn density_changes_real_tab_bounds_and_sidebar_drag_pitch(cx: &mut TestAppContex
                 workspace.tabs_position = position;
                 workspace.density = density;
                 workspace.sync_settings_layout(tab_reveal_instant(cx));
-                workspace.reveal_active_tab();
+                workspace.reveal_active_tab(cx);
                 cx.notify();
             });
             cx.run_until_parked();

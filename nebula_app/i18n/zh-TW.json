@@ -1020,6 +1020,15 @@
     "tab_color": "分頁顏色"
   },
   "chrome": {
+    "tab_grouping": {
+      "label": "分頁群組",
+      "none": "不分組",
+      "project": "按專案目錄",
+      "shell": "按 Shell",
+      "agents": "Agents",
+      "terminal": "終端機",
+      "files": "檔案"
+    },
     "new_terminal_ctrl_shift_t": "新增終端機（Ctrl+Shift+T）",
     "more": "更多",
     "scroll_tabs_left": "向左捲動分頁",
