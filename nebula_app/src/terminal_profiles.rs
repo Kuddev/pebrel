@@ -23,7 +23,8 @@ pub(crate) struct TerminalProfile {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    /// Stable shell integration id (`pwsh`, `powershell`, `bash`, `zsh`, `nu`, `cmd`).
+    /// Stable shell integration id (`pwsh`, `powershell`, `bash`, `zsh`, `nu`,
+    /// `niu`, `cmd`).
     pub shell_id: String,
 }
 
@@ -139,6 +140,10 @@ pub(crate) fn scan_directory(directory: &Path) -> io::Result<Vec<TerminalProfile
         ("bash.exe", "Git Bash", "bash", &["--login", "-i"][..]),
         ("zsh.exe", "Zsh", "zsh", &["--login", "-i"][..]),
         ("nu.exe", "Nushell", "nu", &[][..]),
+        // niubash 是 Bash 兼容的原生 shell（GNU bash 风格选项，实测
+        // `--login -i` 进入交互模式），但不共享 Pebrel 的 Bash 启动集成：
+        // 独立 `niu` 家族走普通 profile 启动路径。
+        ("niu.exe", "Niu", "niu", &["--login", "-i"][..]),
         ("cmd.exe", "Command Prompt", "cmd", &[][..]),
     ];
     let mut profiles = Vec::new();
@@ -353,6 +358,37 @@ mod tests {
             let config = reloaded.as_config_profiles();
             assert_eq!(config[0].settings_id(), Some(format!("profile:zsh|{}", zsh.id)));
             assert_eq!(config[0].shell().program(), command.to_str().unwrap());
+            assert_eq!(config[0].shell().args(), ["--login", "-i"]);
+        }
+    }
+
+    #[test]
+    fn imports_niu_as_its_own_shell_family() {
+        for layout in ["", "bin", "usr/bin"] {
+            let temp = tempfile::tempdir().unwrap();
+            let directory = temp.path().join(layout);
+            std::fs::create_dir_all(&directory).unwrap();
+            // x86 PE fixture 同样被所有受支持的 Windows 宿主接受，且在 Unix
+            // 上走同一个目录扫描路径。
+            write_pe(&directory.join("niu.exe"), 0x014c);
+
+            let found = scan_directory(temp.path()).unwrap();
+            assert_eq!(found.len(), 1, "unexpected imports in {layout:?}: {found:?}");
+            let niu = &found[0];
+            assert_eq!(niu.shell_id, "niu");
+            assert_eq!(niu.name, "Niu");
+            assert_eq!(niu.args, ["--login", "-i"]);
+            assert_eq!(niu.command, directory.join("niu.exe").canonicalize().unwrap());
+
+            let mut store = TerminalProfiles::default();
+            store.upsert(niu.clone()).unwrap();
+            let path = temp.path().join("profiles.json");
+            store.save_to(&path).unwrap();
+            let reloaded = TerminalProfiles::load_from(&path).unwrap();
+            let config = reloaded.as_config_profiles();
+            assert_eq!(config[0].settings_id(), Some(format!("profile:niu|{}", niu.id)));
+            assert_eq!(config[0].shell_id.as_deref(), Some("niu"));
+            assert_eq!(config[0].shell().program(), niu.command.to_str().unwrap());
             assert_eq!(config[0].shell().args(), ["--login", "-i"]);
         }
     }
