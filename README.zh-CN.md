@@ -112,11 +112,11 @@ Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行
   其他窗口对无关命令的修改。
 - 终端快捷键的改绑或清空会保留名称、命令等输入框自身的粘贴键；恢复默认立即作用于
   当前应用窗口，无需重启。运行时改为替换旧覆盖规则，避免追加方式留下禁用记录，
-  配置文件格式保持兼容。详见[快捷键归属说明](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)。
+  配置文件格式保持兼容。详见[快捷键归属说明](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)。
 - Windows 本地 PowerShell 提示符支持将多行剪贴板粘贴保留在 PSReadLine 中检查，
   按 Enter 才提交，一次撤销可移除整次粘贴。需要 Shell 集成生效且托管粘贴键没有被用户占用。
   PSReadLine 会统一 CRLF 换行并将 Tab 展开为四个空格；其他编辑器沿用已协商的粘贴协议
-  或现有确认行为。详见[剪贴板粘贴边界](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
+  或现有确认行为。详见[剪贴板粘贴边界](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
 
 ### 智能补齐
 
@@ -257,7 +257,7 @@ pebrel config check
 安装项目固定的 Rust 工具链与对应平台依赖后运行：
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 内部 Cargo 包名仍为 `nebula`，应用与命令名为 `pebrel`。GPUI 是正式产品界面，

@@ -3,7 +3,7 @@
 #
 # 用法:
 #   .\scripts\perf_baseline.ps1 -Exe <pebrel.exe> -Tag winit-old -ExeArgs '--working-directory D:\temp_build\nebula'
-#   .\scripts\perf_baseline.ps1 -Exe <nebula-gpui.exe> -Tag gpui-lab
+#   .\scripts\perf_baseline.ps1 -Exe <pebrel-gpui.exe> -Tag gpui-lab
 #
 # 方法论:
 # - 负载混合 ANSI 256 色/真彩、CJK 宽字符、boxdraw 框线、Powerline 分隔符，

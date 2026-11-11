@@ -9,7 +9,7 @@ from package_relay import package_relay
 
 def generate(output: Path, resources: Path | None = None) -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "nebula_settings/src/themes.rs").read_text(encoding="utf-8")
+    source = (root / "pebrel_settings/src/themes.rs").read_text(encoding="utf-8")
     names_block = source.split("pub const BUILTIN:", 1)[1].split("];", 1)[0]
     names = re.findall(r"Self::(\w+)", names_block)
     palettes = {}
@@ -27,7 +27,7 @@ def generate(output: Path, resources: Path | None = None) -> None:
     output.mkdir(parents=True, exist_ok=True)
     (output / "themes.json").write_text(json.dumps(palettes, separators=(",", ":")), encoding="utf-8")
     # Keep icon identity, glyph metrics and both labels in the desktop authority.
-    icon_source = (root / "nebula_app/src/display/ui/os_icons.rs").read_text(encoding="utf-8")
+    icon_source = (root / "pebrel_app/src/display/ui/os_icons.rs").read_text(encoding="utf-8")
     catalog = icon_source.split("pub(crate) const CATALOG:", 1)[1].split("];", 1)[0]
     icons = []
     for body in re.findall(r"OsIcon \{ (.*?) \}", catalog):

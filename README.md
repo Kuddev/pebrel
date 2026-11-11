@@ -121,13 +121,13 @@ each agent's activity, and read its output without leaving the application.
   Restoring defaults updates existing windows without restarting. Runtime overrides
   replace their previous rules, avoiding the stale disabled bindings from the append-only
   path; the saved configuration format is unchanged. See the
-  [shortcut ownership decision](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
+  [shortcut ownership decision](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
 - Local Windows PowerShell prompts can keep multiline clipboard paste in
   PSReadLine for review: Enter submits it, and one Undo removes the whole paste.
   This requires active shell integration and no user binding on its managed paste shortcut.
   PSReadLine normalizes CRLF and expands tabs to four spaces; other editors retain
   their negotiated paste or existing confirmation behavior. See the
-  [clipboard paste contract](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md).
+  [clipboard paste contract](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md).
 
 ### Intelligent Completion
 
@@ -295,7 +295,7 @@ See the [notification duration menu](docs/screenshots/notification-duration.png)
 With the pinned Rust toolchain and the platform dependencies installed:
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 The internal Cargo package is still named `nebula`; the application and command

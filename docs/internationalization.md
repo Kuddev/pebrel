@@ -34,9 +34,9 @@ translation of every screen, configuration template, or installer language.
 
 ## Runtime contract / 运行时合同
 
-- `nebula_settings/src/language.rs` owns the supported-language registry,
+- `pebrel_settings/src/language.rs` owns the supported-language registry,
   native names, saved values, and locale negotiation. Both shells use it.
-- `nebula_app/build/i18n.rs` validates JSON and generates static Rust data at
+- `pebrel_app/build/i18n.rs` validates JSON and generates static Rust data at
   compile time. Runtime lookup never parses a JSON file, constructs a map,
   reads a file, takes a lock, or allocates a string.
 - `UiLanguage::text(Message::...)` uses a typed identifier and direct table
@@ -73,9 +73,9 @@ content are preserved.
 
 ## Add a language / 新增语言
 
-1. Add one row to the `languages!` registry in `nebula_settings/src/language.rs`.
+1. Add one row to the `languages!` registry in `pebrel_settings/src/language.rs`.
    Saved values are canonical locale tags; do not change existing tags or order.
-2. Add `nebula_app/i18n/<locale>.json`. Keep the same message ids and named
+2. Add `pebrel_app/i18n/<locale>.json`. Keep the same message ids and named
    placeholders as English. A partial catalog is allowed and falls back to English.
    Do not copy English entries just to inflate the translation coverage count.
 3. Set the component locale to one actually supplied by the pinned component
@@ -105,13 +105,13 @@ content are preserved.
 ## Checks / 验证
 
 ```text
-cargo test -p nebula-settings
+cargo test -p pebrel-settings
 cargo test --manifest-path tools/i18n-contract/Cargo.toml --locked
-cargo test -p nebula --test i18n_contract
-cargo test -p nebula --bin pebrel --features gpui-shell i18n::
-cargo test -p nebula --bin pebrel --features gpui-shell gpui_shell::settings_pane::tests::
-cargo test -p nebula --test file_line_budget
-cargo test -p nebula --test i18n_contract --release -- --ignored --nocapture
+cargo test -p pebrel --test i18n_contract
+cargo test -p pebrel --bin pebrel --features gpui-shell i18n::
+cargo test -p pebrel --bin pebrel --features gpui-shell gpui_shell::settings_pane::tests::
+cargo test -p pebrel --test file_line_budget
+cargo test -p pebrel --test i18n_contract --release -- --ignored --nocapture
 ```
 
 The allocation contract checks both the first and repeated lookup across every

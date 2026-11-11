@@ -3,12 +3,12 @@ name: OpenCode notification bridge
 on:
   push:
     paths:
-      - nebula_app/res/hooks/opencode.js
+      - pebrel_app/res/hooks/opencode.js
       - scripts/tests/opencode-notification-bridge.test.mjs
       - .github/workflows/opencode-bridge.yml
   pull_request:
     paths:
-      - nebula_app/res/hooks/opencode.js
+      - pebrel_app/res/hooks/opencode.js
       - scripts/tests/opencode-notification-bridge.test.mjs
       - .github/workflows/opencode-bridge.yml
   workflow_dispatch:
