@@ -237,7 +237,13 @@ class SshIntegrationTest {
                 withContext(Dispatchers.IO) {
                     connection(host.copy(fingerprint = expectedFingerprint)).use { inspect ->
                         inspect.connect()
-                        assertFalse(RemoteSessions.discover(inspect).sessions.any { it.id == name })
+                        val inventory = inspect.query("herdr session list --json")
+                        assertEquals(0, inventory.getInt("status"))
+                        val sessions = org.json.JSONObject(inventory.getString("stdout")).getJSONArray("sessions")
+                        assertFalse((0 until sessions.length()).any {
+                            val session = sessions.getJSONObject(it)
+                            session.getString("name") == name && session.optBoolean("running")
+                        })
                     }
                 }
             }
