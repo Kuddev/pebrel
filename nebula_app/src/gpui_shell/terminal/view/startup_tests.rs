@@ -1663,3 +1663,94 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
         });
     });
 }
+
+#[gpui::test]
+fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggle(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+            &nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new("/bin/zsh".into(), vec![])),
+                ..Default::default()
+            },
+        ));
+        view.session_launch = crate::session::LaunchSession::Shell {
+            name: "zsh".into(),
+            program: "/bin/zsh".into(),
+            args: Vec::new(),
+        };
+        cx.global_mut::<Settings>().agent_resume_args =
+            nebula_settings::AgentResumeArgs::from_raw(&nebula_settings::RawSettings::from_text(
+                "agent_resume_args_codex=--yolo\n\
+                 agent_resume_enabled_codex=1\n\
+                 agent_resume_args_claude=--dangerously-skip-permissions\n\
+                 agent_resume_enabled_claude=1\n\
+                 agent_resume_args_antigravity=--dangerously-skip-permissions\n\
+                 agent_resume_enabled_antigravity=0\n",
+            ));
+
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "codex".into(),
+                session_id: Some("session-1".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        assert_eq!(
+            view.pending_shell_command.as_ref().map(|pending| pending.text.as_str()),
+            Some("codex resume session-1 --yolo")
+        );
+
+        view.pending_shell_command = None;
+        view.run_agent_session_command("claude --resume 'session-2' --fork-session".to_owned(), cx);
+        assert_eq!(
+            view.pending_shell_command.as_ref().map(|pending| pending.text.as_str()),
+            Some("claude --resume 'session-2' --fork-session --dangerously-skip-permissions")
+        );
+
+        view.pending_shell_command = None;
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "antigravity".into(),
+                session_id: Some("conv-3".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        assert_eq!(
+            view.pending_shell_command.as_ref().map(|pending| pending.text.as_str()),
+            Some("agy --conversation conv-3")
+        );
+
+        // Ordinary non-resume/fork commands must keep exact arguments without rule decoration.
+        view.pending_shell_command = None;
+        view.run_command("codex --version".into(), cx);
+        assert_eq!(
+            view.pending_shell_command.as_ref().map(|pending| pending.text.as_str()),
+            Some("codex --version")
+        );
+
+        view.pending_shell_command = None;
+        cx.global_mut::<Settings>().agent_resume_args = nebula_settings::AgentResumeArgs::from_raw(
+            &nebula_settings::RawSettings::from_text("agent_resume_args_claude=--yolo; echo bad\n"),
+        );
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "claude".into(),
+                session_id: Some("session-4".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        assert!(view.pending_shell_command.is_none());
+        assert!(view.recovery.failed);
+
+        view.recovery.failed = false;
+        view.run_agent_session_command("claude --resume 'session-5' --fork-session".into(), cx);
+        assert!(view.pending_shell_command.is_none());
+        assert!(view.recovery.failed);
+    });
+}

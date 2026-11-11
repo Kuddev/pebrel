@@ -8,7 +8,7 @@ pub(super) struct SessionRecovery {
     pub(super) awaiting_confirmation: bool,
     resolving: bool,
     submitted: bool,
-    failed: bool,
+    pub(super) failed: bool,
     choosing_session: bool,
 }
 
@@ -67,7 +67,7 @@ impl SessionRecovery {
 }
 
 pub(super) struct PendingShellCommand {
-    text: String,
+    pub(super) text: String,
 }
 
 impl TerminalView {
@@ -101,7 +101,18 @@ impl TerminalView {
         self.recovery.submitted = false;
         self.recovery.failed = false;
         self.last_command_failed = false;
-        self.run_command("codex resume".into(), cx);
+        let Some(command) = self.configured_recovery_command("codex resume".into(), "codex", cx)
+        else {
+            self.recovery.choosing_session = false;
+            self.recovery.failed = true;
+            cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
+                body: ui_language().text(crate::i18n::Message::SessionRestoreFailed).to_owned(),
+                program: Some("codex".into()),
+            }));
+            cx.notify();
+            return;
+        };
+        self.run_command(command, cx);
         cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
             body: ui_language().text(crate::i18n::Message::SessionRestoreChooseCodex).to_owned(),
             program: Some("codex".into()),
@@ -155,6 +166,41 @@ impl TerminalView {
         }
         self.pending_shell_command = Some(PendingShellCommand { text });
         self.flush_pending_shell_command(cx);
+    }
+
+    pub(crate) fn run_agent_session_command(&mut self, command: String, cx: &mut Context<Self>) {
+        let Some(kind) = crate::ai_agents::AgentKind::parse_command(&command) else {
+            self.run_command(command, cx);
+            return;
+        };
+        let Some(decorated) = self.configured_recovery_command(command, kind.slug(), cx) else {
+            self.recovery.failed = true;
+            cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
+                body: ui_language().text(crate::i18n::Message::SessionRestoreFailed).to_owned(),
+                program: Some(kind.slug().to_owned()),
+            }));
+            cx.notify();
+            return;
+        };
+        self.run_command(decorated, cx);
+    }
+
+    pub(crate) fn configured_recovery_command(
+        &self,
+        command: String,
+        source: &str,
+        cx: &App,
+    ) -> Option<String> {
+        let value = cx
+            .try_global::<Settings>()
+            .map(|settings| settings.agent_resume_args.get(source))
+            .unwrap_or_default();
+        let program = match &self.session_launch {
+            crate::session::LaunchSession::Shell { program, .. } => Some(program.as_str()),
+            crate::session::LaunchSession::Profile { command, .. } => Some(command.as_str()),
+            _ => self.exec_context.as_ref().and_then(|context| context.shell_program()),
+        };
+        crate::agent_resume::append(command, value, self.path_quote(), program)
     }
 
     fn prediction_startup_command(&self, text: &str, cx: &Context<Self>) -> Option<String> {
@@ -212,7 +258,10 @@ impl TerminalView {
             ..SessionRecovery::default()
         };
         if agent.source != "pi" || self.ssh_destination.is_some() {
-            if let Some(command) = agent.resume_command() {
+            if let Some(command) = agent
+                .resume_command()
+                .and_then(|command| self.configured_recovery_command(command, &agent.source, cx))
+            {
                 self.run_command(command, cx);
             } else {
                 self.recovery.failed = true;
@@ -248,13 +297,19 @@ impl TerminalView {
                 view.recovery.resolving = false;
                 match result {
                     Ok(target) => {
-                        let command = target.session_file.as_ref().and_then(|file| {
-                            crate::display::side_panel::drop_text_for_paths(
-                                std::slice::from_ref(file),
-                                view.path_quote(),
-                            )
-                            .map(|quoted| format!("pi --session {}", quoted.trim_end()))
-                        });
+                        let command = target
+                            .session_file
+                            .as_ref()
+                            .and_then(|file| {
+                                crate::display::side_panel::drop_text_for_paths(
+                                    std::slice::from_ref(file),
+                                    view.path_quote(),
+                                )
+                                .map(|quoted| format!("pi --session {}", quoted.trim_end()))
+                            })
+                            .and_then(|command| {
+                                view.configured_recovery_command(command, "pi", cx)
+                            });
                         view.recovery.target = Some(target);
                         if let Some(command) = command {
                             view.run_command(command, cx);

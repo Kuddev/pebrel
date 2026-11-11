@@ -2,13 +2,13 @@ use super::*;
 
 /// DropdownMenu 注入的 selected 是实际开合状态，箭头不再猜测点击时序。
 #[derive(IntoElement)]
-pub(super) struct ProviderSelectTrigger {
+pub(in crate::gpui_shell::settings_pane) struct ProviderSelectTrigger {
     button: Button,
     open: bool,
 }
 
 impl ProviderSelectTrigger {
-    pub(super) fn new(button: Button) -> Self {
+    pub(in crate::gpui_shell::settings_pane) fn new(button: Button) -> Self {
         Self { button, open: false }
     }
 }

@@ -36,6 +36,9 @@ use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::widgets::{NebulaButton, settings_control_height};
 
 mod about;
+mod agent_resume;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod agent_resume_tests;
 mod agents;
 mod app_icon;
 mod appearance;

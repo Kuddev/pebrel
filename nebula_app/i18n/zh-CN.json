@@ -210,7 +210,7 @@
         "keymap": "快速终端 独立窗口 已有窗口 按键映射 快捷键",
         "advanced": "高级 会话 托盘 恢复 自启动 静默启动 开机 登录",
         "backup": "云备份 云同步 云存储 备份 导出 恢复 坚果云 123云盘 群晖 快照",
-        "agents": "智能体 钩子 接入",
+        "agents": "智能体 钩子 接入 会话恢复 分叉 附加参数 权限 规则",
         "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
         "plugins": "插件 扩展 安装 授权 生成 plugins plugin luau"
       }
@@ -540,7 +540,16 @@
       "helper_missing": "缺少 hook 辅助程序，请修复 Pebrel 安装后再启用。",
       "needs_repair": "Hook 已安装 · 需修复",
       "initialize": "请先运行一次此工具以创建配置，然后刷新。",
-      "config_path": "配置：{path}"
+      "config_path": "配置：{path}",
+      "resume_args_title": "会话恢复与分叉附加参数规则",
+      "resume_args_description": "在 Pebrel 恢复（Resume）或分叉（Fork）智能体会话时自动附加命令行后缀参数（例如 Codex 的 --yolo，或 Claude Code / Antigravity 的 --dangerously-skip-permissions）。",
+      "resume_args_agent": "智能体",
+      "resume_args_suffix": "附加参数后缀",
+      "resume_args_placeholder": "例如 --yolo 或 --dangerously-skip-permissions",
+      "resume_args_add": "保存规则",
+      "resume_args_empty": "暂未配置附加参数规则。在上方选择智能体并输入命令后缀即可添加。",
+      "resume_args_invalid": "请输入合法的命令行参数后缀（不含未加引号的 Shell 运算符）或 JSON 字符串数组。",
+      "resume_args_saved": "已保存 {agent} 的附加参数规则。"
     },
     "plugins": {
       "title": "插件",

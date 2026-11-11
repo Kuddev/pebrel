@@ -210,7 +210,7 @@
         "keymap": "keymap key binding shortcut quick terminal",
         "advanced": "advanced session tray restore startup autostart login silent",
         "backup": "backup cloud sync export restore webdav s3 sftp 123 nextcloud synology nas r2 minio snapshots",
-        "agents": "agents agent hook hooks claude codex opencode cursor kimi pi omp copilot grok",
+        "agents": "agents agent hook hooks claude codex antigravity gemini amp opencode cursor kimi pi omp copilot grok resume fork yolo arguments rules",
         "mobile": "mobile phone android ios remote pairing qr lan relay",
         "plugins": "plugins plugin extension extensions luau install grant generate"
       }
@@ -540,7 +540,16 @@
       "helper_missing": "The hook helper is missing. Repair the Pebrel installation to enable hooks.",
       "needs_repair": "Hook installed · needs repair",
       "initialize": "Run this agent once to create its configuration, then refresh.",
-      "config_path": "Configuration: {path}"
+      "config_path": "Configuration: {path}",
+      "resume_args_title": "Session resume & fork rules",
+      "resume_args_description": "Append custom CLI arguments when Pebrel resumes or forks an agent session (for example, --yolo for Codex or --dangerously-skip-permissions for Claude Code and Antigravity).",
+      "resume_args_agent": "Agent",
+      "resume_args_suffix": "Command suffix",
+      "resume_args_placeholder": "e.g. --yolo or --dangerously-skip-permissions",
+      "resume_args_add": "Save rule",
+      "resume_args_empty": "No argument rules configured yet. Choose an agent above and enter a command suffix to add one.",
+      "resume_args_invalid": "Enter valid CLI flags (without unquoted shell operators) or a JSON string array.",
+      "resume_args_saved": "Saved argument rule for {agent}."
     },
     "plugins": {
       "title": "Plugins",

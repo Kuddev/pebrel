@@ -122,7 +122,11 @@ fn default_settings_text(text: &str) -> String {
     text.split_inclusive('\n')
         .filter(|line| {
             !line.split_once('=').is_some_and(|(key, _)| {
-                RESET_KEYS.iter().any(|known| key.trim().eq_ignore_ascii_case(known))
+                let key = key.trim();
+                RESET_KEYS.iter().any(|known| key.eq_ignore_ascii_case(known))
+                    || crate::AGENT_RESUME_SETTINGS.iter().any(|(_, args_key, enabled_key)| {
+                        key.eq_ignore_ascii_case(args_key) || key.eq_ignore_ascii_case(enabled_key)
+                    })
             })
         })
         .collect()
@@ -403,6 +407,18 @@ mod tests {
         assert_ne!(backup, next_backup);
         assert_eq!(fs::read_to_string(&backup).unwrap(), "theme=Nord\nssh_hosts=keep\n");
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn reset_clears_every_agent_resume_rule() {
+        let mut text = String::from("custom=keep\n");
+        for (_, args_key, enabled_key) in crate::AGENT_RESUME_SETTINGS {
+            text.push_str(&format!("{args_key}=--yolo\n{enabled_key}=0\n"));
+        }
+        let restored = default_settings_text(&text);
+        assert_eq!(restored, "custom=keep\n");
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert!(settings.agent_resume_args.rules().is_empty());
     }
 
     #[test]

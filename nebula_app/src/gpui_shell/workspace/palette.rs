@@ -72,7 +72,12 @@ impl NebulaWorkspace {
             },
             WorkspacePaletteAction::RunAiSession { command, cwd } => {
                 self.dismiss_palette_state();
-                self.add_terminal_at(cwd, Some(command), window, cx);
+                self.add_terminal_at(cwd, None, window, cx);
+                if let Some(view) =
+                    self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).cloned()
+                {
+                    view.update(cx, |view, cx| view.run_agent_session_command(command, cx));
+                }
             },
             WorkspacePaletteAction::LaunchSshHost(host) => {
                 self.dismiss_palette_state();
