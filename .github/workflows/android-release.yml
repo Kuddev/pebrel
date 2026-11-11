@@ -166,7 +166,7 @@ jobs:
       - name: Prepare the isolated OpenSSH fixture
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends openssh-server
+          sudo apt-get install -y --no-install-recommends openssh-server tmux
           sudo useradd --create-home --shell /bin/bash pebreltest
           echo 'pebreltest:pebrel-test-only' | sudo chpasswd
           mkdir -p "$RUNNER_TEMP/android-ssh"
@@ -188,6 +188,22 @@ jobs:
           sudo -u pebreltest mkdir /home/pebreltest/paging
           sudo -u pebreltest bash -c 'for n in $(seq 1 300); do touch "/home/pebreltest/paging/file-$n"; done'
           echo "SSH_FINGERPRINT=$(ssh-keygen -lf "$RUNNER_TEMP/android-ssh/host_key.pub" -E sha256 | awk '{print $2}')" >> "$GITHUB_ENV"
+      - name: Install the pinned remote workspace fixture
+        run: |
+          fixture="$RUNNER_TEMP/android-ssh/workspace-fixture"
+          curl --proto '=https' --proto-redir '=https' --fail --silent --show-error --location --retry 2 --max-time 90 \
+            'https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64' --output "$fixture"
+          printf '%s  %s\n' 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d "$fixture" | sha256sum --check
+          sudo install -m 0755 "$fixture" /usr/local/bin/herdr
+          sudo -u pebreltest install -d -m 0700 /home/pebreltest/.config/herdr
+          cat > "$RUNNER_TEMP/android-ssh/workspace.toml" <<'EOF'
+          onboarding = false
+          [terminal]
+          default_shell = "/bin/sh"
+          shell_mode = "non_login"
+          EOF
+          sudo install -o pebreltest -g pebreltest -m 0600 "$RUNNER_TEMP/android-ssh/workspace.toml" /home/pebreltest/.config/herdr/config.toml
+          sudo -u pebreltest /usr/local/bin/herdr --version
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -206,7 +222,7 @@ jobs:
             # 触摸验收从已授权的本地终端开始；全新模拟器的权限弹窗不应截获选词和复制手势。
             adb shell appops set --uid io.github.kuddev.pebrel.mobile.preview MANAGE_EXTERNAL_STORAGE allow
             adb shell pm grant io.github.kuddev.pebrel.mobile.preview android.permission.POST_NOTIFICATIONS
-            gradle --no-daemon -p mobile/android :app:connectedPreviewAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.kuddev.pebrel.mobile.GhosttyEngineTest,io.github.kuddev.pebrel.mobile.SshIntegrationTest#privateKeysAuthenticateWithPassphrasesAndNeverFallBackToPassword,io.github.kuddev.pebrel.mobile.SshIntegrationTest#sftpRoundTripPagingAndCancellationKeepTheRealShellUsable,io.github.kuddev.pebrel.mobile.SshIntegrationTest#realPasswordShellStreamsOutputThroughGhostty,io.github.kuddev.pebrel.mobile.SshIntegrationTest#wrongPasswordReportsAuthenticationAndWipesSecret,io.github.kuddev.pebrel.mobile.SshIntegrationTest#changedHostKeyNeverReachesAuthentication,io.github.kuddev.pebrel.mobile.SshIntegrationTest#declinedTrustNeverAuthenticates,io.github.kuddev.pebrel.mobile.SshIntegrationTest#execKeepsStderrOutOfRpcStdoutAndPreservesExitCode -Pandroid.testInstrumentationRunnerArguments.sshFingerprint="$SSH_FINGERPRINT" -Pandroid.testInstrumentationRunnerArguments.sftpFixtureDirectory=paging
+            gradle --no-daemon -p mobile/android :app:connectedPreviewAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.kuddev.pebrel.mobile.GhosttyEngineTest,io.github.kuddev.pebrel.mobile.SshIntegrationTest#privateKeysAuthenticateWithPassphrasesAndNeverFallBackToPassword,io.github.kuddev.pebrel.mobile.SshIntegrationTest#sftpRoundTripPagingAndCancellationKeepTheRealShellUsable,io.github.kuddev.pebrel.mobile.SshIntegrationTest#realPasswordShellStreamsOutputThroughGhostty,io.github.kuddev.pebrel.mobile.SshIntegrationTest#wrongPasswordReportsAuthenticationAndWipesSecret,io.github.kuddev.pebrel.mobile.SshIntegrationTest#changedHostKeyNeverReachesAuthentication,io.github.kuddev.pebrel.mobile.SshIntegrationTest#declinedTrustNeverAuthenticates,io.github.kuddev.pebrel.mobile.SshIntegrationTest#execKeepsStderrOutOfRpcStdoutAndPreservesExitCode,io.github.kuddev.pebrel.mobile.SshIntegrationTest#herdrReattachesTheSameRemoteShellAndKeepsSftpAvailable,io.github.kuddev.pebrel.mobile.SshIntegrationTest#tmuxReattachesTheSameRemoteShellAndKeepsSftpAvailable -Pandroid.testInstrumentationRunnerArguments.sshFingerprint="$SSH_FINGERPRINT" -Pandroid.testInstrumentationRunnerArguments.sftpFixtureDirectory=paging
       - name: Verify signing, identity, native payload and test results
         run: |
           python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$SOURCE_COMMIT" \
@@ -246,3 +262,11 @@ jobs:
           if [[ -f "$RUNNER_TEMP/android-ssh/sshd.pid" ]]; then
             sudo kill "$(cat "$RUNNER_TEMP/android-ssh/sshd.pid")"
           fi
+      - name: Upload emulator test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-recovery-emulator-reports
+          path: mobile/android/app/build/outputs/androidTest-results/
+          if-no-files-found: warn
+          retention-days: 7
