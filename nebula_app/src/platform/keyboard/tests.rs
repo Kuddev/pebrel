@@ -103,6 +103,30 @@ fn wait_file(pty: &mut tty::Pty, path: &Path) -> Vec<u8> {
     }
 }
 
+fn write_input(pty: &mut tty::Pty, mut input: &[u8]) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !input.is_empty() {
+        // The evented pipe can temporarily return zero instead of blocking.
+        match pty.writer().write(input) {
+            Ok(0) => (),
+            Ok(count) => {
+                input = &input[count..];
+                continue;
+            },
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "ConPTY did not accept fixture input",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
 #[test]
 fn modified_enter_reaches_native_and_byte_readers_through_conpty() {
     let native = TermMode::WIN32_INPUT_MODE;
@@ -145,7 +169,7 @@ fn modified_enter_reaches_native_and_byte_readers_through_conpty() {
         if reader == "bytes" {
             input.push(b'~');
         }
-        pty.writer().write_all(&input).unwrap();
+        write_input(&mut pty, &input).unwrap_or_else(|error| panic!("{program}: {error}"));
         let result = wait_file(&mut pty, &directory.path().join("result"));
         assert_eq!(result, expected, "{program}: {mode:?}");
     }

@@ -234,15 +234,20 @@ fn application_drag_stays_with_the_original_pane(cx: &mut TestAppContext) {
     });
     let mut window = window.clone();
     window.simulate_resize(gpui::size(px(800.0), px(400.0)));
+    // The fixture creates a split immediately; settle its grid before testing
+    // the press so the startup grace period cannot change the expected column.
+    for pane in &panes {
+        pane.update(&mut window, |view, _| view.mark_structural_resize());
+    }
     window.update(|window, _| window.activate_window());
     draw(&mut window);
     for (source, target) in [(0, 1), (1, 0)] {
         let start = cell(&panes[source], &window, 2);
+        window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        draw(&mut window);
         let end = cell(&panes[target], &window, 5);
         let last_column =
             panes[source].read_with(&window, |view, _| if source == 0 { view.cols } else { 1 });
-        window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
-        draw(&mut window);
         window.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
         window.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
         assert!(
