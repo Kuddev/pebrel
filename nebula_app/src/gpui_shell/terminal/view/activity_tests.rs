@@ -27,6 +27,28 @@ fn remote_hook(session: &str, name: &str, process: &str, sequence: u64) -> AiHoo
 }
 
 #[gpui::test]
+fn wsl_claude_session_end_without_shell_markers_clears_the_saved_agent(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.suggest.suggest_env =
+            crate::display::SuggestEnv::Wsl { distro: "session-end-434".into() };
+        assert!(view.handle_ai_hook(&remote_hook("exited", "SessionStart", "434:1", 1), cx));
+        let saved = view.session_agent().expect("running conversation is restorable");
+        assert_eq!(saved.source, "claude");
+        assert_eq!(saved.session_id.as_deref(), Some("exited"));
+        assert_eq!(view.running_program.as_deref(), Some("claude"));
+        assert!(view.handle_ai_hook(&remote_hook("exited", "SessionEnd", "434:1", 2), cx));
+        view.prepare_ai_session_save(cx);
+        assert!(view.session_agent().is_none(), "window close must not resume an exited CLI");
+        assert!(view.ai_session.is_none());
+        assert!(view.recovery.target.is_none());
+        assert!(view.running_program.is_none());
+        assert!(!view.ai_session_save_pending());
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+    });
+}
+
+#[gpui::test]
 fn pi_redraw_anchor_follows_accepted_hook_and_command_lifecycle(cx: &mut TestAppContext) {
     use nebula_terminal::term::test::TermSize;
     use nebula_terminal::vte::ansi::Processor;
