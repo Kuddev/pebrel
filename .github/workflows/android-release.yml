@@ -57,9 +57,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install native static-link tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools
+        run: bash scripts/install-ci-ubuntu-packages.sh --no-install-recommends musl-tools
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -165,8 +163,7 @@ jobs:
             :app:assemblePreview :app:assemblePreviewAndroidTest
       - name: Prepare the isolated OpenSSH fixture
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends openssh-server
+          bash scripts/install-ci-ubuntu-packages.sh --no-install-recommends openssh-server
           sudo useradd --create-home --shell /bin/bash pebreltest
           echo 'pebreltest:pebrel-test-only' | sudo chpasswd
           mkdir -p "$RUNNER_TEMP/android-ssh"

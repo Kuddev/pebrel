@@ -149,8 +149,7 @@ jobs:
           python-version: "3.13"
       - name: Install build, package, and headless runtime dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          bash scripts/install-ci-ubuntu-packages.sh --no-install-recommends \
             appstream build-essential cmake curl desktop-file-utils dpkg-dev \
             imagemagick libasound2-dev libdbus-1-dev libegl1-mesa-dev \
             libfontconfig1-dev libfreetype6-dev libgl1-mesa-dev libudev-dev \
@@ -235,7 +234,7 @@ jobs:
         env:
           NEBULA_RESIZE_TRACE: "1"
         run: |
-          sudo apt-get install -y "./dist/Pebrel-v$PACKAGE_VERSION-linux-x64.deb"
+          bash scripts/install-ci-ubuntu-packages.sh "./dist/Pebrel-v$PACKAGE_VERSION-linux-x64.deb"
           test "$(dpkg-query -W -f='${Status}' pebrel)" = "install ok installed"
           xvfb-run -a -s "-screen 0 1600x1000x24" \
             python3 scripts/conformance/run.py --app /usr/bin/pebrel \
