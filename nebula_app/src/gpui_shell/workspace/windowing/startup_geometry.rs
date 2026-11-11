@@ -88,30 +88,58 @@ fn fit_bounds(
     )
 }
 
-pub(super) fn load_restore(id: u64, startup: &WorkspaceStartup, role: WindowRole, cx: &mut App) {
-    if id != 1
-        || role != WindowRole::Regular
-        || !matches!(startup, WorkspaceStartup::RestoreOrDefault)
-        || crate::platform::elevation::requires_isolation()
-    {
+pub(super) fn load_restore(
+    id: u64,
+    startup: &WorkspaceStartup,
+    role: WindowRole,
+    has_regular_window: bool,
+    cx: &mut App,
+) {
+    if role != WindowRole::Regular || crate::platform::elevation::requires_isolation() {
         return;
     }
-    let restored = crate::session::load().and_then(|session| session.startup_window_state());
+    load_restore_from(id, startup, has_regular_window, cx, || {
+        crate::session::load().and_then(|session| session.startup_window_state())
+    });
+}
+
+fn load_restore_from(
+    id: u64,
+    startup: &WorkspaceStartup,
+    has_regular_window: bool,
+    cx: &mut App,
+    load: impl FnOnce() -> Option<crate::session::WindowState>,
+) {
+    let size_only = match startup {
+        WorkspaceStartup::RestoreOrDefault if id == 1 => false,
+        WorkspaceStartup::NewTerminal { cwd: Some(_) } if cfg!(windows) && !has_regular_window => {
+            true
+        },
+        _ => return,
+    };
     if cx.has_global::<StartupWindow>() {
-        cx.global_mut::<StartupWindow>().restored = restored;
+        cx.global_mut::<StartupWindow>().restored = load().map(|state| {
+            let state = if size_only {
+                crate::session::WindowState {
+                    width: state.width,
+                    height: state.height,
+                    ..Default::default()
+                }
+            } else {
+                state
+            };
+            (id, state)
+        });
     }
 }
 
-pub(in crate::gpui_shell::workspace) fn restored_size(
-    id: u64,
-    startup: &WorkspaceStartup,
-    cx: &App,
-) -> bool {
-    id == 1
-        && matches!(startup, WorkspaceStartup::RestoreOrDefault)
-        && cx
-            .try_global::<StartupWindow>()
-            .is_some_and(|config| config.dimensions.is_none() && config.restored.is_some())
+fn restored_window(id: u64, config: &StartupWindow) -> Option<crate::session::WindowState> {
+    config.restored.filter(|(target, _)| *target == id).map(|(_, state)| state)
+}
+
+pub(in crate::gpui_shell::workspace) fn restored_size(id: u64, cx: &App) -> bool {
+    cx.try_global::<StartupWindow>()
+        .is_some_and(|config| config.dimensions.is_none() && restored_window(id, config).is_some())
 }
 
 pub(super) fn options(
@@ -170,7 +198,7 @@ pub(super) fn regular_options(
     cx: &mut App,
 ) -> WindowOptions {
     let config = cx.try_global::<StartupWindow>();
-    let restored = (id == 1).then(|| config.and_then(|config| config.restored)).flatten();
+    let restored = config.and_then(|config| restored_window(id, config));
     let configured =
         config.and_then(|config| config.position).map(|position| (position.x, position.y));
     let physical = configured.or_else(|| restored.and_then(|window| window.position));
@@ -356,16 +384,14 @@ mod tests {
     ) {
         cx.update(|cx| {
             cx.set_global(StartupWindow {
-                restored: Some(crate::session::WindowState {
-                    width: 900,
-                    height: 650,
-                    ..Default::default()
-                }),
+                restored: Some((
+                    1,
+                    crate::session::WindowState { width: 900, height: 650, ..Default::default() },
+                )),
                 ..Default::default()
             });
-            assert!(restored_size(1, &WorkspaceStartup::RestoreOrDefault, cx));
-            assert!(!restored_size(2, &WorkspaceStartup::RestoreOrDefault, cx));
-            assert!(!restored_size(1, &WorkspaceStartup::Empty, cx));
+            assert!(restored_size(1, cx));
+            assert!(!restored_size(2, cx));
             let options = regular_options(1, false, 230.0, cx);
             assert_eq!(
                 options.window_bounds.unwrap().get_bounds().size,
@@ -373,7 +399,46 @@ mod tests {
             );
             cx.global_mut::<StartupWindow>().dimensions =
                 Some(crate::config::window::Dimensions { columns: 155, lines: 43 });
-            assert!(!restored_size(1, &WorkspaceStartup::RestoreOrDefault, cx));
+            assert!(!restored_size(1, cx));
+        });
+    }
+
+    #[cfg(all(windows, feature = "gpui-test-support"))]
+    #[gpui::test]
+    fn directory_launch_uses_saved_size_without_restoring_the_old_window(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::startup::{initial_startup, runtime_window_startup};
+
+        cx.update(|cx| {
+            cx.set_global(StartupWindow::default());
+            let cwd = Some(std::path::PathBuf::from("project"));
+            let saved = crate::session::WindowState {
+                width: 900,
+                height: 650,
+                position: Some((10, 20)),
+                maximized: true,
+                ..Default::default()
+            };
+            for (id, launch) in [
+                (1, initial_startup(cwd.clone(), None, false)),
+                (3, runtime_window_startup(cwd.clone(), None).unwrap()),
+            ] {
+                assert!(matches!(&launch, WorkspaceStartup::NewTerminal { cwd: actual } if actual == &cwd));
+                load_restore_from(id, &launch, false, cx, || Some(saved));
+                assert!(restored_size(id, cx));
+                assert!(!restored_size(id + 1, cx));
+                let options = regular_options(id, false, 230.0, cx);
+                let Some(WindowBounds::Windowed(bounds)) = options.window_bounds else {
+                    panic!("opening a directory must start a normal window");
+                };
+                assert_eq!(bounds.size, size(px(900.0), px(650.0)));
+                assert_eq!(restored_window(id, cx.global::<StartupWindow>()).unwrap().position, None);
+                load_restore_from(id + 1, &launch, true, cx, || {
+                    panic!("an existing workspace owns the current window geometry")
+                });
+                assert!(!restored_size(id + 1, cx));
+            }
         });
     }
 

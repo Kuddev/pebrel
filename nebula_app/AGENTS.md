@@ -5,6 +5,7 @@
 - GLSL/WGSL 源码转换、Luau shader 参数与帧 ABI 边界见 [`shader_source`](../architecture/notes/nebula_app/gpui_shell/shader_source/)。
 - `src/gpui_shell` 负责 GPUI 呈现、命令和订阅。交互改动必须覆盖默认、hover、pressed、键盘焦点、disabled/loading 以及成功/失败中实际需要的状态。
 - 首帧窗口尺寸、非阻塞 logo 准备与原生呈现顺序的因果记录见 [`workspace`](../architecture/notes/nebula_app/gpui_shell/workspace/)。
+- Windows 指定目录启动时的窗口尺寸恢复见 [`startup geometry`](../architecture/notes/nebula_app/gpui_shell/workspace/windowing/2026-11-11-directory-launch-window-size.md)。
 - 本地启动失败的诊断保留与显式 Shell 选择见 [`terminal/view`](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-24-failed-local-session-retention.md)。
 - 独立本地草稿写入的 canonical target 并发合同见 [`file_editor writers`](../architecture/notes/nebula_app/gpui_shell/file_editor/2026-10-11-canonical-target-writers.md)。
 - GPUI 图片解码帧与 zoom/pan 几何一致性见 [`doc_tabs`](../architecture/notes/nebula_app/gpui_shell/doc_tabs/)。
