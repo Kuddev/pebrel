@@ -467,7 +467,8 @@ fn default_font_family() -> &'static str {
 pub(crate) struct StartupWindow {
     pub dimensions: Option<crate::config::window::Dimensions>,
     pub position: Option<crate::config::ui_config::Delta<i32>>,
-    pub(crate) restored: Option<crate::session::WindowState>,
+    // Remembered geometry is scoped to the window being created.
+    pub(crate) restored: Option<(u64, crate::session::WindowState)>,
 }
 
 impl Global for StartupWindow {}

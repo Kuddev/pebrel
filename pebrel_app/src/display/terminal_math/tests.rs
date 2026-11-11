@@ -883,6 +883,14 @@ fn explicit_delimiters_still_require_content_evidence() {
     assert_eq!(sources(&["$a/b$"]), vec![("a/b".into(), false)]);
 }
 
+#[test]
+fn escaped_parentheses_render_uppercase_variables_with_numeric_subscripts() {
+    assert_eq!(sources(&[r"│ \(R_0\)，大半径 │"]), vec![("R_0".into(), false)]);
+    for literal in [r"\(PATH_0\)", "$R_0$", "(R_0)"] {
+        assert!(sources(&[literal]).is_empty(), "{literal} should stay literal");
+    }
+}
+
 /// 普通 shell 里真实出现过的形状，一个都不许变成公式。
 /// 每一行都对应实测过的误报（见 PR #55 review）。
 #[test]

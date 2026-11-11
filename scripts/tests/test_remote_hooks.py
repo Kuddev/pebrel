@@ -93,6 +93,68 @@ class RemoteHooksTests(unittest.TestCase):
             write.assert_called_once_with(42, b"\x07")
             self.assertEqual(output.getvalue(), "")
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux procfs and a devpts terminal")
+    def test_detached_claude_session_end_reaches_its_foreground_terminal(self):
+        import pty
+
+        provider = self.root / "claude"
+        bridge = ASSETS / "remote_bridge.py"
+        provider.write_text(
+            "import json, os, subprocess, sys\n"
+            "if sys.argv[1] == 'background':\n"
+            " raise SystemExit(subprocess.run([sys.executable, __file__, 'worker'], process_group=0, timeout=5).returncode)\n"
+            "if sys.argv[1] == 'redirected':\n"
+            " fd = os.open(os.devnull, os.O_RDONLY)\n"
+            " os.dup2(fd, 0)\n"
+            " os.close(fd)\n"
+            "payload = json.dumps({'hook_event_name': 'SessionEnd', 'session_id': 'fixture', 'pid': 1})\n"
+            f"result = subprocess.run([sys.executable, {str(bridge)!r}, 'claude'], input=payload, "
+            "text=True, capture_output=True, start_new_session=True, check=True, timeout=4)\n"
+            # Claude ignores the terminalSequence response during SessionEnd.
+            "print('response=' + ('fallback' if result.stdout else 'empty'))\n"
+        )
+        for mode in ("foreground", "redirected", "background"):
+            with self.subTest(mode=mode):
+                pid, master = pty.fork()
+                if pid == 0:
+                    os.execv(sys.executable, [sys.executable, str(provider), mode])
+                output = bytearray()
+                try:
+                    deadline = time.monotonic() + 6
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.1)[0]:
+                            try:
+                                part = os.read(master, 65536)
+                            except OSError as error:
+                                if error.errno != errno.EIO:
+                                    raise
+                                break
+                            if not part:
+                                break
+                            output.extend(part)
+                    waited, status = os.waitpid(pid, os.WNOHANG)
+                    self.assertEqual(waited, pid, "provider did not finish within the PTY budget")
+                    self.assertEqual(status, 0, output)
+                finally:
+                    os.close(master)
+                    try:
+                        os.kill(pid, 9)
+                        os.waitpid(pid, 0)
+                    except ProcessLookupError:
+                        pass
+                frames = re.findall(
+                    rb"\x1b\]777;nebula-hook;" + TOKEN.encode() + rb";([^\x07]+)\x07", output
+                )
+                if mode != "foreground":
+                    self.assertEqual(frames, [])
+                    self.assertIn(b"response=fallback", output)
+                    continue
+                self.assertEqual(len(frames), 1, output)
+                header, body = base64.b64decode(frames[0]).split(b"\n", 1)
+                self.assertTrue(header.startswith(f"nebula-hook/1 source=claude process={pid}:".encode()))
+                self.assertEqual(json.loads(body)["hook_event_name"], "SessionEnd")
+                self.assertIn(b"response=empty", output)
+
     def test_claude_partial_terminal_frame_is_cancelled_without_stdout_retry(self):
         bridge = module("remote_bridge")
         writes = []
