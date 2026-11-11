@@ -1,5 +1,6 @@
 //! Keep the standard window controls in AppKit's native toolbar hierarchy.
 
+use super::TitleBarLayout;
 use gpui::Window;
 use objc2::{MainThreadOnly, rc::Retained};
 use objc2_app_kit::{NSToolbar, NSView, NSWindow, NSWindowButton, NSWindowToolbarStyle};
@@ -26,34 +27,37 @@ pub(super) fn configure(window: &Window) {
     native.setToolbar(Some(&toolbar));
 }
 
-pub(super) fn layout(window: &Window) -> (f32, f32) {
+pub(super) fn layout(window: &Window) -> TitleBarLayout {
+    const WINDOWED_FALLBACK: TitleBarLayout =
+        TitleBarLayout { height: 52.0, left_inset: 96.0, native_controls_visible: true };
     if window.is_fullscreen() {
-        return (52.0, 8.0);
+        return TitleBarLayout { height: 52.0, left_inset: 8.0, native_controls_visible: false };
     }
-    let Some(native) = native_window(window) else { return (52.0, 96.0) };
+    let Some(native) = native_window(window) else { return WINDOWED_FALLBACK };
     let Some(close) = native.standardWindowButton(NSWindowButton::CloseButton) else {
-        return (52.0, 96.0);
+        return WINDOWED_FALLBACK;
     };
     let Some(zoom) = native.standardWindowButton(NSWindowButton::ZoomButton) else {
-        return (52.0, 96.0);
+        return WINDOWED_FALLBACK;
     };
-    let Some(content) = native.contentView() else { return (52.0, 96.0) };
+    let Some(content) = native.contentView() else { return WINDOWED_FALLBACK };
     let close = close.convertRect_toView(close.bounds(), Some(&content));
     let zoom = zoom.convertRect_toView(zoom.bounds(), Some(&content));
     control_layout(close, zoom, content.bounds(), content.isFlipped())
 }
 
-fn control_layout(close: NSRect, zoom: NSRect, content: NSRect, flipped: bool) -> (f32, f32) {
+fn control_layout(close: NSRect, zoom: NSRect, content: NSRect, flipped: bool) -> TitleBarLayout {
     let center = close.origin.y + close.size.height / 2.0;
     let center_from_top = if flipped {
         center - content.origin.y
     } else {
         content.origin.y + content.size.height - center
     };
-    (
-        2.0 * center_from_top as f32,
-        (zoom.origin.x + zoom.size.width - content.origin.x + 16.0) as f32,
-    )
+    TitleBarLayout {
+        height: 2.0 * center_from_top as f32,
+        left_inset: (zoom.origin.x + zoom.size.width - content.origin.x + 16.0) as f32,
+        native_controls_visible: true,
+    }
 }
 
 #[cfg(test)]
@@ -70,9 +74,10 @@ mod tests {
                     let y = 3.0 + if flipped { center - 7.0 } else { height - center - 7.0 };
                     let close = NSRect::new(NSPoint::new(5.0 + inset, y), NSSize::new(14.0, 14.0));
                     let zoom = NSRect::new(NSPoint::new(5.0 + inset + 46.0, y), close.size);
-                    let (bar_height, left_padding) = control_layout(close, zoom, content, flipped);
-                    assert_eq!(bar_height / 2.0, center as f32);
-                    assert_eq!(left_padding, (inset + 46.0 + 14.0 + 16.0) as f32);
+                    let layout = control_layout(close, zoom, content, flipped);
+                    assert_eq!(layout.height / 2.0, center as f32);
+                    assert_eq!(layout.left_inset, (inset + 46.0 + 14.0 + 16.0) as f32);
+                    assert!(layout.native_controls_visible);
                 }
             }
         }
