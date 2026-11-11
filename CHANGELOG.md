@@ -4,6 +4,48 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.1 - 2026-11-12
+
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.1-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.1-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.1-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.1-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.1-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.1-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.1-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.1-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.1-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.1-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.1-windows-x64.zip
+```
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Fixed
+
+- Fixed keymap errors when clicking the prompt in remote Bash 5.0 and 5.1 sessions by disabling click-to-position on those versions. Native completion remains available. Addresses [#897](https://github.com/Kuddev/nebula/issues/897).
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 修复
+
+- 修复在远端 Bash 5.0 和 5.1 的提示符中点击时报按键映射错误的问题：这些版本停用点击定位，原生补全仍可用。对应 [#897](https://github.com/Kuddev/nebula/issues/897)。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+</p>
+
+Thanks to [Kuddev](https://github.com/Kuddev).
+
+感谢 [Kuddev](https://github.com/Kuddev)。
+
 ## 2.5.0 - 2026-11-12
 
 ```text
