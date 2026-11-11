@@ -7,7 +7,7 @@
 需要 Windows 原生 Python 3.11+，不需要第三方 Python 包。先构建真实产品：
 
 ```powershell
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 确认 `pebrel.exe` 同目录存在产品附带的 `conpty.dll` 和 `OpenConsole.exe`。
@@ -88,8 +88,8 @@ python scripts/windows_memory_stress.py `
 
 ```powershell
 python -m unittest scripts.tests.test_windows_memory_stress
-cargo test --locked -p nebula_terminal --test windows_pty_lifecycle -- --nocapture
-cargo test --locked -p nebula --bin pebrel --features gpui-shell process_tree:: -- --test-threads=1
+cargo test --locked -p pebrel_terminal --test windows_pty_lifecycle -- --nocapture
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell process_tree:: -- --test-threads=1
 ```
 
 本地终端输出沿用现有有界 PTY 缓冲和有限历史网格。此次回收修复关闭了创建

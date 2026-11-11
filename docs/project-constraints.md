@@ -37,7 +37,7 @@ module remains covered. Dependency caches are not product sources.
 
 Generated translation tables live in Cargo output, not handwritten source roots.
 JSON catalogs and other data assets use semantic/payload tests, not arbitrary
-line-count limits. `nebula_app/tests/file_line_budget.rs` reads the same budget;
+line-count limits. `pebrel_app/tests/file_line_budget.rs` reads the same budget;
 the Python PR checker additionally enforces history-relative ratcheting.
 
 ## 2. Dependency direction
@@ -47,7 +47,7 @@ allowed local dependencies separately for normal, build and test use.
 
 - Core crates must not depend on the application or acceptance lab. The policy
   rejects direct renderer packages in core production/build dependencies.
-- `nebula-settings`, `nebula-split` and `nebula_hook` retain their existing
+- `pebrel-settings`, `pebrel-split` and `pebrel_hook` retain their existing
   zero-production-dependency contracts. Test-only tools are not prohibited by a
   runtime-performance argument; they remain subject to normal dependency review.
 - Normal/build local dependency edges must be acyclic, across the declared target

@@ -1,0 +1,1222 @@
+use super::*;
+
+fn is_macos() -> bool {
+    crate::platform::Platform::current() == crate::platform::Platform::MacOS
+}
+
+#[test]
+fn control_character_defaults_follow_the_host_platform() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let keymap = Keymap::new(default_workspace_bindings());
+    let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    for combo in ["ctrl-k", "ctrl-v", "ctrl-,", "ctrl-0", "ctrl-=", "ctrl--", "ctrl-1"] {
+        let (bindings, pending) =
+            keymap.bindings_for_input(&[Keystroke::parse(combo).unwrap()], &contexts);
+        assert!(!pending);
+        assert_eq!(bindings.is_empty(), is_macos(), "{combo}");
+    }
+    // Named keys and the established modified navigation chords retain their defaults.
+    for combo in ["ctrl-tab", "ctrl-shift-t", "ctrl-alt-left"] {
+        let (bindings, pending) =
+            keymap.bindings_for_input(&[Keystroke::parse(combo).unwrap()], &contexts);
+        assert!(!pending && !bindings.is_empty(), "{combo}");
+    }
+}
+
+#[test]
+fn command_aliases_and_modifier_order_share_one_runtime_identity() {
+    let expected = gpui_binding_combo("shift+cmd+k");
+    for combo in ["Shift+Win+K", "cmd+shift+k", "super+shift+k"] {
+        assert_eq!(gpui_binding_combo(combo), expected, "{combo}");
+    }
+    assert_ne!(gpui_binding_combo("cmd+k"), expected);
+    assert_ne!(gpui_binding_combo("ctrl+shift+k"), expected);
+}
+
+mod macos_command_keys {
+    use super::*;
+
+    /// #238：别名表里的每条都必须落到 gpui 绑定上。表和运行时各写一份时，
+    /// 设置页显示的键可能按下去没有反应；合一之后这条守住两边不再漂移。
+    #[test]
+    fn every_macos_command_alias_binds_a_gpui_action() {
+        for (combo, action) in crate::display::keymap::MACOS_COMMAND_ALIASES {
+            assert!(
+                workspace_binding_in_context(combo, action, None).is_some(),
+                "{combo} → {action:?} 没有对应的 gpui 绑定"
+            );
+        }
+        // ⌘Q 必须落到退出动作，否则退出键不会走保存会话与草稿的路径。
+        let quit = workspace_binding_in_context("cmd+q", &crate::config::Action::Quit, None)
+            .expect("⌘Q 必须有绑定");
+        assert!(quit.action().as_any().is::<QuitApp>(), "⌘Q 必须绑定 QuitApp");
+        // ⌘M 最小化：必须落到窗口动作，而不是掉进 `_ => None` 变成表外影子绑定。
+        let minimize =
+            workspace_binding_in_context("cmd+m", &crate::config::Action::Minimize, None)
+                .expect("⌘M 必须有绑定");
+        assert!(minimize.action().as_any().is::<MinimizeWindow>(), "⌘M 必须绑定 MinimizeWindow");
+    }
+
+    #[test]
+    fn command_close_and_quit_dispatch_to_distinct_actions() {
+        use gpui::{KeyContext, Keymap, Keystroke};
+        // 合并后仍按共享别名表分派，防止配置中的 ⌘W/Quit 抢走关闭标签页动作。
+        let bindings = crate::display::keymap::MACOS_COMMAND_ALIASES
+            .iter()
+            .filter_map(|(combo, action)| workspace_binding_in_context(combo, action, None))
+            .collect();
+        let keymap = Keymap::new(bindings);
+        for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
+            let contexts = [KeyContext::parse(context).unwrap()];
+            for (combo, quit) in [("cmd-w", false), ("cmd-q", true)] {
+                let input = [Keystroke::parse(combo).unwrap()];
+                let (bindings, pending) = keymap.bindings_for_input(&input, &contexts);
+                assert!(!pending);
+                let action = bindings.first().expect("命令键必须有明确动作").action();
+                if quit {
+                    assert!(action.as_any().is::<QuitApp>());
+                } else {
+                    assert!(action.as_any().is::<CloseActiveTerminal>());
+                }
+            }
+        }
+        // ⌘M 在终端上下文也必须派发最小化，不得被编码进 PTY。
+        for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
+            let contexts = [KeyContext::parse(context).unwrap()];
+            let input = [Keystroke::parse("cmd-m").unwrap()];
+            let (bindings, pending) = keymap.bindings_for_input(&input, &contexts);
+            assert!(!pending);
+            let action = bindings.first().expect("⌘M 必须有明确动作").action();
+            assert!(action.as_any().is::<MinimizeWindow>(), "{context}");
+        }
+    }
+
+    /// #238：⌘K 被解绑后，用户注入的 NoAction 必须压得住静态默认绑定。
+    #[test]
+    fn released_cmd_k_is_swallowed_by_no_action() {
+        use crate::config::Action;
+        use gpui::{KeyContext, Keymap, Keystroke};
+        let contexts = [
+            KeyContext::parse("Root").unwrap(),
+            KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+        ];
+        let input = [Keystroke::parse("cmd-k").unwrap()];
+        // 反向对照：只有静态默认键时 ⌘K 必须命中 Shell 选择器，否则本用例空跑。
+        let default =
+            custom_workspace_binding("cmd+k", &Action::ToggleShellPicker).expect("静态默认键");
+        let (bindings, pending) =
+            Keymap::new(vec![default.clone()]).bindings_for_input(&input, &contexts);
+        assert!(!pending, "对照组必须命中");
+        assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
+        // `update_keybinds` 在两个作用域各注入一条 NoAction，这里照抄运行时形状。
+        let clear = workspace_binding_in_context("cmd+k", &Action::ReceiveChar, None).unwrap();
+        let clear_terminal = workspace_binding_in_context(
+            "cmd+k",
+            &Action::ReceiveChar,
+            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+        )
+        .unwrap();
+        let released = Keymap::new(vec![default, clear, clear_terminal]);
+        let (bindings, pending) = released.bindings_for_input(&input, &contexts);
+        assert!(bindings.is_empty() && !pending, "解绑后不应有任何应用动作消费 ⌘K");
+    }
+}
+
+#[test]
+fn cleared_shortcut_reaches_terminal_and_can_be_restored_without_restart() {
+    use crate::config::Action;
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let contexts = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let input = [Keystroke::parse("ctrl-k").unwrap()];
+    let original = custom_workspace_binding("ctrl+k", &Action::ToggleShellPicker).unwrap();
+    let clear = workspace_binding_in_context(
+        "ctrl+k",
+        &Action::ReceiveChar,
+        Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+    )
+    .unwrap();
+    let disabled = Keymap::new(vec![original.clone(), clear.clone()]);
+    let (bindings, pending) = disabled.bindings_for_input(&input, &contexts);
+    assert!(bindings.is_empty() && !pending, "No app action should consume the key");
+    let restored = workspace_binding_in_context(
+        "ctrl+k",
+        &Action::ToggleShellPicker,
+        Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+    )
+    .unwrap();
+    let restored = Keymap::new(vec![original, clear, restored]);
+    let (bindings, pending) = restored.bindings_for_input(&input, &contexts);
+    assert!(!pending);
+    assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
+}
+
+#[test]
+fn stale_bare_key_removal_releases_the_key_instead_of_swallowing_it() {
+    use crate::config::Action;
+    use gpui::{KeyContext, Keymap, Keystroke};
+    // Removing a user binding hands Enter back to the terminal without leaving
+    // a null or an old action behind.
+    let original = custom_workspace_binding("enter", &Action::ToggleFullscreen).unwrap();
+    let terminal_scope = workspace_binding_in_context(
+        "enter",
+        &Action::ToggleFullscreen,
+        Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+    )
+    .unwrap();
+    let mut keymap =
+        Keymap::new(with_user_keybindings(&Keymap::default(), vec![original, terminal_scope]));
+    let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let input = [Keystroke::parse("enter").unwrap()];
+    let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
+    assert!(!bindings.is_empty(), "while bound, the action owns enter");
+
+    keymap = Keymap::new(with_user_keybindings(&keymap, Vec::new()));
+    let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
+    assert!(bindings.is_empty(), "after removal enter is plain input again");
+}
+
+#[test]
+fn replacing_overrides_preserves_component_keys_and_foreign_registrations() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let input_context = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let terminal_context = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let key = [Keystroke::parse("ctrl-v").unwrap()];
+    let mut base = default_workspace_bindings();
+    base.push(KeyBinding::new("ctrl-v", gpui_component::input::Paste, Some("Input")));
+    let mut keymap = Keymap::new(base);
+    let nulls = || {
+        vec![
+            workspace_binding_in_context("ctrl+v", &crate::config::Action::ReceiveChar, None)
+                .unwrap(),
+        ]
+    };
+    keymap = Keymap::new(with_user_keybindings(&keymap, nulls()));
+    // A control registering after the user source must survive future replacements.
+    keymap.add_bindings([
+        KeyBinding::new("f12", ToggleZoom, Some("OtherControl")),
+        KeyBinding::new("f11", gpui::NoAction, Some("OtherControl")),
+    ]);
+    let expected = keymap.bindings().len();
+    for _ in 0..50 {
+        keymap = Keymap::new(with_user_keybindings(&keymap, nulls()));
+        assert_eq!(keymap.bindings().len(), expected, "updates replace rather than accumulate");
+        let (bindings, _) = keymap.bindings_for_input(&key, &input_context);
+        assert!(bindings[0].action().as_any().is::<gpui_component::input::Paste>());
+        let (bindings, _) = keymap.bindings_for_input(&key, &terminal_context);
+        assert!(bindings.is_empty(), "cleared terminal paste is still disabled");
+    }
+    keymap = Keymap::new(with_user_keybindings(&keymap, Vec::new()));
+    assert_eq!(keymap.bindings().len(), expected - 1);
+    let (bindings, _) = keymap.bindings_for_input(&key, &terminal_context);
+    if is_macos() {
+        assert!(bindings.is_empty(), "restoring macOS defaults releases Control+V");
+    } else {
+        assert!(bindings[0].action().as_any().is::<PasteClipboard>());
+    }
+    let (bindings, _) = keymap.bindings_for_input(
+        &[Keystroke::parse("f12").unwrap()],
+        &[KeyContext::parse("OtherControl").unwrap()],
+    );
+    assert!(bindings[0].action().as_any().is::<ToggleZoom>());
+    assert!(
+        keymap.bindings().any(|binding| binding.action().as_any().is::<gpui::NoAction>()),
+        "another control's null must not be removed"
+    );
+
+    // Explicitly binding a workspace action retains its established precedence;
+    // protecting native input from nulls does not silently rewrite that request.
+    keymap = Keymap::new(with_user_keybindings(
+        &keymap,
+        vec![
+            custom_workspace_binding("ctrl+v", &crate::config::Action::ToggleShellPicker).unwrap(),
+        ],
+    ));
+    let (bindings, _) = keymap.bindings_for_input(&key, &input_context);
+    assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
+}
+
+#[cfg(feature = "gpui-test-support")]
+mod dispatch {
+    use super::*;
+    use gpui::{FocusHandle, Keystroke, TestAppContext, VisualTestContext};
+    use pebrel_terminal::term::TermMode;
+
+    fn press(combo: &str, cx: &mut VisualTestContext) {
+        let keystroke = Keystroke::parse(combo).unwrap();
+        cx.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+    }
+
+    fn open_workspace(
+        count: usize,
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<NebulaWorkspace>, VisualTestContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..count)
+            .map(|index| {
+                let path = directory.path().join(format!("tab-{index}.txt"));
+                std::fs::write(&path, "fixture\n").unwrap();
+                path
+            })
+            .collect();
+        let hub = crate::runtime_api::RuntimeHub::new();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            crate::gpui_shell::file_editor::init(cx);
+            init(cx);
+            windowing::initialize(cx, hub.clone());
+        });
+        let mut workspace_out = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| {
+                NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    hub,
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                )
+            });
+            workspace.update(cx, |workspace, cx| {
+                // Exercise real workspace tabs without spawning a Shell or
+                // altering the machine's saved shortcuts/session.
+                workspace.update_keybinds(Vec::new(), cx);
+                for path in paths {
+                    let view = cx
+                        .new(|cx| crate::gpui_shell::code_tab::CodeTabView::new(path, window, cx));
+                    let subscription = cx.subscribe(&view, |_, _, _, _| {});
+                    workspace.insert_tab_at(
+                        workspace.tabs.len(),
+                        WorkspaceTab::Code { view, _subscription: subscription },
+                        TabMeta::default(),
+                    );
+                }
+                workspace.focus_active(window, cx);
+            });
+            workspace_out = Some(workspace.clone());
+            Root::new(workspace, window, cx)
+        });
+        window.run_until_parked();
+        (directory, workspace_out.unwrap(), window.clone())
+    }
+
+    fn assert_active(
+        workspace: &Entity<NebulaWorkspace>,
+        index: usize,
+        cx: &mut VisualTestContext,
+    ) {
+        cx.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.active, index);
+            assert!(!workspace.settings_open);
+            let WorkspaceTab::Code { view, .. } = &workspace.tabs[index] else {
+                panic!("expected the selected fixture tab");
+            };
+            assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn image_tabs_dispatch_default_and_custom_new_close_shortcuts(cx: &mut TestAppContext) {
+        // Keep real key dispatch and tab transitions, but replace shell selection
+        // with a failed launch so no PTY thread enters GPUI's test scheduler.
+        struct ImageShortcutHost(Entity<NebulaWorkspace>);
+        impl Render for ImageShortcutHost {
+            fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+                let workspace = self.0.clone();
+                div()
+                    .size_full()
+                    .capture_action(move |_: &NewTerminal, window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.add_terminal_with(
+                                crate::session::LaunchSession::Shell {
+                                    name: "image shortcut fixture".into(),
+                                    program: "pebrel-test-missing-shell-executable".into(),
+                                    args: Vec::new(),
+                                },
+                                None,
+                                None,
+                                window,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    })
+                    .child(self.0.clone())
+            }
+        }
+
+        let (directory, workspace, mut cx) = open_workspace(1, cx);
+        cx.update(|_, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+        });
+        cx.update(|window, cx| {
+            window.replace_root(cx, |window, cx| {
+                let host = cx.new(|_| ImageShortcutHost(workspace.clone()));
+                Root::new(host, window, cx)
+            });
+        });
+        let image = directory.path().join("image.png");
+        image::RgbaImage::from_pixel(20, 20, image::Rgba([50, 80, 120, 255])).save(&image).unwrap();
+        let broken = directory.path().join("broken.png");
+        std::fs::write(&broken, b"not an image").unwrap();
+
+        for position in
+            [pebrel_settings::TabsPositionName::Sidebar, pebrel_settings::TabsPositionName::Top]
+        {
+            for (path, custom) in
+                [(&image, false), (&image, true), (&broken, false), (&broken, true)]
+            {
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.tabs_position = position;
+                        workspace.update_keybinds(
+                            if custom {
+                                vec![
+                                    ("alt+n".into(), "CreateNewTab".into()),
+                                    ("alt+w".into(), "CloseTab".into()),
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                            cx,
+                        );
+                        workspace.open_document_path(path.clone(), window, cx);
+                    });
+                });
+                cx.run_until_parked();
+                press(if custom { "alt-n" } else { "ctrl-shift-t" }, &mut cx);
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tabs.len(), 3, "new tab from {path:?}, {position:?}");
+                    assert!(workspace.tabs[workspace.active].is_terminal());
+                });
+
+                // Returning by keyboard must focus the image again, including
+                // when its background decoder reported an error.
+                press("alt-2", &mut cx);
+                assert_eq!(workspace.read_with(&cx, |workspace, _| workspace.active), 1);
+                press(if custom { "alt-w" } else { "ctrl-shift-w" }, &mut cx);
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tabs.len(), 2, "close image from {position:?}");
+                    assert!(
+                        !workspace.tabs.iter().any(|tab| matches!(tab, WorkspaceTab::Image { .. }))
+                    );
+                });
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.close_tab(1, window, cx));
+                });
+                cx.run_until_parked();
+                assert_active(&workspace, 0, &mut cx);
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn control_character_dispatch_reaches_the_terminal_receiver(cx: &mut TestAppContext) {
+        use pebrel_terminal::event_loop::Msg;
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        let receiver = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "control character fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                terminal.update(cx, |view, _| view.install_completion_test_session())
+            })
+        });
+        cx.run_until_parked();
+        let drain = || {
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<u8>>()
+        };
+        for (combo, expected) in [
+            ("ctrl-a", 0x01),
+            ("ctrl-e", 0x05),
+            ("ctrl-w", 0x17),
+            ("ctrl-c", 0x03),
+            ("ctrl-k", 0x0b),
+        ] {
+            press(combo, &mut cx);
+            if is_macos() || combo != "ctrl-k" {
+                assert_eq!(drain(), [expected], "{combo}");
+                assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            } else {
+                assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+                assert!(drain().is_empty());
+                press("escape", &mut cx);
+            }
+        }
+        if is_macos() {
+            press("ctrl-v", &mut cx);
+            assert_eq!(drain(), [0x16], "Control+V remains terminal quoted-insert");
+            press("cmd-k", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            assert!(drain().is_empty(), "Command+K must not leak terminal input");
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![("ctrl+k".into(), "ToggleShellPicker".into())], cx);
+            });
+            press("ctrl-k", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            assert!(drain().is_empty(), "an explicit Control binding must still win");
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+            press("ctrl-k", &mut cx);
+            assert_eq!(drain(), [0x0b], "removing the override restores terminal input");
+            assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        }
+    }
+
+    #[gpui::test]
+    fn command_shortcut_registration_follows_runtime_platform(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        press("cmd-k", &mut cx);
+        assert_eq!(
+            workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open),
+            crate::platform::Platform::current() == crate::platform::Platform::MacOS,
+            "共享别名表只应在 macOS 注册原生命令键"
+        );
+    }
+
+    #[gpui::test]
+    fn command_digit_clearing_keeps_an_explicit_workspace_action(cx: &mut TestAppContext) {
+        use crate::config::Action;
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for (logical, physical, pressed, action) in [
+            ("cmd+0", "cmd+digit0", "cmd-0", Action::ResetFontSize),
+            ("cmd+1", "cmd+digit1", "cmd-1", Action::SelectTab1),
+            ("cmd+9", "cmd+digit9", "cmd-9", Action::SelectLastTab),
+        ] {
+            for combo in [logical, physical] {
+                let mut raw = vec![(combo.into(), "ToggleShellPicker".into())];
+                keymap::GPUI.clear_action(&mut raw, &action);
+                workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
+                press(pressed, &mut cx);
+                assert!(
+                    workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open),
+                    "clearing {action:?} must not disable the explicit picker on {combo}"
+                );
+                press("escape", &mut cx);
+            }
+        }
+    }
+
+    fn paste_in_command_dialog(raw: Vec<(String, String)>, restore: bool, cx: &mut TestAppContext) {
+        // Mouse events can render another frame. Keep the entry animation from
+        // moving Save away from its sampled bounds on slower native CI runners.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.saved_commands = crate::saved_commands::SavedCommands::load_from(
+                &directory.path().join("commands.json"),
+            )
+            .unwrap();
+            workspace.update_keybinds(raw.clone(), cx);
+            if restore {
+                workspace.update_keybinds(Vec::new(), cx);
+            }
+        });
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            workspace.toggle_command_manager(window, cx);
+        });
+        let native = if cfg!(target_os = "macos") { "cmd-v" } else { "ctrl-v" };
+        for (index, shortcut) in [native, "ctrl-shift-v"].into_iter().enumerate() {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let add = cx.debug_bounds("saved-command-add").unwrap();
+            cx.simulate_click(add.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            let name = format!("Paste fixture {index}");
+            let command = format!("echo fixture_{index}\necho second_line");
+            cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.clone())));
+            press(shortcut, &mut cx);
+            press("tab", &mut cx);
+            cx.update(|_, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.clone()))
+            });
+            press(shortcut, &mut cx);
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let save = cx.debug_bounds("saved-command-save").unwrap();
+            cx.simulate_click(save.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            workspace.read_with(&cx, |workspace, _| {
+                assert_eq!(
+                    workspace.saved_commands.commands().len(),
+                    index + 1,
+                    "{shortcut} must populate both real dialog inputs before Save"
+                );
+                assert_eq!(workspace.saved_commands.commands()[index].name, name);
+                assert_eq!(workspace.saved_commands.commands()[index].command, command);
+                assert!(workspace.tabs.is_empty(), "paste must not create or target a terminal");
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn default_command_dialog_paste_reaches_both_inputs(cx: &mut TestAppContext) {
+        paste_in_command_dialog(Vec::new(), false, cx);
+    }
+
+    #[gpui::test]
+    fn remapped_terminal_paste_keeps_command_dialog_paste(cx: &mut TestAppContext) {
+        paste_in_command_dialog(reported_paste_overrides(), false, cx);
+    }
+
+    #[gpui::test]
+    fn restored_terminal_paste_keeps_command_dialog_paste_without_restart(cx: &mut TestAppContext) {
+        paste_in_command_dialog(reported_paste_overrides(), true, cx);
+    }
+
+    #[gpui::test]
+    fn disabled_terminal_paste_keeps_command_dialog_paste(cx: &mut TestAppContext) {
+        let mut raw = reported_paste_overrides();
+        raw.retain(|(_, action)| action == "ReceiveChar");
+        for (_, action) in &mut raw {
+            *action = "None".into();
+        }
+        paste_in_command_dialog(raw, false, cx);
+    }
+
+    #[gpui::test]
+    fn override_updates_from_either_window_do_not_accumulate_old_rules(cx: &mut TestAppContext) {
+        let (_first_dir, first, mut first_cx) = open_workspace(1, cx);
+        let (_second_dir, second, mut second_cx) = open_workspace(1, cx);
+        let baseline = first_cx.update(|_, cx| cx.key_bindings().borrow().bindings().len());
+        let (stored, pressed) = if is_macos() { ("cmd+k", "cmd-k") } else { ("ctrl+k", "ctrl-k") };
+        for _ in 0..5 {
+            first.update(&mut first_cx, |workspace, cx| {
+                workspace.update_keybinds(vec![(stored.into(), "ReceiveChar".into())], cx);
+            });
+            press(pressed, &mut second_cx);
+            assert!(!second.read_with(&second_cx, |workspace, _| workspace.shell_picker_open));
+            second
+                .update(&mut second_cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+            press(pressed, &mut first_cx);
+            assert!(first.read_with(&first_cx, |workspace, _| workspace.shell_picker_open));
+            press("escape", &mut first_cx);
+            assert_eq!(
+                first_cx.update(|_, cx| cx.key_bindings().borrow().bindings().len()),
+                baseline
+            );
+        }
+    }
+
+    fn reported_paste_overrides() -> Vec<(String, String)> {
+        // config::platform_key_bindings is empty under cfg(test), so rebind_action
+        // cannot reproduce Windows' saved removal rows here. Use the persisted
+        // form reported by the user, plus the equivalent native macOS shortcut.
+        let mut raw = vec![
+            ("ctrl+v".into(), "ReceiveChar".into()),
+            ("ctrl+shift+v".into(), "ReceiveChar".into()),
+            ("ctrl+alt+v".into(), "Paste".into()),
+        ];
+        if cfg!(target_os = "macos") {
+            raw.push(("cmd+v".into(), "ReceiveChar".into()));
+        }
+        raw
+    }
+
+    #[gpui::test]
+    fn removing_a_reassigned_bare_key_does_not_revive_its_previous_action(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for keep_previous_row in [false, true] {
+            let first = ("Enter".into(), "ToggleFullscreen".into());
+            let second = ("enter".into(), "ToggleShellPicker".into());
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![first.clone()], cx);
+            });
+            press("enter", &mut cx);
+            assert!(cx.update(|window, _| window.is_fullscreen()));
+            press("enter", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+
+            workspace.update(&mut cx, |workspace, cx| {
+                let rows = if keep_previous_row {
+                    vec![first, second.clone()]
+                } else {
+                    vec![second.clone()]
+                };
+                workspace.update_keybinds(rows, cx);
+            });
+            press("enter", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![second], cx);
+                workspace.update_keybinds(Vec::new(), cx);
+            });
+            press("enter", &mut cx);
+            assert!(
+                !cx.update(|window, _| window.is_fullscreen()),
+                "old action revived after removal"
+            );
+            assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        }
+    }
+
+    #[gpui::test]
+    #[cfg(target_os = "macos")]
+    fn recorded_command_key_can_restore_default(cx: &mut TestAppContext) {
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        press("cmd-k", &mut cx);
+        assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        press("escape", &mut cx);
+        let keymap::CaptureOutcome::Bind(combo) =
+            keymap::capture_gpui(&Keystroke::parse("cmd-k").unwrap())
+        else {
+            panic!("expected captured shortcut")
+        };
+        assert_eq!(combo, "win+k");
+        let mut raw = vec![(combo, "ToggleShellPicker".into())];
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw.clone(), cx));
+        press("cmd-k", &mut cx);
+        assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        press("escape", &mut cx);
+        keymap::GPUI.reset_action(&mut raw, &crate::config::Action::ToggleShellPicker);
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
+        press("cmd-k", &mut cx);
+        assert!(
+            workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open),
+            "Reset after recording Cmd+K must restore its default action"
+        );
+    }
+
+    #[gpui::test]
+    #[cfg(target_os = "macos")]
+    fn old_fullscreen_unbind_can_restore_default(cx: &mut TestAppContext) {
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for combo in ["Ctrl+Cmd+F", "Ctrl+Win+F", "super+ctrl+f"] {
+            let mut raw = vec![(combo.into(), "ReceiveChar".into())];
+            workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw.clone(), cx));
+            press("ctrl-cmd-f", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+            keymap::GPUI.reset_action(&mut raw, &crate::config::Action::ToggleFullscreen);
+            assert!(raw.is_empty());
+            workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
+            press("ctrl-cmd-f", &mut cx);
+            assert!(cx.update(|window, _| window.is_fullscreen()), "reset failed for {combo}");
+            press("ctrl-cmd-f", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+        }
+    }
+
+    #[gpui::test]
+    fn hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui::EntityInputHandler as _;
+        use pebrel_terminal::event_loop::Msg;
+        use pebrel_terminal::term::test::TermSize;
+        use pebrel_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let _settings_lock = crate::gpui_shell::settings_fixture::lock_theme_studio();
+        let _settings_bytes = crate::gpui_shell::settings_fixture::SettingsBytesGuard::capture();
+        pebrel_settings::persist_keys(&[("ghost", "1".into()), ("theme", "Nord".into())]).unwrap();
+
+        fn draw(cx: &mut VisualTestContext) {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.run_until_parked();
+        }
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        cx.simulate_resize(size(px(1000.0), px(600.0)));
+        let (terminal, receiver) = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            let mut settings =
+                crate::gpui_shell::config::Settings::load(pebrel_settings::ThemeName::Nord);
+            settings.ghost = true;
+            settings.completion_style = crate::display::CompletionStyle::Inline;
+            cx.set_global(settings);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "completion fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                let receiver =
+                    terminal.update(cx, |view, _| view.install_completion_test_session());
+                (terminal, receiver)
+            })
+        });
+        let pane_id = terminal.read_with(&cx, |view, _| view.pane_id);
+        for position in [
+            pebrel_settings::TabsPositionName::Sidebar,
+            pebrel_settings::TabsPositionName::Top,
+            pebrel_settings::TabsPositionName::Sidebar,
+        ] {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.tabs_position = position;
+                workspace.sync_settings_layout(true);
+                cx.notify();
+            });
+            draw(&mut cx);
+            cx.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.open_settings(window, cx));
+            });
+            draw(&mut cx);
+            let settings = workspace.read_with(&cx, |workspace, _| {
+                workspace.settings_surface.as_ref().unwrap().0.clone()
+            });
+            for (style, value) in [
+                (crate::display::CompletionStyle::Inline, "inline"),
+                (crate::display::CompletionStyle::Hybrid, "hybrid"),
+            ] {
+                pebrel_settings::persist_keys(&[
+                    ("tabs_position", position.settings_value().into()),
+                    ("completion_style", value.into()),
+                ])
+                .unwrap();
+                // 沿设置实体的真实订阅通知热应用，而不是直接给终端改模式。
+                settings.update(&mut cx, |_, cx| {
+                    cx.emit(crate::gpui_shell::settings_pane::SettingsPaneEvent::Changed);
+                });
+                draw(&mut cx);
+                assert_eq!(
+                    terminal.read_with(&cx, |view, _| view.completion_test_state().4),
+                    style
+                );
+                assert_eq!(
+                    workspace.read_with(&cx, |workspace, _| workspace.tabs_position),
+                    position
+                );
+            }
+            let selector = if position == pebrel_settings::TabsPositionName::Top {
+                "top-tab-0"
+            } else {
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.leave_settings(window, cx));
+                });
+                draw(&mut cx);
+                "sidebar-tab-0"
+            };
+            let tab = cx.debug_bounds(selector).expect("actual tab control is visible");
+            cx.simulate_click(tab.center(), gpui::Modifiers::default());
+            draw(&mut cx);
+            cx.update(|window, cx| {
+                assert!(terminal.read(cx).focus_handle.is_focused(window), "{position:?}");
+                assert!(!workspace.read(cx).settings_open);
+            });
+            press("ctrl-u", &mut cx);
+            receiver.try_iter().for_each(drop);
+            terminal.update(&mut cx, |view, cx| {
+                // 无 PTY 的夹具显式确认真实布局发来的网格尺寸，再模拟 shell 回显。
+                let size = TermSize::new(view.grid_cols(), view.grid_rows());
+                let mut term = view.session.as_ref().unwrap().term.lock();
+                term.resize(size);
+                Processor::<StdSyncHandler>::default()
+                    .advance(&mut *term, "\x1b[2J\x1b[H❯ ".as_bytes());
+                cx.notify();
+            });
+            draw(&mut cx);
+            cx.update(|window, cx| {
+                terminal.update(cx, |view, cx| {
+                    view.replace_text_in_range(None, "systemc", window, cx);
+                    let mut term = view.session.as_ref().unwrap().term.lock();
+                    Processor::<StdSyncHandler>::default().advance(&mut *term, b"systemc");
+                    cx.notify();
+                });
+            });
+            receiver.try_iter().for_each(drop);
+            draw(&mut cx);
+            press("tab", &mut cx);
+            draw(&mut cx);
+            terminal.read_with(&cx, |view, _| {
+                let (line, requested, count, visible, _) = view.completion_test_state();
+                assert_eq!(view.pane_id, pane_id, "layout changes retain the same terminal");
+                assert_eq!(line, "systemc", "{position:?}");
+                assert!(
+                    requested && count > 0 && visible,
+                    "{position:?}: {requested}/{count}/{visible}"
+                );
+            });
+            assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+            cx.update(|window, cx| {
+                assert!(
+                    terminal.read(cx).focus_handle.is_focused(window),
+                    "Tab must retain terminal focus"
+                );
+            });
+            press("escape", &mut cx);
+            draw(&mut cx);
+        }
+    }
+
+    #[gpui::test]
+    fn digits_switch_real_tabs_and_focus_in_both_tab_layouts(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(10, cx);
+        for position in
+            [pebrel_settings::TabsPositionName::Sidebar, pebrel_settings::TabsPositionName::Top]
+        {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.tabs_position = position;
+                workspace.tab_meta[8].has_bell = true;
+                cx.notify();
+            });
+            for modifier in [if is_macos() { "cmd" } else { "ctrl" }, "alt"] {
+                for digit in (1..=9).rev() {
+                    press(&format!("{modifier}-{digit}"), &mut cx);
+                    let index = if modifier == "cmd" && digit == 9 { 9 } else { digit - 1 };
+                    assert_active(&workspace, index, &mut cx);
+                }
+            }
+            assert!(!workspace.read_with(&cx, |workspace, _| workspace.tab_meta[8].has_bell));
+        }
+    }
+
+    #[gpui::test]
+    fn missing_tab_preserves_settings_and_reselecting_a_tab_restores_focus(
+        cx: &mut TestAppContext,
+    ) {
+        let (_directory, workspace, mut cx) = open_workspace(3, cx);
+        cx.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.open_settings(window, cx));
+        });
+        press("alt-9", &mut cx);
+        press(if is_macos() { "cmd-4" } else { "ctrl-4" }, &mut cx);
+        cx.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert!(workspace.settings_open);
+            assert_eq!(workspace.active, 0);
+            let settings = &workspace.settings_surface.as_ref().unwrap().0;
+            assert!(settings.read(cx).focus_handle(cx).contains_focused(window, cx));
+        });
+        // The active index was already zero: this still has to leave Settings
+        // and return focus to the tab, rather than treating it as a no-op.
+        press(if is_macos() { "cmd-1" } else { "ctrl-1" }, &mut cx);
+        assert_active(&workspace, 0, &mut cx);
+
+        cx.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.begin_rename(0, window, cx));
+        });
+        press("alt-1", &mut cx);
+        assert_active(&workspace, 0, &mut cx);
+    }
+
+    #[gpui::test]
+    fn numbered_shortcut_overrides_clear_and_restore_without_restart(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(3, cx);
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.update_keybinds(
+                vec![
+                    ("ctrl+1".into(), "SelectTab3".into()),
+                    ("alt+8".into(), "SelectLastTab".into()),
+                ],
+                cx,
+            );
+        });
+        press("ctrl-1", &mut cx);
+        assert_active(&workspace, 2, &mut cx);
+        press(if is_macos() { "cmd-2" } else { "ctrl-2" }, &mut cx);
+        press("alt-8", &mut cx);
+        assert_active(&workspace, 2, &mut cx);
+
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.update_keybinds(vec![("ctrl+1".into(), "ReceiveChar".into())], cx);
+        });
+        press("ctrl-1", &mut cx);
+        assert_active(&workspace, 2, &mut cx);
+        // Removing the override restores this host's defaults: Control digits
+        // remain terminal input on macOS, where Command selects a tab.
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+        press("ctrl-1", &mut cx);
+        if is_macos() {
+            assert_active(&workspace, 2, &mut cx);
+            press("cmd-1", &mut cx);
+        }
+        assert_active(&workspace, 0, &mut cx);
+    }
+
+    #[gpui::test]
+    fn rename_shortcut_remaps_clears_and_restores_in_both_tab_layouts(cx: &mut TestAppContext) {
+        use crate::config::Action;
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(3, cx);
+        for position in
+            [pebrel_settings::TabsPositionName::Sidebar, pebrel_settings::TabsPositionName::Top]
+        {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.tabs_position = position;
+                workspace.update_keybinds(Vec::new(), cx);
+            });
+            press(if is_macos() { "cmd-3" } else { "ctrl-3" }, &mut cx);
+            press("f2", &mut cx);
+            assert_eq!(
+                workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
+                Some(2)
+            );
+            cx.update(|window, cx| workspace.update(cx, |w, cx| w.cancel_rename(window, cx)));
+            cx.run_until_parked();
+
+            let mut raw = Vec::new();
+            keymap::GPUI.rebind_action(&mut raw, &Action::RenameTab, "ctrl+alt+r".into());
+            let saved = pebrel_settings::apply_keybinds("", &raw);
+            let mut raw = pebrel_settings::keybind_pairs_from_text(&saved);
+            workspace.update(&mut cx, |w, cx| w.update_keybinds(raw.clone(), cx));
+            press("f2", &mut cx);
+            assert!(workspace.read_with(&cx, |w, _| w.tab_rename.is_none()));
+            press("ctrl-alt-r", &mut cx);
+            assert_eq!(
+                workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
+                Some(2)
+            );
+            cx.update(|window, cx| workspace.update(cx, |w, cx| w.cancel_rename(window, cx)));
+            cx.run_until_parked();
+            cx.update(|window, _| {
+                let bindings = window.bindings_for_action(&RenameActiveTab);
+                assert!(
+                    bindings
+                        .iter()
+                        .any(|b| b.match_keystrokes(&[Keystroke::parse("ctrl-alt-r").unwrap()])
+                            == Some(false))
+                );
+                assert!(
+                    !bindings
+                        .iter()
+                        .any(|b| b.match_keystrokes(&[Keystroke::parse("f2").unwrap()])
+                            == Some(false))
+                );
+            });
+
+            keymap::GPUI.clear_action(&mut raw, &Action::RenameTab);
+            workspace.update(&mut cx, |w, cx| w.update_keybinds(raw.clone(), cx));
+            press("ctrl-alt-r", &mut cx);
+            press("f2", &mut cx);
+            assert!(workspace.read_with(&cx, |w, _| w.tab_rename.is_none()));
+            keymap::GPUI.reset_action(&mut raw, &Action::RenameTab);
+            workspace.update(&mut cx, |w, cx| w.update_keybinds(raw, cx));
+            press("f2", &mut cx);
+            assert_eq!(
+                workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
+                Some(2)
+            );
+            cx.update(|window, cx| workspace.update(cx, |w, cx| w.cancel_rename(window, cx)));
+            cx.run_until_parked();
+        }
+    }
+
+    struct TerminalKeyProbe {
+        focus: FocusHandle,
+        selected: Option<usize>,
+        renamed: usize,
+        mode: TermMode,
+        input: Vec<Keystroke>,
+        encoded: Vec<u8>,
+    }
+
+    impl Render for TerminalKeyProbe {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, action: &SelectTab, _, _| {
+                    this.selected = action.index_for(10);
+                }))
+                .on_action(cx.listener(|this, _: &RenameActiveTab, _, _| this.renamed += 1))
+                .child(
+                    div()
+                        .size_full()
+                        .key_context(crate::gpui_shell::terminal::KEY_CONTEXT)
+                        .track_focus(&self.focus)
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            this.input.push(event.keystroke.clone());
+                            if let Some(bytes) = crate::gpui_shell::terminal::keymap::encode(
+                                &event.keystroke,
+                                &this.mode,
+                            ) {
+                                this.encoded.extend(bytes);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn numeric_actions_precede_terminal_encoding_and_unbound_digits_pass_through(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            init(cx);
+        });
+        let mut probe_out = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let probe = cx.new(|cx| TerminalKeyProbe {
+                focus: cx.focus_handle(),
+                selected: None,
+                renamed: 0,
+                mode: TermMode::empty(),
+                input: Vec::new(),
+                encoded: Vec::new(),
+            });
+            let focus = probe.read(cx).focus.clone();
+            focus.focus(window, cx);
+            probe_out = Some(probe.clone());
+            Root::new(probe, window, cx)
+        });
+        let probe = probe_out.unwrap();
+        for mode in [
+            TermMode::empty(),
+            TermMode::WIN32_INPUT_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::REPORT_ALL_KEYS_AS_ESC,
+        ] {
+            probe.update(cx, |probe, _| probe.mode = mode);
+            for modifier in [if is_macos() { "cmd" } else { "ctrl" }, "alt"] {
+                for digit in 1..=9 {
+                    press(&format!("{modifier}-{digit}"), cx);
+                    probe.read_with(cx, |probe, _| {
+                        let index = if modifier == "cmd" && digit == 9 { 9 } else { digit - 1 };
+                        assert_eq!(probe.selected, Some(index));
+                        assert!(probe.input.is_empty(), "tab shortcuts must not reach PTY input");
+                        assert!(probe.encoded.is_empty());
+                    });
+                }
+            }
+            if is_macos() {
+                for digit in 1..=9 {
+                    let combo = format!("ctrl-{digit}");
+                    press(&combo, cx);
+                    probe.update(cx, |probe, _| {
+                        assert_eq!(probe.selected, Some(8));
+                        assert_eq!(probe.input, [Keystroke::parse(&combo).unwrap()]);
+                        probe.input.clear();
+                        probe.encoded.clear();
+                    });
+                }
+            }
+        }
+        // Plain digits and additional modifiers retain their terminal meaning.
+        for combo in ["1", "alt-0", "ctrl-alt-2", "ctrl-shift-2"] {
+            press(combo, cx);
+            probe.read_with(cx, |probe, _| {
+                assert_eq!(probe.selected, Some(8));
+                assert_eq!(probe.input.last(), Some(&Keystroke::parse(combo).unwrap()));
+            });
+        }
+        cx.update(|_, cx| {
+            cx.bind_keys([workspace_binding_in_context(
+                "alt+2",
+                &crate::config::Action::ReceiveChar,
+                Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+            )
+            .unwrap()]);
+        });
+        press("alt-2", cx);
+        probe.read_with(cx, |probe, _| {
+            assert_eq!(probe.selected, Some(8));
+            assert_eq!(probe.input.last(), Some(&Keystroke::parse("alt-2").unwrap()));
+            assert!(!probe.encoded.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn remapped_rename_releases_f2_to_negotiated_terminal_input(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            init(cx);
+            let mut raw = Vec::new();
+            crate::display::keymap::GPUI.rebind_action(
+                &mut raw,
+                &crate::config::Action::RenameTab,
+                "ctrl+alt+r".into(),
+            );
+            for (combo, name) in raw {
+                let action = crate::display::keymap::parse_action(&name).unwrap();
+                for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
+                    cx.bind_keys([workspace_binding_in_context(&combo, &action, scope).unwrap()]);
+                }
+            }
+        });
+        let mut probe_out = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let probe = cx.new(|cx| TerminalKeyProbe {
+                focus: cx.focus_handle(),
+                selected: None,
+                renamed: 0,
+                mode: TermMode::empty(),
+                input: Vec::new(),
+                encoded: Vec::new(),
+            });
+            let focus = probe.read(cx).focus.clone();
+            focus.focus(window, cx);
+            probe_out = Some(probe.clone());
+            Root::new(probe, window, cx)
+        });
+        let probe = probe_out.unwrap();
+        for mode in [
+            TermMode::empty(),
+            TermMode::WIN32_INPUT_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::REPORT_ALL_KEYS_AS_ESC,
+        ] {
+            probe.update(cx, |p, _| {
+                p.mode = mode;
+                p.input.clear();
+                p.encoded.clear();
+                p.renamed = 0;
+            });
+            press("ctrl-alt-r", cx);
+            probe.read_with(cx, |p, _| {
+                assert_eq!(p.renamed, 1);
+                assert!(p.input.is_empty());
+            });
+            press("f2", cx);
+            probe.read_with(cx, |p, _| {
+                assert_eq!(p.renamed, 1);
+                assert_eq!(p.input.last(), Some(&Keystroke::parse("f2").unwrap()));
+                assert!(!p.encoded.is_empty(), "F2 must reach the CLI");
+                if mode.is_empty() {
+                    assert_eq!(p.encoded, b"\x1bOQ");
+                }
+            });
+        }
+    }
+}

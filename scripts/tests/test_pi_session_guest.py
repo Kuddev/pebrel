@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[2] / 'nebula_app/src/platform/pi_session.sh'
+SCRIPT = Path(__file__).resolve().parents[2] / 'pebrel_app/src/platform/pi_session.sh'
 SESSION = '11111111-2222-4333-8444-555555555555'
 
 

@@ -77,7 +77,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          version="$(python3 scripts/preview_release.py --print-package-version nebula_app/Cargo.toml)"
+          version="$(python3 scripts/preview_release.py --print-package-version pebrel_app/Cargo.toml)"
           if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$version" ]]; then
             echo "requested version $REQUESTED_VERSION does not match Cargo package version $version" >&2
             exit 1
@@ -99,7 +99,7 @@ jobs:
           import os
           import subprocess
           version = subprocess.check_output(
-              ["python3", "scripts/preview_release.py", "--print-package-version", "nebula_app/Cargo.toml"],
+              ["python3", "scripts/preview_release.py", "--print-package-version", "pebrel_app/Cargo.toml"],
               text=True,
           ).strip()
           validate_notes(Path(f"docs/release-notes/v{version}.md"), version)
@@ -169,7 +169,7 @@ jobs:
           target: target/release
           legacy-key: linux
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell --timings
       - name: Save compiled workload
         if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -306,7 +306,7 @@ jobs:
           target: target/release
           legacy-key: macos
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell --timings
       - name: Save compiled workload
         if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -483,6 +483,7 @@ jobs:
           if (Test-Path scripts/build-windows-product.ps1) {
             ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
           } else {
+            # 只有不含构建脚本的旧源码走这里；那些版本的包名仍是 nebula / nebula_hook。
             cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
             if ($LASTEXITCODE -ne 0) { throw 'Windows product build failed' }
           }

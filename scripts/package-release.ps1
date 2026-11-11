@@ -128,8 +128,8 @@ function Assert-FreshBinaries {
     # 是预编译供给件，不参与判定。
     if ($AllowStale) { return }
     $memberDirs = @(
-        'nebula_app', 'nebula_terminal', 'nebula_config', 'nebula_config_derive',
-        'nebula-completions', 'nebula_gpui', 'nebula_settings', 'nebula_split'
+        'pebrel_app', 'pebrel_terminal', 'pebrel_config', 'pebrel_config_derive',
+        'pebrel-completions', 'pebrel_gpui', 'pebrel_settings', 'pebrel_split'
     ) | ForEach-Object { Join-Path $repo $_ }
     $appSources = $memberDirs + @(
         (Join-Path $repo 'Cargo.toml'),
@@ -139,7 +139,7 @@ function Assert-FreshBinaries {
         @{ Binary = $manifest['pebrel.exe']; Newest = Get-NewestSourceTime $appSources },
         @{ Binary = $manifest['pebrel.com']; Newest = Get-NewestSourceTime $appSources },
         @{ Binary = $manifest['runtime/pebrel-hook.exe']; Newest = Get-NewestSourceTime @(
-            (Join-Path $repo 'nebula_hook'), (Join-Path $repo 'Cargo.toml')) }
+            (Join-Path $repo 'pebrel_hook'), (Join-Path $repo 'Cargo.toml')) }
     )
     foreach ($check in $checks) {
         $item = Get-Item -LiteralPath $check.Binary

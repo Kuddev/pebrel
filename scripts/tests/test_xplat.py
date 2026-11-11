@@ -79,7 +79,7 @@ class XplatIsolationTests(unittest.TestCase):
 
     def test_inherited_native_output_is_preserved_and_cargo_is_locked(self):
         native_out = self.build_out(self.native, "media-native")
-        result = self.run_check("macos", "--features", "gpui-shell", "-p", "nebula")
+        result = self.run_check("macos", "--features", "gpui-shell", "-p", "pebrel")
         self.assertEqual(result.returncode, 0, result.stderr)
         call, = self.recordings()
         self.assertEqual(call["target"], str(self.output))
@@ -87,7 +87,7 @@ class XplatIsolationTests(unittest.TestCase):
         args = call["args"]
         self.assertIn("--locked", args)
         self.assertEqual(args[args.index("--target-dir") + 1], str(self.output))
-        self.assertEqual(args[-4:], ["--features", "gpui-shell", "-p", "nebula"])
+        self.assertEqual(args[-4:], ["--features", "gpui-shell", "-p", "pebrel"])
         self.assertEqual(list(native_out.iterdir()), [])
         self.assertEqual(self.native_sentinel.read_text(encoding="utf-8"), "native cache")
         self.assertIn("not a native build/test", result.stdout)

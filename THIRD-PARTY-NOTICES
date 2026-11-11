@@ -14,11 +14,11 @@ MIT License, ttf-parser 0.25.1 under the MIT OR Apache-2.0 License, and
 ab_glyph_rasterizer 0.1.10 under the Apache-2.0 License.
 
 The bundled AI-CLI screen-state evidence in
-nebula_app/src/agent_detection derives from Herdr
+pebrel_app/src/agent_detection derives from Herdr
 (github.com/AmrDeveloper/herdr), distributed under the Apache License 2.0.
 
 The unmodified next-message prediction prompt in
-nebula_app/res/prompts/codex_prompt_suggestion.txt and its JSON-schema suffix
+pebrel_app/res/prompts/codex_prompt_suggestion.txt and its JSON-schema suffix
 come from OpenAI Codex (github.com/openai/codex), revision
 814de47b69dd63a2660fd14f9af66690888d183e, under the Apache License 2.0
 (full text below). OpenAI Codex, Copyright 2025 OpenAI.
@@ -27,7 +27,7 @@ The embedded Latin Modern Math font is distributed under the GUST Font
 License 1.0. Its complete license text is included as
 licenses/LICENSE-LATIN-MODERN-MATH.
 
-The SSH Bash login-startup replay in nebula_app/res/shell/bashrc adapts
+The SSH Bash login-startup replay in pebrel_app/res/shell/bashrc adapts
 the source-observation startup logic by l0ng-ai (revision 4da3868,
 shell_integration.rs).
 Copyright 2026 l0ng-ai, Apache License 2.0 (full text below). Pebrel's

@@ -83,7 +83,7 @@ config.ui = {
 ```
 
 The supported field names and scalar shapes are defined by
-[`ui_value_kind`](../nebula_settings/src/config_defaults.rs). Numeric ranges,
+[`ui_value_kind`](../pebrel_settings/src/config_defaults.rs). Numeric ranges,
 enum aliases and defaults continue to come from `RuntimeSettings::from_raw`;
 unknown fields and incorrect scalar types fail `config check`. Background-image
 paths in `config.ui` are relative to the entry configuration directory.
@@ -150,16 +150,16 @@ top-left origin. This does not implement Shadertoy texture channels or includes.
 Background snippets receive `iParameter` from `background.parameter`. Full
 background fragments may declare one 16-byte uniform at set 0/binding 0 containing
 width, height, scaled seconds and that parameter. Terminal snippets receive the
-[`GLSL frame ABI`](../nebula_app/src/gpui_shell/terminal/effects/abi.glsl), including
+[`GLSL frame ABI`](../pebrel_app/src/gpui_shell/terminal/effects/abi.glsl), including
 `load_surface`, `sample_surface`, the palette/cursor data and `iParameters`.
 The four values are also available as `frame.parameters` in WGSL. Frame ABI version
 2 appends those values after the palette, preserving every earlier field offset.
 Other textures, storage and resource bindings are rejected by the renderer's
 existing validation. Shader reads and compilation stay on background workers.
 
-Start with the [background example](../nebula_app/examples/shaders/background.glsl)
-and [terminal example](../nebula_app/examples/shaders/scanlines.frag). The complete
-configuration shape is defined in [`config/shaders.rs`](../nebula_app/src/config/shaders.rs).
+Start with the [background example](../pebrel_app/examples/shaders/background.glsl)
+and [terminal example](../pebrel_app/examples/shaders/scanlines.frag). The complete
+configuration shape is defined in [`config/shaders.rs`](../pebrel_app/src/config/shaders.rs).
 `config check` validates configuration values and paths' syntax; actual shader
 compilation occurs when an effect is enabled in a supported window.
 
@@ -229,7 +229,7 @@ shell alias.
 Imported profiles live in `terminal_profiles.json`. Their settings IDs combine
 the stored shell family and profile identity as
 `profile:<shell-id>|<profile-id>`, as defined by
-[`Profile::settings_id`](../nebula_app/src/config/ui_config.rs).
+[`Profile::settings_id`](../pebrel_app/src/config/ui_config.rs).
 The complete ID is case-sensitive and requires an actual, launchable store
 entry. Adding `terminal_profile_id` to a Lua entry does not create that entry.
 When using such an ID on the command line, quote it because it contains `|`.

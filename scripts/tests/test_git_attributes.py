@@ -6,17 +6,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURES = ROOT / "nebula_terminal/tests/ref"
+FIXTURES = ROOT / "pebrel_terminal/tests/ref"
 
 
 class GitAttributeTests(unittest.TestCase):
     def test_embedded_shell_scripts_survive_autocrlf_checkout(self):
         paths = [
-            "nebula_terminal/src/tty/connection.sh",
-            "nebula_app/src/platform/pi_session.sh",
+            "pebrel_terminal/src/tty/connection.sh",
+            "pebrel_app/src/platform/pi_session.sh",
             *(
                 path.relative_to(ROOT).as_posix()
-                for path in sorted((ROOT / "nebula_app/res/shell").iterdir())
+                for path in sorted((ROOT / "pebrel_app/res/shell").iterdir())
                 if path.is_file()
             ),
         ]
@@ -52,7 +52,7 @@ class GitAttributeTests(unittest.TestCase):
 
     def test_embedded_remote_scripts_use_posix_newlines_in_windows_checkouts(self):
         paths = [str(path.relative_to(ROOT)).replace("\\", "/")
-                 for directory in ["nebula_app/res/hooks", "nebula_app/res/shell"]
+                 for directory in ["pebrel_app/res/hooks", "pebrel_app/res/shell"]
                  for path in (ROOT / directory).iterdir() if path.is_file()]
         self.assertTrue(paths)
         with tempfile.TemporaryDirectory() as directory:
@@ -73,7 +73,7 @@ class GitAttributeTests(unittest.TestCase):
 
     def test_checksum_pinned_assets_keep_verified_bytes_on_checkout(self):
         fixtures = {
-            "nebula_app/res/prompts/codex_prompt_suggestion.txt":
+            "pebrel_app/res/prompts/codex_prompt_suggestion.txt":
                 "3728870393e8d9776f983db00b1b4bea094b541d56478807d204f7e650232f4e",
             "scripts/tests/fixtures/ai-hooks-v1.5.0/opencode.js":
                 "5f155e7330a9ef51c5ad1a048e27bedf6f48ade94e0bbe0624d76e632b545a06",

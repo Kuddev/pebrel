@@ -1,0 +1,1223 @@
+//! Native presentation settings. Startup evaluates the shared config once, then
+//! settings saves reuse the cached plain data. Explicit Settings preferences win
+//! over script defaults; theme resolution stays with its existing owner.
+//! GPUI script edits currently require a restart.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use gpui::{App, Global};
+use pebrel_settings::{BlurModeName, CursorShapeName, RuntimeSettings};
+use pebrel_terminal::vte::ansi::CursorShape;
+use serde::Deserialize;
+
+use crate::display::{LanguagePreference, UiLanguage};
+use crate::gpui_shell::terminal::colors::Palette;
+
+pub(crate) mod source;
+/// GPUI 对齐 legacy 的产品默认：配置未写 `cursor_blink` 时光标闪烁。
+pub(crate) const DEFAULT_CURSOR_BLINK: bool = true;
+
+#[inline]
+pub(crate) const fn effective_cursor_blink(configured: Option<bool>) -> bool {
+    match configured {
+        Some(blinking) => blinking,
+        None => DEFAULT_CURSOR_BLINK,
+    }
+}
+
+/// 应用启动时装载一次的全局设置。
+pub struct Settings {
+    /// 已解析的界面语言。GPUI 组件只读这个内存全局，渲染路径不得重复读盘。
+    pub ui_language: UiLanguage,
+    pub panel_resize: bool,
+    pub font_family: String,
+    pub font_cjk: Option<[gpui::Font; 4]>,
+    pub font_bold_family: String,
+    pub font_italic_family: String,
+    pub font_bold_italic_family: String,
+    /// GPUI 逻辑像素（配置里是 pt，1pt = 4/3 px @96dpi）。
+    pub font_size_px: f32,
+    pub ligatures: bool,
+    /// 配置文件的基准字号，不含设置页/Ctrl+滚轮持久化的终端缩放。
+    /// 启动窗口按它定形，和旧壳的 `window_size` 契约一致。
+    pub base_font_size_px: f32,
+    /// Ctrl+滚轮缩放终端字号。默认开启；关闭时终端消费整个手势而不缩放。
+    pub ctrl_wheel_font_zoom: bool,
+    pub ui_font_size_px: f32,
+    pub(crate) ui_font_family: Option<String>,
+    pub(crate) ui_font_size_override: Option<f32>,
+    /// 字体 cell 的物理像素偏移；旧壳 Windows 默认 y=4，必须在设备像素
+    /// 域参与取整，才能在 125%/150% DPI 下保持同一行数。
+    pub font_offset_x: f32,
+    pub font_offset_y: f32,
+    /// Optional theme line-height multiplier. `None` keeps the shaped font
+    /// metrics, while `Some(multiplier)` is resolved as multiplier * font size.
+    pub(crate) theme_line_height: Option<f32>,
+    /// Effective window material values after user settings and theme defaults
+    /// have been merged once during settings loading.
+    pub(crate) visual_opacity: f32,
+    pub(crate) visual_blur: BlurModeName,
+    pub palette: Palette,
+    /// Fully resolved theme snapshot. Renderers use the derived palette above;
+    /// chrome helpers use this cache so they never reload theme files per frame.
+    pub(crate) resolved_theme: Arc<crate::gpui_shell::theme::ResolvedTheme>,
+    pub cursor_shape: Option<CursorShape>,
+    pub cursor_blink: Option<bool>,
+    pub cursor_motion: pebrel_settings::CursorMotion,
+    /// 选区完成即复制（旧壳 `copy_on_select` 设置）。
+    pub copy_on_select: bool,
+    pub scrollback_lines: usize,
+    pub scroll_speed: f32,
+    pub scrollbar_visibility: pebrel_settings::ScrollbarVisibility,
+    /// Pointer handlers and split rendering only read these cached preferences.
+    pub focus_follows_mouse: bool,
+    pub dim_inactive_panes: bool,
+    /// Cached in-app toast preference, independent of native system notifications.
+    pub ai_toasts: bool,
+    /// Cached display lifetime; toast delivery and native notifications are independent.
+    pub notification_duration: pebrel_settings::NotificationDuration,
+    /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
+    pub tab_close_visible: bool,
+    pub tab_reveal: pebrel_settings::TabRevealName,
+    /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
+    /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
+    pub ghost: bool,
+    pub prompt_suggestions_enabled: bool,
+    pub completion_style: crate::display::CompletionStyle,
+    /// 单元格宽度取整方式；同一窗口宽度下必须与旧壳得到相同列数。
+    pub cell_width_mode: pebrel_settings::CellWidthModeName,
+    /// 全宽字形（CJK 等）的 bold run 用 Regular 字形栅格（粗体只提亮不加粗，
+    /// 旧壳 `glyph_cache.wide_bold_use_regular` 同义）。
+    pub cjk_bold_regular: bool,
+    /// 默认 shell 的稳定 id（`nebula_settings.txt` 的 `shell=`，如
+    /// "pwsh" / "cmd" / "wsl:Ubuntu"）。None = 引擎默认。
+    pub shell_id: Option<String>,
+    /// 配置装载时吞掉的第一个错误（toml 解析失败/字段形状不符）。解析
+    /// 保持宽容——任何用户配置都不能阻止启动——但错误必须有去处：
+    /// 开窗后由工作区放进驻留消息栏（提示三层裁定：这是有待办的事）。
+    pub load_notice: Option<String>,
+    /// 终端卡几何（圆角 / 卡缝 / 投影 / 竖线）。主题默认叠用户覆盖后的结果，
+    /// 放在全局里是因为每帧都要用——`RuntimeSettings::load()` 每次都读磁盘。
+    pub card: crate::gpui_shell::theme::PaneCardStyle,
+}
+
+impl Global for Settings {}
+
+/// GPUI 壳唯一的界面语言入口。应用初始化会先注册 [`Settings`]；测试或极早期
+/// 回调若尚未注册则回退英文，不能为取语言把磁盘 I/O 带进渲染路径。
+pub(crate) fn ui_language(cx: &App) -> UiLanguage {
+    cx.try_global::<Settings>().map(|settings| settings.ui_language).unwrap_or(UiLanguage::EnUs)
+}
+
+pub(crate) fn panel_resize(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.panel_resize)
+}
+
+/// 只查询内存快照，避免动画渲染读盘；初始化前保持默认滑动行为。
+pub(crate) fn tab_reveal_instant(cx: &App) -> bool {
+    cx.try_global::<Settings>()
+        .is_some_and(|settings| settings.tab_reveal == pebrel_settings::TabRevealName::Instant)
+}
+
+pub(crate) fn ctrl_wheel_font_zoom(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_none_or(|settings| settings.ctrl_wheel_font_zoom)
+}
+
+pub(crate) fn ai_toasts_enabled(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_none_or(|settings| settings.ai_toasts)
+}
+
+#[inline]
+fn resolve_ui_language(preference: pebrel_settings::LanguagePref) -> UiLanguage {
+    LanguagePreference::from(preference).resolved()
+}
+
+fn effective_font_sizes(
+    runtime_font_size_px: Option<f32>,
+    theme_font_size_px: Option<f32>,
+    toml_font_size_pt: Option<f32>,
+) -> (f32, f32) {
+    let theme_font_size_px = theme_font_size_px.map(|size| size.clamp(4.0, 96.0));
+    let base_font_size_px = theme_font_size_px
+        .unwrap_or_else(|| toml_font_size_pt.unwrap_or(11.25).clamp(4.0, 96.0) * 4.0 / 3.0);
+    let font_size_px = runtime_font_size_px.or(theme_font_size_px).unwrap_or(base_font_size_px);
+    (font_size_px, base_font_size_px)
+}
+
+fn effective_theme_line_height(
+    resolved_theme: &crate::gpui_shell::theme::ResolvedTheme,
+) -> Option<f32> {
+    resolved_theme
+        .typography()
+        .and_then(|typography| typography.line_height)
+        .map(|line_height| line_height.clamp(0.5, 3.0))
+}
+
+impl Settings {
+    /// Load the latest persisted runtime snapshot and derive the effective
+    /// theme from that same snapshot.
+    pub(crate) fn load_current(cx: &App) -> Self {
+        Self::load_current_snapshot(cx).1
+    }
+
+    /// Variant for callers that also keep a runtime mirror. Returning both
+    /// values prevents the mirror and global settings from being split by two
+    /// adjacent disk reads.
+    pub(crate) fn load_current_snapshot(cx: &App) -> (RuntimeSettings, Self) {
+        let runtime = RuntimeSettings::load();
+        let theme = crate::gpui_shell::theme::resolve_theme_name(
+            runtime.theme,
+            runtime.follow_system_theme,
+            crate::gpui_shell::theme::system_is_light(cx),
+        );
+        let settings = Self::load_with_runtime(theme, runtime.clone());
+        (runtime, settings)
+    }
+
+    /// `theme`：**生效**主题（follow_system 折算后，见
+    /// `theme::effective_theme_name`）。不在这里自行读 RuntimeSettings 的
+    /// 原始主题，否则 chrome 层与终端 palette 会在跟随系统时分家。
+    pub fn load(theme: pebrel_settings::ThemeName) -> Self {
+        Self::load_with_runtime(theme, RuntimeSettings::load())
+    }
+
+    /// Load from the exact runtime snapshot that was just persisted.  Settings
+    /// panes use this entry point to avoid resolving the old theme between the
+    /// write and the global cache update.
+    pub fn load_with_runtime(theme: pebrel_settings::ThemeName, runtime: RuntimeSettings) -> Self {
+        let resolved_theme =
+            Arc::new(crate::gpui_shell::theme::ResolvedTheme::from_runtime(&runtime, theme));
+        let ui_language = resolve_ui_language(runtime.language);
+        let mut load_notice = resolved_theme.notice.clone();
+        let raw = source::raw(&mut load_notice).unwrap_or_else(|| {
+            find_config_file()
+                .as_deref()
+                .map(|p| load_merged_toml(p, &mut load_notice, ui_language))
+                .unwrap_or_else(|| toml::Value::Table(Default::default()))
+        });
+        let raw: RawConfig = match raw.try_into() {
+            Ok(config) => config,
+            Err(err) => {
+                load_notice.get_or_insert_with(|| {
+                    format!(
+                        "{}: {err}",
+                        ui_language.pick(
+                            "pebrel.toml 字段解析失败",
+                            "Failed to parse pebrel.toml fields",
+                        )
+                    )
+                });
+                RawConfig::default()
+            },
+        };
+
+        // 字体：settings.txt（设置界面）覆盖 toml，最后落内置默认。
+        let themed_font_family =
+            resolved_theme.typography().and_then(|typography| typography.font_family.clone());
+        let normal_family = runtime
+            .font_family
+            .clone()
+            .or(themed_font_family)
+            .or_else(|| raw.font.normal.family.clone())
+            .unwrap_or_else(|| default_font_family().to_string());
+        let secondary = |desc: &RawFontDesc| -> String {
+            desc.family.clone().unwrap_or_else(|| normal_family.clone())
+        };
+        // 字号语义（对齐旧壳写盘）：settings.txt 的 font_size 是**逻辑像素**
+        // （设置 spinner/Ctrl+滚轮持久化时已除 scale）；toml 的 font.size
+        // 才是 pt（1pt = 4/3 px @96dpi）。
+        let theme_font_size_px =
+            resolved_theme.typography().and_then(|typography| typography.font_size);
+        let (font_size_px, base_font_size_px) =
+            effective_font_sizes(runtime.font_size_px, theme_font_size_px, raw.font.size);
+        let offset = raw.font.offset.unwrap_or_else(default_font_offset);
+        let theme_line_height = effective_theme_line_height(&resolved_theme);
+        let visual_opacity = resolved_theme.effective_opacity(&runtime);
+        let visual_blur = resolved_theme.effective_blur(&runtime);
+
+        // 配色：toml 覆盖内置默认，主题裁定背景/浅色替换/Powerline 槽位。
+        // 跟随系统时由当前亮/暗主题全权决定终端底色；否则用户取色器压轴。
+        let mut palette = build_palette(&raw.colors);
+        apply_resolved_theme(&mut palette, &resolved_theme);
+        if let Some(background) =
+            runtime_background(runtime.follow_system_theme, runtime.background)
+        {
+            palette.background = rgba8(background);
+        }
+
+        let cursor_shape = runtime
+            .cursor_shape
+            .or_else(|| resolved_theme.effects().and_then(|effects| effects.cursor_shape));
+        let card = crate::gpui_shell::theme::PaneCardStyle::resolve_for_resolved_theme(
+            &resolved_theme,
+            &runtime,
+        );
+
+        Settings {
+            ui_language,
+            panel_resize: runtime.panel_resize,
+            font_bold_family: secondary(&raw.font.bold),
+            font_italic_family: secondary(&raw.font.italic),
+            font_bold_italic_family: secondary(&raw.font.bold_italic),
+            font_size_px,
+            ligatures: runtime
+                .ligatures
+                .enabled(resolved_theme.typography().map(|typography| typography.ligatures)),
+            base_font_size_px,
+            ctrl_wheel_font_zoom: runtime.ctrl_wheel_font_zoom,
+            ui_font_size_px: runtime.ui_font_size_px.unwrap_or(base_font_size_px),
+            ui_font_family: runtime.ui_font_family.clone(),
+            ui_font_size_override: runtime.ui_font_size_px,
+            font_offset_x: f32::from(offset.x),
+            font_offset_y: f32::from(offset.y),
+            theme_line_height,
+            visual_opacity,
+            visual_blur,
+            palette,
+            resolved_theme,
+            cursor_shape: cursor_shape.map(|shape| match shape {
+                CursorShapeName::Block => CursorShape::Block,
+                CursorShapeName::Beam => CursorShape::Beam,
+                CursorShapeName::Underline => CursorShape::Underline,
+                CursorShapeName::Hollow => CursorShape::HollowBlock,
+            }),
+            cursor_blink: runtime.cursor_blink,
+            cursor_motion: runtime.cursor_motion,
+            copy_on_select: runtime.copy_on_select,
+            scrollback_lines: runtime.scrollback_lines,
+            scroll_speed: runtime.scroll_speed,
+            scrollbar_visibility: runtime.scrollbar_visibility,
+            focus_follows_mouse: runtime
+                .focus_follows_mouse
+                .unwrap_or(raw.mouse.focus_follows_mouse),
+            dim_inactive_panes: runtime.dim_inactive_panes,
+            ai_toasts: runtime.ai_toasts,
+            notification_duration: runtime.notification_duration,
+            tab_close_visible: runtime.tab_close_visible,
+            tab_reveal: runtime.tab_reveal,
+            ghost: runtime.ghost,
+            prompt_suggestions_enabled: runtime.prompt_suggestions.enabled,
+            completion_style: runtime.completion_style,
+            cell_width_mode: runtime.cell_width_mode,
+            cjk_bold_regular: runtime.cjk_bold_regular,
+            shell_id: runtime.shell.clone(),
+            font_family: normal_family,
+            // 未指定中文字体时沿用主字体及平台缺字回退，不隐式指定完整 Maple。
+            font_cjk: runtime.font_family_cjk.as_deref().map(|family| {
+                use gpui::{FontStyle, FontWeight};
+                [
+                    (FontWeight::NORMAL, FontStyle::Normal),
+                    (FontWeight::BOLD, FontStyle::Normal),
+                    (FontWeight::NORMAL, FontStyle::Italic),
+                    (FontWeight::BOLD, FontStyle::Italic),
+                ]
+                .map(|(weight, style)| gpui::Font {
+                    weight,
+                    style,
+                    ..crate::font_install::gpui_font_with_fallbacks(family)
+                })
+            }),
+            load_notice,
+            // 这里是唯一能正确合并「主题自带几何」与「用户显式覆盖」的地方：
+            // `theme` 已是 follow_system 折算后的**生效**主题，runtime 是同一次
+            // 装载读到的设置。别处再读一遍就会在跟随系统时和 chrome 分家。
+            card,
+        }
+    }
+
+    /// 引擎 Term 的启动配置（默认光标形状/闪烁来自运行时设置）。
+    pub fn term_config(&self) -> pebrel_terminal::term::Config {
+        let mut config = pebrel_terminal::term::Config::default();
+        config.scrolling_history = self.scrollback_lines;
+        if let Some(shape) = self.cursor_shape {
+            config.default_cursor_style.shape = shape;
+        }
+        config.default_cursor_style.blinking = effective_cursor_blink(self.cursor_blink);
+        // 与旧壳 `UiConfig::term_options` 对齐的关键位（ui_config.rs）——
+        // 裸默认在 ConPTY 下会出两类肉眼可见的错：
+        // - 起桥 DA1 由 conpty 预应答过，Term 必须吞掉自己的重复应答，
+        //   否则它作为击键进入 shell（首行提示符上的 `[?6c` 回显，光标
+        //   随之后移）。
+        // - resize 后 ConPTY 静默重锚主屏并按绝对坐标重绘，网格必须用
+        //   同一行语义，否则光标漂移。
+        #[cfg(windows)]
+        {
+            config.suppress_bringup_da1 = pebrel_terminal::tty::windows::conpty_sideload_enabled();
+            config.conpty_resize = true;
+        }
+        config.kitty_keyboard = true;
+        config
+    }
+}
+
+fn default_font_offset() -> RawDelta {
+    // 恢复 2.2.2 的默认留白，不再为字符画比例压缩普通正文。
+    let y = match crate::platform::Platform::current() {
+        crate::platform::Platform::Windows => 4,
+        _ => 0,
+    };
+    RawDelta { x: 0, y }
+}
+
+fn runtime_background(
+    follow_system_theme: bool,
+    background: Option<pebrel_settings::Rgb8>,
+) -> Option<pebrel_settings::Rgb8> {
+    (!follow_system_theme).then_some(background).flatten()
+}
+
+/// 主题叠加在 toml 配色之上（镜像旧壳 `apply_term_colors` 的范围与次序）：
+/// 背景永远替换；保留应用使用的扩展色槽。原有主题保持旧合同：仅浅色
+/// 主题替换前景与 ANSI-16；自带完整 palette 的主题（Nord/Paper）应用其明确色表。
+fn apply_theme(palette: &mut Palette, theme: pebrel_settings::ThemeName) {
+    let resolved = crate::gpui_shell::theme::ResolvedTheme::builtin(theme, None);
+    apply_resolved_theme(palette, &resolved);
+}
+
+fn apply_resolved_theme(palette: &mut Palette, resolved: &crate::gpui_shell::theme::ResolvedTheme) {
+    let term = resolved.base_name().term_theme();
+    if resolved.is_custom() {
+        palette.background = rgba8(resolved.terminal_background());
+        palette.foreground = rgba8(resolved.terminal_foreground());
+        palette.bright_foreground = palette.foreground;
+        palette.dim_foreground = Palette::dim_of(palette.foreground);
+        for (index, color) in resolved.ansi().into_iter().enumerate() {
+            palette.ansi[index] = rgba8(color);
+            if index < 8 {
+                palette.dim[index] = Palette::dim_of(palette.ansi[index]);
+            }
+        }
+        palette.cursor = resolved.terminal_cursor().map(rgba8).unwrap_or(palette.cursor);
+        palette.cursor_text = resolved.terminal_cursor_text().map(rgba8);
+        palette.cursor_stroke = resolved.terminal_cursor_stroke().map(rgba8);
+        let (selection_background, selection_foreground) = resolved.terminal_selection();
+        if let Some(selection) = selection_background {
+            palette.selection = rgba8(selection);
+        }
+        palette.selection_foreground = selection_foreground.map(rgba8);
+        palette.indexed.retain(|(index, _)| *index < 16);
+        palette.indexed.extend(
+            (16..=255).filter_map(|index| {
+                resolved.indexed(index).map(|color| (index as u8, rgba8(color)))
+            }),
+        );
+        return;
+    }
+    palette.background = rgba8(term.background);
+    if let Some(exact) = term.exact {
+        let foreground = rgba8(resolved.foreground_override().unwrap_or(exact.foreground));
+        palette.foreground = foreground;
+        palette.bright_foreground = foreground;
+        palette.dim_foreground = Palette::dim_of(foreground);
+        for (i, color) in exact.ansi.into_iter().enumerate() {
+            palette.ansi[i] = rgba8(color);
+            if i < 8 {
+                palette.dim[i] = Palette::dim_of(palette.ansi[i]);
+            }
+        }
+        if let Some(cursor) = exact.cursor {
+            palette.cursor = rgba8(cursor);
+        }
+        palette.cursor_text = exact.cursor_text.map(rgba8);
+        palette.cursor_stroke = exact.cursor_stroke.map(rgba8);
+        if let Some(selection) = exact.selection_background {
+            palette.selection = rgba8(selection);
+        }
+        if let Some(selection_foreground) = exact.selection_foreground {
+            palette.selection_foreground = Some(rgba8(selection_foreground));
+        }
+        return;
+    }
+    if term.is_light {
+        let foreground =
+            rgba8(resolved.foreground_override().unwrap_or(pebrel_settings::LIGHT_FOREGROUND));
+        palette.foreground = foreground;
+        palette.bright_foreground = foreground;
+        palette.dim_foreground = Palette::dim_of(foreground);
+        for (i, color) in pebrel_settings::LIGHT_ANSI.into_iter().enumerate() {
+            palette.ansi[i] = rgba8(color);
+            if i < 8 {
+                palette.dim[i] = Palette::dim_of(palette.ansi[i]);
+            }
+        }
+    }
+}
+
+fn rgba8(color: pebrel_settings::Rgb8) -> gpui::Rgba {
+    gpui::Rgba {
+        r: color[0] as f32 / 255.0,
+        g: color[1] as f32 / 255.0,
+        b: color[2] as f32 / 255.0,
+        a: 1.0,
+    }
+}
+
+fn default_font_family() -> &'static str {
+    crate::font_install::REQUIRED_FONT_FAMILY
+}
+
+/// 显式窗口网格、物理坐标与首个普通窗口的冷启动恢复值。
+///
+/// 单独驻留而不是并入 [`Settings`]，因为生命周期不同：`Settings` 随设置页写入
+/// 反复重载，启动网格按定义只在开窗时生效一次，而 Lua 配置求值不该出现在每次
+/// 保存设置的路径上。显式 `--config-file` 优先；否则复用主应用发现顺序（`pebrel.luau`
+/// 优先于 `pebrel.toml`，YAML 同路）和 `pebrel config check` 的同一解析器。
+#[derive(Default)]
+pub(crate) struct StartupWindow {
+    pub dimensions: Option<crate::config::window::Dimensions>,
+    pub position: Option<crate::config::ui_config::Delta<i32>>,
+    // Remembered geometry is scoped to the window being created.
+    pub(crate) restored: Option<(u64, crate::session::WindowState)>,
+}
+
+impl Global for StartupWindow {}
+
+impl StartupWindow {
+    #[cfg(test)]
+    pub(crate) fn load(config_file: Option<PathBuf>) -> Self {
+        let source = match crate::config::source::discover(config_file) {
+            Ok(Some(source)) => source,
+            Ok(None) => return Self::default(),
+            Err(error) => {
+                super::try_write_stderr(format_args!(
+                    "[pebrel:gpui] failed to find window config: {error}"
+                ));
+                return Self::default();
+            },
+        };
+        match crate::config::load_source(&source) {
+            Ok(loaded) => Self::from_config(&loaded.config),
+            Err(error) => {
+                super::try_write_stderr(format_args!(
+                    "[pebrel:gpui] failed to read window config {}: {error}",
+                    source.primary_path.display()
+                ));
+                Self::default()
+            },
+        }
+    }
+
+    /// `dimensions()` 自带「行列必须同时非零」的旧壳合同。
+    fn from_config(config: &crate::config::UiConfig) -> Self {
+        Self {
+            dimensions: config.window.dimensions(),
+            position: config.window.position,
+            restored: None,
+        }
+    }
+}
+
+/// 启动网格行列（浮点，供 cell 宽度直接相乘）。
+///
+/// 配置了 `config.window.dimensions` 就按它定形，与旧壳 `window_size` 同合同
+/// （行列各钳到终端最小可用值）；未配置时用 `TerminalView` 的内建默认画布。
+pub(crate) fn startup_grid(cx: &App) -> (f32, f32) {
+    let builtin = || {
+        (
+            f32::from(super::terminal::view::TerminalView::DEFAULT_GRID_COLUMNS),
+            f32::from(super::terminal::view::TerminalView::DEFAULT_GRID_LINES),
+        )
+    };
+    let Some(dimensions) = cx.try_global::<StartupWindow>().and_then(|window| window.dimensions)
+    else {
+        return builtin();
+    };
+    (
+        dimensions.columns.max(pebrel_terminal::term::MIN_COLUMNS) as f32,
+        dimensions.lines.max(pebrel_terminal::term::MIN_SCREEN_LINES) as f32,
+    )
+}
+
+/// 查找配置文件；顺序与 `pebrel_app::config::installed_config` 一致。
+/// `NEBULA_GPUI_CONFIG` 用于隔离测试：绝不能往用户真实配置目录写测试文件，
+/// 正式版 Nebula 正在监视它做热重载。
+fn find_config_file() -> Option<PathBuf> {
+    if let Some(explicit) = ["PEBREL_GPUI_CONFIG", "NEBULA_GPUI_CONFIG"]
+        .into_iter()
+        .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
+    {
+        let path = PathBuf::from(explicit);
+        return path.exists().then_some(path);
+    }
+
+    crate::config::source::discover_toml()
+}
+
+/// 读取主文件并按主应用语义合并 imports：imports 先加载，主文件最后覆盖。
+/// 途中吞掉的第一个错误经 `notice` 上浮（宽容解析 + 有去处的错误）。
+fn load_merged_toml(path: &Path, notice: &mut Option<String>, language: UiLanguage) -> toml::Value {
+    let main = read_toml(path, notice, language);
+
+    let imports: Vec<String> =
+        [main.get("general").and_then(|g| g.get("import")), main.get("import")]
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_array())
+            .flatten()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+
+    let mut merged = toml::Value::Table(Default::default());
+    for import in imports {
+        let import_path = resolve_import_path(&import, path);
+        if import_path.exists() {
+            merged = merge_values(merged, read_toml(&import_path, notice, language));
+        } else {
+            super::try_write_stderr(format_args!(
+                "[pebrel:gpui] config import not found: {}",
+                import_path.display()
+            ));
+        }
+    }
+    merge_values(merged, main)
+}
+
+fn read_toml(path: &Path, notice: &mut Option<String>, language: UiLanguage) -> toml::Value {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            super::try_write_stderr(format_args!(
+                "[pebrel:gpui] failed to read config {}: {err}",
+                path.display()
+            ));
+            notice.get_or_insert_with(|| {
+                format!(
+                    "{} {}: {err}",
+                    language.pick("无法读取配置", "Failed to read configuration"),
+                    path.display()
+                )
+            });
+            return toml::Value::Table(Default::default());
+        },
+    };
+    // toml 0.9：`Value: FromStr` 解析的是单个 TOML 值；文档必须走 `Table`。
+    match text.parse::<toml::Table>() {
+        Ok(table) => toml::Value::Table(table),
+        Err(err) => {
+            super::try_write_stderr(format_args!(
+                "[pebrel:gpui] failed to parse config {}: {err}",
+                path.display()
+            ));
+            let first_line = err
+                .to_string()
+                .lines()
+                .next()
+                .unwrap_or(language.pick("解析失败", "Parse failed"))
+                .to_owned();
+            notice.get_or_insert_with(|| {
+                format!(
+                    "{} {}: {first_line}",
+                    language.pick("配置解析失败", "Failed to parse configuration"),
+                    path.display()
+                )
+            });
+            toml::Value::Table(Default::default())
+        },
+    }
+}
+
+/// `~/` 展开为 home；相对路径相对于主配置文件所在目录。
+fn resolve_import_path(import: &str, base_config: &Path) -> PathBuf {
+    let mut path = PathBuf::from(import);
+    if let Ok(stripped) = path.strip_prefix("~/") {
+        if let Some(home) = home::home_dir() {
+            path = home.join(stripped);
+        }
+    }
+    if path.is_relative() {
+        if let Some(dir) = base_config.parent() {
+            path = dir.join(path);
+        }
+    }
+    path
+}
+
+/// TOML 值级递归合并：表递归，其余类型 `other` 覆盖 `base`。
+fn merge_values(base: toml::Value, other: toml::Value) -> toml::Value {
+    match (base, other) {
+        (toml::Value::Table(mut base), toml::Value::Table(other)) => {
+            for (key, value) in other {
+                let merged = match base.remove(&key) {
+                    Some(existing) => merge_values(existing, value),
+                    None => value,
+                };
+                base.insert(key, merged);
+            }
+            toml::Value::Table(base)
+        },
+        (_, other) => other,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TOML 字段子集（与 pebrel_app/src/config 的 TOML 形状兼容）
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawConfig {
+    font: RawFont,
+    colors: RawColors,
+    mouse: RawMouse,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawMouse {
+    focus_follows_mouse: bool,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawFont {
+    normal: RawFontDesc,
+    bold: RawFontDesc,
+    italic: RawFontDesc,
+    bold_italic: RawFontDesc,
+    /// pt，允许整数或浮点。
+    size: Option<f32>,
+    /// 与旧壳 `font.offset` 同义，单位是设备像素。
+    offset: Option<RawDelta>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawFontDesc {
+    family: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(default)]
+struct RawDelta {
+    x: i8,
+    y: i8,
+}
+
+impl Default for RawDelta {
+    fn default() -> Self {
+        Self { x: 0, y: 0 }
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawColors {
+    primary: RawPrimary,
+    cursor: RawCellColors,
+    selection: RawCellColors,
+    normal: RawAnsi8,
+    bright: RawAnsi8,
+    dim: Option<RawAnsi8>,
+    indexed_colors: Vec<RawIndexed>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawPrimary {
+    foreground: Option<String>,
+    background: Option<String>,
+    bright_foreground: Option<String>,
+    dim_foreground: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawCellColors {
+    // CellForeground/CellBackground 等特殊值 parse 失败自然落回默认。
+    foreground: Option<String>,
+    background: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawAnsi8 {
+    black: Option<String>,
+    red: Option<String>,
+    green: Option<String>,
+    yellow: Option<String>,
+    blue: Option<String>,
+    magenta: Option<String>,
+    cyan: Option<String>,
+    white: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawIndexed {
+    index: Option<u16>,
+    color: Option<String>,
+}
+
+/// 解析 `#rrggbb` / `0xrrggbb`。
+fn parse_rgb(text: &str) -> Option<gpui::Rgba> {
+    let hex = text.strip_prefix('#').or_else(|| text.strip_prefix("0x"))?;
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let value = u32::from_str_radix(hex, 16).ok()?;
+    Some(gpui::Rgba {
+        r: ((value >> 16) & 0xff) as f32 / 255.0,
+        g: ((value >> 8) & 0xff) as f32 / 255.0,
+        b: (value & 0xff) as f32 / 255.0,
+        a: 1.0,
+    })
+}
+
+fn build_palette(raw: &RawColors) -> Palette {
+    let mut palette = Palette::default();
+    let set = |slot: &mut gpui::Rgba, value: &Option<String>| {
+        if let Some(rgba) = value.as_deref().and_then(parse_rgb) {
+            *slot = rgba;
+        }
+    };
+
+    set(&mut palette.foreground, &raw.primary.foreground);
+    set(&mut palette.background, &raw.primary.background);
+    // 主应用语义：bright/dim foreground 未配置时派生自 foreground。
+    palette.bright_foreground =
+        raw.primary.bright_foreground.as_deref().and_then(parse_rgb).unwrap_or(palette.foreground);
+    palette.dim_foreground = raw
+        .primary
+        .dim_foreground
+        .as_deref()
+        .and_then(parse_rgb)
+        .unwrap_or_else(|| Palette::dim_of(palette.foreground));
+
+    set(&mut palette.cursor, &raw.cursor.background);
+    if let Some(selection) = raw.selection.background.as_deref().and_then(parse_rgb) {
+        // 用户显式选区色保持主应用的不透明语义。
+        palette.selection = selection;
+    }
+    palette.selection_foreground = raw.selection.foreground.as_deref().and_then(parse_rgb);
+
+    let ansi8 = |group: &RawAnsi8| -> [Option<gpui::Rgba>; 8] {
+        [
+            group.black.as_deref().and_then(parse_rgb),
+            group.red.as_deref().and_then(parse_rgb),
+            group.green.as_deref().and_then(parse_rgb),
+            group.yellow.as_deref().and_then(parse_rgb),
+            group.blue.as_deref().and_then(parse_rgb),
+            group.magenta.as_deref().and_then(parse_rgb),
+            group.cyan.as_deref().and_then(parse_rgb),
+            group.white.as_deref().and_then(parse_rgb),
+        ]
+    };
+
+    for (i, color) in ansi8(&raw.normal).into_iter().enumerate() {
+        if let Some(color) = color {
+            palette.ansi[i] = color;
+        }
+    }
+    for (i, color) in ansi8(&raw.bright).into_iter().enumerate() {
+        if let Some(color) = color {
+            palette.ansi[8 + i] = color;
+        }
+    }
+    if let Some(dim) = &raw.dim {
+        for (i, color) in ansi8(dim).into_iter().enumerate() {
+            if let Some(color) = color {
+                palette.dim[i] = color;
+            }
+        }
+    } else {
+        // 主应用语义：dim 未配置时由 normal 推导。
+        for i in 0..8 {
+            palette.dim[i] = Palette::dim_of(palette.ansi[i]);
+        }
+    }
+
+    for indexed in &raw.indexed_colors {
+        if let (Some(index), Some(color)) =
+            (indexed.index, indexed.color.as_deref().and_then(parse_rgb))
+        {
+            if (16..=255).contains(&index) {
+                palette.indexed.push((index as u8, color));
+            }
+        }
+    }
+
+    palette
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RawColors, Settings, StartupWindow, apply_resolved_theme, apply_theme, build_palette,
+        effective_font_sizes, effective_theme_line_height, resolve_ui_language, rgba8,
+        runtime_background, startup_grid,
+    };
+    use crate::config::window::Dimensions;
+    use crate::display::UiLanguage;
+    use crate::gpui_shell::terminal::colors::Palette;
+    use pebrel_settings::{
+        BlurModeName, LanguagePref, RawSettings, RuntimeSettings, ThemeDefinition, ThemeName,
+    };
+
+    #[test]
+    fn default_terminal_font_is_bundled_on_every_platform() {
+        assert_eq!(super::default_font_family(), crate::font_install::REQUIRED_FONT_FAMILY);
+    }
+
+    #[test]
+    fn font_offset_restores_2_2_2_padding_and_preserves_explicit_values() {
+        let default_y = match crate::platform::Platform::current() {
+            crate::platform::Platform::Windows => 4,
+            _ => 0,
+        };
+        for (input, expected) in [
+            ("", (0, default_y)),
+            ("[font.offset]\nx = 2\ny = 4", (2, 4)),
+            ("[font.offset]\ny = -2", (0, -2)),
+        ] {
+            let raw: super::RawConfig = toml::from_str(input).unwrap();
+            let offset = raw.font.offset.unwrap_or_else(super::default_font_offset);
+            assert_eq!((offset.x, offset.y), expected);
+        }
+    }
+
+    #[test]
+    fn explicit_runtime_languages_resolve_without_reading_system_locale() {
+        assert_eq!(resolve_ui_language(LanguagePref::ZhCn), UiLanguage::ZhCn);
+        assert_eq!(resolve_ui_language(LanguagePref::EnUs), UiLanguage::EnUs);
+    }
+
+    #[test]
+    fn startup_window_uses_the_config_file_selected_by_cli() {
+        use clap::Parser as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("selected.lua");
+        std::fs::write(
+            &path,
+            "local pebrel = require 'pebrel'\n\
+             local config = pebrel.config_builder()\n\
+             config.window = { dimensions = { columns = 123, lines = 37 }, position = { x = 197, y = 102 } }\n\
+             return config\n",
+        )
+        .unwrap();
+        let options = crate::cli::Options::try_parse_from([
+            "pebrel",
+            "--config-file",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+
+        let startup = StartupWindow::load(options.config_file);
+        assert_eq!(startup.dimensions, Some(Dimensions { columns: 123, lines: 37 }));
+        assert_eq!(startup.position, Some(crate::config::ui_config::Delta { x: 197, y: 102 }));
+    }
+
+    /// 用户写在 `pebrel.lua` 里的 `config.window.dimensions` 必须真的决定启动
+    /// 网格；过去它只被 `pebrel config check` 的同一套解析认下，壳从不读取。
+    #[test]
+    fn lua_window_dimensions_reach_the_startup_grid() {
+        use crate::config::lua::runtime::ReloadSignal;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pebrel.lua");
+        std::fs::write(
+            &path,
+            "local pebrel = require 'pebrel'\n\
+             local config = pebrel.config_builder()\n\
+             config.window = { dimensions = { columns = 155, lines = 43 } }\n\
+             return config\n",
+        )
+        .unwrap();
+        let loaded = crate::config::lua::load_lua_file(&path, ReloadSignal::default()).unwrap();
+
+        assert_eq!(
+            StartupWindow::from_config(&loaded.config).dimensions,
+            Some(Dimensions { columns: 155, lines: 43 })
+        );
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn startup_grid_follows_window_dimensions(cx: &mut gpui::TestAppContext) {
+        use crate::gpui_shell::terminal::view::TerminalView;
+
+        let builtin = (
+            f32::from(TerminalView::DEFAULT_GRID_COLUMNS),
+            f32::from(TerminalView::DEFAULT_GRID_LINES),
+        );
+        let configured = |columns: usize, lines: usize| StartupWindow {
+            dimensions: Some(Dimensions { columns, lines }),
+            ..Default::default()
+        };
+        cx.update(|cx| {
+            assert_eq!(startup_grid(cx), builtin);
+            cx.set_global(configured(155, 43));
+            assert_eq!(startup_grid(cx), (155.0, 43.0));
+            // 与旧壳 `window_size` 同合同：行列各钳到终端最小可用值。
+            cx.set_global(configured(1, 1));
+            assert_eq!(startup_grid(cx), (2.0, 1.0));
+        });
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn render_preferences_read_current_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            for (theme, language, panel_resize) in [
+                (ThemeName::Nord, UiLanguage::ZhCn, false),
+                (ThemeName::Paper, UiLanguage::EnUs, true),
+            ] {
+                let mut runtime = RuntimeSettings::from_raw(&RawSettings::default());
+                runtime.panel_resize = panel_resize;
+                let mut settings = Settings::load_with_runtime(theme, runtime);
+                settings.ui_language = language;
+                cx.set_global(settings);
+                assert_eq!(super::ui_language(cx), language);
+                assert_eq!(super::panel_resize(cx), panel_resize);
+            }
+        });
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn ctrl_wheel_font_zoom_reads_current_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert!(super::ctrl_wheel_font_zoom(cx));
+            for zoom_enabled in [false, true] {
+                let mut runtime = RuntimeSettings::from_raw(&RawSettings::default());
+                runtime.ctrl_wheel_font_zoom = zoom_enabled;
+                cx.set_global(Settings::load_with_runtime(ThemeName::Nebula, runtime));
+                assert_eq!(super::ctrl_wheel_font_zoom(cx), zoom_enabled);
+            }
+        });
+    }
+
+    #[test]
+    fn system_theme_owns_terminal_background_while_following_system() {
+        let custom = Some([0x0f, 0x11, 0x1a]);
+        assert_eq!(runtime_background(true, custom), None);
+        assert_eq!(runtime_background(false, custom), custom);
+    }
+
+    #[test]
+    fn missing_cursor_blink_key_enables_term_blinking() {
+        let mut settings = Settings::load(ThemeName::Nebula);
+        settings.cursor_blink = None;
+        assert!(settings.term_config().default_cursor_style.blinking);
+
+        settings.cursor_blink = Some(false);
+        assert!(!settings.term_config().default_cursor_style.blinking);
+    }
+
+    #[test]
+    fn builtin_themes_preserve_application_extended_colors() {
+        use pebrel_terminal::term::color::Colors;
+        use pebrel_terminal::vte::ansi::{Color, Rgb};
+
+        for theme in ThemeName::BUILTIN {
+            let mut palette = Palette::default();
+            apply_theme(&mut palette, theme);
+            let overrides = Colors::default();
+            for (index, expected) in [
+                (16, [0, 0, 0]),
+                (17, [0, 0, 95]),
+                (18, [0, 0, 135]),
+                (19, [0, 0, 175]),
+                (20, [0, 0, 215]),
+                (21, [0, 0, 255]),
+                (22, [0, 95, 0]),
+                (23, [0, 95, 95]),
+                (231, [255, 255, 255]),
+                (255, [238, 238, 238]),
+            ] {
+                assert_eq!(
+                    palette.resolve(Color::Indexed(index), &overrides, false),
+                    rgba8(expected),
+                    "{} index {index}",
+                    theme.prompt_name()
+                );
+                assert_eq!(
+                    palette.query_reply(index as usize, &overrides),
+                    Rgb { r: expected[0], g: expected[1], b: expected[2] }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn theme_switches_preserve_user_extended_colors_and_osc_overrides() {
+        use pebrel_terminal::term::color::Colors;
+        use pebrel_terminal::vte::ansi::{Color, Rgb};
+
+        let configured = [12, 34, 56];
+        let osc = Rgb { r: 78, g: 90, b: 123 };
+        let mut palette = Palette::default();
+        palette.indexed.push((16, rgba8(configured)));
+        for theme in ThemeName::BUILTIN {
+            apply_theme(&mut palette, theme);
+            let mut overrides = Colors::default();
+            assert_eq!(palette.resolve(Color::Indexed(16), &overrides, false), rgba8(configured));
+            overrides[16] = Some(osc);
+            assert_eq!(
+                palette.resolve(Color::Indexed(16), &overrides, false),
+                rgba8([78, 90, 123])
+            );
+            assert_eq!(palette.query_reply(16, &overrides), osc);
+            overrides[16] = None;
+            assert_eq!(palette.query_reply(16, &overrides), Rgb { r: 12, g: 34, b: 56 });
+        }
+    }
+
+    #[test]
+    fn existing_dark_theme_keeps_user_terminal_colors() {
+        let mut palette = Palette::default();
+        palette.foreground = rgba8([1, 2, 3]);
+        palette.ansi[0] = rgba8([4, 5, 6]);
+        palette.cursor = rgba8([7, 8, 9]);
+
+        apply_theme(&mut palette, ThemeName::Nebula);
+
+        assert_eq!(palette.foreground, rgba8([1, 2, 3]));
+        assert_eq!(palette.ansi[0], rgba8([4, 5, 6]));
+        assert_eq!(palette.cursor, rgba8([7, 8, 9]));
+        assert_eq!(palette.selection_foreground, None);
+    }
+
+    #[test]
+    fn explicit_selection_colors_are_loaded_together() {
+        let raw: RawColors = toml::from_str(
+            r##"
+            [selection]
+            foreground = "#102030"
+            background = "0xe5e9f0"
+            "##,
+        )
+        .unwrap();
+        let palette = build_palette(&raw);
+
+        assert_eq!(palette.selection_foreground, Some(rgba8([0x10, 0x20, 0x30])));
+        assert_eq!(palette.selection, rgba8([0xe5, 0xe9, 0xf0]));
+    }
+
+    #[test]
+    fn invalid_or_relative_selection_foreground_keeps_default() {
+        for foreground in ["#invalid", "#fff", "CellForeground", "CellBackground"] {
+            let raw: RawColors = toml::from_str(&format!(
+                "[selection]\nforeground = {foreground:?}\nbackground = \"#e5e9f0\"\n"
+            ))
+            .unwrap();
+            let palette = build_palette(&raw);
+
+            assert_eq!(palette.selection_foreground, None, "{foreground}");
+            assert_eq!(palette.selection, rgba8([0xe5, 0xe9, 0xf0]));
+        }
+    }
+
+    #[test]
+    fn theme_without_selection_colors_preserves_user_foreground() {
+        let foreground = rgba8([0x10, 0x20, 0x30]);
+        let background = rgba8([0xe5, 0xe9, 0xf0]);
+        for theme in [ThemeName::Nebula, ThemeName::Paper] {
+            let mut palette = Palette {
+                selection_foreground: Some(foreground),
+                selection: background,
+                ..Palette::default()
+            };
+
+            apply_theme(&mut palette, theme);
+
+            assert_eq!(palette.selection_foreground, Some(foreground));
+            assert_eq!(palette.selection, background);
+        }
+    }
+
+    #[test]
+    fn theme_with_selection_colors_keeps_its_existing_precedence() {
+        let mut palette = Palette {
+            selection_foreground: Some(rgba8([1, 2, 3])),
+            selection: rgba8([4, 5, 6]),
+            ..Palette::default()
+        };
+
+        apply_theme(&mut palette, ThemeName::Nord);
+
+        assert_eq!(palette.selection_foreground, Some(rgba8([0x2e, 0x34, 0x40])));
+        assert_eq!(palette.selection, rgba8([0xe5, 0xe9, 0xf0]));
+    }
+
+    #[test]
+    fn themes_apply_only_the_colors_they_declare() {
+        let mut nord = Palette::default();
+        apply_theme(&mut nord, ThemeName::Nord);
+        assert_eq!(nord.foreground, rgba8([0xf1, 0xf6, 0xff]));
+        assert_eq!(nord.ansi[15], rgba8([0xec, 0xef, 0xf4]));
+        assert_eq!(nord.cursor, rgba8([0xe5, 0xe9, 0xf0]));
+        assert_eq!(nord.cursor_text, Some(rgba8([0x2e, 0x34, 0x40])));
+        assert_eq!(nord.cursor_stroke, Some(rgba8([0x88, 0xc0, 0xd0])));
+        assert_eq!(nord.selection, rgba8([0xe5, 0xe9, 0xf0]));
+        assert_eq!(nord.selection_foreground, Some(rgba8([0x2e, 0x34, 0x40])));
+
+        let mut paper = Palette::default();
+        let original_cursor = paper.cursor;
+        let original_selection = paper.selection;
+        apply_theme(&mut paper, ThemeName::Paper);
+        assert_eq!(paper.foreground, rgba8([0x2f, 0x2e, 0x2b]));
+        assert_eq!(paper.ansi[15], rgba8([0x4a, 0x43, 0x3b]));
+        assert_eq!(paper.cursor, original_cursor);
+        assert_eq!(paper.cursor_text, None);
+        assert_eq!(paper.selection, original_selection);
+        assert_eq!(paper.selection_foreground, None);
+    }
+
+    #[test]
+    fn theme_foreground_override_updates_all_foreground_slots() {
+        let mut palette = Palette::default();
+        let resolved =
+            crate::gpui_shell::theme::ResolvedTheme::builtin(ThemeName::Nord, Some([1, 2, 3]));
+
+        apply_resolved_theme(&mut palette, &resolved);
+
+        let foreground = rgba8([1, 2, 3]);
+        assert_eq!(palette.foreground, foreground);
+        assert_eq!(palette.bright_foreground, foreground);
+        assert_eq!(palette.dim_foreground, Palette::dim_of(foreground));
+    }
+
+    #[test]
+    fn theme_font_size_is_used_until_runtime_font_size_is_explicit() {
+        assert_eq!(effective_font_sizes(None, Some(18.0), Some(12.0)), (18.0, 18.0));
+        assert_eq!(effective_font_sizes(Some(20.0), Some(18.0), Some(12.0)), (20.0, 18.0));
+        assert_eq!(effective_font_sizes(None, None, Some(12.0)), (16.0, 16.0));
+    }
+
+    #[test]
+    fn custom_theme_line_height_is_clamped_once_for_runtime_consumers() {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.typography.line_height = Some(1.5);
+        let resolved = crate::gpui_shell::theme::ResolvedTheme::custom(definition, None, None);
+
+        assert_eq!(effective_theme_line_height(&resolved), Some(1.5));
+    }
+
+    #[test]
+    fn theme_material_defaults_yield_to_explicit_runtime_values() {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.effects.opacity = Some(0.72);
+        definition.effects.blur = Some(BlurModeName::Mica);
+        let resolved = crate::gpui_shell::theme::ResolvedTheme::custom(definition, None, None);
+
+        let absent = RuntimeSettings::from_raw(&RawSettings::default());
+        assert!((resolved.effective_opacity(&absent) - 0.72).abs() < f32::EPSILON);
+        assert_eq!(resolved.effective_blur(&absent), BlurModeName::Mica);
+
+        let explicit =
+            RuntimeSettings::from_raw(&RawSettings::from_text("opacity=1.0\nblur=none\n"));
+        assert!((resolved.effective_opacity(&explicit) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.effective_blur(&explicit), BlurModeName::None);
+    }
+
+    #[test]
+    fn missing_theme_materials_fall_back_to_runtime_defaults() {
+        let resolved = crate::gpui_shell::theme::ResolvedTheme::builtin(ThemeName::Nord, None);
+        let runtime = RuntimeSettings::from_raw(&RawSettings::default());
+
+        assert!((resolved.effective_opacity(&runtime) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.effective_blur(&runtime), BlurModeName::None);
+    }
+}

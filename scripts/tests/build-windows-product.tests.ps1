@@ -19,9 +19,9 @@ try {
         if ($arguments[$i] -eq '-p') { $packages += $arguments[$i + 1] }
         if ($arguments[$i] -eq '--bin') { $binaries += $arguments[$i + 1] }
     }
-    if (($packages -join ',') -ne 'nebula,nebula_hook') { throw 'Unexpected package selection' }
+    if (($packages -join ',') -ne 'nebula,pebrel_hook') { throw 'Unexpected package selection' }
     if (($binaries -join ',') -ne 'pebrel,pebrel-cli,pebrel-hook') { throw 'Unexpected product binaries' }
-    foreach ($required in @('--locked', '--release', '--features', 'nebula/gpui-shell')) {
+    foreach ($required in @('--locked', '--release', '--features', 'pebrel/gpui-shell')) {
         if ($required -notin $arguments) { throw "Missing product build argument: $required" }
     }
     if ('--workspace' -in $arguments) { throw 'Packaging must not build the acceptance lab' }
