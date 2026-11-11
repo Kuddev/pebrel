@@ -33,7 +33,7 @@ pub(crate) fn parse_formula(
     if !matches!(&result, Err(error) if error.kind == MathErrorKind::Parse) {
         return result;
     }
-    let Some(repaired) = repair_numeric_matrix_rows(source) else {
+    let Some(repaired) = repair_collapsed_matrix_rows(source) else {
         return result;
     };
     validate(&repaired, limits)?;
@@ -316,10 +316,10 @@ fn brace_group(source: &str, at: usize) -> Option<std::ops::Range<usize>> {
     None
 }
 
-/// Markdown can collapse a row separator followed by a digit: `\\1` becomes
-/// `\1`, which the TeX parser rejects. Retry only at matrix row level so
-/// comments, grouped arguments, and real control words keep their meaning.
-fn repair_numeric_matrix_rows(source: &str) -> Option<String> {
+/// Markdown can collapse `\\1` or `\\y` into invalid TeX. Retry only at
+/// matrix row level, and ask the parser whether a one-letter control word is
+/// supported before treating it as a damaged row separator.
+fn repair_collapsed_matrix_rows(source: &str) -> Option<String> {
     if !source.contains("matrix") {
         return None;
     }
@@ -343,14 +343,19 @@ fn repair_numeric_matrix_rows(source: &str) -> Option<String> {
                     .count();
                 let command = &source[offset..offset + command_len];
                 offset += command_len;
+                let matrix_row = environments.last() == Some(&Some(group_depth));
+                let mut recover = false;
                 if command.is_empty() {
                     let symbol = source[offset..].chars().next()?;
-                    if symbol.is_ascii_digit() && environments.last() == Some(&Some(group_depth)) {
-                        repaired.push_str(&source[copied..start]);
-                        repaired.push('\\');
-                        copied = start;
-                    }
+                    recover = symbol.is_ascii_digit() && matrix_row;
                     offset += symbol.len_utf8();
+                } else if command.len() == 1
+                    && command.as_bytes()[0].is_ascii_alphabetic()
+                    && matrix_row
+                {
+                    let storage = Storage::new();
+                    recover =
+                        Parser::new(&source[start..offset], &storage).any(|event| event.is_err());
                 } else if matches!(command, "begin" | "end") {
                     let name = brace_group(source, offset)?;
                     offset = name.end + 1;
@@ -363,6 +368,11 @@ fn repair_numeric_matrix_rows(source: &str) -> Option<String> {
                     } else {
                         environments.pop()?;
                     }
+                }
+                if recover {
+                    repaired.push_str(&source[copied..start]);
+                    repaired.push('\\');
+                    copied = start;
                 }
             },
             _ => {},
