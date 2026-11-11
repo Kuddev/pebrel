@@ -219,8 +219,8 @@ impl SettingsPane {
         let theme = self.appearance_trigger(true, window, cx);
         let icon = self.appearance_trigger(false, window, cx);
         // 与开关、字体等设置共用行原语，字号、字重和说明缩放只维护一份。
-        let selectors = v_flex()
-            .w_full()
+        let selectors = self
+            .group(language.text(crate::i18n::Message::CommonTheme), cx)
             .child(self.row(
                 language.text(crate::i18n::Message::CommonTheme),
                 language.text(crate::i18n::Message::SettingsAppearanceOnePaletteForTheTerminal),
