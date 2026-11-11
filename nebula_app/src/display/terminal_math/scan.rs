@@ -739,8 +739,14 @@ pub(super) fn find_formula(
     };
     let after = grid.after(close, closing.len());
     let source = grid.extract(source_start, close)?;
-    let display = kind.is_display();
-    if !standard_formula_source(&source, display) {
+    // TeX's explicit inline delimiters distinguish an indexed variable such
+    // as R_0 from a dollar-prefixed shell identifier of the same shape.
+    let indexed_variable = kind == DelimiterKind::Parenthesized
+        && matches!(
+            source.as_bytes(),
+            [b'A'..=b'Z', b'_', b'0'..=b'9', rest @ ..] if rest.iter().all(u8::is_ascii_digit)
+        );
+    if !indexed_variable && !standard_formula_source(&source, kind.is_display()) {
         return None;
     }
     Some((make_overlay(grid, open, after, source, kind), after))

@@ -1,5 +1,7 @@
 use super::*;
-use crate::{gpui_shell::widgets::toolbar_button, i18n::Message};
+use crate::{
+    gpui_shell::widgets::toolbar_button, i18n::Message, platform::window_chrome::TitleBarLayout,
+};
 
 fn title_bar_height(_density: nebula_settings::DensityName) -> f32 {
     // Content density must not compress the application chrome.
@@ -8,9 +10,9 @@ fn title_bar_height(_density: nebula_settings::DensityName) -> f32 {
 
 pub(super) fn effective_title_bar_height(
     density: nebula_settings::DensityName,
-    native_layout: Option<(f32, f32)>,
+    native_layout: Option<TitleBarLayout>,
 ) -> f32 {
-    native_layout.map_or_else(|| title_bar_height(density), |(height, _)| height)
+    native_layout.map_or_else(|| title_bar_height(density), |layout| layout.height)
 }
 
 /// Prepaint records the actual pane column before any titlebar paint runs. Keep
@@ -144,6 +146,8 @@ impl NebulaWorkspace {
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
         let native_layout = crate::platform::window_chrome::layout(window);
         let title_bar_height = effective_title_bar_height(self.density, native_layout);
+        let align_with_native_controls =
+            native_layout.is_some_and(|layout| layout.native_controls_visible);
         let bar = TitleBar::new()
             .on_close_window(cx.listener(|workspace, _, window, cx| {
                 // Linux 的客户端标题栏默认直接销毁窗口；必须复用系统关窗的会话与文档守卫。
@@ -170,12 +174,20 @@ impl NebulaWorkspace {
             .when(top_tabs && native_layout.is_none(), |bar| {
                 bar.pl(px(top_tabs::TOP_TAB_LEFT_INSET))
             })
-            .when(top_tabs, |bar| bar.child(self.render_top_title_bar(settings_active, window, cx)))
+            .when(top_tabs, |bar| {
+                bar.child(self.render_top_title_bar(
+                    settings_active,
+                    align_with_native_controls,
+                    window,
+                    cx,
+                ))
+            })
             .when(!top_tabs, |bar| bar.child(self.render_sidebar_title_bar(settings_active, cx)));
 
         // AppKit owns both the control group and its geometry. Read the live
         // frames so system layout, resize and full-screen transitions agree.
-        let bar = if let Some((_, inset)) = native_layout { bar.pl(px(inset)) } else { bar };
+        let bar =
+            if let Some(layout) = native_layout { bar.pl(px(layout.left_inset)) } else { bar };
 
         title_bar_frame()
             .debug_selector(|| "workspace-titlebar".to_owned())
@@ -275,7 +287,7 @@ mod tests {
 
 #[cfg(test)]
 mod density_tests {
-    use super::{effective_title_bar_height, title_bar_height};
+    use super::{TitleBarLayout, effective_title_bar_height, title_bar_height};
     use nebula_settings::DensityName;
 
     #[test]
@@ -284,7 +296,9 @@ mod density_tests {
         assert_eq!(title_bar_height(DensityName::Compact), 48.0);
         assert_eq!(effective_title_bar_height(DensityName::Standard, None), 48.0);
         assert_eq!(effective_title_bar_height(DensityName::Compact, None), 48.0);
-        assert_eq!(effective_title_bar_height(DensityName::Compact, Some((34.0, 7.0))), 34.0);
+        let native =
+            TitleBarLayout { height: 34.0, left_inset: 7.0, native_controls_visible: true };
+        assert_eq!(effective_title_bar_height(DensityName::Compact, Some(native)), 34.0);
         assert!(title_bar_height(DensityName::Compact) >= 32.0 + 2.0 * 4.0);
     }
 }
