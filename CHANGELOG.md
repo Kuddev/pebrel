@@ -4,6 +4,48 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.2 - 2026-11-12
+
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.2-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.2-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.2-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.2-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.2-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.2-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.2-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.2-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.2-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.2-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.2-windows-x64.zip
+```
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Improved
+
+- Improved file and folder completion in large directories so suggestions appear sooner. ([#914](https://github.com/Kuddev/pebrel/pull/914))
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 改进
+
+- 改进大目录中的文件和文件夹补全，减少等待建议的时间。 ([#914](https://github.com/Kuddev/pebrel/pull/914))
+
+### Contributors
+
+<p>
+  <a href="https://github.com/not-exist"><img src="https://avatars.githubusercontent.com/u/121529946?v=4&amp;s=96" width="48" height="48" alt="not-exist" title="not-exist" /></a>
+</p>
+
+Thanks to [not-exist](https://github.com/not-exist).
+
+感谢 [not-exist](https://github.com/not-exist)。
+
 ## 2.5.1 - 2026-11-12
 
 ```text
