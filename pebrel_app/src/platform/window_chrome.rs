@@ -79,8 +79,15 @@ pub(crate) fn configure(_window: &Window) {
 /// macOS leaves no system control reserve on the right edge, so toolbar buttons need an inset.
 pub(crate) const RIGHT_CONTROLS_INSET: f32 = if cfg!(target_os = "macos") { 12.0 } else { 0.0 };
 
-/// Height and left inset when native controls determine the titlebar geometry.
-pub(crate) fn layout(_window: &Window) -> Option<(f32, f32)> {
+#[derive(Clone, Copy)]
+pub(crate) struct TitleBarLayout {
+    pub(crate) height: f32,
+    pub(crate) left_inset: f32,
+    pub(crate) native_controls_visible: bool,
+}
+
+/// Geometry for a window whose titlebar is managed by the platform.
+pub(crate) fn layout(_window: &Window) -> Option<TitleBarLayout> {
     #[cfg(target_os = "macos")]
     {
         Some(macos::layout(_window))

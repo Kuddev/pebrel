@@ -145,6 +145,7 @@ pub(crate) enum MathNode {
     },
     Accent {
         accent: char,
+        stretchy: bool,
         body: NodeId,
         style_override: Option<StyleOverride>,
     },

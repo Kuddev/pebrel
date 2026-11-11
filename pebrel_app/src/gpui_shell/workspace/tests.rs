@@ -81,6 +81,7 @@ mod title_bar_panel_control_tests {
 
     impl Render for TopTabGeometryProbe {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let row_height = px(super::tab_scroll::tab_row_height(self.0));
             h_flex()
                 .w(px(400.0))
                 .h(px(48.0))
@@ -89,10 +90,10 @@ mod title_bar_panel_control_tests {
                     div()
                         .debug_selector(|| "top-tab-geometry-probe".to_owned())
                         .w(px(160.0))
-                        .h(px(super::tab_scroll::tab_row_height(self.0))),
+                        .h(row_height),
                 )
                 .child(super::top_tabs::top_tab_action_slot(
-                    self.0,
+                    row_height.into(),
                     super::top_tabs::top_new_tab_control(
                         crate::i18n::UiLanguage::EnUs,
                         |_, _, _| {},
@@ -100,7 +101,7 @@ mod title_bar_panel_control_tests {
                     .debug_selector(|| "top-new-tab-geometry-probe".to_owned()),
                 ))
                 .child(super::top_tabs::top_tab_action_slot(
-                    self.0,
+                    row_height.into(),
                     h_flex().debug_selector(|| "top-tabs-menu-geometry-probe".to_owned()).child(
                         super::top_tabs::top_tabs_menu_button(false, crate::i18n::UiLanguage::EnUs),
                     ),

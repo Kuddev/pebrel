@@ -942,16 +942,27 @@ impl NebulaWorkspace {
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, _, cx| {
-                let _ = workspace.update(cx, |this, cx| {
-                    match crate::display::send_to_recycle_bin(&path) {
-                        Ok(()) => {
-                            this.side_panel.request_refresh();
-                            this.sync_side_panel_to_active(false, cx);
-                        },
-                        Err(error) => this.side_panel.set_notice(PanelNotice::DeleteFailed(error)),
-                    }
-                    cx.notify();
-                });
+                let path = path.clone();
+                let workspace = workspace.clone();
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { crate::display::send_to_recycle_bin(&path) });
+                cx.spawn(async move |cx| {
+                    let result = task.await;
+                    let _ = workspace.update(cx, |this, cx| {
+                        match result {
+                            Ok(()) => {
+                                this.side_panel.request_refresh();
+                                this.sync_side_panel_to_active(false, cx);
+                            },
+                            Err(error) => {
+                                this.side_panel.set_notice(PanelNotice::DeleteFailed(error))
+                            },
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
                 true
             })
         });
