@@ -337,6 +337,49 @@ mod tests {
     }
 
     #[test]
+    fn control_spaces_render_as_one_text_space_in_inline_and_display_math() {
+        for compile in [compile_formula, compile_formula_source] {
+            for display in [false, true] {
+                for (source, expected) in [
+                    (r"14\ \mathrm{V}", r"14\text{ }\mathrm{V}"),
+                    (r"50~\mathrm{Hz}", r"50\text{ }\mathrm{Hz}"),
+                    (r"2.32\nobreakspace\mathrm{H}", r"2.32\text{ }\mathrm{H}"),
+                    (
+                        r"M=\frac{U_2}{2\pi f I_1}=2.32\ \mathrm{H}",
+                        r"M=\frac{U_2}{2\pi f I_1}=2.32\text{ }\mathrm{H}",
+                    ),
+                ] {
+                    assert_eq!(
+                        compile(source, display, 18.0, 1.0, DEFAULT_LIMITS).unwrap(),
+                        compile(expected, display, 18.0, 1.0, DEFAULT_LIMITS).unwrap(),
+                        "control space in {source:?}, display={display}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn control_space_conversion_preserves_literal_text_entities() {
+        let formula = super::super::parser::parse_formula_source(
+            r"\text{&nbsp;}+14\ \mathrm{V}",
+            false,
+            DEFAULT_LIMITS,
+        )
+        .unwrap();
+        let text: String = formula
+            .arena
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                super::super::ir::MathNode::Glyph { character, .. } => Some(*character),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "&nbsp;+14 V");
+    }
+
+    #[test]
     fn original_source_does_not_silently_rewrite_arrows_or_drop_commands() {
         let original = compile_formula_source("a->b", true, 18.0, 1.0, DEFAULT_LIMITS).unwrap();
         let substituted = compile_formula("a->b", true, 18.0, 1.0, DEFAULT_LIMITS).unwrap();

@@ -132,6 +132,18 @@ fn parse_normalized_formula(
         }
         event_count += 1;
         let event = event.map_err(|_| MathError::new(MathErrorKind::Parse, 0))?;
+        // pulldown-latex 0.7.1 emits a static HTML entity for TeX control
+        // spaces. Literal \text arguments borrow the input, so retain those
+        // verbatim even when the user actually wrote \text{&nbsp;}.
+        let event = match event {
+            Event::Content(Content::Text(text))
+                if text == "&nbsp;"
+                    && !parser_source.as_bytes().as_ptr_range().contains(&text.as_ptr()) =>
+            {
+                Event::Content(Content::Text(" "))
+            },
+            event => event,
+        };
         builder.consume(event)?;
     }
     let (arena, root) = builder.finish()?;
