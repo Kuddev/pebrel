@@ -40,6 +40,10 @@ const QUOTES: [char; 3] = ['"', '\'', '`'];
 struct UnscoredMatch<T> {
     item: T,
     haystack: String,
+    /// Case-folded haystack used as the alphabetical sort key. Populated once
+    /// when the match is stored, and only when matching is case-insensitive,
+    /// so sorting never folds the same string inside a comparator.
+    folded_haystack: Option<String>,
     match_indices: Vec<usize>,
 }
 
@@ -142,51 +146,84 @@ impl<T> CandidateMatcher<'_, T> {
 
     /// Internal: test `haystack` against the needle and optionally store the item.
     fn matches_aux(&mut self, orig_haystack: &str, item: Option<T>) -> Option<Vec<usize>> {
-        let haystack = if self.strip_quotes {
+        self.matches_inner(Cow::Borrowed(orig_haystack), item)
+    }
+
+    /// Add `item` if `haystack` matches, reusing the owned string as the stored
+    /// sort key instead of allocating another copy of it.
+    pub(crate) fn add_owned(&mut self, haystack: String, item: T) -> bool {
+        self.matches_inner(Cow::Owned(haystack), Some(item)).is_some()
+    }
+
+    fn matches_inner(
+        &mut self,
+        orig_haystack: Cow<'_, str>,
+        item: Option<T>,
+    ) -> Option<Vec<usize>> {
+        let trimmed_start = if self.strip_quotes {
             orig_haystack.trim_start_matches(QUOTES)
         } else {
-            orig_haystack
+            orig_haystack.as_ref()
         };
-        let offset = orig_haystack.len() - haystack.len();
-        let haystack = if self.strip_quotes { haystack.trim_end_matches(QUOTES) } else { haystack };
+        let offset = orig_haystack.len() - trimmed_start.len();
+        let haystack =
+            if self.strip_quotes { trimmed_start.trim_end_matches(QUOTES) } else { trimmed_start };
+        let trimmed = haystack.len() != orig_haystack.len();
         match &mut self.state {
             State::Unscored(matches) => {
-                let haystack_folded = if self.options.case_sensitive {
-                    Cow::Borrowed(haystack)
-                } else {
-                    Cow::Owned(haystack.to_folded_case())
-                };
-                let match_start = match self.options.match_algorithm {
-                    MatchAlgorithm::Prefix => {
-                        if haystack_folded.starts_with(self.needle.as_str()) {
-                            Some(0)
-                        } else {
-                            None
-                        }
-                    },
-                    MatchAlgorithm::Substring => haystack_folded.find(self.needle.as_str()),
-                    _ => unreachable!("Only prefix and substring algorithms don't use score"),
-                };
-                match_start.map(|byte_start| {
+                let (grapheme_start, folded_haystack) = {
+                    let haystack_folded = if self.options.case_sensitive {
+                        Cow::Borrowed(haystack)
+                    } else {
+                        Cow::Owned(haystack.to_folded_case())
+                    };
+                    let match_start = match self.options.match_algorithm {
+                        MatchAlgorithm::Prefix => {
+                            if haystack_folded.starts_with(self.needle.as_str()) {
+                                Some(0)
+                            } else {
+                                None
+                            }
+                        },
+                        MatchAlgorithm::Substring => haystack_folded.find(self.needle.as_str()),
+                        _ => unreachable!("Only prefix and substring algorithms don't use score"),
+                    };
+                    let byte_start = match_start?;
                     let grapheme_start = haystack_folded[0..byte_start].graphemes(true).count();
-                    let grapheme_len = self.needle.graphemes(true).count();
-                    let match_indices: Vec<usize> =
-                        (offset + grapheme_start..offset + grapheme_start + grapheme_len).collect();
-                    if let Some(item) = item {
-                        matches.push(UnscoredMatch {
-                            item,
-                            haystack: haystack.to_string(),
-                            match_indices: match_indices.clone(),
-                        });
-                    }
-                    match_indices
-                })
+                    let folded = match haystack_folded {
+                        Cow::Owned(folded) => Some(folded),
+                        Cow::Borrowed(_) => None,
+                    };
+                    (grapheme_start, folded)
+                };
+                let grapheme_len = self.needle.graphemes(true).count();
+                let match_indices: Vec<usize> =
+                    (offset + grapheme_start..offset + grapheme_start + grapheme_len).collect();
+                if let Some(item) = item {
+                    let haystack = if trimmed {
+                        haystack.to_string()
+                    } else if let Cow::Owned(haystack) = orig_haystack {
+                        haystack
+                    } else {
+                        haystack.to_string()
+                    };
+                    matches.push(UnscoredMatch {
+                        item,
+                        haystack,
+                        folded_haystack,
+                        match_indices: match_indices.clone(),
+                    });
+                }
+                Some(match_indices)
             },
             State::Fuzzy { matcher, atom, matches } => {
-                let mut haystack_buf = Vec::new();
-                let haystack_utf32 = Utf32Str::new(haystack, &mut haystack_buf);
-                let mut indices = Vec::new();
-                let score = atom.indices(haystack_utf32, matcher, &mut indices)?;
+                let (score, indices) = {
+                    let mut haystack_buf = Vec::new();
+                    let haystack_utf32 = Utf32Str::new(haystack, &mut haystack_buf);
+                    let mut indices = Vec::new();
+                    let score = atom.indices(haystack_utf32, matcher, &mut indices)?;
+                    (score, indices)
+                };
                 let indices: Vec<usize> = indices
                     .iter()
                     .map(|i| {
@@ -196,9 +233,16 @@ impl<T> CandidateMatcher<'_, T> {
                     })
                     .collect();
                 if let Some(item) = item {
+                    let haystack = if trimmed {
+                        haystack.to_string()
+                    } else if let Cow::Owned(haystack) = orig_haystack {
+                        haystack
+                    } else {
+                        haystack.to_string()
+                    };
                     matches.push(FuzzyMatch {
                         item,
-                        haystack: haystack.to_string(),
+                        haystack,
                         score,
                         match_indices: indices.clone(),
                     });
@@ -230,10 +274,15 @@ impl<T> CandidateMatcher<'_, T> {
                     if self.options.case_sensitive {
                         cmp_sensitive
                     } else {
-                        a.haystack
-                            .to_folded_case()
-                            .cmp(&b.haystack.to_folded_case())
-                            .then(cmp_sensitive)
+                        match (a.folded_haystack.as_deref(), b.folded_haystack.as_deref()) {
+                            (Some(a_folded), Some(b_folded)) => {
+                                a_folded.cmp(b_folded).then(cmp_sensitive)
+                            },
+                            // Unreachable: case-insensitive inserts always store
+                            // the folded key. Degrade to the raw order instead
+                            // of panicking if that invariant ever breaks.
+                            _ => cmp_sensitive,
+                        }
                     }
                 });
             },
@@ -260,6 +309,22 @@ impl<T> CandidateMatcher<'_, T> {
             },
             State::Fuzzy { matches, .. } => {
                 matches.into_iter().map(|m| (m.item, m.match_indices)).collect()
+            },
+        }
+    }
+
+    /// Sort (if configured) and return all matched items together with the
+    /// stored haystack they matched and their match indices.
+    pub(crate) fn results_with_haystack(mut self) -> Vec<(T, String, Vec<usize>)> {
+        if self.should_sort {
+            self.sort();
+        }
+        match self.state {
+            State::Unscored(matches) => {
+                matches.into_iter().map(|m| (m.item, m.haystack, m.match_indices)).collect()
+            },
+            State::Fuzzy { matches, .. } => {
+                matches.into_iter().map(|m| (m.item, m.haystack, m.match_indices)).collect()
             },
         }
     }
@@ -384,5 +449,67 @@ mod tests {
         // includes a space after "spaces"
         assert_eq!(1, results.len());
         assert_eq!("'i love spaces' so much", results[0].0);
+    }
+
+    #[test]
+    fn case_insensitive_sort_folds_then_breaks_ties_on_raw_haystack() {
+        let opts = CompletionOptions {
+            case_sensitive: false,
+            match_algorithm: MatchAlgorithm::Prefix,
+            ..Default::default()
+        };
+        let mut m = CandidateMatcher::new("", &opts, true);
+        for item in ["beta", "Alpha", "BETA", "alpha", "Beta", "ALPHA"] {
+            assert!(m.add(item, item));
+        }
+        let results: Vec<_> = m.results().into_iter().map(|(item, _)| item).collect();
+        // Folded order first; equal folded keys fall back to the raw haystack
+        // byte order (upper case sorts before lower case).
+        assert_eq!(vec!["ALPHA", "Alpha", "alpha", "BETA", "Beta", "beta"], results);
+    }
+
+    #[test]
+    fn case_sensitive_sort_orders_raw_haystacks_only() {
+        let opts = CompletionOptions::default();
+        let mut m = CandidateMatcher::new("", &opts, true);
+        for item in ["beta", "Alpha", "BETA", "alpha", "Beta", "ALPHA"] {
+            assert!(m.add(item, item));
+        }
+        let results: Vec<_> = m.results().into_iter().map(|(item, _)| item).collect();
+        assert_eq!(vec!["ALPHA", "Alpha", "BETA", "Beta", "alpha", "beta"], results);
+    }
+
+    #[test]
+    fn add_owned_reuses_the_haystack_and_keeps_match_indices() {
+        let opts = CompletionOptions { case_sensitive: false, ..Default::default() };
+        let mut m = CandidateMatcher::literal("pre", &opts, true);
+        assert!(m.add_owned(String::from("PrefixOne"), 1));
+        assert!(!m.add_owned(String::from("Other"), 2));
+        assert!(m.add_owned(String::from("prelude"), 3));
+        assert_eq!(
+            m.results_with_haystack(),
+            vec![
+                (1, String::from("PrefixOne"), (0..3).collect::<Vec<_>>()),
+                (3, String::from("prelude"), (0..3).collect::<Vec<_>>()),
+            ]
+        );
+    }
+
+    #[test]
+    fn add_owned_fuzzy_keeps_haystack_and_score_order() {
+        let opts = CompletionOptions {
+            match_algorithm: MatchAlgorithm::Fuzzy,
+            sort: crate::options::CompletionSort::Smart,
+            ..Default::default()
+        };
+        let mut m = CandidateMatcher::literal("fob", &opts, true);
+        assert!(m.add_owned(String::from("fob"), "fob"));
+        assert!(m.add_owned(String::from("foo bar"), "foo bar"));
+        let results: Vec<_> = m
+            .results_with_haystack()
+            .into_iter()
+            .map(|(item, haystack, _)| (item, haystack))
+            .collect();
+        assert_eq!(results, vec![("fob", "fob".to_string()), ("foo bar", "foo bar".to_string())]);
     }
 }
