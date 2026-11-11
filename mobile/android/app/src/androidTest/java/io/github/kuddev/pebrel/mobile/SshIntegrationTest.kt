@@ -170,10 +170,10 @@ class SshIntegrationTest {
         val target = host.copy(fingerprint = expectedFingerprint, sessionMode = mode, sessionName = name)
         fun connection(profile: HostProfile = target) = SshConnection(profile, "pebrel-test-only".toCharArray(),
             { _, _ -> error("The fixture fingerprint must already match") })
-        suspend fun opened(): Pair<TerminalSession, SshConnection> {
+        suspend fun opened(command: String? = null): Pair<TerminalSession, SshConnection> {
             val ready = CompletableDeferred<Unit>()
             val channel = connection()
-            val terminal = TerminalSession(SshTerminalTransport(channel), object : TerminalCallbacks() {
+            val terminal = TerminalSession(SshTerminalTransport(channel, command), object : TerminalCallbacks() {
                 override fun onTransportReady(session: TerminalSession) { ready.complete(Unit) }
                 override fun onSessionFinished(session: TerminalSession) { ready.complete(Unit) }
             })
@@ -201,6 +201,14 @@ class SshIntegrationTest {
             }
             @Suppress("UNREACHABLE_CODE") ""
         }
+        suspend fun stopFixture() = withContext(Dispatchers.IO + NonCancellable) {
+            connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
+                cleanup.connect()
+                val command = if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'"
+                cleanup.query(command).getInt("status")
+            }
+        }
+        val retry = checkNotNull(target.reconnectCommand())
         try {
             val (first, ssh) = opened()
             val pid = try {
@@ -210,20 +218,31 @@ class SshIntegrationTest {
                 assertTrue(SftpClient(ssh::sftp).list(".").path.startsWith('/'))
                 marker.substringAfterLast(':')
             } finally { first.finishIfRunning() }
-            val (second, _) = opened()
+            val (second, _) = opened(retry)
             try {
                 assertTrue(second.sendText("printf '\\115UX_SECOND:%s:%s\\n' \"\$PEBREL_QA_TOKEN\" \"\$\$\"\r"))
                 assertEquals("MUX_SECOND:$name:$pid", output(second, Regex("MUX_SECOND:$name:[0-9]+")))
             } finally { second.finishIfRunning() }
-        } finally {
-            withContext(Dispatchers.IO + NonCancellable) {
-                connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
-                    cleanup.connect()
-                    cleanup.openExec(if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'")
-                    cleanup.input().readBytes()
-                    cleanup.awaitExit()
+            if (mode == SshSessionMode.HERDR) {
+                assertEquals(0, stopFixture())
+                val ended = CompletableDeferred<Unit>()
+                val missing = TerminalSession(SshTerminalTransport(connection(), retry), object : TerminalCallbacks() {
+                    override fun onSessionFinished(session: TerminalSession) { ended.complete(Unit) }
+                })
+                missing.start()
+                try {
+                    withTimeout(15_000) { ended.await() }
+                    assertNull(missing.failureCause)
+                } finally { missing.finishIfRunning() }
+                withContext(Dispatchers.IO) {
+                    connection(host.copy(fingerprint = expectedFingerprint)).use { inspect ->
+                        inspect.connect()
+                        assertFalse(RemoteSessions.discover(inspect).sessions.any { it.id == name })
+                    }
                 }
             }
+        } finally {
+            stopFixture()
         }
     }
 
