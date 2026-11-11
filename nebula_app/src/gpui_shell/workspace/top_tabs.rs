@@ -8,9 +8,9 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, Context, FontWeight, InteractiveElement as _,
-    IntoElement as _, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement as _,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
-    Window, div, ease_out_quint, img, px,
+    IntoElement as _, KeyDownEvent, Length, MouseButton, MouseDownEvent, ObjectFit,
+    ParentElement as _, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledImage as _, Window, div, ease_out_quint, img, px,
 };
 use gpui_component::menu::PopupMenuItem;
 
@@ -107,11 +107,8 @@ pub(super) fn top_tabs_menu_button(settings_active: bool, language: UiLanguage) 
 
 /// 紧邻 TabView 的操作按钮占满同一条标签行，再在槽内居中 32px 按钮。
 /// 外层仍贴标题栏底边，tab 与正文相接的既有布局不变。
-pub(super) fn top_tab_action_slot(
-    density: nebula_settings::DensityName,
-    child: impl gpui::IntoElement,
-) -> gpui::Div {
-    h_flex().h(px(super::tab_scroll::tab_row_height(density))).items_center().child(child)
+pub(super) fn top_tab_action_slot(height: Length, child: impl gpui::IntoElement) -> gpui::Div {
+    h_flex().h(height).items_center().child(child)
 }
 
 impl NebulaWorkspace {
@@ -125,10 +122,17 @@ impl NebulaWorkspace {
     pub(super) fn render_top_title_bar(
         &self,
         settings_active: bool,
+        align_with_native_controls: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let row_height = super::tab_scroll::tab_row_height(self.density);
+        // Filling the native title bar centers the tab contents on the AppKit
+        // controls while keeping the active tab attached to the content below.
+        let row_height: Length = if align_with_native_controls {
+            gpui::relative(1.0).into()
+        } else {
+            px(super::tab_scroll::tab_row_height(self.density)).into()
+        };
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
         let theme = cx.theme();
@@ -229,11 +233,11 @@ impl NebulaWorkspace {
                             .into_any_element(),
                     ),
                     SidebarActivity::WaitingInput => Some(
-                        Self::waiting_hand(symbol_family.clone(), label_px, theme.primary)
+                        Self::waiting_hand(label_px, theme.primary)
                             .into_any_element(),
                     ),
                     SidebarActivity::Attention => Some(
-                        Self::waiting_hand(symbol_family.clone(), label_px, theme.warning)
+                        Self::waiting_hand(label_px, theme.warning)
                             .into_any_element(),
                     ),
                     SidebarActivity::Failed => Some(
@@ -278,7 +282,7 @@ impl NebulaWorkspace {
                     .group(hover_group.clone())
                     .relative()
                     .w(px(tab_w))
-                    .h(px(row_height))
+                    .h(row_height)
                     .flex_shrink_0()
                     .min_w_0()
                     .overflow_hidden()
@@ -489,7 +493,11 @@ impl NebulaWorkspace {
                                         .justify_end()
                                         .items_center()
                                         .group_hover(hover_group.clone(), |item| item.invisible())
-                                        .child(status),
+                                        .child(if matches!(activity, SidebarActivity::Idle) {
+                                            status
+                                        } else {
+                                            Self::tab_status_icon(status).into_any_element()
+                                        }),
                                 )
                             })
                             .child(
@@ -501,7 +509,7 @@ impl NebulaWorkspace {
                                     .invisible()
                                     .group_hover(hover_group, |slot| slot.visible())
                                     .when(tab_close_visible || settings_navigation, |slot| {
-                                            slot.child(
+                                            slot.child(Self::tab_status_icon(
                                                 Button::new(("top-close-tab", ix))
                                                     .icon(IconName::Close)
                                                     .ghost()
@@ -512,7 +520,7 @@ impl NebulaWorkspace {
                                                             this.close_top_tab(ix, window, cx);
                                                         },
                                                     )),
-                                            )
+                                            ))
                                         }),
                             ),
                     )
@@ -563,7 +571,7 @@ impl NebulaWorkspace {
                     // 看不见的入口——tab 一多，用户根本不知道右边还有东西。
                     .when(overflow, |bar| {
                         bar.child(
-                            div().h(px(row_height)).flex().items_center().child(
+                            div().h(row_height).flex().items_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-prev")
                                         .icon(IconName::ChevronLeft)
@@ -591,7 +599,7 @@ impl NebulaWorkspace {
                             .w(px(tab_viewport_w))
                             .flex_shrink(1.0)
                             .min_w_0()
-                            .h(px(row_height))
+                            .h(row_height)
                             .overflow_hidden()
                             // 保留内部滚动命中，截断外层原生标题栏 Drag 命中区。
                             .occlude()
@@ -614,7 +622,7 @@ impl NebulaWorkspace {
                     )
                     .when(overflow, |bar| {
                         bar.child(
-                            div().h(px(row_height)).flex().items_center().child(
+                            div().h(row_height).flex().items_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-next")
                                         .icon(IconName::ChevronRight)
@@ -636,7 +644,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        top_tab_action_slot(self.density, top_new_tab_control(language, cx.listener(
+                        top_tab_action_slot(row_height, top_new_tab_control(language, cx.listener(
                             |this, _, window, cx| {
                                 this.add_terminal(window, cx);
                             },
@@ -644,7 +652,7 @@ impl NebulaWorkspace {
                     )
                     .child(
                         top_tab_action_slot(
-                            self.density,
+                            row_height,
                             top_tabs_menu_button(settings_active, language).dropdown_menu_with_anchor(
                                 gpui::Anchor::TopRight,
                                 move |menu, _, _| {

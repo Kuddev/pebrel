@@ -367,7 +367,12 @@ fn open_workspace_window_with_visibility(
 ) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
     let (runtime_window_id, runtime_hub) = allocate_window(cx);
     let runtime = nebula_settings::RuntimeSettings::load();
-    startup_geometry::load_restore(runtime_window_id, &startup, role, cx);
+    let has_regular_window = cx
+        .global::<WindowRegistry>()
+        .entries
+        .iter()
+        .any(|entry| entry.role == WindowRole::Regular && entry.workspace.upgrade().is_some());
+    startup_geometry::load_restore(runtime_window_id, &startup, role, has_regular_window, cx);
     let mut options =
         startup_geometry::options(cx, focus, role, runtime.sidebar_width, runtime_window_id);
     if start_hidden {

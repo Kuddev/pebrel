@@ -31,6 +31,7 @@ mod live_navigation;
 mod live_selection;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod live_tests;
+mod loading;
 mod object_edit;
 mod object_source;
 mod object_view;
@@ -126,6 +127,11 @@ pub struct TextFileView {
     source: DocumentSource,
     document: Option<LoadedDocument>,
     operation: Option<DocumentOperation>,
+    load_generation: u64,
+    load_task: Option<Task<()>>,
+    progress_task: Option<Task<()>>,
+    load_received: u64,
+    load_total: Option<u64>,
     dirty: bool,
     loading: bool,
     saving: bool,
@@ -278,6 +284,11 @@ impl TextFileView {
             source,
             document: None,
             operation: None,
+            load_generation: 0,
+            load_task: None,
+            progress_task: None,
+            load_received: 0,
+            load_total: None,
             dirty: false,
             loading: false,
             saving: false,
@@ -329,7 +340,11 @@ impl TextFileView {
     }
 
     fn source_slice(&self, range: std::ops::Range<usize>, cx: &App) -> Option<String> {
-        self.input.read(cx).text().try_slice(range).ok().map(|slice| slice.to_string())
+        let source = self.input.read(cx).text();
+        if !source_range_in_bounds(source, &range) {
+            return None;
+        }
+        source.try_slice(range).ok().map(|slice| slice.to_string())
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -430,70 +445,6 @@ impl TextFileView {
             return;
         }
         self.load(window, cx);
-    }
-
-    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.cancel_object_edit(cx);
-        self.loading = true;
-        self.content_revision = self.content_revision.wrapping_add(1);
-        self.revision += 1;
-        self.preview_task = None;
-        let path = self.path.clone();
-        let source = self.source.clone();
-        let operation = DocumentOperation::default();
-        if let Some(previous) = self.operation.replace(operation.clone()) {
-            previous.cancel();
-        }
-        let markdown = self.markdown;
-        let resources = super::scientific_render::assets(cx);
-        let task = cx.background_executor().spawn(async move {
-            let _permit = resources.document_permit().await;
-            source.load(operation).await.map(|doc| {
-                let outline = markdown.then(|| Outline::prepare(&doc.text, path.parent()));
-                (doc, outline)
-            })
-        });
-        let handle = window.window_handle();
-        cx.spawn(async move |this, cx| {
-            let loaded = task.await;
-            let _ = handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |view, cx| {
-                    view.loading = false;
-                    view.operation = None;
-                    match loaded {
-                        Ok((document, outline)) => {
-                            view.live_edit = None;
-                            view.last_edit_cursor = None;
-                            view.resume_edit = false;
-                            view.history.reset(&document.text);
-                            view.input.update(cx, |input, cx| {
-                                input.set_value(document.text.clone(), window, cx)
-                            });
-                            view.document = Some(document);
-                            view.dirty = false;
-                            view.notice = None;
-                            if let Some(outline) = outline {
-                                view.apply_outline(outline, cx);
-                            }
-                            if view.preview && view.focus.is_focused(window) {
-                                view.begin_live_edit(0, window, cx);
-                            }
-                        },
-                        Err(error) => {
-                            view.notice = Some(if error.kind() == std::io::ErrorKind::Interrupted {
-                                (Message::TransferCancelled, None)
-                            } else {
-                                (Message::EditorReadFailed, Some(error.to_string()))
-                            })
-                        },
-                    }
-                    cx.emit(TextFileEvent::Changed);
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-        cx.notify();
     }
 
     fn request_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -622,14 +573,22 @@ impl TextFileView {
     }
 
     fn apply_outline(&mut self, outline: Outline, cx: &mut Context<Self>) {
+        self.apply_outline_at(outline, self.scroll.logical_scroll_top(), cx);
+    }
+
+    fn apply_outline_at(
+        &mut self,
+        outline: Outline,
+        top: gpui::ListOffset,
+        cx: &mut Context<Self>,
+    ) {
         self.link_hover = None;
         self.link_hide_task = None;
         self.preview_stale = false;
         self.preview_code_languages.clear();
         self.inline_views.borrow_mut().clear();
-        let top = self.scroll.logical_scroll_top();
         self.blocks = Rc::new(RefCell::new(vec![None; outline.blocks.len()]));
-        self.scroll.reset(outline.blocks.len().max(usize::from(self.live_mode)));
+        self.scroll.reset(outline.blocks.len().max(usize::from(self.live_mode && !self.loading)));
         if !outline.blocks.is_empty() {
             self.scroll.scroll_to(gpui::ListOffset {
                 item_ix: top.item_ix.min(outline.blocks.len() - 1),
@@ -693,16 +652,21 @@ impl TextFileView {
     }
 }
 
+fn source_range_in_bounds(source: &gpui_component::Rope, range: &std::ops::Range<usize>) -> bool {
+    // Ropey's try_slice checks UTF-8 boundaries before reporting bounds errors.
+    range.start <= range.end && range.end <= source.len()
+}
+
 impl Render for TextFileView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.restore_edit_cursor(window, cx);
         let language = super::config::ui_language(cx);
         let muted = cx.theme().muted_foreground;
         let editable = !self.loading && self.document.as_ref().is_some_and(|doc| !doc.read_only);
-        let mut notice = if self.loading {
-            Some(language.text(Message::EditorLoading).to_owned())
-        } else if let Some((message, error)) = &self.notice {
+        let mut notice = if let Some((message, error)) = &self.notice {
             Some(language.format(*message, &[("error", error.as_deref().unwrap_or_default())]))
+        } else if self.loading {
+            Some(super::widgets::file_read_progress(language, self.load_received, self.load_total))
         } else {
             self.document.as_ref().and_then(|doc| {
                 let message = if doc.truncated {

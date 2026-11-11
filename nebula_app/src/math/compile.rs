@@ -337,6 +337,49 @@ mod tests {
     }
 
     #[test]
+    fn control_spaces_render_as_one_text_space_in_inline_and_display_math() {
+        for compile in [compile_formula, compile_formula_source] {
+            for display in [false, true] {
+                for (source, expected) in [
+                    (r"14\ \mathrm{V}", r"14\text{ }\mathrm{V}"),
+                    (r"50~\mathrm{Hz}", r"50\text{ }\mathrm{Hz}"),
+                    (r"2.32\nobreakspace\mathrm{H}", r"2.32\text{ }\mathrm{H}"),
+                    (
+                        r"M=\frac{U_2}{2\pi f I_1}=2.32\ \mathrm{H}",
+                        r"M=\frac{U_2}{2\pi f I_1}=2.32\text{ }\mathrm{H}",
+                    ),
+                ] {
+                    assert_eq!(
+                        compile(source, display, 18.0, 1.0, DEFAULT_LIMITS).unwrap(),
+                        compile(expected, display, 18.0, 1.0, DEFAULT_LIMITS).unwrap(),
+                        "control space in {source:?}, display={display}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn control_space_conversion_preserves_literal_text_entities() {
+        let formula = super::super::parser::parse_formula_source(
+            r"\text{&nbsp;}+14\ \mathrm{V}",
+            false,
+            DEFAULT_LIMITS,
+        )
+        .unwrap();
+        let text: String = formula
+            .arena
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                super::super::ir::MathNode::Glyph { character, .. } => Some(*character),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "&nbsp;+14 V");
+    }
+
+    #[test]
     fn original_source_does_not_silently_rewrite_arrows_or_drop_commands() {
         let original = compile_formula_source("a->b", true, 18.0, 1.0, DEFAULT_LIMITS).unwrap();
         let substituted = compile_formula("a->b", true, 18.0, 1.0, DEFAULT_LIMITS).unwrap();
@@ -360,6 +403,70 @@ mod tests {
             assert!(layout.metrics.height.is_finite() && layout.metrics.height > 0.0);
             assert!(!layout.glyphs.is_empty());
         }
+    }
+
+    #[test]
+    fn terminal_recovers_the_numeric_matrix_row_from_issue_772() {
+        let damaged = r"\mathbf{p}{\mathrm{clip}}
+=\mathbf{P}\mathbf{V}\mathbf{M}
+\begin{bmatrix}
+\mathbf{p}{\mathrm{local}}\1
+\end{bmatrix}";
+        let original = damaged.replace(r"\1", r"\\1");
+        let expected = compile_formula_source(&original, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the matrix has two rows");
+        let recovered = compile_formula(damaged, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the terminal can recover the numeric row");
+        assert_eq!(recovered, expected);
+
+        assert!(compile_formula_source(damaged, true, 18.0, 1.0, DEFAULT_LIMITS).is_err());
+        for literal in [
+            r"x\1",
+            r"\begin{bmatrix}x{\1}\end{bmatrix}",
+            r"\begin{bmatrix}\begin{gathered}x\1\end{gathered}\end{bmatrix}",
+        ] {
+            assert!(
+                compile_formula(literal, true, 18.0, 1.0, DEFAULT_LIMITS).is_err(),
+                "{literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_recovers_the_rotation_matrix_rows_from_issue_772() {
+        let damaged = r"\begin{bmatrix}x'\y'\end{bmatrix}
+\begin{bmatrix}
+\cos\theta&-\sin\theta\
+\sin\theta&\cos\theta
+\end{bmatrix}
+\begin{bmatrix}x\y\end{bmatrix}";
+        let original = damaged.replace(r"\y", r"\\y").replace("\\\n", "\\\\\n");
+        let expected = compile_formula_source(&original, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the rotation has three two-row matrices");
+        let recovered = compile_formula(damaged, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("the terminal can recover the collapsed letter rows");
+        assert_eq!(recovered, expected);
+        assert!(compile_formula_source(damaged, true, 18.0, 1.0, DEFAULT_LIMITS).is_err());
+        for literal in [
+            r"x\y",
+            r"\begin{bmatrix}x{\y}\end{bmatrix}",
+            r"\begin{bmatrix}\begin{gathered}x\y\end{gathered}\end{bmatrix}",
+            r"\begin{bmatrix}x\unknown\end{bmatrix}",
+        ] {
+            assert!(
+                compile_formula(literal, true, 18.0, 1.0, DEFAULT_LIMITS).is_err(),
+                "{literal}"
+            );
+        }
+        let symbols = r"\begin{bmatrix}\P&x\1&\S\end{bmatrix}";
+        let intact = symbols.replace(r"\1", r"\\1");
+        let expected = compile_formula_source(&intact, true, 18.0, 1.0, DEFAULT_LIMITS)
+            .expect("one-letter control words are supported");
+        assert_eq!(
+            compile_formula(symbols, true, 18.0, 1.0, DEFAULT_LIMITS),
+            Ok(expected),
+            "supported one-letter control words retain their meaning during recovery"
+        );
     }
 
     #[test]

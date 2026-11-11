@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use mlua::{Lua, Table, Value};
+use mlua::{ChunkMode, Lua, StdLib, Table, Value};
 
 use super::{LuaConfigError, validate_config_value};
 
@@ -27,20 +27,28 @@ impl ReloadSignal {
 
 pub struct LuaRuntime {
     lua: Lua,
+    budget: crate::luau::Budget,
     watched_paths: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl LuaRuntime {
     pub fn new(config_file: &Path, reload: ReloadSignal) -> Result<Self, LuaConfigError> {
-        let lua = Lua::new();
+        let budget = crate::luau::Budget::new(std::time::Duration::from_secs(2), 1_000_000);
+        let lua = budget.vm(StdLib::ALL_SAFE, 32 * 1024 * 1024)?;
         let watched_paths = Arc::new(Mutex::new(Vec::new()));
-        let runtime = Self { lua, watched_paths };
+        let runtime = Self { lua, budget, watched_paths };
         runtime.register(config_file, reload)?;
         Ok(runtime)
     }
 
     pub fn lua(&self) -> &Lua {
         &self.lua
+    }
+
+    pub fn evaluate(&self, source: &str, path: &Path) -> mlua::Result<Value> {
+        self.budget.run(|| {
+            self.lua.load(source).set_mode(ChunkMode::Text).set_name(path.to_string_lossy()).eval()
+        })
     }
 
     pub fn watched_paths(&self) -> Vec<PathBuf> {
@@ -52,10 +60,10 @@ impl LuaRuntime {
     }
 
     fn register(&self, config_file: &Path, reload: ReloadSignal) -> Result<(), LuaConfigError> {
-        let config_dir = config_file.parent().unwrap_or_else(|| Path::new("."));
-        let globals = self.lua.globals();
-        let package: Table = globals.get("package")?;
-        let loaded: Table = package.get("loaded")?;
+        let config_dir = config_file
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let module = self.lua.create_table()?;
 
         module.set("config_file", path_string(config_file)?)?;
@@ -104,13 +112,12 @@ impl LuaRuntime {
         )?;
 
         let watched_paths = self.watched_paths.clone();
-        let lua_config_dir = path_string(config_dir)?.replace('\\', "/");
-        let config_dir = config_dir.to_owned();
+        let watch_dir = config_dir.to_owned();
         module.set(
             "add_to_config_reload_watch_list",
             self.lua.create_function(move |_, path: String| {
                 let path = PathBuf::from(path);
-                let path = if path.is_absolute() { path } else { config_dir.join(path) };
+                let path = if path.is_absolute() { path } else { watch_dir.join(path) };
                 let path = path.canonicalize().unwrap_or(path);
                 let mut paths = watched_paths.lock().unwrap_or_else(|lock| lock.into_inner());
                 if paths.len() >= 1024 {
@@ -140,29 +147,7 @@ impl LuaRuntime {
         }
 
         module.set("config_builder", self.lua.create_function(create_config_builder)?)?;
-        loaded.set("pebrel", module.clone())?;
-        loaded.set("nebula", module)?;
-
-        let current_path: String = package.get("path")?;
-        package.set(
-            "path",
-            format!("{lua_config_dir}/?.lua;{lua_config_dir}/?/init.lua;{current_path}"),
-        )?;
-        self.lua
-            .load(
-                r#"
-                local original = package.searchers[2]
-                package.searchers[2] = function(name)
-                    local path = package.searchpath(name, package.path)
-                    if path then
-                        package.loaded.pebrel.add_to_config_reload_watch_list(path)
-                    end
-                    return original(name)
-                end
-                "#,
-            )
-            .set_name("=pebrel-module-watcher")
-            .exec()?;
+        super::modules::install(&self.lua, config_dir, module, self.watched_paths.clone())?;
 
         Ok(())
     }
@@ -212,7 +197,7 @@ fn create_config_builder(lua: &Lua, (): ()) -> mlua::Result<Table> {
 
     let pairs_store = store.clone();
     metatable.set(
-        "__pairs",
+        "__iter",
         lua.create_function(move |lua, _table: Table| {
             let next: mlua::Function = lua.globals().get("next")?;
             Ok((next, pairs_store.clone(), Value::Nil))

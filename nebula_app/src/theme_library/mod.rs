@@ -4,6 +4,7 @@
 //! import/export adapters, and `store` owns durable custom-theme files.  The
 //! settings crate remains the single runtime definition authority.
 
+pub(crate) mod community;
 pub(crate) mod document;
 mod formats;
 pub(crate) mod package;

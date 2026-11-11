@@ -201,7 +201,7 @@
     "search": {
       "terms": {
         "application": "application app update version github support",
-        "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
+        "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl glsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
         "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
         "providers": "providers provider ai api prediction prompt suggestions",
         "ssh": "ssh host remote connection",
@@ -211,7 +211,8 @@
         "advanced": "advanced session tray restore startup autostart login silent",
         "backup": "backup cloud sync export restore webdav s3 sftp 123 nextcloud synology nas r2 minio snapshots",
         "agents": "agents agent hook hooks claude codex opencode cursor kimi pi omp copilot grok",
-        "mobile": "mobile phone android ios remote pairing qr lan relay"
+        "mobile": "mobile phone android ios remote pairing qr lan relay",
+        "plugins": "plugins plugin extension extensions luau install grant generate"
       }
     },
     "opacity": {
@@ -270,7 +271,8 @@
       "keymap": "Key Bindings",
       "advanced": "Advanced",
       "backup": "Backup",
-      "agents": "Agents"
+      "agents": "Agents",
+      "plugins": "Plugins"
     },
     "notifications": {
       "duration": "Notification duration",
@@ -539,6 +541,32 @@
       "needs_repair": "Hook installed · needs repair",
       "initialize": "Run this agent once to create its configuration, then refresh.",
       "config_path": "Configuration: {path}"
+    },
+    "plugins": {
+      "title": "Plugins",
+      "description": "Plugins run only when you click one of their buttons or run a pebrel plugin command. Each capability a plugin needs is granted once, when you install it.",
+      "install": "Install from folder…",
+      "installing": "Installing…",
+      "choose_folder": "Choose a plugin folder containing plugin.toml",
+      "refresh": "Refresh",
+      "loading": "Loading installed plugins…",
+      "empty": "No plugins installed. Choose a plugin folder to install one.",
+      "failed": "Plugin operation failed: {error}",
+      "installed": "Installed {name}.",
+      "themes_added": "{count} of {total} bundled themes are in your theme library.",
+      "uninstalled": "Uninstalled {id}.",
+      "generated": "Added “{name}” to your theme library. Choose it in Appearance → Theme.",
+      "generate_tooltip": "Run this plugin command and add the theme it generates to your library. Nothing is applied.",
+      "uninstall": "Uninstall",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "granted": "Allowed: {grants}",
+      "grant_title": "{name} needs your permission to install:",
+      "grant_allow": "Allow and install",
+      "grant_cancel": "Cancel",
+      "grant_theme_library": "Add themes to your theme library (never applied automatically)",
+      "broken": "This plugin can no longer be loaded: {error}",
+      "themes_kept": "Uninstalling a plugin keeps the themes it added to your theme library."
     },
     "about": {
       "checking_for_updates": "Checking for updates...",
@@ -857,6 +885,7 @@
     "edit_block": "Edit this paragraph",
     "right_sidebar": "Toggle right sidebar",
     "loading": "Loading file…",
+    "loading_progress": "Loading… {received} / {total}",
     "save": "Save",
     "saving": "Saving…",
     "saved": "Saved",
@@ -1420,14 +1449,14 @@
     "shader_liquid_silk": "Liquid silk",
     "shader_wgsl": "Custom…",
     "shader_source": "Custom background effect",
-    "shader_source_description": "Choose a WGSL effect file, then enable it. Replacing the file updates an enabled effect; reload after editing.",
+    "shader_source_description": "Choose a WGSL/GLSL effect file, then enable it. Replacing the file updates an enabled effect; reload after editing.",
     "shader_choose": "Choose file",
     "shader_reload": "Reload",
     "shader_selecting": "Selecting…",
-    "shader_prompt": "Select a terminal background WGSL file",
-    "shader_failed": "The shader background failed; the underlying background is retained. Check WGSL syntax and the frame-parameter format, or choose another effect.",
+    "shader_prompt": "Select a terminal background WGSL/GLSL file",
+    "shader_failed": "The shader background failed; the underlying background is retained. Check WGSL/GLSL syntax and the frame-parameter format, or choose another effect.",
     "shader_unavailable": "Realtime shader backgrounds are not enabled in this build or on this platform.",
-    "shader_missing_source": "Choose a WGSL file before enabling the custom effect.",
+    "shader_missing_source": "Choose a WGSL/GLSL file before enabling the custom effect.",
     "shader_confirm": "Enable custom background effect?",
     "shader_confirm_description": "The selected local program will run on the GPU. Enable a file you trust; its runtime cost depends on its contents.",
     "shader_enable": "Enable",
@@ -1604,6 +1633,7 @@
   },
   "workspace": {
     "pane": {
+      "drag_hint": "Drag to move · Double-click to rename · Right-click for pane actions",
       "rename_hint": "Double-click to rename; Enter or click outside to save, Esc to cancel. Clear for an automatic title. Reopen to undo a saved name.",
       "stop_broadcast_input": "Stop broadcasting input",
       "broadcast_input_tooltip": "Broadcast input to every pane in this tab",
@@ -1884,6 +1914,35 @@
       "edit_copy": "Edit a copy",
       "failed": "Could not complete the operation: {detail}",
       "changed": "The package changed after inspection. Choose the file again before installing."
+    },
+    "community": {
+      "filter": "Community",
+      "loading": "Loading community themes…",
+      "empty": "No community themes are listed yet.",
+      "skipped": "{count} listings could not be read and are hidden.",
+      "retry": "Retry",
+      "install": "Install",
+      "installing": "Installing…",
+      "installed": "Installed",
+      "select": "Preview",
+      "install_version": "Install {version}",
+      "author": "by {author}",
+      "download_size": "{size} download",
+      "no_preview": "No preview",
+      "notice": "From the pebrel-community/themes catalog. Downloads are checked against the catalog's SHA-256 and added to your library without being applied.",
+      "added": "{name} was added to your library. Preview it here, then choose Use this theme.",
+      "install_failed": "Could not install {name}: {error}",
+      "error": {
+        "dns": "Could not resolve GitHub or the proxy address. Check your network and proxy settings, then retry.",
+        "tls": "Could not establish a secure connection. Check your system clock and whether a proxy intercepts TLS.",
+        "timeout": "The request timed out. Check your network or proxy, then retry.",
+        "proxy": "Could not connect through the configured proxy. Check Network settings.",
+        "network": "Could not reach the community catalog. Check your network, then retry.",
+        "http": "The server returned HTTP {status}.",
+        "integrity": "The download does not match the size and SHA-256 recorded in the catalog, so it was not installed.",
+        "catalog": "The community catalog could not be read: {detail}",
+        "package": "The theme package was rejected: {detail}"
+      }
     }
   },
   "ssh.ports.button": "Ports",
@@ -1906,11 +1965,11 @@
     "disable": "Disable",
     "reload": "Reload",
     "confirm": "Enable custom terminal effects?",
-    "confirm_description": "Run the listed WGSL files in order on terminal surfaces. Existing background settings are kept.",
-    "missing": "Choose a WGSL source first.",
+    "confirm_description": "Run the listed WGSL/GLSL files in order on terminal surfaces. Existing background settings are kept.",
+    "missing": "Choose a WGSL/GLSL source first.",
     "failed": "Terminal effect failed. Original terminal rendering is kept; check the source and reload.",
     "unsupported": "Terminal effects are not available for this window's graphics backend or build. Saved sources can still be removed and effects disabled.",
-    "prompt": "Add terminal effect WGSL files",
+    "prompt": "Add terminal effect WGSL/GLSL files",
     "animation": "Playback",
     "animation_description": "By default, play only in the current terminal to reduce background resource use.",
     "animation_off": "Static",
@@ -1920,7 +1979,7 @@
     "move_up": "Up",
     "move_down": "Down",
     "remove": "Remove",
-    "sources_invalid": "Choose at most eight WGSL files with paths supported by the settings format.",
+    "sources_invalid": "Choose at most eight WGSL/GLSL files with paths supported by the settings format.",
     "save_failed": "Could not save the effect list. Check that the settings location is writable, then try again.",
     "advanced": "Advanced effects",
     "advanced_active": "Advanced effects · Terminal effects enabled"
@@ -1980,7 +2039,8 @@
     "serial_read_failed": "Serial port stopped: {error}",
     "serial_write_failed": "Serial write failed: {error}",
     "serial_start_failed": "Could not open serial port: {error}",
-    "pty_start_failed": "Could not start the PTY: {error}"
+    "pty_start_failed": "Could not start the PTY: {error}",
+    "zmodem_cancelled": "Pebrel does not support ZMODEM (rz/sz) transfers, so it cancelled the transfer to keep the terminal usable. Use scp or SFTP to transfer files."
   },
   "confirmation": {
     "cover_title": "Extend the background image behind window controls?",

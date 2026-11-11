@@ -39,7 +39,7 @@ mod sftp;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 pub use pane_connection::PaneConnection;
-pub use resume::ResumeTarget;
+pub use resume::{ResumeTarget, TmuxActivity};
 use route::{ResolvedRoute, RouteTransport};
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
@@ -81,6 +81,13 @@ pub trait SshEventHost:
 
     /// Last positively identified target survives transport loss; only a confirmed shell clears it.
     fn ssh_resume_target(&self, _target: Option<ResumeTarget>) {}
+
+    /// An observation belongs to this channel's currently active remote pane.
+    fn ssh_tmux_activity(&self, _activity: Option<TmuxActivity>) {}
+
+    /// A terminal multiplexer client owns this channel's PTY, whether or not
+    /// its server can be queried from the authenticated account.
+    fn ssh_multiplexer_client(&self, _present: bool) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
@@ -596,6 +603,24 @@ impl client::Handler for ClientHandler {
             },
         }
     }
+
+    // A pane only sees its channel vanish; keep the transport cause
+    // (keepalive timeout, socket error, server disconnect) in the log.
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(info) => {
+                info!("SSH 连接 {}:{} 已关闭: {info:?}", self.host, self.port);
+                Ok(())
+            },
+            client::DisconnectReason::Error(error) => {
+                warn!("SSH 连接 {}:{} 异常断开: {error:?}", self.host, self.port);
+                Err(error)
+            },
+        }
+    }
 }
 
 pub(crate) fn runtime() -> io::Result<&'static tokio::runtime::Runtime> {
@@ -783,10 +808,12 @@ async fn authenticated_route<H: SshEventHost>(
         evict_pooled_session(&key, &existing).await;
     }
 
+    // Same budget as the managed OpenSSH launch. 15 s × 3 ended idle panes
+    // after one minute of server silence that OpenSSH survives (#816).
     let config = Arc::new(client::Config {
         inactivity_timeout: None,
-        keepalive_interval: Some(Duration::from_secs(15)),
-        keepalive_max: 3,
+        keepalive_interval: Some(crate::ssh::SERVER_ALIVE_INTERVAL),
+        keepalive_max: crate::ssh::SERVER_ALIVE_COUNT_MAX,
         ..Default::default()
     });
     report_stage(progress, SshStage::Connect);

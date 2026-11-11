@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pebrel.com"><img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-pebrel.com-2f81f7?style=flat-square&logo=googlechrome&logoColor=white" alt="官网：pebrel.com" /></a>
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
   <a href="https://atomgit.com/kettys/pebrel"><img src="https://atomgit.com/kettys/pebrel/star/badge.svg" alt="AtomGitStars" /></a>
   <a href="https://hub.xerj.org/contributors/Kuddev"><img src="https://hub.xerj.org/contributors/Kuddev/badge.svg" alt="XERJ Corpus Hub contributor" /></a>
@@ -132,6 +133,10 @@ WSL 发行版，以及 `cat` 读取带空格的文件名。使用内置 Powerlin
 
 设置中可选择**行内补齐**（Tab 接受灰字）、**列表补齐**（Tab 接受选中候选），
 或**混合补齐**（→ 接受灰字，Tab 打开列表）。
+
+Pebrel 能查询窗格的文件系统时，`nvim`、`code` 和 `cat` 的文件参数从当前目录获取候选，
+历史只给已发现的候选排序。需要在多个文件间选择时，选用**混合补齐**：
+Tab 打开列表，再次按 Tab 轮换候选，Enter 插入选中项但不执行命令；→ 直接接受灰字。
 
 <details>
 <summary>历史补齐有什么不同？</summary>

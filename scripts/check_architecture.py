@@ -33,13 +33,22 @@ class Revision:
             cwd=self.root, capture_output=True, check=True,
         ).stdout
 
+    def files(self, directory: str):
+        result = subprocess.run(
+            ["git", "--literal-pathspecs", "ls-tree", "-r", "--name-only", "-z", self.commit, "--", directory + "/"],
+            cwd=self.root, capture_output=True, check=True,
+        )
+        return [name.decode("utf-8") for name in result.stdout.split(b"\0") if name]
+
 
 def run(root: Path, base: str | None = None, report: bool = False) -> int:
     budget = budgets.Budget.parse((root / budgets.BUDGET_PATH).read_text(encoding="utf-8"))
     revision = Revision(root, base) if base else None
     previous_source = revision.read(budgets.BUDGET_PATH) if revision else None
     previous = budgets.Budget.parse(previous_source.decode("utf-8")) if previous_source is not None else None
-    errors, notices, counts = budgets.check(root, budget, previous, revision.read if revision else None)
+    errors, notices, counts = budgets.check(
+        root, budget, previous, revision.read if revision else None, revision.files if revision else None
+    )
     dependency_errors, members = dependencies.check(
         root, dependencies.load(root / dependencies.POLICY_PATH), budget.roots, set(counts)
     )

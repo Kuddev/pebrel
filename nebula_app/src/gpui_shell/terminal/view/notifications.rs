@@ -22,13 +22,16 @@ impl super::TerminalView {
 
 pub(super) use crate::ai_hook::lifecycle::screen_notification;
 
+/// `passthrough` marks a foreground program that only relays a multiplexed
+/// pane, so the screen may name the Agent running inside it.
 pub(super) fn screen_program(
     current: Option<&str>,
     identified: Option<AgentKind>,
+    passthrough: bool,
 ) -> Option<String> {
     match current {
         Some(program) if AgentKind::parse(program).is_some() => Some(program.to_owned()),
-        Some(program) if !screen_identity_allowed(Some(program)) => None,
+        Some(program) if !passthrough && !screen_identity_allowed(Some(program)) => None,
         _ => identified.map(|agent| agent.slug().to_owned()),
     }
 }
@@ -84,10 +87,32 @@ mod tests {
     #[test]
     fn wsl_and_ssh_wrappers_allow_identifying_the_guest_agent() {
         for wrapper in [None, Some("wsl"), Some("ssh"), Some("bash")] {
-            assert_eq!(screen_program(wrapper, Some(AgentKind::Claude)), Some("claude".into()));
+            assert_eq!(
+                screen_program(wrapper, Some(AgentKind::Claude), false),
+                Some("claude".into())
+            );
         }
-        assert_eq!(screen_program(Some("codex"), Some(AgentKind::Claude)), Some("codex".into()));
-        assert_eq!(screen_program(Some("vim"), Some(AgentKind::Claude)), None);
-        assert_eq!(screen_program(Some("wsl"), None), None);
+        assert_eq!(
+            screen_program(Some("codex"), Some(AgentKind::Claude), false),
+            Some("codex".into())
+        );
+        assert_eq!(screen_program(Some("vim"), Some(AgentKind::Claude), false), None);
+        assert_eq!(screen_program(Some("wsl"), None, false), None);
+    }
+
+    #[test]
+    fn an_unobserved_multiplexer_wrapper_relays_the_guest_agent_identity() {
+        // The wrapper name is arbitrary (a launcher script); only remote process
+        // evidence of a multiplexer client marks it as a relay.
+        assert_eq!(screen_program(Some("mydev"), Some(AgentKind::Codex), false), None);
+        assert_eq!(
+            screen_program(Some("mydev"), Some(AgentKind::Codex), true),
+            Some("codex".into())
+        );
+        assert_eq!(screen_program(Some("mydev"), None, true), None);
+        assert_eq!(
+            screen_program(Some("claude"), Some(AgentKind::Codex), true),
+            Some("claude".into())
+        );
     }
 }

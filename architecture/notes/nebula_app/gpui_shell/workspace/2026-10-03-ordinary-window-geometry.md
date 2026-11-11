@@ -1,5 +1,7 @@
 # Ordinary-window startup geometry
 
+Superseded for Windows directory-launch size by [Directory launches retain their normal window size](windowing/2026-11-11-directory-launch-window-size.md).
+
 ## Status
 
 Proposed for review.

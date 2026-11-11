@@ -211,7 +211,8 @@
         "advanced": "高级 会话 托盘 恢复 自启动 静默启动 开机 登录",
         "backup": "云备份 云同步 云存储 备份 导出 恢复 坚果云 123云盘 群晖 快照",
         "agents": "智能体 钩子 接入",
-        "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知"
+        "mobile": "手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
+        "plugins": "插件 扩展 安装 授权 生成 plugins plugin luau"
       }
     },
     "opacity": {
@@ -270,7 +271,8 @@
       "keymap": "按键映射",
       "advanced": "高级",
       "backup": "备份",
-      "agents": "Agents"
+      "agents": "Agents",
+      "plugins": "插件"
     },
     "notifications": {
       "duration": "通知显示时长",
@@ -539,6 +541,32 @@
       "needs_repair": "Hook 已安装 · 需修复",
       "initialize": "请先运行一次此工具以创建配置，然后刷新。",
       "config_path": "配置：{path}"
+    },
+    "plugins": {
+      "title": "插件",
+      "description": "插件只在你点它的按钮或执行 pebrel plugin 命令时运行。插件需要的能力在安装时一次性授权。",
+      "install": "从文件夹安装…",
+      "installing": "正在安装…",
+      "choose_folder": "选择包含 plugin.toml 的插件文件夹",
+      "refresh": "刷新",
+      "loading": "正在读取已安装的插件…",
+      "empty": "还没有安装插件。选择一个插件文件夹来安装。",
+      "failed": "插件操作失败：{error}",
+      "installed": "已安装 {name}。",
+      "themes_added": "自带的 {total} 个主题中有 {count} 个已在主题库里。",
+      "uninstalled": "已卸载 {id}。",
+      "generated": "已把「{name}」加入主题库，可以在 外观 → 主题 里选用。",
+      "generate_tooltip": "运行这个插件命令，把生成的主题加入主题库，不会自动应用。",
+      "uninstall": "卸载",
+      "enabled": "已启用",
+      "disabled": "已停用",
+      "granted": "已允许：{grants}",
+      "grant_title": "安装 {name} 需要你允许：",
+      "grant_allow": "允许并安装",
+      "grant_cancel": "取消",
+      "grant_theme_library": "向主题库添加主题（不会自动应用）",
+      "broken": "这个插件已无法加载：{error}",
+      "themes_kept": "卸载插件时，它加入主题库的主题会保留。"
     },
     "about": {
       "checking_for_updates": "正在检查更新…",
@@ -857,6 +885,7 @@
     "edit_block": "编辑此段落",
     "right_sidebar": "展开或收起右侧栏",
     "loading": "正在读取文件…",
+    "loading_progress": "正在加载… {received} / {total}",
     "save": "保存",
     "saving": "正在保存…",
     "saved": "已保存",
@@ -1420,14 +1449,14 @@
     "shader_liquid_silk": "液态流光",
     "shader_wgsl": "自定义…",
     "shader_source": "自定义背景效果",
-    "shader_source_description": "选择 WGSL 效果文件后点击启用。已启用时更换文件会替换当前效果；编辑文件后可重新加载。",
+    "shader_source_description": "选择 WGSL/GLSL 效果文件后点击启用。已启用时更换文件会替换当前效果；编辑文件后可重新加载。",
     "shader_choose": "选择文件",
     "shader_reload": "重新加载",
     "shader_selecting": "选择中…",
-    "shader_prompt": "选择终端背景 WGSL 文件",
-    "shader_failed": "着色器背景加载失败，已保留底层背景。请检查 WGSL 语法和帧参数格式，或选择其他效果。",
+    "shader_prompt": "选择终端背景 WGSL/GLSL 文件",
+    "shader_failed": "着色器背景加载失败，已保留底层背景。请检查 WGSL/GLSL 语法和帧参数格式，或选择其他效果。",
     "shader_unavailable": "此构建或平台尚未启用实时着色器背景。",
-    "shader_missing_source": "请先选择 WGSL 文件，再启用自定义效果。",
+    "shader_missing_source": "请先选择 WGSL/GLSL 文件，再启用自定义效果。",
     "shader_confirm": "启用自定义背景效果？",
     "shader_confirm_description": "所选本地程序将在 GPU 上运行。请启用可信文件；运行开销取决于文件内容。",
     "shader_enable": "启用",
@@ -1604,6 +1633,7 @@
   },
   "workspace": {
     "pane": {
+      "drag_hint": "拖动移动 · 双击重命名 · 右键打开分屏菜单",
       "rename_hint": "双击重命名；Enter 或点击外部保存，Esc 取消。清空恢复自动标题，重新编辑可撤销已保存的名称。",
       "stop_broadcast_input": "关闭广播输入",
       "broadcast_input_tooltip": "广播输入到本标签全部分栏",
@@ -1884,6 +1914,35 @@
       "edit_copy": "编辑副本",
       "failed": "操作未完成：{detail}",
       "changed": "主题包在检查后发生了变化。请重新选择文件，再确认安装。"
+    },
+    "community": {
+      "filter": "社区",
+      "loading": "正在获取社区主题…",
+      "empty": "社区目录里还没有主题。",
+      "skipped": "有 {count} 个条目无法读取，已隐藏。",
+      "retry": "重试",
+      "install": "安装",
+      "installing": "正在安装…",
+      "installed": "已安装",
+      "select": "预览",
+      "install_version": "安装 {version}",
+      "author": "作者 {author}",
+      "download_size": "下载 {size}",
+      "no_preview": "暂无预览图",
+      "notice": "来自 pebrel-community/themes 社区目录。下载内容会按目录登记的 SHA-256 校验，只加入主题库，不会自动应用。",
+      "added": "{name} 已加入主题库。可以在这里预览，满意后点「使用此主题」。",
+      "install_failed": "无法安装 {name}：{error}",
+      "error": {
+        "dns": "无法解析 GitHub 或代理地址。请检查网络和代理设置后重试。",
+        "tls": "无法建立安全连接。请检查系统时间，以及代理是否拦截了 TLS 连接。",
+        "timeout": "请求超时。请检查网络或代理后重试。",
+        "proxy": "无法通过已设置的代理连接。请检查「网络」设置。",
+        "network": "无法连接社区目录。请检查网络后重试。",
+        "http": "服务器返回 HTTP {status}。",
+        "integrity": "下载内容与目录登记的大小和 SHA-256 不一致，没有安装。",
+        "catalog": "无法读取社区目录：{detail}",
+        "package": "主题包未通过校验：{detail}"
+      }
     }
   },
   "ssh.ports.button": "端口",
@@ -1906,11 +1965,11 @@
     "disable": "停用",
     "reload": "重新加载",
     "confirm": "启用自定义终端效果？",
-    "confirm_description": "按列表顺序在终端画面上运行 WGSL。现有背景设置保持不变。",
-    "missing": "请先选择 WGSL 文件。",
+    "confirm_description": "按列表顺序在终端画面上运行 WGSL/GLSL。现有背景设置保持不变。",
+    "missing": "请先选择 WGSL/GLSL 文件。",
     "failed": "终端效果加载失败，已保留原始终端画面。请检查文件后重新加载。",
     "unsupported": "当前窗口的图形后端或构建尚未支持终端效果。仍可移除已保存的文件或停用效果。",
-    "prompt": "添加终端效果 WGSL 文件",
+    "prompt": "添加终端效果 WGSL/GLSL 文件",
     "animation": "播放方式",
     "animation_description": "默认只在当前终端中播放，以减少后台资源占用。",
     "animation_off": "静态",
@@ -1920,7 +1979,7 @@
     "move_up": "上移",
     "move_down": "下移",
     "remove": "移除",
-    "sources_invalid": "最多添加八个 WGSL 文件，路径需符合设置文件格式。",
+    "sources_invalid": "最多添加八个 WGSL/GLSL 文件，路径需符合设置文件格式。",
     "save_failed": "效果列表保存失败，请检查设置目录的写入权限后重试。",
     "advanced": "高级效果",
     "advanced_active": "高级效果 · 终端效果已启用"
@@ -1980,7 +2039,8 @@
     "serial_read_failed": "串口已停止：{error}",
     "serial_write_failed": "串口写入失败：{error}",
     "serial_start_failed": "串口打开失败：{error}",
-    "pty_start_failed": "PTY 启动失败: {error}"
+    "pty_start_failed": "PTY 启动失败: {error}",
+    "zmodem_cancelled": "Pebrel 暂不支持 ZMODEM（rz/sz）传输，已自动取消以免终端卡住。请改用 scp 或 SFTP 传输文件。"
   },
   "confirmation": {
     "cover_title": "让背景图覆盖窗口控件区域？",

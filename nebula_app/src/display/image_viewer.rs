@@ -20,7 +20,7 @@ pub fn viewable_file(path: &Path) -> bool {
             .and_then(|extension| extension.to_str())
             .map(|extension| extension.to_ascii_lowercase())
             .as_deref(),
-        Some("png" | "jpg" | "jpeg" | "webp" | "bmp")
+        Some("png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif")
     )
 }
 
@@ -36,12 +36,18 @@ pub struct ImageView {
 
 impl ImageView {
     pub fn open(path: PathBuf) -> Self {
+        let mut view = Self::pending(path);
+        view.reload();
+        view
+    }
+
+    /// Async hosts must not probe local metadata while creating a view.
+    pub(crate) fn pending(path: PathBuf) -> Self {
         let title = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        let dimensions = image_dimensions(&path).ok();
-        Self { path, title, dimensions, zoom: 1.0, pan: (0.0, 0.0), drag_last: None }
+        Self { path, title, dimensions: None, zoom: 1.0, pan: (0.0, 0.0), drag_last: None }
     }
 
     pub fn reload(&mut self) {

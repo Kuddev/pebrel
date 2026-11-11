@@ -27,6 +27,28 @@ fn remote_hook(session: &str, name: &str, process: &str, sequence: u64) -> AiHoo
 }
 
 #[gpui::test]
+fn wsl_claude_session_end_without_shell_markers_clears_the_saved_agent(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.suggest.suggest_env =
+            crate::display::SuggestEnv::Wsl { distro: "session-end-434".into() };
+        assert!(view.handle_ai_hook(&remote_hook("exited", "SessionStart", "434:1", 1), cx));
+        let saved = view.session_agent().expect("running conversation is restorable");
+        assert_eq!(saved.source, "claude");
+        assert_eq!(saved.session_id.as_deref(), Some("exited"));
+        assert_eq!(view.running_program.as_deref(), Some("claude"));
+        assert!(view.handle_ai_hook(&remote_hook("exited", "SessionEnd", "434:1", 2), cx));
+        view.prepare_ai_session_save(cx);
+        assert!(view.session_agent().is_none(), "window close must not resume an exited CLI");
+        assert!(view.ai_session.is_none());
+        assert!(view.recovery.target.is_none());
+        assert!(view.running_program.is_none());
+        assert!(!view.ai_session_save_pending());
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+    });
+}
+
+#[gpui::test]
 fn pi_redraw_anchor_follows_accepted_hook_and_command_lifecycle(cx: &mut TestAppContext) {
     use nebula_terminal::term::test::TermSize;
     use nebula_terminal::vte::ansi::Processor;
@@ -432,8 +454,7 @@ const CLAUDE_IDLE_SCREEN: &str = "╭─── Claude Code v2.1.286 ───╮
                                    \x20 ⏳5h 🟢 20% 2h7m | 📅MCP 13/1000\n\
                                    \x20 ⏵⏵ auto mode on (shift+tab to cycle)";
 
-/// 同款加宽 chrome 的工作中屏幕：转圈 + esc to interrupt 同屏，spinner_working
-/// 判 Working——停滞对账不得在干活时收边。
+/// Working and idle screen layouts are deliberately different from Hook state.
 const CLAUDE_WORKING_SCREEN: &str = "  ⎿  Running…\n\
                                      ✶ Moseying… (8m 42s · ↓ 18.3k tokens)\n\
                                      ────────────────────────────────────────\n\
@@ -443,140 +464,34 @@ const CLAUDE_WORKING_SCREEN: &str = "  ⎿  Running…\n\
                                      \x20 ↳ queued\n\
                                      \x20 ⏸ esc to interrupt · ? for shortcuts · ← for agents";
 
-/// 远端 Stop hook 丢失（bridge 通道锁/超时/超限都会丢）时，hook 权威把回合钉在
-/// Working；远端没有进程树这第二重证据，唯一的对账源是屏幕。停滞超阈值 +
-/// 连续两拍 agent 自家 idle 屏 → 收敛为 Done；身份保留给命令边界。
 #[gpui::test]
-fn remote_lost_stop_is_reconciled_by_stalled_idle_screen(cx: &mut TestAppContext) {
+fn remote_hook_states_are_not_rewritten_by_idle_or_working_screens(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.ssh_destination = Some("build@example.test".into());
         view.suggest.suggest_env =
             crate::display::SuggestEnv::Ssh { destination: "build@example.test".into() };
-        // fixture 先对着 detect() 钉一遍，防止规则演进让这组断言静默失效。
-        assert_eq!(
-            crate::ai_agents::detect("claude", CLAUDE_IDLE_SCREEN).unwrap().status,
-            AgentStatus::Idle
-        );
-        assert_eq!(
-            crate::ai_agents::detect("claude", CLAUDE_WORKING_SCREEN).unwrap().status,
-            AgentStatus::Working
-        );
-        // 回合起跑；Stop 在远端丢失。
-        view.handle_ai_hook(&hook("lost-stop", "UserPromptSubmit", 1), cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
-        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-        // agent 已答完：屏幕是 idle 提示符，但 hook 静默未超阈值——不得收边。
-        screen(view, CLAUDE_IDLE_SCREEN);
-        for _ in 0..4 {
-            view.refresh_agent_screen_state(cx);
+        for (index, (event, expected)) in [
+            ("UserPromptSubmit", AgentStatus::Working),
+            ("PermissionRequest", AgentStatus::Blocked),
+            ("PostToolUse", AgentStatus::Working),
+            ("Stop", AgentStatus::Done),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            view.handle_ai_hook(&hook("explicit-remote", event, index as u64 + 1), cx);
+            view.agent_activity.backdate_activity_for_test(std::time::Duration::from_secs(3600));
+            for text in [CLAUDE_IDLE_SCREEN, CLAUDE_WORKING_SCREEN] {
+                screen(view, text);
+                for _ in 0..4 {
+                    view.refresh_agent_screen_state(cx);
+                }
+                assert_eq!(view.agent_activity.status(), expected);
+                assert_eq!(view.agent_activity.source(), AgentStatusSource::Hook);
+            }
+            assert_eq!(view.running_program.as_deref(), Some("claude"));
         }
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Working,
-            "a live hook timeline outranks the idle screen"
-        );
-        // 停滞超阈值：连续两拍 idle 屏收敛为 Done；CLI 还活着，身份不动。
-        view.agent_activity.backdate_activity_for_test(
-            super::REMOTE_TURN_STALL + std::time::Duration::from_secs(1),
-        );
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working, "one sample is not enough");
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
-        assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Finished);
-        assert_eq!(view.running_program.as_deref(), Some("claude"), "identity survives the turn");
-    });
-}
-
-/// 工作中的屏幕（转圈/中断提示）反证「回合已结束」：连续 idle 计数归零，
-/// 之后即使停滞依旧，也要重新攒满两拍。
-#[gpui::test]
-fn a_working_screen_resets_the_stall_reconciliation_samples(cx: &mut TestAppContext) {
-    let (view, window, _) = open(cx);
-    view.update(window, |view, cx| {
-        view.ssh_destination = Some("build@example.test".into());
-        view.suggest.suggest_env =
-            crate::display::SuggestEnv::Ssh { destination: "build@example.test".into() };
-        view.handle_ai_hook(&hook("working-screen", "UserPromptSubmit", 1), cx);
-        view.agent_activity.backdate_activity_for_test(
-            super::REMOTE_TURN_STALL + std::time::Duration::from_secs(1),
-        );
-        screen(view, CLAUDE_IDLE_SCREEN);
-        view.refresh_agent_screen_state(cx);
-        // 攒到第 2 拍之前屏幕翻回转圈：计数归零，回合继续。
-        screen(view, CLAUDE_WORKING_SCREEN);
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
-        screen(view, CLAUDE_IDLE_SCREEN);
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Working,
-            "the counter restarted from the working frame"
-        );
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
-    });
-}
-
-/// 停滞对账只属于远端：本地 pane 有进程树这第二重证据，hook 权威不被屏幕
-/// 侵蚀（等价加固 `hook_lifecycle_cannot_be_rewritten_by_screen_words_or_idle_samples`）。
-#[gpui::test]
-fn local_hook_authority_is_never_eroded_by_stall_reconciliation(cx: &mut TestAppContext) {
-    let (view, window, _) = open(cx);
-    view.update(window, |view, cx| {
-        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
-        view.handle_ai_hook(&hook("local-authority", "UserPromptSubmit", 1), cx);
-        view.agent_activity.backdate_activity_for_test(super::REMOTE_TURN_STALL * 2);
-        screen(view, CLAUDE_IDLE_SCREEN);
-        for _ in 0..4 {
-            view.refresh_agent_screen_state(cx);
-        }
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Working,
-            "local panes keep the process tree as their second witness"
-        );
-    });
-}
-
-/// 远端 UserPromptSubmit 丢失（bridge 通道锁 busy/超时/超限都会丢）时，上一
-/// 回合的 Stop 把回合钉在 Done（侧栏 ready）；停滞超阈值 + 连续两拍转圈屏
-/// 重新点火 Running；身份保留给命令边界。
-#[gpui::test]
-fn remote_lost_prompt_submit_is_reignited_by_stalled_working_screen(cx: &mut TestAppContext) {
-    let (view, window, _) = open(cx);
-    view.update(window, |view, cx| {
-        view.ssh_destination = Some("build@example.test".into());
-        view.suggest.suggest_env =
-            crate::display::SuggestEnv::Ssh { destination: "build@example.test".into() };
-        // 第一回合完整：UserPromptSubmit → Stop（Done，侧栏读作 ready）。
-        view.handle_ai_hook(&hook("lost-prompt", "UserPromptSubmit", 1), cx);
-        view.handle_ai_hook(&hook("lost-prompt", "Stop", 2), cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done);
-        assert_eq!(view.sidebar_activity(), SidebarActivity::Done);
-        // 第二回合的 UserPromptSubmit 在远端丢失；屏幕转圈但 hook 静默未超
-        // 阈值——hook 时间线仍然在场，屏幕不得点火。
-        screen(view, CLAUDE_WORKING_SCREEN);
-        for _ in 0..4 {
-            view.refresh_agent_screen_state(cx);
-        }
-        assert_eq!(
-            view.agent_activity.status(),
-            AgentStatus::Done,
-            "a live hook timeline outranks the working screen"
-        );
-        // 停滞超阈值：连续两拍转圈重新点火 Running；CLI 还活着，身份不动。
-        view.agent_activity.backdate_activity_for_test(
-            super::REMOTE_TURN_STALL + std::time::Duration::from_secs(1),
-        );
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Done, "one sample is not enough");
-        view.refresh_agent_screen_state(cx);
-        assert_eq!(view.agent_activity.status(), AgentStatus::Working);
-        assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-        assert_eq!(view.running_program.as_deref(), Some("claude"), "identity survives the turn");
     });
 }
 
@@ -598,7 +513,12 @@ fn ignored_idle_notification_does_not_reopen_the_hook_ordering_gate(cx: &mut Tes
     view.update(window, |view, cx| {
         for name in ["UserPromptSubmit", "Stop", "Notification", "PostToolUse"] {
             let wire = format!("nebula-hook/1 source=claude\n{{\"hook_event_name\":\"{name}\",\"session_id\":\"idle-notification-order\"}}");
-            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42)).unwrap();
+            let Some(event) = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42))
+            else {
+                // An untyped notification is not a waiting signal and never reaches the view.
+                assert_eq!(name, "Notification");
+                continue;
+            };
             view.handle_ai_hook(&event, cx);
             if name != "UserPromptSubmit" {
                 assert_eq!(view.agent_activity.status(), AgentStatus::Done, "{name}");
@@ -713,6 +633,165 @@ fn fullscreen_multiplexer_keeps_spinning_for_hook_owned_work(cx: &mut TestAppCon
             // Hook ownership still wins when a process probe reports the multiplexer.
             view.running_program = Some(program.into());
             assert_eq!(view.sidebar_activity(), SidebarActivity::Running, "{program}");
+        });
+    }
+}
+
+/// A restored Codex form ends with its live model footer; the multiplexer's
+/// status line below it hides that anchor from whole-screen identity.
+const CODEX_RESTORED_SCREEN: &str =
+    "› Ask Codex to do anything\n\n  gpt-5.5 high · 74% left · ~/projects/nebula";
+const MULTIPLEXER_STATUS: &str =
+    "[cl2] 0:bash*                                   \"Issue\" 20:22 04-Nov-26";
+
+fn launcher_pane(view: &mut TerminalView) {
+    view.ssh_destination = Some("ops@example.test".into());
+    view.suggest.suggest_env =
+        crate::display::SuggestEnv::Ssh { destination: "ops@example.test".into() };
+    // A launcher script exec'd the multiplexer; its name is not a known client.
+    view.running_program = Some("mydev".into());
+}
+
+#[gpui::test]
+fn an_unobserved_multiplexer_client_relays_the_agent_identity_on_screen(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        launcher_pane(view);
+        screen(view, &format!("{CODEX_RESTORED_SCREEN}\n{MULTIPLEXER_STATUS}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("mydev"), "no process evidence yet");
+
+        // The remote PTY is owned by a multiplexer client whose server this
+        // account cannot query, so no pane-scoped observation will arrive.
+        view.session.as_ref().unwrap().multiplexer_client.store(true, Ordering::Relaxed);
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"));
+
+        screen(view, &format!("dev@host:~/projects/nebula$\n{MULTIPLEXER_STATUS}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"), "a redraw keeps the Agent");
+
+        view.remote_activity.passthrough_missing =
+            Some(std::time::Instant::now() - super::remote_activity::PASSTHROUGH_RELEASE);
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("mydev"), "the Agent left the pane");
+        assert!(view.ai_session.is_none());
+
+        screen(view, &format!("{CODEX_RESTORED_SCREEN}\n{MULTIPLEXER_STATUS}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"), "a later Agent is identified");
+    });
+}
+
+#[gpui::test]
+fn a_known_remote_pane_without_a_current_observation_keeps_outer_evidence(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        launcher_pane(view);
+        let session = view.session.as_ref().unwrap();
+        session.multiplexer_client.store(true, Ordering::Relaxed);
+        *session.resume_target.lock().unwrap() = Some(crate::ssh_session::ResumeTarget::sample());
+        assert!(!view.observing_tmux(), "a target alone is not an observation");
+        screen(view, &format!("{MULTIPLEXER_STATUS}\n{CODEX_RESTORED_SCREEN}"));
+        view.refresh_agent_screen_state(cx);
+        assert_eq!(view.running_program.as_deref(), Some("codex"));
+        assert_eq!(view.agent_activity.source(), AgentStatusSource::Screen);
+    });
+}
+
+#[gpui::test]
+fn interactive_ssh_login_keeps_running_without_a_permanent_spinner(cx: &mut TestAppContext) {
+    use crate::runtime_api::RuntimeTaskState;
+
+    for command in [
+        "ssh user@example.test",
+        "ssh -p 2222 user@example.test",
+        r"C:\Windows\System32\OpenSSH\ssh.exe user@example.test",
+        "pebrel ssh user@example.test",
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.last_committed = command.into();
+            view.on_command_start(cx);
+            // 停在主屏的远端 shell（#857）：仍是运行中且关闭需确认，但不转圈。
+            assert!(!view.term_mode().contains(TermMode::ALT_SCREEN));
+            assert_eq!(view.runtime_task_state(), RuntimeTaskState::Running, "{command}");
+            assert!(view.busy_process().is_some(), "{command}");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle, "{command}");
+
+            view.progress = crate::taskbar::TaskProgress::Indeterminate;
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.progress = crate::taskbar::TaskProgress::None;
+            view.ssh_stage = Some(crate::ssh_session::SshStage::Authenticate);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.ssh_stage = None;
+
+            // A remote program reported by shell integration owns its own activity.
+            view.running_program = Some("make".into());
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.running_program = Some("claude".into());
+            view.agent_activity.begin_command(true);
+            view.agent_activity.submitted();
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+
+            view.finish_foreground_command(Some(0), cx);
+            view.suggest.last_committed = "cargo test".into();
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+        });
+    }
+}
+
+#[gpui::test]
+fn ssh_remote_commands_and_noninteractive_modes_keep_their_spinner(cx: &mut TestAppContext) {
+    for command in [
+        "ssh example.test make",
+        "ssh -T example.test",
+        "ssh -N -L 8000:localhost:80 example.test",
+        "ssh -G example.test",
+        "ssh example.test && cargo test",
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.last_committed = command.into();
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running, "{command}");
+        });
+    }
+}
+
+#[gpui::test]
+fn ssh_login_classification_does_not_leak_into_the_next_pasted_command(cx: &mut TestAppContext) {
+    for runtime_prompt in [false, true] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            if runtime_prompt {
+                view.runtime_prompt("ssh user@example.test".into(), true, cx).unwrap();
+            } else {
+                // cmd.exe 没有 133;C：只有 Enter 这一个提交边界，也不能永久转圈。
+                feed(view, b"C:\\work>ssh user@example.test");
+                view.suggest.line_buf = "ssh user@example.test".into();
+                view.commit_line(cx);
+            }
+            assert_eq!(view.suggest.last_committed, "ssh user@example.test");
+            assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Running);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+
+            view.finish_foreground_command(Some(0), cx);
+            feed(view, b"\x1b[?2004h");
+            view.runtime_paste("cargo test".into(), true, InputOrigin::Program, cx).unwrap();
+            // 粘贴不刷新 `last_committed`；随后的 133;C 不能借旧行把新命令判成登录。
+            assert_eq!(view.suggest.last_committed, "ssh user@example.test");
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
+            view.on_command_start(cx);
+            assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
         });
     }
 }

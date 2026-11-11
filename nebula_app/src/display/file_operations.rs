@@ -4,6 +4,9 @@
 pub(crate) fn send_to_recycle_bin(path: &std::path::Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
 
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+    };
     use windows_sys::Win32::UI::Shell::{
         FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW,
         SHFileOperationW,
@@ -25,11 +28,43 @@ pub(crate) fn send_to_recycle_bin(path: &std::path::Path) -> Result<(), String> 
         hNameMappings: std::ptr::null_mut(),
         lpszProgressTitle: std::ptr::null(),
     };
+    // Background executor threads do not inherit the UI thread's COM apartment.
+    // Keep initialization and the synchronous Shell operation on this thread.
+    let initialized = unsafe {
+        CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32)
+    };
+    if initialized < 0 {
+        return Err(format!("COM initialization failed (HRESULT {initialized:#010x})"));
+    }
     let code = unsafe { SHFileOperationW(&mut operation) };
+    // Both S_OK and S_FALSE acquire an initialization reference.
+    unsafe { CoUninitialize() };
     if code == 0 && operation.fAnyOperationsAborted == 0 {
         Ok(())
+    } else if matches!(code, 32 | 33) {
+        Err(std::io::Error::from_raw_os_error(code).to_string())
     } else {
         Err(format!("\u{7cfb}\u{7edf}\u{62d2}\u{7edd}\u{ff08}\u{4ee3}\u{7801} {code}\u{ff09}"))
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn recycling_a_locked_file_on_a_worker_returns_an_error_and_keeps_the_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("locked.db");
+        std::fs::write(&path, b"in use").unwrap();
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        let worker_path = path.clone();
+        let result = std::thread::spawn(move || send_to_recycle_bin(&worker_path)).join().unwrap();
+        assert!(result.is_err(), "a locked file must report a deletion failure");
+        assert!(path.exists());
+        drop(locked);
+        assert_eq!(std::fs::read(&path).unwrap(), b"in use");
     }
 }
 

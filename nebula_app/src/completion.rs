@@ -1006,6 +1006,111 @@ mod tests {
     }
 
     #[test]
+    fn editor_file_history_only_ranks_candidates_in_the_current_directory() {
+        use crate::remote_dirs::RemoteEntry;
+
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        let empty = root.path().join("empty");
+        for path in [&first, &second, &empty] {
+            std::fs::create_dir(path).unwrap();
+        }
+        for name in ["issue845-a.txt", "issue845-z.txt"] {
+            std::fs::write(first.join(name), b"").unwrap();
+        }
+        std::fs::write(second.join("issue845-b.txt"), b"").unwrap();
+        let session = Session::default();
+        for env in [
+            SuggestEnv::Local,
+            SuggestEnv::Wsl { distro: "editor-cwd-845".into() },
+            SuggestEnv::Ssh { destination: "editor-cwd-845.invalid".into() },
+        ] {
+            let cwds = if env.is_this_machine() {
+                [&first, &second, &empty].map(|path| path.to_string_lossy().into_owned())
+            } else {
+                let cwds = ["/editor-first", "/editor-second", "/editor-empty"].map(str::to_owned);
+                for (cwd, names) in cwds.iter().zip([
+                    vec!["issue845-a.txt", "issue845-z.txt"],
+                    vec!["issue845-b.txt"],
+                    vec![],
+                ]) {
+                    crate::remote_dirs::finish_fetch(
+                        &env,
+                        cwd,
+                        Some(
+                            names
+                                .into_iter()
+                                .map(|name| RemoteEntry { name: name.into(), is_dir: false })
+                                .collect(),
+                        ),
+                    );
+                }
+                cwds
+            };
+            for command in ["nvim", "code", "cat"] {
+                let line = format!("{command} ");
+                record_command(&env.history_scope(), &format!("{line}issue845-z.txt"), &cwds[0]);
+                for style in
+                    [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+                {
+                    for (cwd, expected) in cwds.iter().zip([
+                        vec!["issue845-z.txt", "issue845-a.txt"],
+                        vec!["issue845-b.txt"],
+                        vec![],
+                    ]) {
+                        let result = session
+                            .request_with_syntax(
+                                cwd.clone(),
+                                env.clone(),
+                                line.clone(),
+                                line.len(),
+                                style,
+                                None,
+                                Some(ShellSyntax::Posix),
+                            )
+                            .calculate(&Cancellation::default());
+                        if style == CompletionStyle::Popup {
+                            assert_eq!(
+                                result
+                                    .completion_items
+                                    .iter()
+                                    .map(|item| item.insert.as_str())
+                                    .collect::<Vec<_>>(),
+                                expected,
+                                "{env:?}: {line} in {cwd}"
+                            );
+                        } else {
+                            assert_eq!(
+                                result.suggestion,
+                                expected.first().copied().unwrap_or_default(),
+                                "{env:?}: {line} in {cwd}"
+                            );
+                        }
+                        assert!(result.pending_remote_dir.is_none());
+                    }
+                }
+                if !env.is_this_machine() {
+                    let result = session
+                        .request(
+                            "/editor-pending".into(),
+                            env.clone(),
+                            line,
+                            CompletionStyle::Inline,
+                            None,
+                        )
+                        .calculate(&Cancellation::default());
+                    assert_eq!(result.pending_remote_dir.as_deref(), Some("/editor-pending"));
+                    assert!(
+                        result.suggestion.is_empty(),
+                        "pending directories cannot fall back to stale history"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn semantic_history_only_promotes_candidates_in_the_current_project() {
         let directory = tempfile::tempdir().unwrap();
         let cwd = directory.path().to_str().unwrap();
