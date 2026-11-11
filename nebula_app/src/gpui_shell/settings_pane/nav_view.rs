@@ -10,6 +10,8 @@ use super::*;
 /// 子项缩进：竖向引导线对齐大类图标的中心。
 const CHILD_INDENT: f32 = 20.0;
 const CHILD_GUIDE_X: f32 = 18.0;
+const NAV_PAD_X: f32 = 8.0;
+const NAV_SCROLLBAR_WIDTH: f32 = 16.0;
 
 impl SettingsPane {
     pub(super) fn render_nav(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -33,7 +35,7 @@ impl SettingsPane {
             .flex_shrink_0()
             .bg(crate::gpui_shell::theme::settings_canvas_tint(cx))
             .rounded_l(radius)
-            .px(px(8.0))
+            .px(px(NAV_PAD_X))
             .pt(px(12.0))
             .pb(px(8.0))
             .gap(px(2.0))
@@ -66,6 +68,7 @@ impl SettingsPane {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.nav_scroll)
+            .pr(px(NAV_SCROLLBAR_WIDTH - NAV_PAD_X))
             .pb(px(8.0))
             .gap(px(4.0));
 
@@ -165,11 +168,12 @@ impl SettingsPane {
                 .child(sections)
                 .child(
                     div()
+                        .debug_selector(|| "settings-nav-scrollbar".into())
                         .absolute()
                         .top_0()
-                        .right(px(-8.0))
+                        .right(px(-NAV_PAD_X))
                         .bottom_0()
-                        .w(px(16.0))
+                        .w(px(NAV_SCROLLBAR_WIDTH))
                         .child(
                             gpui_component::scroll::Scrollbar::vertical(&self.nav_scroll)
                                 .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always),

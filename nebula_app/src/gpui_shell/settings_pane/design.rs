@@ -5,6 +5,7 @@
 //! 标题栏不随内容密度缩小。分组通过留白表达，不添加标题下横线。
 
 use gpui::FontWeight;
+use gpui_component::button::ButtonCustomVariant;
 
 use super::*;
 
@@ -26,8 +27,8 @@ const ROW_PAD_Y: f32 = 12.0;
 const ROW_PAD_Y_COMPACT: f32 = 10.0;
 /// 组与组。
 pub(super) const GROUP_GAP: f32 = 28.0;
-pub(super) const CONTENT_MAX_WIDTH: f32 = 720.0;
-pub(super) const CONTENT_PAD_X: f32 = 40.0;
+pub(super) const CONTENT_MAX_WIDTH: f32 = 960.0;
+pub(super) const CONTENT_PAD_X: f32 = 32.0;
 pub(super) const CONTENT_PAD_TOP: f32 = 36.0;
 pub(super) const CONTENT_PAD_BOTTOM: f32 = 64.0;
 /// 内容相对轨道的缩进。标题左对齐轨道本身、行内容缩进这么多——标题是命名者
@@ -135,15 +136,31 @@ impl SettingsPane {
         let reset = dirty.then(|| {
             let action = crate::gpui_shell::config::ui_language(cx)
                 .text(crate::i18n::Message::SettingsPaneRestoreDefault);
-            Button::new(SharedString::from(format!("setting-reset-{label}")))
+            let id: SharedString = format!("setting-reset-{label}").into();
+            let ink = cx.theme().foreground;
+            let hover = crate::gpui_shell::theme::neutral_hover(cx);
+            Button::new(id.clone())
                 .debug_selector(move || format!("setting-reset-{label}"))
-                .ghost()
-                .icon(IconName::Undo2)
-                .size(px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE))
-                .rounded_md()
+                .group(id.clone())
+                .custom(ButtonCustomVariant::new(cx).foreground(cx.theme().muted_foreground))
+                .size(px(32.0))
+                .px_0()
+                .rounded(px(6.0))
                 .cursor_pointer()
                 .aria_label(action)
                 .tooltip(action)
+                .child(
+                    h_flex()
+                        .id("reset-face")
+                        .debug_selector(move || format!("setting-reset-face-{label}"))
+                        .w(px(30.0))
+                        .h(px(26.0))
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .group_hover(id, move |style| style.bg(hover).text_color(ink))
+                        .active(move |style| style.bg(ink.opacity(0.12)))
+                        .child(Icon::new(IconName::Undo2).size(px(12.0))),
+                )
                 .on_click(cx.listener(move |this, _, window, cx| on_reset(this, window, cx)))
                 .into_any_element()
         });
@@ -241,7 +258,7 @@ impl SettingsPane {
                             Button::new(SharedString::from(format!("settings-help-{label}")))
                                 .icon(IconName::Info)
                                 .ghost()
-                                .size(px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE))
+                                .size(px(32.0))
                                 .text_color(theme.muted_foreground)
                                 .accessibility_id(SharedString::from(format!(
                                     "settings-help-{label}"
@@ -281,7 +298,7 @@ impl SettingsPane {
         let control = control.into_any_element();
         let columns = match layout {
             RowLayout::IntrinsicControl => {
-                // 胶囊依实际文字取宽；空间不足时控件整块换行，不缩字号或截断选项。
+                // 分段条依实际文字取宽；空间不足时整组换行。
                 h_flex()
                     .w_full()
                     .items_center()
@@ -319,6 +336,15 @@ impl SettingsPane {
     }
 }
 
+pub(super) fn settings_card(cx: &App) -> gpui::Div {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .bg(crate::gpui_shell::theme::raised_fill(cx))
+        .rounded(px(CARD_RADIUS))
+        .shadow(crate::gpui_shell::theme::settings_card_shadow(cx))
+}
+
 /// 设置分组卡。`ParentElement` 把子元素收进卡内，调用点保持
 /// `self.group(title, cx).child(row)` 的写法；行之间插内缩细线。
 #[derive(IntoElement)]
@@ -328,9 +354,6 @@ pub(crate) struct SettingsGroup {
     pub(super) hidden: bool,
     title_size: f32,
     title_color: Hsla,
-    fill: Hsla,
-    shadow: Vec<gpui::BoxShadow>,
-    divider: Hsla,
 }
 
 impl SettingsGroup {
@@ -342,9 +365,6 @@ impl SettingsGroup {
             hidden: false,
             title_size: base_px * CARD_TITLE_SCALE,
             title_color: theme.muted_foreground.blend(theme.foreground.opacity(0.55)),
-            fill: crate::gpui_shell::theme::raised_fill(cx),
-            shadow: crate::gpui_shell::theme::settings_card_shadow(cx),
-            divider: crate::gpui_shell::theme::settings_hairline(cx),
         }
     }
 }
@@ -356,18 +376,13 @@ impl gpui::ParentElement for SettingsGroup {
 }
 
 impl gpui::RenderOnce for SettingsGroup {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         // `hidden` 走 display:none：不占位，也不吃父容器的 gap。
         if self.hidden {
             return div().hidden();
         }
-        let divider = self.divider;
-        let mut card = v_flex()
-            .debug_selector(|| "settings-group-card".into())
-            .w_full()
-            .bg(self.fill)
-            .rounded(px(CARD_RADIUS))
-            .shadow(self.shadow);
+        let divider = crate::gpui_shell::theme::settings_hairline(cx);
+        let mut card = settings_card(cx).debug_selector(|| "settings-group-card".into());
         for (ix, row) in self.rows.into_iter().enumerate() {
             if ix > 0 {
                 card = card.child(div().h(px(1.0)).mx(px(CARD_PAD_X)).flex_shrink_0().bg(divider));

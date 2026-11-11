@@ -1603,6 +1603,14 @@ impl Render for SettingsPane {
             .flex_row()
             .child(nav)
             .child(
+                div()
+                    .debug_selector(|| "settings-nav-divider".into())
+                    .w(px(1.0))
+                    .h_full()
+                    .flex_shrink_0()
+                    .bg(crate::gpui_shell::theme::settings_hairline(cx)),
+            )
+            .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()

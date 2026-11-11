@@ -310,7 +310,11 @@ fn settings_navigation_scrolls_without_squeezing_rows_or_moving_fixed_controls(
     let child = window.debug_bounds("settings-nav-child-1-0").unwrap();
     assert_eq!(first.size.height, px(SETTINGS_NAV_ROW_HEIGHT));
     assert_eq!(child.size.height, px(SETTINGS_NAV_CHILD_HEIGHT));
-    assert_eq!(first.size.width, px(SETTINGS_NAV_WIDTH - 16.0));
+    assert_eq!(first.size.height, px(32.0));
+    assert_eq!(child.size.height, px(28.0));
+    let scrollbar = window.debug_bounds("settings-nav-scrollbar").unwrap();
+    assert_eq!(first.right(), scrollbar.left());
+    assert_eq!(scrollbar.right(), px(SETTINGS_NAV_WIDTH));
     assert_eq!(child.size.width, first.size.width - px(20.0));
     assert!(back.bottom() <= viewport.top());
     assert!(viewport.bottom() <= restore.top());
@@ -345,7 +349,7 @@ fn settings_navigation_scrolls_without_squeezing_rows_or_moving_fixed_controls(
 }
 
 #[gpui::test]
-fn settings_cards_keep_the_prototype_column_and_outer_spacing(cx: &mut TestAppContext) {
+fn settings_cards_use_desktop_width_and_keep_outer_spacing(cx: &mut TestAppContext) {
     let _fixture_guard = lock_theme_studio();
     let (pane, mut window) = open_settings(cx);
     pane.update(&mut window, |pane, cx| {
@@ -356,9 +360,16 @@ fn settings_cards_keep_the_prototype_column_and_outer_spacing(cx: &mut TestAppCo
         window.simulate_resize(size(px(width), px(1000.0)));
         draw(&mut window);
         let area = window.debug_bounds("settings-content-area").unwrap();
+        let divider = window.debug_bounds("settings-nav-divider").unwrap();
+        assert_eq!(divider.left(), px(248.0));
+        assert_eq!(divider.size.width, px(1.0));
+        assert_eq!(area.left(), divider.right());
         let column = window.debug_bounds("settings-content-column").unwrap();
         let card = window.debug_bounds("settings-group-card").unwrap();
         assert_eq!(column.size.width, area.size.width.min(px(design::CONTENT_MAX_WIDTH)));
+        if width == 1400.0 {
+            assert_eq!(card.size.width, px(896.0));
+        }
         assert!((f32::from(column.center().x - area.center().x)).abs() < 1.0);
         assert_eq!(card.left() - column.left(), px(design::CONTENT_PAD_X));
         assert_eq!(column.right() - card.right(), px(design::CONTENT_PAD_X));
@@ -392,9 +403,13 @@ fn modified_setting_reset_remains_clickable_away_from_hover_and_disappears_after
     window.simulate_mouse_move(gpui::point(px(2.0), px(2.0)), None, Modifiers::default());
     draw(&mut window);
     let reset = window.debug_bounds(selector).expect("modified setting has a reset button");
-    assert!(reset.size.height >= px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE));
-    // MouseDown/Up without a preceding hover must still activate the reset.
-    click_point(reset.center(), &mut window);
+    assert_eq!(reset.size, size(px(32.0), px(32.0)));
+    let face_selector = Box::leak(format!("setting-reset-face-{label}").into_boxed_str());
+    let face = window.debug_bounds(face_selector).expect("inset reset face");
+    assert_eq!(face.size, size(px(30.0), px(26.0)));
+    assert_eq!(face.center(), reset.center());
+    // The outer padding must still activate the button.
+    click_point(gpui::point(reset.center().x, reset.top() + px(1.0)), &mut window);
     assert_eq!(pane.read_with(&window, |pane, _| pane.runtime.copy_on_select), default);
     assert_eq!(RuntimeSettings::load().copy_on_select, default);
     assert!(window.debug_bounds(selector).is_none());
@@ -1354,6 +1369,11 @@ fn native_theme_picker_visual_review() {
                             );
                         } else if mode == "appearance" {
                             settings.active_nav_child = Some(NavChild::TerminalLook);
+                        } else if mode == "theme" {
+                            settings.active_nav_child = Some(NavChild::Theme);
+                            // Show the undo action without letting the host theme pick the palette.
+                            settings.runtime.follow_system_theme =
+                                !SettingsPane::factory_defaults().follow_system_theme;
                         } else {
                             settings.open_appearance_picker(true, window, cx);
                         }
@@ -1383,8 +1403,16 @@ fn native_theme_picker_visual_review() {
                         "settings-content-column",
                         "settings-group-card",
                         "settings-nav-scroll",
+                        "settings-nav-divider",
+                        "settings-nav-0",
+                        "settings-nav-child-1-0",
                         "setting-reset-选中即复制",
+                        "setting-reset-跟随系统",
+                        "setting-reset-face-跟随系统",
                         "nebula-switch-copy_on_select",
+                        "settings-choices-cell_width_mode",
+                        "settings-choice-cell_width_mode-compact",
+                        "settings-choice-cell_width_mode-relaxed",
                     ]
                     .into_iter()
                     .filter_map(|selector| {

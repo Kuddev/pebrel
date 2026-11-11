@@ -138,8 +138,8 @@ pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
 
 // 导航使用组件的小字号，与搜索菜单一致；尺寸是逻辑像素，由窗口统一处理 DPI。
 pub(super) const SETTINGS_NAV_WIDTH: f32 = 248.0;
-pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = crate::gpui_shell::widgets::SETTINGS_HIT_SIZE;
-pub(super) const SETTINGS_NAV_CHILD_HEIGHT: f32 = SETTINGS_NAV_ROW_HEIGHT;
+pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 32.0;
+pub(super) const SETTINGS_NAV_CHILD_HEIGHT: f32 = 28.0;
 pub(super) const SETTINGS_NAV_ICON_SIZE: f32 = 16.0;
 
 // 正文分组与表单继续沿用现有几何节奏。

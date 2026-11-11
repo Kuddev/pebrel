@@ -8,6 +8,7 @@ use gpui::{FontWeight, Pixels, RenderOnce, relative};
 use gpui_component::button::ButtonCustomVariant;
 
 const TRACK_INSET: f32 = 2.0;
+const SEGMENT_RADIUS: f32 = 6.0;
 
 #[derive(IntoElement)]
 struct SettingsSegments {
@@ -45,9 +46,9 @@ impl RenderOnce for SettingsSegments {
                     .width
                     + px(24.0)
             })
-            .fold(px(64.0), |width, next| width.max(next));
+            .fold(px(48.0), |width, next| width.max(next));
         let width = slot_width * self.labels.len() as f32;
-        // 已确认的短选项保持胶囊；真实排版宽度交给设置行换行，而非退回下拉框。
+        // 短选项沿用原稿的小圆角分段条；宽度按文字排版，空间不足时整组换行。
         let key = self.key;
         let count = self.buttons.len() as f32;
         let target = self.selected as f32 / count;
@@ -66,7 +67,7 @@ impl RenderOnce for SettingsSegments {
             .bottom_0()
             .left(relative(target))
             .w(relative(1.0 / count))
-            .rounded(self.height / 2.0)
+            .rounded(px(SEGMENT_RADIUS))
             .border_1()
             .border_color(cx.theme().border.opacity(0.7))
             .bg(thumb)
@@ -92,7 +93,7 @@ impl RenderOnce for SettingsSegments {
             .border_1()
             .border_color(cx.theme().border)
             .p(px(TRACK_INSET - 1.0))
-            .rounded(self.height / 2.0 + px(TRACK_INSET))
+            .rounded(px(SEGMENT_RADIUS + TRACK_INSET))
             .bg(track)
             .child(
                 h_flex().relative().w_full().h(self.height).child(indicator).children(self.buttons),
@@ -128,7 +129,7 @@ impl SettingsPane {
         let selected = state.read(cx).selected_index(cx).map(|index| index.row).unwrap_or(0);
         let labels =
             localized_select_labels(key, values, crate::gpui_shell::config::ui_language(cx));
-        let height = settings_control_height(cx);
+        let height = (cx.theme().font_size * 1.5).max(px(28.0));
         Some(
             SettingsSegments {
                 key,
@@ -149,7 +150,7 @@ impl SettingsPane {
                             .small()
                             .h(height)
                             .px(px(12.0))
-                            .rounded(height / 2.0)
+                            .rounded(px(SEGMENT_RADIUS))
                             .custom(
                                 ButtonCustomVariant::new(cx)
                                     .foreground(if active {
