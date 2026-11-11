@@ -340,7 +340,7 @@ pub(super) fn settings_card(cx: &App) -> gpui::Div {
     v_flex()
         .w_full()
         .min_w_0()
-        .bg(crate::gpui_shell::theme::raised_fill(cx))
+        .bg(crate::gpui_shell::theme::settings_card_fill(cx))
         .rounded(px(CARD_RADIUS))
         .shadow(crate::gpui_shell::theme::settings_card_shadow(cx))
 }
