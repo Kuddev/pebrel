@@ -174,12 +174,20 @@ fn complete_rec(
             if cancelled() {
                 return Vec::new();
             }
-            let entry_name = entry.file_name().to_string_lossy().into_owned();
-            let entry_isdir = entry.path().is_dir();
-            let mut built = built.clone();
-            built.isdir = entry_isdir;
+            // 目录项类型优先取 `file_type`，在文件系统提供 d_type 时省去每条目
+            // 一次 stat。它不跟随 symlink，因此 symlink 仍回退到 `is_dir`，
+            // 保持“指向目录的 symlink 视为目录”的既有语义；类型未知时同样回退。
+            let entry_isdir = match entry.file_type() {
+                Ok(file_type) if file_type.is_symlink() => entry.path().is_dir(),
+                Ok(file_type) => file_type.is_dir(),
+                Err(_) => entry.path().is_dir(),
+            };
 
             if !want_directory || entry_isdir {
+                // 被 `want_directory` 过滤掉的条目不再分配名称，也不再 clone
+                // 父路径。
+                let entry_name = entry.file_name().to_string_lossy().into_owned();
+
                 if enable_exact_match && !multiple_exact_matches && has_more {
                     let matches = if options.case_sensitive {
                         entry_name.eq(prefix)
@@ -188,9 +196,10 @@ fn complete_rec(
                     };
                     if matches {
                         if exact_match.is_none() {
-                            let mut built_exact = built.clone();
                             let match_indices: Vec<usize> =
                                 (0..entry_name.graphemes(true).count()).collect();
+                            let mut built_exact = built.clone();
+                            built_exact.isdir = entry_isdir;
                             built_exact
                                 .parts
                                 .push(MatchedPart { text: entry_name.clone(), match_indices });
@@ -201,7 +210,9 @@ fn complete_rec(
                     }
                 }
 
-                matcher.add(entry_name.clone(), (built, entry_name));
+                let mut completed = built.clone();
+                completed.isdir = entry_isdir;
+                matcher.add_owned(entry_name, completed);
             }
         }
     }
@@ -219,13 +230,14 @@ fn complete_rec(
         );
     }
 
-    let completion_iter =
-        matcher.results().into_iter().map(|((mut built, last_entry_name), last_match_indices)| {
+    let completion_iter = matcher.results_with_haystack().into_iter().map(
+        |(mut built, last_entry_name, last_match_indices)| {
             built
                 .parts
                 .push(MatchedPart { text: last_entry_name, match_indices: last_match_indices });
             built
-        });
+        },
+    );
 
     if has_more {
         completion_iter
@@ -555,6 +567,153 @@ fn complete_paths(
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::fs;
+
+    /// Isolated directory under the system temp dir; removed on drop.
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("pebrel-completions-tests-{}-{name}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create isolated test directory");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn cwd(&self) -> String {
+            self.path.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// File names and directory flags, independent of the absolute temp path.
+    fn entry_names(items: &[FileSuggestion]) -> Vec<(String, bool)> {
+        items
+            .iter()
+            .map(|item| {
+                let name = Path::new(item.path.trim_end_matches(is_separator))
+                    .file_name()
+                    .expect("completion has a file name")
+                    .to_string_lossy()
+                    .into_owned();
+                (name, item.is_dir)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn directory_filter_keeps_only_directories_in_name_order() {
+        let dir = TestDir::new("filter");
+        fs::create_dir(dir.path().join("z_dir")).unwrap();
+        fs::create_dir(dir.path().join("a_dir")).unwrap();
+        fs::write(dir.path().join("m_file"), b"").unwrap();
+        fs::write(dir.path().join("b_file"), b"").unwrap();
+
+        let cwd = dir.cwd();
+        let options = CompletionOptions::default();
+        let all = complete_item(false, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&all),
+            vec![
+                ("a_dir".to_string(), true),
+                ("b_file".to_string(), false),
+                ("m_file".to_string(), false),
+                ("z_dir".to_string(), true),
+            ]
+        );
+        assert!(
+            all.iter().filter(|item| item.is_dir).all(|item| item.path.ends_with(is_separator))
+        );
+
+        let dirs = complete_item(true, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&dirs),
+            vec![("a_dir".to_string(), true), ("z_dir".to_string(), true)]
+        );
+        assert!(dirs.iter().all(|item| item.path.ends_with(is_separator)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_follow_directory_targets_and_keep_file_targets_as_files() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("symlinks");
+        fs::create_dir(dir.path().join("real_dir")).unwrap();
+        fs::write(dir.path().join("real_file"), b"").unwrap();
+        symlink(dir.path().join("real_dir"), dir.path().join("link_dir")).unwrap();
+        symlink(dir.path().join("real_file"), dir.path().join("link_file")).unwrap();
+        symlink(dir.path().join("missing"), dir.path().join("link_broken")).unwrap();
+
+        let cwd = dir.cwd();
+        let options = CompletionOptions::default();
+        let all = complete_item(false, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&all),
+            vec![
+                ("link_broken".to_string(), false),
+                ("link_dir".to_string(), true),
+                ("link_file".to_string(), false),
+                ("real_dir".to_string(), true),
+                ("real_file".to_string(), false),
+            ]
+        );
+
+        let dirs = complete_item(true, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&dirs),
+            vec![("link_dir".to_string(), true), ("real_dir".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn exact_match_drills_in_and_keeps_its_indices() {
+        let dir = TestDir::new("exact");
+        fs::create_dir(dir.path().join("targetdir")).unwrap();
+        fs::write(dir.path().join("targetdir").join("inner.txt"), b"").unwrap();
+        fs::write(dir.path().join("targetdir_sibling"), b"").unwrap();
+
+        let cwd = dir.cwd();
+        let case_sensitive = CompletionOptions::default();
+        let suggestions = complete_item(
+            false,
+            Span::new(0, 9),
+            "targetdir/",
+            &[cwd.as_str()],
+            &case_sensitive,
+            false,
+            None,
+        );
+        assert_eq!(entry_names(&suggestions), vec![("inner.txt".to_string(), false)]);
+        assert_eq!(suggestions[0].match_indices, (0..9).collect::<Vec<_>>());
+
+        let case_folded =
+            CompletionOptions { case_sensitive: false, ..CompletionOptions::default() };
+        let suggestions = complete_item(
+            false,
+            Span::new(0, 9),
+            "TARGETDIR/",
+            &[cwd.as_str()],
+            &case_folded,
+            false,
+            None,
+        );
+        assert_eq!(entry_names(&suggestions), vec![("inner.txt".to_string(), false)]);
+        assert_eq!(suggestions[0].path, "targetdir/inner.txt");
+        assert_eq!(suggestions[0].match_indices, (0..9).collect::<Vec<_>>());
+    }
 
     #[test]
     fn cancellation_stops_directory_enumeration_and_discards_partial_results() {
