@@ -90,7 +90,7 @@ pub(super) fn migrate_data_at(source: &Path, destination: &Path) -> io::Result<(
         }
         let old = destination.join(old);
         if old.try_exists()? {
-            copy_file(&old, &destination.join(new))?;
+            adopt_legacy_data_file(&old, &destination.join(new))?;
         }
     }
 
@@ -125,7 +125,7 @@ fn copy_tree(source: &Path, destination: &Path, keep_config: bool) -> io::Result
             }
             copy_tree(&source, &target, false)?;
         } else if kind.is_file() {
-            copy_file(&source, &target)?;
+            adopt_legacy_data_file(&source, &target)?;
         } else if kind.is_symlink() {
             copy_symlink(&source, &target)?;
         } else {
@@ -146,7 +146,9 @@ fn destination_exists(path: &Path) -> io::Result<bool> {
     }
 }
 
-fn copy_file(source: &Path, destination: &Path) -> io::Result<()> {
+/// Copy a legacy file atomically without replacing an existing destination.
+/// The destination's parent directory must already exist. Safe to retry after failure.
+pub fn adopt_legacy_data_file(source: &Path, destination: &Path) -> io::Result<()> {
     write_if_absent(destination, |output| {
         let mut input = File::open(source)?;
         io::copy(&mut input, output)?;

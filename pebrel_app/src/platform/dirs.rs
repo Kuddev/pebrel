@@ -64,7 +64,7 @@ fn resolve_data_dir() -> PathBuf {
 
 /// 数据目录下的一项（文件或只含文件的目录）。AI 会话记录和 Agent 识别规则覆盖
 /// 以前各自计算路径，改名后仍写在旧的 `Nebula` 目录，启动迁移的文件清单也没有包含
-/// 它们。新位置还没有时从旧位置复制一次：不删除旧数据，也不覆盖已有的新数据。
+/// 它们。首次解析路径时补齐缺失文件；失败后下次启动可重试，已有文件保持不变。
 pub(crate) fn adopted_data_entry(name: &str) -> PathBuf {
     let current = data_dir().join(name);
     if let Some(legacy) = pre_rename_entry_dir() {
@@ -89,26 +89,45 @@ fn pre_rename_entry_dir() -> Option<PathBuf> {
 }
 
 fn adopt_entry(legacy: &Path, current: &Path) {
-    if legacy == current || current.exists() {
-        return;
-    }
-    let result = if legacy.is_file() {
-        std::fs::read(legacy).and_then(|bytes| crate::atomic_file::write(current, &bytes))
-    } else if legacy.is_dir() {
-        std::fs::read_dir(legacy).and_then(|entries| {
-            std::fs::create_dir_all(current)?;
-            for entry in entries.flatten().filter(|entry| entry.path().is_file()) {
-                let bytes = std::fs::read(entry.path())?;
-                crate::atomic_file::write(&current.join(entry.file_name()), &bytes)?;
-            }
-            Ok(())
-        })
-    } else {
-        return;
-    };
-    if let Err(error) = result {
+    if let Err(error) = try_adopt_entry(legacy, current) {
         log::warn!("could not copy {} to {}: {error}", legacy.display(), current.display());
     }
+}
+
+fn try_adopt_entry(legacy: &Path, current: &Path) -> std::io::Result<()> {
+    if legacy == current {
+        return Ok(());
+    }
+    let source = match std::fs::symlink_metadata(legacy) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if source.is_file() {
+        return pebrel_settings::adopt_legacy_data_file(legacy, current);
+    }
+    if source.is_dir() {
+        match std::fs::symlink_metadata(current) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Ok(());
+            },
+            Ok(_) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(current)?;
+            },
+            Err(error) => return Err(error),
+        }
+        for entry in std::fs::read_dir(legacy)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                pebrel_settings::adopt_legacy_data_file(
+                    &entry.path(),
+                    &current.join(entry.file_name()),
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -137,6 +156,37 @@ mod tests {
 
         adopt_entry(&legacy.join("missing.json"), &current.join("missing.json"));
         assert!(!current.join("missing.json").exists());
+    }
+
+    #[test]
+    fn adopting_completes_a_partial_directory_without_replacing_new_rules() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join("legacy");
+        let current = temp.path().join("current");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::create_dir(&current).unwrap();
+        std::fs::write(legacy.join("codex.toml"), b"old codex").unwrap();
+        std::fs::write(legacy.join("claude.toml"), b"old claude").unwrap();
+        std::fs::write(current.join("codex.toml"), b"new codex").unwrap();
+
+        adopt_entry(&legacy, &current);
+        assert_eq!(std::fs::read(current.join("codex.toml")).unwrap(), b"new codex");
+        assert_eq!(std::fs::read(current.join("claude.toml")).unwrap(), b"old claude");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopting_preserves_a_dangling_destination_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join("legacy.json");
+        let current = temp.path().join("current.json");
+        let missing = temp.path().join("missing.json");
+        std::fs::write(&legacy, b"old").unwrap();
+        std::os::unix::fs::symlink(&missing, &current).unwrap();
+
+        adopt_entry(&legacy, &current);
+        assert_eq!(std::fs::read_link(&current).unwrap(), missing);
+        assert!(!missing.exists());
     }
 
     #[test]

@@ -7,3 +7,5 @@
 - 持久化格式、兼容迁移或共享设置所有权的非平凡变化写入 `architecture/notes/pebrel_settings/<capability>/`。
 
 - 原生 UI 的 Luau 默认值与界面保存优先级见 [脚本默认值](../architecture/notes/pebrel_settings/config_defaults/2026-11-02-script-ui-defaults.md)；设置核心不执行脚本。
+
+- 旧应用数据的非覆盖补迁复用路径模块的文件发布实现，见 [补迁边界](../architecture/notes/pebrel_settings/paths/2026-11-11-late-data-adoption.md)。

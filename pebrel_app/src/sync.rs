@@ -120,16 +120,20 @@ const WEAK_PASSPHRASES: &[&str] = &[
     "pebrel",
 ];
 
-/// Windows 凭据管理器里的条目名（`ssh_credentials` 的通用 DPAPI 存取）。
 #[cfg(windows)]
-const PASSWORD_TARGET: &str = "Pebrel Sync WebDAV Password";
-#[cfg(windows)]
-const PASSPHRASE_TARGET: &str = "Pebrel Sync Passphrase";
-/// 改名前保存的条目只读取，下次保存写到新名字下。
-#[cfg(windows)]
-const LEGACY_PASSWORD_TARGET: &str = "Nebula Sync WebDAV Password";
-#[cfg(windows)]
-const LEGACY_PASSPHRASE_TARGET: &str = "Nebula Sync Passphrase";
+mod credentials {
+    /// Windows 凭据管理器里的条目名（`ssh_credentials` 的通用 DPAPI 存取）。
+    pub(super) const PASSWORD_TARGET: &str = "Pebrel Sync WebDAV Password";
+    pub(super) const PASSPHRASE_TARGET: &str = "Pebrel Sync Passphrase";
+    /// 改名前保存的条目只读取，下次保存写到新名字下。
+    pub(super) const LEGACY_PASSWORD_TARGET: &str = "Nebula Sync WebDAV Password";
+    pub(super) const LEGACY_PASSPHRASE_TARGET: &str = "Nebula Sync Passphrase";
+
+    pub(super) fn stored_secret(target: &str, legacy: &str) -> Option<Vec<u8>> {
+        use crate::ssh_credentials::windows_store::load_secret;
+        load_secret(target).ok().flatten().or_else(|| load_secret(legacy).ok().flatten())
+    }
+}
 
 pub fn config_path() -> PathBuf {
     crate::display::nebula_data_dir().join(CONFIG_FILE)
@@ -197,7 +201,7 @@ pub fn has_passphrase() -> bool {
 #[cfg(windows)]
 pub fn store_password(username: &str, secret: &str) -> Result<(), String> {
     crate::ssh_credentials::windows_store::save_secret(
-        PASSWORD_TARGET,
+        credentials::PASSWORD_TARGET,
         username,
         secret.trim().as_bytes(),
     )
@@ -213,7 +217,7 @@ pub fn store_passphrase(username: &str, secret: &str) -> Result<(), String> {
         return Err(reason.to_owned());
     }
     crate::ssh_credentials::windows_store::save_secret(
-        PASSPHRASE_TARGET,
+        credentials::PASSPHRASE_TARGET,
         username,
         secret.trim().as_bytes(),
     )
@@ -238,7 +242,10 @@ fn webdav_password() -> Option<String> {
         }
     }
     #[cfg(windows)]
-    if let Some(secret) = stored_secret(PASSWORD_TARGET, LEGACY_PASSWORD_TARGET) {
+    if let Some(secret) = credentials::stored_secret(
+        credentials::PASSWORD_TARGET,
+        credentials::LEGACY_PASSWORD_TARGET,
+    ) {
         return String::from_utf8(secret).ok();
     }
     None
@@ -252,16 +259,13 @@ fn sync_passphrase() -> Option<String> {
         }
     }
     #[cfg(windows)]
-    if let Some(secret) = stored_secret(PASSPHRASE_TARGET, LEGACY_PASSPHRASE_TARGET) {
+    if let Some(secret) = credentials::stored_secret(
+        credentials::PASSPHRASE_TARGET,
+        credentials::LEGACY_PASSPHRASE_TARGET,
+    ) {
         return String::from_utf8(secret).ok();
     }
     None
-}
-
-#[cfg(windows)]
-fn stored_secret(target: &str, legacy: &str) -> Option<Vec<u8>> {
-    use crate::ssh_credentials::windows_store::load_secret;
-    load_secret(target).ok().flatten().or_else(|| load_secret(legacy).ok().flatten())
 }
 
 /// 弱口令闸（硬拒绝）。返回 Some(原因) = 拒绝同步。

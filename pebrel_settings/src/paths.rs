@@ -5,7 +5,9 @@ use std::path::PathBuf;
 #[path = "paths/migration.rs"]
 mod migration;
 
-pub use migration::{canonical_data_file_name, is_migration_artifact, legacy_data_file_name};
+pub use migration::{
+    adopt_legacy_data_file, canonical_data_file_name, is_migration_artifact, legacy_data_file_name,
+};
 
 fn first_override(mut variable: impl FnMut(&str) -> Option<OsString>) -> Option<PathBuf> {
     ["PEBREL_CONFIG_DIR", "NEBULA_CONFIG_DIR"]
