@@ -213,6 +213,7 @@ def run(args, root, report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--release", choices=("2.2.0", "2.5.3"), required=True)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--cli", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
@@ -220,7 +221,7 @@ def main():
     args.archive, args.cli, args.evidence = (path.resolve() for path in (args.archive, args.cli, args.evidence))
     args.evidence.mkdir(parents=True, exist_ok=True)
     report = {"status": "blocked", "stage": "setup", "windows": platform.version(),
-              "pebrel": "2.5.3", "input": "Win32 SendInput to the verified foreground window",
+              "pebrel": args.release, "input": "Win32 SendInput to the verified foreground window",
               "application_hooks": "disabled"}
     temporary = Path(tempfile.mkdtemp(prefix="pebrel-655-")).resolve()
     try:

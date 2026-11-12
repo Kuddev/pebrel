@@ -8,6 +8,11 @@ on:
         description: Must be false for this input test
         type: boolean
         default: false
+      release:
+        description: Published Windows ZIP to test
+        type: choice
+        options: ["2.5.3", "2.2.0"]
+        default: "2.5.3"
 
 permissions:
   contents: read
@@ -20,6 +25,7 @@ jobs:
     timeout-minutes: 12
     env:
       PYTHONUTF8: "1"
+      PEBREL_655_RELEASE: ${{ inputs.release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,10 +39,16 @@ jobs:
         run: |
           $testDir = Join-Path $env:RUNNER_TEMP 'pebrel-escape-inputs'
           New-Item -ItemType Directory -Path $testDir | Out-Null
-          $zip = Join-Path $testDir 'Pebrel-v2.5.3-windows-x64.zip'
-          Invoke-WebRequest 'https://github.com/Kuddev/pebrel/releases/download/v2.5.3/Pebrel-v2.5.3-windows-x64.zip' -OutFile $zip
+          $hashes = @{
+            '2.5.3' = 'c6d7faf53defa32fc43e596d5b8a34963ef6241e95d858762bea450d5f127141'
+            '2.2.0' = '20023c035d7aa28680345c0049781b03a0c6a430cfdf5ebf8b3bd3d04ebf4c62'
+          }
+          if (-not $hashes.ContainsKey($env:PEBREL_655_RELEASE)) { throw 'Unexpected release input' }
+          $zip = Join-Path $testDir ('Pebrel-v{0}-windows-x64.zip' -f $env:PEBREL_655_RELEASE)
+          $url = 'https://github.com/Kuddev/pebrel/releases/download/v{0}/{1}' -f $env:PEBREL_655_RELEASE, (Split-Path -Leaf $zip)
+          Invoke-WebRequest $url -OutFile $zip
           $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($digest -ne 'c6d7faf53defa32fc43e596d5b8a34963ef6241e95d858762bea450d5f127141') {
+          if ($digest -ne $hashes[$env:PEBREL_655_RELEASE]) {
             throw 'Public ZIP digest differs from the release record'
           }
           $metadata = npm pack '@anthropic-ai/claude-code-win32-x64@2.1.292' --ignore-scripts --json --pack-destination $testDir
@@ -55,7 +67,7 @@ jobs:
       - name: Run Left, Right, MCP, Escape on the Windows input path
         shell: pwsh
         run: |
-          python scripts/conformance/windows_standard_user.py -m scripts.conformance.windows_escape_review --archive $env:PEBREL_655_ARCHIVE --cli $env:PEBREL_655_CLI --evidence review-evidence
+          python scripts/conformance/windows_standard_user.py -m scripts.conformance.windows_escape_review --release $env:PEBREL_655_RELEASE --archive $env:PEBREL_655_ARCHIVE --cli $env:PEBREL_655_CLI --evidence review-evidence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload terminal state and result
