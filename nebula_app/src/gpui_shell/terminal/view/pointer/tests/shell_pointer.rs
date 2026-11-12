@@ -104,7 +104,8 @@ fn zsh_click_moves_the_caret_after_arrow_key_navigation(cx: &mut TestAppContext)
         let (view, mut window, receiver) = fixture_with_owner(cx, owner);
         window.update(|window, cx| {
             // The pointer fixture initially focuses the input above the terminal.
-            view.read(cx).focus_handle.focus(window, cx);
+            let focus = view.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
         });
         view.update(&mut window, |view, _| {
             super::super::super::startup_tests::feed(view, setup);
