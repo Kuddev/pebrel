@@ -513,10 +513,10 @@ fn ssh_first_capability_query_receives_reply_and_input_keeps_flowing() {
             open_shell(&acquired, size(), None, None, &events).await.unwrap();
         let exchange = async {
             let mut replies = Vec::new();
-            while !replies.ends_with(b"\x1b[?6c") {
+            while !replies.ends_with(b"\x1b[?62;4c") {
                 replies.extend(fixture.data.recv().await.unwrap());
             }
-            assert_eq!(replies, b"\x1b[?0u\x1b[?6c");
+            assert_eq!(replies, b"\x1b[?0u\x1b[?62;4c");
             let keys = b"\x1b[A\x1b[B\x03\x1a";
             sender.send(Msg::Input(keys.to_vec().into())).unwrap();
             let mut received = Vec::new();
