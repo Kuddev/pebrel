@@ -18,6 +18,7 @@ impl Render for NebulaWorkspace {
         let card_style = crate::gpui_shell::theme::PaneCardStyle::current(cx);
         let titlebar_background = self.titlebar_background.clone();
         let draw_file_divider = self.side_panel.open;
+        self.cancel_hidden_split_drag(cx);
         let sidebar_logo_target_px =
             (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
         if let Some(images) = logos::poll_sidebar_logo_images(self, sidebar_logo_target_px, cx) {
@@ -420,32 +421,17 @@ impl Render for NebulaWorkspace {
                 // 兜底。详见 render_pointer_drag_capture 的注释。
                 root.child(self.render_pointer_drag_capture(cx))
             })
-            .when_some(
-                self.split_drag.as_ref().map(|drag| drag.direction),
-                |root, direction| {
-                    // 分隔条拖拽罩层（同 tab_drag 的指针捕获模式）：整窗
-                    // 保持 resize 光标，移动喂预览、松开提交/关闭。
-                    root.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .occlude()
-                            .map(|mask| match direction {
-                                SplitDirection::LeftRight => mask.cursor_col_resize(),
-                                SplitDirection::TopBottom => mask.cursor_row_resize(),
-                            })
-                            .on_mouse_move(cx.listener(|this, event, window, cx| {
-                                this.update_split_drag(event, window, cx);
-                            }))
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
-                                    this.finish_split_drag(event.position, window, cx);
-                                }),
-                            ),
-                    )
-                },
-            )
+            .when(self.split_capture_needed(), |root| {
+                root.child(self.render_split_drag_capture(cx))
+            })
+            .when_some(self.split_drag.as_ref().map(|drag| drag.direction), |root, direction| {
+                root.child(
+                    div().absolute().inset_0().occlude().map(|mask| match direction {
+                        SplitDirection::LeftRight => mask.cursor_col_resize(),
+                        SplitDirection::TopBottom => mask.cursor_row_resize(),
+                    }),
+                )
+            })
             .when(self.command_palette_open, |root| {
                 root.child(self.render_command_palette(window, cx))
             })
