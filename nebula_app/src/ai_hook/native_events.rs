@@ -1,8 +1,19 @@
 //! Native lifecycle hooks that carry their event in the helper argv.
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+
 use serde_json::Value;
 
 use super::payload::{attention_message, context_string};
 use super::{AiHookKind, AiTurnOutcome};
+
+const MAX_TRACKED_ANTIGRAVITY_CONVERSATIONS: usize = 64;
+const MAX_TRANSCRIPT_LINE_BYTES: u64 = 256 * 1024;
+
+static ANTIGRAVITY_CONVERSATIONS: LazyLock<Mutex<VecDeque<(PathBuf, bool)>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 pub(super) fn parse(
     source: &str,
@@ -75,10 +86,163 @@ fn antigravity_outcome(payload: &Value) -> AiTurnOutcome {
     }
 }
 
+/// Antigravity runs subagents inside the primary CLI process, firing the same
+/// global `SessionStart`, `PreInvocation` and `Stop` hooks while scrubbing
+/// internal parent fields from external JSON payloads. Reject subagents before
+/// ordering or pane ownership can treat a child `SessionStart` as `/new`.
+pub(super) fn is_antigravity_subagent(
+    payload: &Value,
+    conversation_id: Option<&str>,
+    local_transport: bool,
+) -> bool {
+    if antigravity_payload_marks_subagent(payload, conversation_id) {
+        return true;
+    }
+    if !local_transport {
+        return false;
+    }
+    let Some((conversation_dir, id)) =
+        validated_antigravity_conversation_dir(payload, conversation_id)
+    else {
+        return false;
+    };
+    let known_in_brain = {
+        let cache =
+            ANTIGRAVITY_CONVERSATIONS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, is_subagent)) = cache.iter().find(|(dir, _)| dir == &conversation_dir) {
+            return *is_subagent;
+        }
+        let brain_dir = conversation_dir.parent();
+        cache
+            .iter()
+            .filter(|(dir, _)| dir.parent() == brain_dir && *dir != conversation_dir)
+            .map(|(dir, _)| dir.clone())
+            .collect::<Vec<_>>()
+    };
+    let first_source = transcript_first_step_source(&conversation_dir);
+    if first_source.as_deref() == Some("SYSTEM") {
+        remember_antigravity_conversation(conversation_dir, true);
+        return true;
+    }
+    let subagent_record = format!("{id}.json");
+    if known_in_brain.iter().any(|parent_dir| {
+        parent_dir.join(".system_generated").join("subagents").join(&subagent_record).is_file()
+    }) {
+        remember_antigravity_conversation(conversation_dir, true);
+        return true;
+    }
+    if first_source.is_some() {
+        remember_antigravity_conversation(conversation_dir, false);
+    }
+    false
+}
+
+fn antigravity_payload_marks_subagent(payload: &Value, conversation_id: Option<&str>) -> bool {
+    if context_string(payload, &["parentConversationId", "parent_conversation_id"]).is_some() {
+        return true;
+    }
+    if context_string(payload, &["callerContext", "caller_context"])
+        .is_some_and(|caller| caller.eq_ignore_ascii_case("subagent"))
+    {
+        return true;
+    }
+    match (
+        conversation_id,
+        context_string(payload, &["rootConversationId", "root_conversation_id"]),
+    ) {
+        (Some(id), Some(root)) => id != root,
+        _ => false,
+    }
+}
+
+fn valid_antigravity_conversation_segment(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id != "."
+        && id != ".."
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn clean_absolute_path(raw: &str) -> Option<&Path> {
+    if raw.len() > 4096 || raw.chars().any(char::is_control) {
+        return None;
+    }
+    let path = Path::new(raw);
+    (path.is_absolute() && !path.components().any(|c| matches!(c, Component::ParentDir)))
+        .then_some(path)
+}
+
+fn validated_brain_dir(dir: &Path, expected_id: Option<&str>) -> Option<(PathBuf, String)> {
+    let segment = dir.file_name()?.to_str()?;
+    if !valid_antigravity_conversation_segment(segment)
+        || expected_id.is_some_and(|id| id != segment)
+        || dir.parent()?.file_name()?.to_str()? != "brain"
+    {
+        return None;
+    }
+    Some((dir.to_path_buf(), segment.to_owned()))
+}
+
+fn validated_antigravity_conversation_dir(
+    payload: &Value,
+    conversation_id: Option<&str>,
+) -> Option<(PathBuf, String)> {
+    if let Some(found) = payload
+        .get("artifactDirectoryPath")
+        .and_then(Value::as_str)
+        .and_then(clean_absolute_path)
+        .and_then(|dir| validated_brain_dir(dir, conversation_id))
+    {
+        return Some(found);
+    }
+    let transcript =
+        payload.get("transcriptPath").and_then(Value::as_str).and_then(clean_absolute_path)?;
+    if !matches!(
+        transcript.file_name().and_then(|name| name.to_str()),
+        Some("transcript.jsonl" | "transcript_full.jsonl")
+    ) {
+        return None;
+    }
+    let logs = transcript.parent()?;
+    if logs.file_name().and_then(|name| name.to_str()) != Some("logs") {
+        return None;
+    }
+    let generated = logs.parent()?;
+    if generated.file_name().and_then(|name| name.to_str()) != Some(".system_generated") {
+        return None;
+    }
+    validated_brain_dir(generated.parent()?, conversation_id)
+}
+
+fn transcript_first_step_source(conversation_dir: &Path) -> Option<String> {
+    let logs = conversation_dir.join(".system_generated").join("logs");
+    let file = std::fs::File::open(logs.join("transcript.jsonl"))
+        .or_else(|_| std::fs::File::open(logs.join("transcript_full.jsonl")))
+        .ok()?;
+    let mut reader = BufReader::new(file.take(MAX_TRANSCRIPT_LINE_BYTES));
+    let mut line = String::new();
+    reader.read_line(&mut line).ok()?;
+    let step: Value = serde_json::from_str(line.trim()).ok()?;
+    step.get("source").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+fn remember_antigravity_conversation(conversation_dir: PathBuf, is_subagent: bool) {
+    let mut cache =
+        ANTIGRAVITY_CONVERSATIONS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, cached)) = cache.iter_mut().find(|(dir, _)| dir == &conversation_dir) {
+        *cached |= is_subagent;
+        return;
+    }
+    if cache.len() >= MAX_TRACKED_ANTIGRAVITY_CONVERSATIONS {
+        cache.pop_front();
+    }
+    cache.push_back((conversation_dir, is_subagent));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai_hook::parse_envelope;
+    use crate::ai_hook::{AiHookEvent, parse_envelope};
 
     #[test]
     fn native_events_preserve_provider_and_resume_identity() {
@@ -255,5 +419,206 @@ mod tests {
         )
         .unwrap();
         assert!(crate::notify::Notification::from_ai_hook(&event, None, false).is_none());
+    }
+
+    #[test]
+    fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() {
+        use crate::ai_agents::AgentStatus;
+        use crate::ai_hook::lifecycle::AgentActivity;
+        use serde_json::json;
+
+        let temp = tempfile::tempdir().unwrap();
+        let brain = temp.path().join("brain");
+        let write_transcript = |id: &str, source: &str, step_type: &str| {
+            let logs = brain.join(id).join(".system_generated").join("logs");
+            std::fs::create_dir_all(&logs).unwrap();
+            let step = json!({"step_index": 0, "source": source, "type": step_type}).to_string();
+            let content = format!("{step}\n");
+            std::fs::write(logs.join("transcript.jsonl"), &content).unwrap();
+            let full = logs.join("transcript_full.jsonl");
+            std::fs::write(&full, &content).unwrap();
+            full
+        };
+
+        let root_id = "11111111-1111-4111-8111-111111111111";
+        let sub_id = "22222222-2222-4222-8222-222222222222";
+        let fork_id = "33333333-3333-4333-8333-333333333333";
+        let next_root_id = "44444444-4444-4444-8444-444444444444";
+
+        let root_transcript = write_transcript(root_id, "USER_EXPLICIT", "USER_INPUT");
+        let sub_transcript = write_transcript(sub_id, "SYSTEM", "SYSTEM_MESSAGE");
+        let fork_transcript = write_transcript(fork_id, "USER_EXPLICIT", "USER_INPUT");
+        let next_root_transcript = write_transcript(next_root_id, "USER_EXPLICIT", "USER_INPUT");
+        let subagents_dir = brain.join(root_id).join(".system_generated").join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        std::fs::write(
+            subagents_dir.join(format!("{fork_id}.json")),
+            json!({"conversationId": fork_id, "state": "SUBAGENT_STATE_ALIVE"}).to_string(),
+        )
+        .unwrap();
+
+        let send = |event: &str, id: &str, transcript: &Path, extra: Value| {
+            let mut body = json!({
+                "conversationId": id,
+                "transcriptPath": transcript.to_str().unwrap(),
+            });
+            if let Some(extra_obj) = extra.as_object() {
+                for (k, v) in extra_obj {
+                    body[k] = v.clone();
+                }
+            }
+            let wire = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
+            parse_envelope(wire.as_bytes()).map(|mut parsed| {
+                parsed.agent_pid = Some(4242);
+                parsed
+            })
+        };
+
+        let mut activity = AgentActivity::default();
+        let mut active_session = None;
+        fn accept(
+            activity: &mut AgentActivity,
+            active_session: &mut Option<String>,
+            event: AiHookEvent,
+        ) {
+            assert!(activity.apply_hook(&event));
+            if let Some(id) = event.session_id {
+                *active_session = Some(id);
+            }
+        }
+
+        accept(
+            &mut activity,
+            &mut active_session,
+            send("session-start", root_id, &root_transcript, json!({})).unwrap(),
+        );
+        assert_eq!(activity.status(), AgentStatus::Idle);
+        accept(
+            &mut activity,
+            &mut active_session,
+            send("tool-complete", root_id, &root_transcript, json!({})).unwrap(),
+        );
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(active_session.as_deref(), Some(root_id));
+
+        for (child_id, child_transcript) in [(sub_id, &sub_transcript), (fork_id, &fork_transcript)]
+        {
+            for (event, extra) in [
+                ("session-start", json!({})),
+                ("tool-complete", json!({})),
+                ("done", json!({"terminationReason": "model_stop", "fullyIdle": true})),
+            ] {
+                assert!(
+                    send(event, child_id, child_transcript, extra).is_none(),
+                    "subagent {child_id} event {event} must be filtered before pane routing"
+                );
+            }
+        }
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(active_session.as_deref(), Some(root_id));
+
+        accept(
+            &mut activity,
+            &mut active_session,
+            send("tool-complete", root_id, &root_transcript, json!({})).unwrap(),
+        );
+        accept(
+            &mut activity,
+            &mut active_session,
+            send(
+                "done",
+                root_id,
+                &root_transcript,
+                json!({"terminationReason": "model_stop", "fullyIdle": true}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(activity.status(), AgentStatus::Done);
+        assert_eq!(active_session.as_deref(), Some(root_id));
+
+        let saved = crate::session::AgentSession {
+            source: "antigravity".into(),
+            session_id: active_session.clone(),
+            session_file: None,
+        };
+        assert_eq!(
+            saved.resume_command().as_deref(),
+            Some("agy --conversation 11111111-1111-4111-8111-111111111111")
+        );
+
+        accept(
+            &mut activity,
+            &mut active_session,
+            send("session-start", next_root_id, &next_root_transcript, json!({})).unwrap(),
+        );
+        assert_eq!(activity.status(), AgentStatus::Idle);
+        assert_eq!(active_session.as_deref(), Some(next_root_id));
+    }
+
+    #[test]
+    fn antigravity_explicit_subagent_markers_and_untrusted_paths_are_handled_safely() {
+        use crate::ai_hook::parse_remote_envelope;
+        use serde_json::json;
+
+        let parse_both = |body: Value| {
+            let wire =
+                format!("nebula-hook/1 source=antigravity pane=5 event=session-start\n{body}");
+            (parse_envelope(wire.as_bytes()), parse_remote_envelope(wire.as_bytes(), Some(5)))
+        };
+
+        for subagent_body in [
+            json!({
+                "conversationId": "22222222-2222-4222-8222-222222222222",
+                "parentConversationId": "11111111-1111-4111-8111-111111111111",
+            }),
+            json!({
+                "conversationId": "22222222-2222-4222-8222-222222222222",
+                "callerContext": "subagent",
+            }),
+            json!({
+                "conversationId": "22222222-2222-4222-8222-222222222222",
+                "rootConversationId": "11111111-1111-4111-8111-111111111111",
+            }),
+        ] {
+            let (local, remote) = parse_both(subagent_body.clone());
+            assert!(local.is_none() && remote.is_none(), "{subagent_body}");
+        }
+
+        for root_body in [
+            json!({
+                "conversationId": "11111111-1111-4111-8111-111111111111",
+                "parentConversationId": "",
+                "callerContext": "",
+                "rootConversationId": "11111111-1111-4111-8111-111111111111",
+                "agentName": "custom-agent",
+            }),
+            json!({
+                "conversationId": "11111111-1111-4111-8111-111111111111",
+                "transcriptPath": "/tmp/brain/../outside/transcript.jsonl",
+            }),
+        ] {
+            let (local, remote) = parse_both(root_body.clone());
+            assert!(local.is_some() && remote.is_some(), "{root_body}");
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let sub_id = "22222222-2222-4222-8222-222222222222";
+        let logs = temp.path().join("brain").join(sub_id).join(".system_generated").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("transcript_full.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"step_index\":0,\"source\":\"SYSTEM\",\"type\":\"SYSTEM_MESSAGE\"}\n",
+        )
+        .unwrap();
+        let wire = format!(
+            "nebula-hook/1 source=antigravity pane=5 event=session-start\n{}",
+            json!({"conversationId": sub_id, "transcriptPath": transcript.to_str().unwrap()})
+        );
+        assert!(parse_envelope(wire.as_bytes()).is_none());
+        assert!(
+            parse_remote_envelope(wire.as_bytes(), Some(5)).is_some(),
+            "remote envelopes must never inspect local host transcript files"
+        );
     }
 }

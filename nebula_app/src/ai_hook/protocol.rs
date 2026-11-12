@@ -22,6 +22,10 @@ static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// then the hook's raw JSON payload verbatim (the helper never re-encodes;
 /// all JSON work happens here, off the turn's hot path).
 pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
+    parse_envelope_with_transport(bytes, true)
+}
+
+fn parse_envelope_with_transport(bytes: &[u8], local_transport: bool) -> Option<AiHookEvent> {
     let received_at_ms = unix_time_ms();
     let received_sequence = RECEIVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let nl = bytes.iter().position(|&b| b == b'\n')?;
@@ -101,6 +105,15 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     } else {
         reported_session_id
     };
+    if source == "antigravity"
+        && super::native_events::is_antigravity_subagent(
+            &payload,
+            session_id.as_deref(),
+            local_transport,
+        )
+    {
+        return None;
+    }
     let mut event_id =
         context_string(&payload, &["event_id", "eventId"]).map(|id| truncate(&id, ID_MAX_CHARS));
     let turn_id =
@@ -363,7 +376,7 @@ fn unix_time_ms() -> u64 {
 /// 远端会话只能提交事件语义，Pane 身份始终由本地 PTY 通道覆盖，
 /// 防止远端载荷把通知路由到同一窗口中的其他标签页。
 pub(crate) fn parse_remote_envelope(bytes: &[u8], pane: Option<u64>) -> Option<AiHookEvent> {
-    let mut event = parse_envelope(bytes)?;
+    let mut event = parse_envelope_with_transport(bytes, false)?;
     // Only this entrypoint is reached after SSH/WSL token verification. Ignore
     // claimed process metadata on the local named-pipe path.
     let header = std::str::from_utf8(bytes.split(|byte| *byte == b'\n').next()?).ok()?;
