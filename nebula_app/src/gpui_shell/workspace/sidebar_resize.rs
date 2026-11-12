@@ -45,7 +45,9 @@ impl NebulaWorkspace {
             // must consume Escape first without taking the editor's focus.
             if window.window_handle() == owner_window
                 && event.keystroke.key == "escape"
-                && (view.cancel_details_panel_resize(cx) | view.cancel_left_sidebar_resize(cx))
+                && (view.cancel_details_panel_resize(cx)
+                    | view.cancel_left_sidebar_resize(cx)
+                    | view.cancel_pane_drag(cx))
             {
                 cx.stop_propagation();
             }
@@ -109,8 +111,13 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let Some(drag) = &mut self.sidebar_resizing else { return };
-        if event.pressed_button != Some(MouseButton::Left) || !window.is_window_active() {
+        if !window.is_window_active() {
             self.cancel_left_sidebar_resize(cx);
+            return;
+        }
+        // Non-client moves can omit button state while capture is still active.
+        // Only MouseUp commits the drag; Escape or window deactivation cancels it.
+        if event.pressed_button != Some(MouseButton::Left) {
             return;
         }
         let raw = drag.start_width + f32::from(event.position.x) - drag.start_x;

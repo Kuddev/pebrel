@@ -409,6 +409,7 @@ mod tests {
                 args: vec!["-NoExit".into(), "quotes \" and $(literal); %PATH%".into()],
             }),
             shell_id: None,
+            update_restore: None,
         }
     }
 
@@ -428,6 +429,14 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid.command = Some(Program::Just("x".repeat(MAX_BYTES)));
         assert_eq!(encode(&invalid).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        let mut recovery = request();
+        recovery.command = None;
+        recovery.update_restore = Some(PathBuf::from(
+            r"C:\ProgramData\PebrelAdminUpdates\scope\handoffs\fixture\plan.json",
+        ));
+        assert_eq!(decode(&encode(&recovery).unwrap()).unwrap().request, recovery);
+        recovery.update_restore = Some("relative-ticket.json".into());
+        assert!(recovery.validate().is_err());
     }
 
     #[test]

@@ -261,7 +261,7 @@ impl AnswerReader {
     }
 }
 
-fn contains_uncontrolled_media(node: &markdown_ast::Node) -> bool {
+pub(super) fn contains_uncontrolled_media(node: &markdown_ast::Node) -> bool {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
         if matches!(

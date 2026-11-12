@@ -2,6 +2,26 @@
 use super::*;
 
 impl<T: Copy + Eq> SplitTree<T> {
+    /// Exchange occupied positions without changing the layout or pane identities.
+    pub fn swap_leaves(&mut self, a: T, b: T) -> bool {
+        if a == b || !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        fn swap<T: Copy + Eq>(tree: &mut SplitTree<T>, a: T, b: T) {
+            match tree {
+                SplitTree::Leaf(id) if *id == a => *id = b,
+                SplitTree::Leaf(id) if *id == b => *id = a,
+                SplitTree::Split { first, second, .. } => {
+                    swap(first, a, b);
+                    swap(second, a, b);
+                },
+                _ => {},
+            }
+        }
+        swap(self, a, b);
+        true
+    }
+
     pub fn joined(self, source: Self, side: SplitNav) -> Self {
         let (direction, before) = match side {
             SplitNav::Left => (SplitDirection::LeftRight, true),
@@ -40,6 +60,32 @@ impl<T: Copy + Eq> SplitTree<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exchanging_positions_preserves_mixed_layout_ratios_and_unrelated_panes() {
+        let mut tree = SplitTree::leaf(1).joined(SplitTree::leaf(2), SplitNav::Right);
+        tree.split_leaf(2, 3, SplitDirection::TopBottom, 0.3);
+        let original = tree.clone();
+        let viewport = Rect::new(0.0, 0.0, 1200.0, 800.0);
+        let before = tree.layout(viewport, 1.0, 1.0, DIVIDER_GAP, false).panes;
+        assert!(tree.swap_leaves(1, 3));
+        assert_eq!(tree.leaves(), [3, 2, 1]);
+        let after = tree.layout(viewport, 1.0, 1.0, DIVIDER_GAP, false).panes;
+        for (id, rect) in before {
+            let replacement = match id {
+                1 => 3,
+                3 => 1,
+                _ => id,
+            };
+            assert_eq!(after.iter().find(|(pane, _)| *pane == replacement).unwrap().1, rect);
+        }
+        let swapped = tree.clone();
+        assert!(!tree.swap_leaves(1, 99));
+        assert!(!tree.swap_leaves(1, 1));
+        assert_eq!(tree, swapped);
+        assert!(tree.swap_leaves(3, 1));
+        assert_eq!(tree, original);
+    }
 
     #[test]
     fn fifth_pane_only_splits_the_hovered_quadrant() {

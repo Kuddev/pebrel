@@ -12,6 +12,26 @@ import kotlin.math.min
 internal object TerminalCellPainter {
     private val emojiPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val emojiBounds = Rect()
+    private val glyphClip = Rect()
+
+    // Paint every row's background before any text. Accents/descenders can extend beyond a
+    // compact row without being clipped or erased by the following row's background.
+    fun backgrounds(canvas: Canvas, paint: Paint, frame: TerminalFrame, row: TerminalRow,
+                    y: Int, cellWidth: Float, cellHeight: Float) {
+        paint.alpha = 255
+        paint.style = Paint.Style.FILL
+        var x = 0
+        while (x < frame.columns) {
+            val width = row.cells[x * 6 + 2]
+            if (width == 0) { x++; continue }
+            paint.color = row.cells[x * 6 + 4]
+            var end = x + width
+            while (end < frame.columns && row.cells[end * 6 + 2] > 0 && row.cells[end * 6 + 4] == paint.color)
+                end += row.cells[end * 6 + 2]
+            canvas.drawRect(x * cellWidth, y * cellHeight, end * cellWidth, (y + 1) * cellHeight, paint)
+            x = end
+        }
+    }
 
     fun row(canvas: Canvas, paint: Paint, frame: TerminalFrame, row: TerminalRow, y: Int,
             cellWidth: Float, cellHeight: Float, baseline: Float) {
@@ -47,10 +67,6 @@ internal object TerminalCellPainter {
             }
             val left = x * cellWidth
             val top = y * cellHeight
-            paint.color = cells[index + 4]
-            paint.alpha = 255
-            paint.style = Paint.Style.FILL
-            canvas.drawRect(left, top, next * cellWidth, top + cellHeight, paint)
             if (flags and 32 == 0 && end > start) {
                 paint.color = cells[index + 3]
                 paint.alpha = if (flags and 16 != 0) 150 else 255
@@ -63,7 +79,8 @@ internal object TerminalCellPainter {
                     canvas, paint, row.text[start], left, top, width * cellWidth, cellHeight))
                 if (!procedural) {
                     val checkpoint = canvas.save()
-                    canvas.clipRect(left, top, next * cellWidth, top + cellHeight)
+                    canvas.getClipBounds(glyphClip)
+                    canvas.clipRect(left, glyphClip.top.toFloat(), next * cellWidth, glyphClip.bottom.toFloat())
                     // Android 回退字体可能把终端的一列符号画成两列；缩放到原单元格，
                     // 保留完整字形和邻字边界。ASCII 批次仍走原来的零测量路径。
                     if (end - start != next - x || row.text[start].code !in 32..126) {
@@ -113,7 +130,7 @@ internal object TerminalCellPainter {
 internal object TerminalGlyphs {
     fun draw(canvas: Canvas, paint: Paint, character: Char, x: Float, y: Float, w: Float, h: Float): Boolean {
         val code = character.code
-        if (code !in 0x2580..0x259f && code !in BOX_ARMS && code != 0x23f5 && code != 0x23f8) return false
+        if (code !in 0x2800..0x28ff && code !in 0x2580..0x259f && code !in BOX_ARMS && code != 0x23f5 && code != 0x23f8) return false
         val antialias = paint.isAntiAlias
         val alpha = paint.alpha
         paint.isAntiAlias = false
@@ -121,6 +138,16 @@ internal object TerminalGlyphs {
             canvas.drawRect(x + left * w, y + top * h, x + right * w, y + bottom * h, paint)
         }
         when (code) {
+            in 0x2800..0x28ff -> {
+                paint.isAntiAlias = true
+                val radius = min(w / 2f, h / 4f) / 4f
+                val dots = code - 0x2800
+                for (bit in 0..7) if (dots and (1 shl bit) != 0) {
+                    val column = if (bit in 3..5 || bit == 7) 1 else 0
+                    val row = if (bit >= 6) 3 else bit % 3
+                    canvas.drawCircle(x + (column + .5f) * w / 2f, y + (row + .5f) * h / 4f, radius, paint)
+                }
+            }
             0x23f8 -> {
                 rect(.2f, .25f, .4f, .75f)
                 rect(.6f, .25f, .8f, .75f)

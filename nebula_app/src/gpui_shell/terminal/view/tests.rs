@@ -1,8 +1,9 @@
 use gpui::{FontStyle, FontWeight};
 
 use super::{
-    TermMode, cursor_blink_allowed, paste_line_count, paste_needs_confirmation,
-    restart_cursor_blink_phase, selection_scroll_lines, typography,
+    OutputFrameTiming, TermMode, cursor_blink_allowed, cursor_blink_silence_pauses,
+    output_frame_timing, paste_line_count, paste_needs_confirmation, restart_cursor_blink_phase,
+    selection_scroll_lines, typography,
 };
 
 #[test]
@@ -12,6 +13,36 @@ fn ime_preedit_stops_blinking_and_restores_visible_cursor() {
     let (mut visible, mut epoch) = (false, 7);
     assert_eq!(restart_cursor_blink_phase(&mut visible, &mut epoch), 8);
     assert!(visible);
+}
+
+/// 空闲停闪只在整段静默满 8s 后触发：阈值内照常翻转（用户盯着看时不能
+/// 突然停），满阈值后断链保持常亮（静止终端归零渲染帧）。
+#[test]
+fn blink_silence_pauses_only_after_the_full_threshold() {
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_millis(750)));
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_secs(7)));
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_millis(7999)));
+    assert!(cursor_blink_silence_pauses(std::time::Duration::from_secs(8)));
+    assert!(cursor_blink_silence_pauses(std::time::Duration::from_secs(60)));
+}
+
+/// 输出驱动帧的最小间隔：首帧立即渲染；间隔内的批次并入一次尾帧（等待
+/// 剩余时长），间隔外立即渲染。高频输出风暴由此收敛到 ≤125fps，尾延迟
+/// 被 Trail 的等待时长封顶（≤ 8ms）。
+#[test]
+fn output_frames_coalesce_inside_the_minimum_interval() {
+    use std::time::Duration;
+    assert!(matches!(output_frame_timing(None), OutputFrameTiming::Now));
+    assert!(matches!(output_frame_timing(Some(Duration::from_millis(8))), OutputFrameTiming::Now));
+    assert!(matches!(output_frame_timing(Some(Duration::from_secs(1))), OutputFrameTiming::Now));
+    match output_frame_timing(Some(Duration::from_millis(3))) {
+        OutputFrameTiming::Trail(wait) => assert_eq!(wait, Duration::from_millis(5)),
+        other => panic!("3ms 内的批次应并入尾帧，得到 {other:?}"),
+    }
+    assert!(matches!(
+        output_frame_timing(Some(Duration::from_millis(7))),
+        OutputFrameTiming::Trail(wait) if wait == Duration::from_millis(1)
+    ));
 }
 
 #[test]
@@ -145,6 +176,17 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
         let aligned = shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(8.0));
         assert_eq!(glyph_ids(&aligned), glyph_ids(&natural), "keep contextual substitutions");
         assert_eq!(aligned.width, px(32.0));
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width.as_f32();
+        for delta in [-3.0_f32, 3.0] {
+            let grid = (unit + delta).max(1.0);
+            let spaced =
+                shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(grid));
+            assert_eq!(
+                glyph_ids(&spaced),
+                glyph_ids(&natural),
+                "{sample} must stay joined when the grid is {grid}"
+            );
+        }
         let last = aligned
             .runs
             .iter()
@@ -160,6 +202,67 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
                 .iter()
                 .flat_map(|run| &run.glyphs)
                 .map(|glyph| glyph.position)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // 用真实 shaper 展开构造的坍缩 cluster；Linux 不解析 Monaco 的 AAT，
+    // 此处只模拟它的输入布局，避免把改造字体当作 macOS 原字体的证据。
+    for sample in ["fi", "fl", "fifi", "afile", "afl"] {
+        let mut template = run(true);
+        template.len = sample.len();
+        let cached = text_system.shape_line(sample.into(), px(15.0), &[template.clone()], None);
+        let before = cached
+            .runs
+            .iter()
+            .flat_map(|r| &r.glyphs)
+            .map(|g| (g.id, g.index, g.position))
+            .collect::<Vec<_>>();
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width;
+        let font_id = cached.runs[0].font_id;
+        let glyph = cached.runs[0].glyphs[0].clone();
+        let mut glyphs = Vec::new();
+        let mut byte = 0;
+        while byte < sample.len() {
+            let mut glyph = glyph.clone();
+            glyph.index = byte;
+            glyph.position.x = unit * glyphs.len() as f32;
+            glyphs.push(glyph);
+            byte += if sample[byte..].starts_with("fi") || sample[byte..].starts_with("fl") {
+                2
+            } else {
+                1
+            };
+        }
+        let layout = gpui::LineLayout {
+            font_size: cached.font_size,
+            width: unit * glyphs.len() as f32,
+            ascent: cached.ascent,
+            descent: cached.descent,
+            runs: vec![gpui::ShapedRun { font_id, glyphs }],
+            len: cached.len(),
+        };
+        let mut collapsed = cached.clone();
+        *collapsed = std::sync::Arc::new(layout);
+        let expanded = crate::gpui_shell::terminal::ligatures::expand_collapsed_ligatures(
+            &collapsed,
+            &text_system,
+            px(15.0),
+            &template,
+        )
+        .expect("constructed fi/fl cluster must expand");
+        let indices =
+            expanded.runs.iter().flat_map(|r| &r.glyphs).map(|g| g.index).collect::<Vec<_>>();
+        assert_eq!(indices, (0..sample.len()).collect::<Vec<_>>(), "{sample}");
+        assert!(expanded.runs.iter().all(|r| r.font_id == font_id));
+        let after = text_system.shape_line(sample.into(), px(15.0), &[template], None);
+        assert_eq!(
+            before,
+            after
+                .runs
+                .iter()
+                .flat_map(|r| &r.glyphs)
+                .map(|g| (g.id, g.index, g.position))
                 .collect::<Vec<_>>()
         );
     }
@@ -204,20 +307,27 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
 }
 
 #[test]
-fn line_height_uses_shaped_metrics_and_device_pixel_offset() {
-    // Maple's hhea metrics are 1.32em. At 150% DPI, the legacy 4px
-    // Windows offset yields floor(15 * 1.32 * 1.5 + 4) = 33 device px.
+fn explicit_line_height_offset_is_still_measured_in_device_pixels() {
+    // Preserve the offset formula, independently of the default row spacing.
     let height = typography::effective_line_height(15.0 * 1.32, 4.0, 1.5);
     assert!((f32::from(height) - 22.0).abs() < f32::EPSILON);
 }
 
 #[test]
-fn theme_line_height_none_preserves_shaped_metrics() {
-    let natural = 15.0 * 1.32;
-    let legacy = typography::effective_line_height(natural, 4.0, 1.5);
-    let themed = typography::effective_line_height_with_theme(natural, 15.0, None, 4.0, 1.5);
-
-    assert_eq!(themed, legacy);
+fn default_line_height_matches_2_2_2_natural_metrics_across_dpi_and_zoom() {
+    for font_size in [10.0, 13.0, 14.0, 15.0, 18.0, 24.0] {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5] {
+            for metric_ratio in [1.2, 1.32, 1.6] {
+                for offset in [0.0, 4.0] {
+                    let natural = font_size * metric_ratio;
+                    let height = typography::effective_line_height_with_theme(
+                        natural, font_size, None, offset, scale,
+                    );
+                    assert_eq!(height, typography::effective_line_height(natural, offset, scale));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -228,4 +338,24 @@ fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
         typography::effective_line_height_with_theme(15.0 * 1.32, 15.0, Some(1.5), 4.0, 1.5);
 
     assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
+}
+
+#[test]
+fn maple_reading_rows_restore_2_2_2_height_without_changing_columns() {
+    use gpui::px;
+    for (font_size, expected_device_height) in [(13.0, 29.0), (14.0, 31.0)] {
+        let width = typography::effective_cell_width(
+            font_size * 0.6,
+            nebula_settings::CellWidthModeName::Compact,
+            1.5,
+            0.0,
+        );
+        let height =
+            typography::line_height_for_view(px(font_size), None, font_size * 1.32, 4.0, 1.5);
+        assert!((height.as_f32() * 1.5 - expected_device_height).abs() < 1e-5);
+        assert!(
+            height > width * 2.0,
+            "reading space must not be tied to character-art proportions"
+        );
+    }
 }

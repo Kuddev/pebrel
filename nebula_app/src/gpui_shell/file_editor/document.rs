@@ -6,6 +6,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod writers;
+
 #[derive(Clone, Debug)]
 pub(super) struct Document {
     snapshot: TextSnapshot,
@@ -58,6 +60,19 @@ impl Document {
     }
 
     pub(super) fn save(&self, path: &Path, text: String) -> Result<Self, SaveError> {
+        self.save_before_publish(path, text, || {})
+    }
+
+    fn save_before_publish(
+        &self,
+        path: &Path,
+        text: String,
+        before_publish: impl FnOnce(),
+    ) -> Result<Self, SaveError> {
+        // Cloned drafts and independently opened aliases share the canonical
+        // target. A permit spans both preconditions and publication; contenders
+        // fail immediately instead of blocking the UI's executor.
+        let _permit = writers::acquire(&self.target)?;
         if self.read_only {
             return Err(SaveError::ReadOnly);
         }
@@ -76,6 +91,7 @@ impl Document {
         staged.write_all(&bytes)?;
         staged.as_file().sync_all()?;
         self.check_current(path)?;
+        before_publish();
         staged.persist(&self.target).map_err(|error| SaveError::Io(error.error))?;
         Ok(Self {
             total_bytes: bytes.len() as u64,
@@ -85,6 +101,10 @@ impl Document {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "document/writer_tests.rs"]
+mod writer_tests;
 
 #[cfg(test)]
 mod tests {

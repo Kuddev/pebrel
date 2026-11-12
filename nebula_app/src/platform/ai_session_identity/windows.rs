@@ -1,5 +1,9 @@
-//! Native handle inspection is confined to a disposable copy of this process.
+//! Native handle inspection is confined to an owned, reusable helper process.
 //! Never seek/read a duplicated live handle: it shares Codex's file position.
+
+mod worker;
+
+pub(super) use worker::UpdatePause;
 
 use super::*;
 use std::collections::HashMap;
@@ -47,9 +51,7 @@ pub(super) fn probe(shell_pid: u32) -> Option<CodexSession> {
     // cannot silently bind this pane to a different process tree.
     let shell = open_process(shell_pid, PROCESS_QUERY_INFORMATION)?;
     let created = creation_time(shell.0)?;
-    let mut command = helper_command(shell_pid, created)?;
-    crate::platform::process::hidden_command(&mut command);
-    run_probe_command(command)
+    worker::probe(shell_pid, created)
 }
 
 fn helper_command(shell_pid: u32, created: u64) -> Option<Command> {
@@ -70,7 +72,11 @@ fn helper_command(shell_pid: u32, created: u64) -> Option<Command> {
 pub(super) fn run_helper_if_requested() -> Option<i32> {
     let mut args = std::env::args();
     args.next();
-    if args.next().as_deref() != Some(HELPER_ARG) {
+    let mode = args.next();
+    if mode.as_deref() == Some(worker::ARG) {
+        return Some(if args.next().is_none() { worker::run() } else { 2 });
+    }
+    if mode.as_deref() != Some(HELPER_ARG) {
         return None;
     }
     let parameters = args

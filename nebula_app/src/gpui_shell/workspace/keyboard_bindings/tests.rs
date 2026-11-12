@@ -50,6 +50,11 @@ mod macos_command_keys {
         let quit = workspace_binding_in_context("cmd+q", &crate::config::Action::Quit, None)
             .expect("⌘Q 必须有绑定");
         assert!(quit.action().as_any().is::<QuitApp>(), "⌘Q 必须绑定 QuitApp");
+        // ⌘M 最小化：必须落到窗口动作，而不是掉进 `_ => None` 变成表外影子绑定。
+        let minimize =
+            workspace_binding_in_context("cmd+m", &crate::config::Action::Minimize, None)
+                .expect("⌘M 必须有绑定");
+        assert!(minimize.action().as_any().is::<MinimizeWindow>(), "⌘M 必须绑定 MinimizeWindow");
     }
 
     #[test]
@@ -74,6 +79,15 @@ mod macos_command_keys {
                     assert!(action.as_any().is::<CloseActiveTerminal>());
                 }
             }
+        }
+        // ⌘M 在终端上下文也必须派发最小化，不得被编码进 PTY。
+        for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
+            let contexts = [KeyContext::parse(context).unwrap()];
+            let input = [Keystroke::parse("cmd-m").unwrap()];
+            let (bindings, pending) = keymap.bindings_for_input(&input, &contexts);
+            assert!(!pending);
+            let action = bindings.first().expect("⌘M 必须有明确动作").action();
+            assert!(action.as_any().is::<MinimizeWindow>(), "{context}");
         }
     }
 
@@ -312,6 +326,102 @@ mod dispatch {
             };
             assert!(view.read(cx).focus_handle(cx).is_focused(window));
         });
+    }
+
+    #[gpui::test]
+    fn image_tabs_dispatch_default_and_custom_new_close_shortcuts(cx: &mut TestAppContext) {
+        // Keep real key dispatch and tab transitions, but replace shell selection
+        // with a failed launch so no PTY thread enters GPUI's test scheduler.
+        struct ImageShortcutHost(Entity<NebulaWorkspace>);
+        impl Render for ImageShortcutHost {
+            fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+                let workspace = self.0.clone();
+                div()
+                    .size_full()
+                    .capture_action(move |_: &NewTerminal, window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.add_terminal_with(
+                                crate::session::LaunchSession::Shell {
+                                    name: "image shortcut fixture".into(),
+                                    program: "pebrel-test-missing-shell-executable".into(),
+                                    args: Vec::new(),
+                                },
+                                None,
+                                None,
+                                window,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    })
+                    .child(self.0.clone())
+            }
+        }
+
+        let (directory, workspace, mut cx) = open_workspace(1, cx);
+        cx.update(|_, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+        });
+        cx.update(|window, cx| {
+            window.replace_root(cx, |window, cx| {
+                let host = cx.new(|_| ImageShortcutHost(workspace.clone()));
+                Root::new(host, window, cx)
+            });
+        });
+        let image = directory.path().join("image.png");
+        image::RgbaImage::from_pixel(20, 20, image::Rgba([50, 80, 120, 255])).save(&image).unwrap();
+        let broken = directory.path().join("broken.png");
+        std::fs::write(&broken, b"not an image").unwrap();
+
+        for position in
+            [nebula_settings::TabsPositionName::Sidebar, nebula_settings::TabsPositionName::Top]
+        {
+            for (path, custom) in
+                [(&image, false), (&image, true), (&broken, false), (&broken, true)]
+            {
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.tabs_position = position;
+                        workspace.update_keybinds(
+                            if custom {
+                                vec![
+                                    ("alt+n".into(), "CreateNewTab".into()),
+                                    ("alt+w".into(), "CloseTab".into()),
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                            cx,
+                        );
+                        workspace.open_document_path(path.clone(), window, cx);
+                    });
+                });
+                cx.run_until_parked();
+                press(if custom { "alt-n" } else { "ctrl-shift-t" }, &mut cx);
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tabs.len(), 3, "new tab from {path:?}, {position:?}");
+                    assert!(workspace.tabs[workspace.active].is_terminal());
+                });
+
+                // Returning by keyboard must focus the image again, including
+                // when its background decoder reported an error.
+                press("alt-2", &mut cx);
+                assert_eq!(workspace.read_with(&cx, |workspace, _| workspace.active), 1);
+                press(if custom { "alt-w" } else { "ctrl-shift-w" }, &mut cx);
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tabs.len(), 2, "close image from {position:?}");
+                    assert!(
+                        !workspace.tabs.iter().any(|tab| matches!(tab, WorkspaceTab::Image { .. }))
+                    );
+                });
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.close_tab(1, window, cx));
+                });
+                cx.run_until_parked();
+                assert_active(&workspace, 0, &mut cx);
+            }
+        }
     }
 
     #[gpui::test]

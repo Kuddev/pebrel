@@ -7,7 +7,7 @@ local thresholds. See [architecture](architecture.md) for module responsibilitie
 ## 1. File size: a safety limit, not a design score
 
 - Keep the existing **2000 physical-line hard limit**. Apply it to first-party
-  Rust and maintained `.py`, `.ps1`, `.mjs`, `.js`, `.sh`, `.lua` sources in the
+  Rust and maintained `.py`, `.ps1`, `.mjs`, `.js`, `.sh`, `.lua`, `.luau` sources in the
   declared roots. No maintained script exceeded this limit at adoption.
 - **800 lines is advisory only**. Review cohesion and consider extraction; a
   cohesive 801-line module is not automatically worse than fragmented wrappers.
@@ -22,6 +22,11 @@ local thresholds. See [architecture](architecture.md) for module responsibilitie
   size, so an old allowance cannot be reused after the file has shrunk.
 - Remove allowances when a file is deleted or reaches the default limit. A
   reduction above that limit gives a tightening notice. No wildcard allowances.
+- A whole root may be renamed only with a `moved <old-root> <new-root>` record.
+  Against the base, every base source file under the old root must appear at the
+  same relative path under the new root, the old root must be gone, and
+  allowances keep their base value and base size under the new path. A record
+  whose old root is not in the base has no effect and gives a removal notice.
 
 The Python checker runs offline and scans untracked local source additions too.
 It fails on malformed budgets, missing roots, read errors and symlinked source

@@ -51,7 +51,7 @@ async fn prompt(
     view: &gpui::Entity<TerminalView>,
 ) -> Result<(), String> {
     wait_for(cx, window, view, |view| {
-        view.completion_editor.ready_for_test()
+        view.completion_editor.ready()
             && view
                 .session
                 .as_ref()

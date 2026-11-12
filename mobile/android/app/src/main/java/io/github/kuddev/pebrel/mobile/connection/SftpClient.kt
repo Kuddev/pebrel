@@ -7,6 +7,8 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.security.MessageDigest
+import java.util.UUID
 
 data class SftpEntry(val path: String, val name: String, val kind: String, val size: Long?,
                      val modified: Long?, val permissions: Int?, val revision: String) {
@@ -23,7 +25,9 @@ data class SftpContent(val file: SftpEntry, val bytes: ByteArray)
 data class SftpTab(val id: String, val session: String, val file: SftpEntry)
 
 /** View operations borrow the already authenticated SSH connection; no extra password or socket. */
-class SftpClient(private val execute: (JSONObject) -> JSONObject, private val active: () -> Boolean = { true }) {
+class SftpClient(private val execute: (JSONObject) -> JSONObject,
+                 private val recover: (suspend () -> Unit)? = null,
+                 private val active: () -> Boolean = { true }) {
     private suspend fun request(op: String, fields: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
         ensureActive()
         if (!active()) throw NativeSshException("SFTP_CLOSED")
@@ -62,60 +66,143 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject, private val ac
 
     suspend fun preview(path: String, progress: (Long, Long) -> Unit = { _, _ -> }): SftpContent {
         val bytes = ByteArrayOutputStream()
-        val file = download(path, bytes, MAX_PREVIEW_BYTES, progress)
+        val file = download(path, bytes, MAX_PREVIEW_BYTES, progress = progress)
         return SftpContent(file, bytes.toByteArray())
     }
 
     suspend fun download(path: String, sink: OutputStream, maximum: Long = Long.MAX_VALUE,
+                         waiting: (Boolean) -> Unit = {},
                          progress: (Long, Long) -> Unit = { _, _ -> }): SftpEntry = withContext(Dispatchers.IO) {
-        ensureActive()
-        val opened = withContext(NonCancellable) { request("open_read", JSONObject().put("path", path)) }
-        val transfer = opened.getLong("transfer")
+        var transfer: Long? = null
+        var file: SftpEntry? = null
+        var offset = 0L
+        var batch = BATCH
         try {
-            ensureActive()
-            val file = SftpEntry.parse(opened.getJSONObject("file"))
-            val size = file.size ?: throw NativeSshException("SFTP_FILE_TYPE")
-            if (size > maximum) throw NativeSshException("SFTP_TOO_LARGE")
-            var offset = 0L
-            while (true) {
+            do {
                 ensureActive()
-                val chunk = request("read", JSONObject().put("transfer", transfer).put("offset", offset))
-                val bytes = Base64.decode(chunk.getString("data"), Base64.NO_WRAP)
-                check(bytes.size <= CHUNK && chunk.getLong("offset") == offset)
-                check(offset + bytes.size <= size && chunk.getLong("next_offset") == offset + bytes.size)
-                sink.write(bytes)
-                offset += bytes.size
-                progress(offset, size)
-                if (chunk.getBoolean("eof")) { check(offset == size); break }
-                check(bytes.isNotEmpty())
-            }
+                try {
+                    if (transfer == null) {
+                        val opened = withContext(NonCancellable) { request("open_read", JSONObject()
+                            .put("path", file?.path ?: path).put("offset", offset).apply { file?.let { put("revision", it.revision) } }) }
+                        transfer = opened.getLong("transfer")
+                        val current = SftpEntry.parse(opened.getJSONObject("file"))
+                        if (file != null && (file.revision != current.revision || file.path != current.path)) throw NativeSshException("SFTP_CHANGED")
+                        file = current
+                    }
+                    val size = file?.size ?: throw NativeSshException("SFTP_FILE_TYPE")
+                    if (size > maximum) throw NativeSshException("SFTP_TOO_LARGE")
+                    val started = System.nanoTime()
+                    val chunk = request("read", JSONObject().put("transfer", transfer).put("offset", offset).put("length", batch))
+                    val bytes = Base64.decode(chunk.getString("data"), Base64.NO_WRAP)
+                    check(bytes.size <= BATCH && chunk.getLong("offset") == offset)
+                    check(offset + bytes.size <= size && chunk.getLong("next_offset") == offset + bytes.size)
+                    sink.write(bytes)
+                    offset += bytes.size
+                    waiting(false)
+                    progress(offset, size)
+                    if (bytes.size == batch && System.nanoTime() - started < 5_000_000_000L) batch = (batch * 2).coerceAtMost(BATCH)
+                    if (chunk.getBoolean("eof")) { check(offset == size); break }
+                    check(bytes.isNotEmpty())
+                } catch (error: NativeSshException) {
+                    if (error.code in setOf("TIMEOUT", "SFTP_TIMEOUT")) batch = (batch / 2).coerceAtLeast(CHUNK)
+                    awaitRecovery(error, waiting)
+                    transfer = null // Native handles belong to the old subsystem, never the replacement.
+                }
+            } while (true)
             sink.flush()
-            file
-        } finally { release(transfer) }
+            checkNotNull(file)
+        } finally { transfer?.let { release(it) }; waiting(false) }
     }
 
-    suspend fun upload(path: String, source: InputStream, size: Long?,
+    suspend fun upload(path: String, source: InputStream, size: Long?, waiting: (Boolean) -> Unit = {},
                        progress: (Long, Long?) -> Unit = { _, _ -> }): String = withContext(Dispatchers.IO) {
-        ensureActive()
-        val transfer = withContext(NonCancellable) { request("begin_upload", JSONObject().put("path", path)) }.getLong("transfer")
+        val token = UUID.randomUUID().toString().replace("-", "")
+        var transfer: Long? = null
+        var offset = 0L
+        var attempted = false
+        var completed = false
+        var batch = BATCH
+        val digest = MessageDigest.getInstance("SHA-256")
+        suspend fun open() {
+            while (transfer == null) {
+                ensureActive()
+                val resume = attempted
+                attempted = true // Retain identity even if the server's OPEN acknowledgement is lost.
+                try {
+                    transfer = withContext(NonCancellable) { request("begin_upload", JSONObject()
+                        .put("path", path).put("token", token).put("offset", offset).put("resume", resume)) }.getLong("transfer")
+                } catch (error: NativeSshException) { awaitRecovery(error, waiting) }
+            }
+        }
         try {
-            ensureActive()
-            var offset = 0L
-            val buffer = ByteArray(CHUNK)
+            open()
+            val buffer = ByteArray(BATCH)
             while (true) {
                 ensureActive()
+                // A short local read is valid, including document providers with unknown sizes.
                 val count = source.read(buffer)
                 if (count < 0) break
-                if (count == 0) continue
-                val data = Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP)
-                val written = request("write", JSONObject().put("transfer", transfer).put("offset", offset).put("data", data))
-                check(written.getLong("next_offset") == offset + count)
-                offset += count
-                progress(offset, size)
+                if (count == 0) { yield(); continue }
+                var position = 0
+                while (position < count) {
+                    val length = minOf(batch, count - position)
+                    try {
+                        open()
+                        val started = System.nanoTime()
+                        val data = Base64.encodeToString(buffer, position, length, Base64.NO_WRAP)
+                        val written = request("write_batch", JSONObject().put("transfer", transfer).put("offset", offset).put("data", data))
+                        check(written.getLong("next_offset") == offset + length)
+                        digest.update(buffer, position, length)
+                        position += length
+                        offset += length
+                        waiting(false)
+                        progress(offset, size)
+                        if (length == batch && System.nanoTime() - started < 5_000_000_000L) batch = (batch * 2).coerceAtMost(BATCH)
+                    } catch (error: NativeSshException) {
+                        if (error.code in setOf("TIMEOUT", "SFTP_TIMEOUT")) batch = (batch / 2).coerceAtLeast(CHUNK)
+                        awaitRecovery(error, waiting)
+                        transfer = null
+                    }
+                }
+                // Keep source bytes until acknowledged, including after shrinking a slow link's window.
             }
             if (size != null && size != offset) throw NativeSshException("SFTP_CHANGED")
-            request("commit", JSONObject().put("transfer", transfer)).getString("path")
-        } finally { release(transfer) }
+            val hash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+            var reconcile = false
+            while (true) {
+                ensureActive()
+                try {
+                    if (reconcile) {
+                        val state = request("resolve_upload", JSONObject().put("path", path).put("token", token).put("size", offset).put("digest", hash))
+                        if (state.getBoolean("committed")) return@withContext state.getString("path").also { completed = true }
+                        open()
+                    }
+                    return@withContext request("commit", JSONObject().put("transfer", transfer)).getString("path").also { completed = true }
+                } catch (error: NativeSshException) {
+                    awaitRecovery(error, waiting)
+                    transfer = null
+                    reconcile = true
+                }
+            }
+            @Suppress("UNREACHABLE_CODE") error("unreachable")
+        } finally {
+            transfer?.let { release(it) }
+            // Never remove the final destination, even after an ambiguous RENAME acknowledgement.
+            if (attempted && !completed && active()) withContext(NonCancellable) {
+                runCatching { request("abort_upload", JSONObject().put("path", path).put("token", token)) }
+            }
+            waiting(false)
+        }
+    }
+
+    private suspend fun awaitRecovery(error: NativeSshException, waiting: (Boolean) -> Unit) {
+        val retry = recover ?: throw error
+        if (error.code !in setOf("NETWORK", "TIMEOUT", "CLOSED", "SFTP_CLOSED", "SFTP_TIMEOUT", "SFTP_STALE")) throw error
+        currentCoroutineContext().ensureActive()
+        waiting(true)
+        delay(500) // The SSH owner supplies reconnect backoff; avoid a busy loop for a reset subsystem.
+        retry()
+        currentCoroutineContext().ensureActive()
     }
 
     private suspend fun release(transfer: Long) = withContext(NonCancellable + Dispatchers.IO) {
@@ -126,6 +213,7 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject, private val ac
 
     companion object {
         const val CHUNK = 32 * 1024
+        const val BATCH = CHUNK * 64
         const val MAX_PREVIEW_BYTES = 16L * 1024 * 1024
     }
 }

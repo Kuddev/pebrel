@@ -77,12 +77,16 @@ fn launch_agent(executable: &Path) -> io::Result<String> {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
+    let arguments = super::LOGIN_STARTUP_ARGUMENTS
+        .split_whitespace()
+        .map(|argument| format!("<string>{argument}</string>"))
+        .collect::<String>();
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>io.github.kuddev.pebrel</string>
-<key>ProgramArguments</key><array><string>{executable}</string><string>--gpui</string></array>
+<key>ProgramArguments</key><array><string>{executable}</string>{arguments}</array>
 <key>RunAtLoad</key><true/>
 <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict></plist>
@@ -103,8 +107,9 @@ fn desktop_entry(executable: &Path) -> io::Result<String> {
         }
     }
     let argument = argument.replace('\\', "\\\\");
+    let login_arguments = super::LOGIN_STARTUP_ARGUMENTS;
     Ok(format!(
-        "[Desktop Entry]\nType=Application\nName=Pebrel\nExec=\"{argument}\" --gpui\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+        "[Desktop Entry]\nType=Application\nName=Pebrel\nExec=\"{argument}\" {login_arguments}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
     ))
 }
 
@@ -136,11 +141,12 @@ mod tests {
         let executable = root.path().join("a & b <apps> $tools `x` %f").join("pebrel");
         let plist = launch_agent(&executable).unwrap();
         assert!(plist.contains("a &amp; b &lt;apps&gt; $tools `x` %f"));
-        assert!(plist.contains("<string>--gpui</string>"));
+        assert!(plist.contains("<string>--gpui</string><string>--launched-at-login</string>"));
         let desktop = desktop_entry(&executable).unwrap();
         assert!(desktop.contains("%%f"));
         assert!(desktop.contains("\\\\$tools"));
         assert!(desktop.contains("\\\\`x\\\\`"));
+        assert!(desktop.contains("\" --gpui --launched-at-login\n"));
         for path in [Path::new("relative"), Path::new("/tmp/invalid\nExec=bad")] {
             assert!(launch_agent(path).is_err());
             assert!(desktop_entry(path).is_err());

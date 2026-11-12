@@ -229,7 +229,8 @@ fn download_to_partial(
         let agent = crate::update_check::test_source::agent(Duration::from_secs(15 * 60));
         return download_with_job(asset, partial_path, language, &agent, job);
     }
-    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60));
+    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60))
+        .map_err(|error| network_error_text(error, language))?;
     download_with_job(asset, partial_path, language, &agent, job)
 }
 
@@ -320,31 +321,20 @@ fn download_with_agent(
 
 /// 网络错误用稳定类别解释；不把代理 URL、认证信息或 CDN 查询串拼进 UI。
 fn network_error_text(error: ureq::Error, language: UiLanguage) -> String {
-    use std::io::ErrorKind;
-    use ureq::Error;
+    use crate::update_proxy::NetworkFailure;
 
-    let message = match error {
-        Error::HostNotFound => Message::UpdateDownloadDns,
-        Error::Tls(_) | Error::Rustls(_) | Error::TlsRequired => Message::UpdateDownloadTls,
-        Error::Timeout(_) => Message::UpdateDownloadTimeout,
-        Error::Io(ref io) if io.kind() == ErrorKind::ConnectionRefused => {
-            Message::UpdateDownloadRefused
-        },
-        Error::Io(ref io) if io.kind() == ErrorKind::TimedOut => Message::UpdateDownloadTimeout,
-        Error::Io(ref io)
-            if matches!(
-                io.kind(),
-                ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe
-            ) =>
-        {
-            Message::UpdateDownloadInterrupted
-        },
-        Error::ConnectProxyFailed(_) | Error::InvalidProxyUrl => Message::UpdateDownloadProxy,
-        Error::StatusCode(status) => {
+    let message = match crate::update_proxy::classify(&error) {
+        NetworkFailure::Dns => Message::UpdateDownloadDns,
+        NetworkFailure::Tls => Message::UpdateDownloadTls,
+        NetworkFailure::Timeout => Message::UpdateDownloadTimeout,
+        NetworkFailure::Refused => Message::UpdateDownloadRefused,
+        NetworkFailure::Interrupted => Message::UpdateDownloadInterrupted,
+        NetworkFailure::Proxy => Message::UpdateDownloadProxy,
+        NetworkFailure::Status(status) => {
             return language
                 .format(Message::UpdateDownloadHttp, &[("status", &status.to_string())]);
         },
-        _ => Message::UpdateDownloadNetwork,
+        NetworkFailure::Other => Message::UpdateDownloadNetwork,
     };
     language.text(message).to_owned()
 }
@@ -409,12 +399,16 @@ fn set_progress(job: Option<&DownloadJob>, downloaded: u64, total: Option<u64>) 
 }
 
 fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
-    let directory = nebula_settings::settings_dir().join("updates");
+    let directory = state_directory("").map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("无法创建更新下载目录：{error}"))?;
     let final_path = directory.join(&asset.name);
     let partial_path = directory.join(format!("{}.part", asset.name));
     Ok((partial_path, final_path))
+}
+
+fn state_directory(relative: &str) -> std::io::Result<PathBuf> {
+    crate::platform::update_installation::state_directory(Path::new(relative))
 }
 
 fn verify_package_trailer(file: &mut File, asset: &UpdateAsset) -> Result<(), String> {
@@ -541,8 +535,13 @@ mod tests {
         );
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("installer.part");
-        let bytes = super::download_with_agent(&asset, &path, UiLanguage::EnUs, &server.agent(&[]))
-            .unwrap();
+        let bytes = super::download_with_agent(
+            &asset,
+            &path,
+            UiLanguage::EnUs,
+            &server.network_agent("http", None, &[]),
+        )
+        .unwrap();
         assert_eq!(bytes, body.len() as u64);
         assert_eq!(std::fs::read(&path).unwrap(), body.as_bytes());
         assert!(super::verify_file(&path, &asset).is_ok());
@@ -575,7 +574,7 @@ mod tests {
             &asset,
             &directory.path().join("installer.part"),
             UiLanguage::EnUs,
-            &proxy.agent(&["127.0.0.1"]),
+            &proxy.network_agent("http", None, &["127.0.0.1"]),
         )
         .unwrap();
         assert!(proxy.finish()[0].0.starts_with("CONNECT release.update.invalid:80 "));
@@ -635,6 +634,7 @@ mod tests {
                 Error::ConnectProxyFailed("http://user:secret@proxy.local".into()),
                 Message::UpdateDownloadProxy,
             ),
+            (Error::InvalidProxyUrl, Message::UpdateDownloadProxy),
             (Error::ConnectionFailed, Message::UpdateDownloadNetwork),
         ] {
             let text = super::network_error_text(error, UiLanguage::ZhCn);

@@ -26,7 +26,7 @@ const PROXY_TEST_GAP: f32 = 18.0;
 /// 旧壳 `ssh_proxy_mode_control` 紧凑宽度。
 const PROXY_MODE_SELECT_W: f32 = 156.0;
 /// 旧壳 `ssh_proxy_manual_controls` 协议下拉。
-const PROXY_PROTOCOL_SELECT_W: f32 = 112.0;
+const PROXY_PROTOCOL_SELECT_W: f32 = 132.0;
 const PROXY_MANUAL_GAP: f32 = 8.0;
 /// 旧壳 `ssh_proxy_test_button`：约 108，下限 88。
 const PROXY_TEST_BUTTON_W: f32 = 108.0;
@@ -75,7 +75,11 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) {
         let typed = self.proxy_url_input.read(cx).value().to_string();
-        let (protocol, url) = compose_manual_proxy_url(self.current_proxy_protocol(cx), &typed);
+        let Some((protocol, url)) =
+            compose_manual_proxy_url(self.current_proxy_protocol(cx), &typed)
+        else {
+            return;
+        };
         let row =
             MANUAL_PROXY_PROTOCOL_OPTIONS.iter().position(|item| *item == protocol).unwrap_or(0);
         let selected = self.proxy_protocol_select.read(cx).selected_index(cx).map(|path| path.row);
@@ -172,9 +176,9 @@ impl SettingsPane {
     pub(super) fn section_network(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let custom = shows_manual_proxy_address(self.runtime.ssh_proxy_mode);
         let language = crate::gpui_shell::config::ui_language(cx);
-        self.group(language.tr("settings.network.title"), cx)
-            .child(self.proxy_test_banner(cx))
-            .child(div().h(px(PROXY_TEST_GAP)).w_full().flex_shrink_0())
+        // 连通性检测是页面级状态，放在卡片之上；卡内只放设置行。
+        let settings = self
+            .group(language.tr("settings.network.title"), cx)
             .child(self.proxy_mode_row(cx))
             .when(custom, |page| page.child(self.proxy_address_row(cx)))
             .child(self.switch_row(
@@ -183,7 +187,8 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsNetworkTerminalDescription),
                 self.runtime.terminal_proxy,
                 cx,
-            ))
+            ));
+        v_flex().w_full().gap(px(PROXY_TEST_GAP)).child(self.proxy_test_banner(cx)).child(settings)
     }
 
     fn proxy_test_banner(&self, cx: &mut Context<Self>) -> gpui::Div {

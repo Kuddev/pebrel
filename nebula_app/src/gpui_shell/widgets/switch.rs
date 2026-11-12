@@ -22,12 +22,18 @@ pub struct NebulaSwitch {
     key: SharedString,
     checked: bool,
     disabled: bool,
+    small: bool,
     on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
 }
 
 impl NebulaSwitch {
     pub fn new(key: impl Into<SharedString>) -> Self {
-        Self { key: key.into(), checked: false, disabled: false, on_click: None }
+        Self { key: key.into(), checked: false, disabled: false, small: false, on_click: None }
+    }
+
+    pub fn small(mut self) -> Self {
+        self.small = true;
+        self
     }
 
     pub fn checked(mut self, checked: bool) -> Self {
@@ -80,10 +86,11 @@ impl RenderOnce for NebulaSwitch {
         let muted = cx.theme().muted_foreground;
         let white = gpui::hsla(0.0, 0.0, 1.0, 1.0);
         let checked = self.checked;
+        let small = self.small;
         let group = SharedString::from(format!("switch-hit-{}", self.key));
         let track = div()
-            .w(px(40.0))
-            .h(px(22.0))
+            .w(px(if small { 28.0 } else { 40.0 }))
+            .h(px(if small { 16.0 } else { 22.0 }))
             .relative()
             .flex_shrink_0()
             .rounded(px(11.0))
@@ -97,9 +104,9 @@ impl RenderOnce for NebulaSwitch {
             track.bg(primary.opacity(t)).border_color(border.blend(primary.opacity(t))).child(
                 div()
                     .absolute()
-                    .left(px(4.0 + 16.0 * t))
-                    .top(px(4.0 - 2.0 * t))
-                    .size(px(12.0 + 4.0 * t))
+                    .left(px(if small { 3.0 + 12.0 * t } else { 4.0 + 16.0 * t }))
+                    .top(px(if small { 3.0 } else { 4.0 - 2.0 * t }))
+                    .size(px(if small { 10.0 } else { 12.0 + 4.0 * t }))
                     .rounded_full()
                     .bg(muted.blend(white.opacity(t))),
             )
@@ -127,7 +134,7 @@ impl RenderOnce for NebulaSwitch {
             .toggled(checked)
             .disabled(self.disabled)
             .custom(ButtonCustomVariant::new(cx))
-            .w(px(44.0))
+            .w(px(if small { 32.0 } else { 44.0 }))
             .h(px(32.0))
             .px_0()
             .rounded(px(6.0))

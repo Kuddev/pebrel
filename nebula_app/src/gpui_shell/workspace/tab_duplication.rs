@@ -205,6 +205,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn serial_session_restore_and_duplicate_preserve_transport_and_options() {
+        let original = LaunchSession::Serial { destination: "serial:COM3,9600,7E2".into() };
+        let restored: LaunchSession =
+            serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+        let (copied, cwd) = copy_launch(
+            restored,
+            CopyKind::Duplicate,
+            PaneOrigin { guest: None, cwd: "", host_cwd: None },
+        );
+        assert_eq!(copied, original);
+        assert!(matches!(NebulaWorkspace::terminal_launch_from_session(&copied, cwd),
+            crate::gpui_shell::terminal::view::TerminalLaunch::Serial { destination }
+                if destination == "serial:COM3,9600,7E2"));
+    }
+
+    #[test]
     fn duplicate_wsl_shell_uses_guest_directory_even_when_it_is_not_on_the_host() {
         use crate::gpui_shell::terminal::view::TerminalLaunch;
 
@@ -330,7 +346,9 @@ mod tests {
             let (launch, cwd) = copy_launch(session, CopyKind::Split, origin);
             match NebulaWorkspace::terminal_launch_from_session(&launch, cwd) {
                 TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.map(|s| s.args().to_vec())),
-                TerminalLaunch::Ssh { .. } => panic!("a local split stays local"),
+                TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => {
+                    panic!("a local split stays local")
+                },
             }
         };
         let (cwd, args) = split(shell("wsl", "wsl.exe", &["~"]), guest("Ubuntu"), "/home/dev");

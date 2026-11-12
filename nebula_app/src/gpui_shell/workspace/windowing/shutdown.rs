@@ -11,6 +11,19 @@ pub(crate) fn quit_for_update(asset: crate::update_check::UpdateAsset, cx: &mut 
     request_quit(Some(asset), cx);
 }
 
+pub(crate) fn schedule_update(
+    asset: &crate::update_check::UpdateAsset,
+    cx: &mut App,
+) -> Result<(), String> {
+    save_combined_session(cx, false).map_err(|error| error.to_string())?;
+    let windows = cx
+        .global::<WindowRegistry>()
+        .session_persistence
+        .update_windows()
+        .map_err(|error| error.to_string())?;
+    crate::update_download::handoff::schedule(asset, &windows)
+}
+
 fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) {
     if cx.global::<WindowRegistry>().quit_pending {
         return;
@@ -100,8 +113,7 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                 return;
             }
             if let Some(prepared) = prepared.as_mut() {
-                // Use the same durable snapshot as a scheduled update, including
-                // the last window closed to the tray and the active-window order.
+                // 提交持久保存包括活跃窗口顺序的快照；管理员不经过普通共享会话文件。
                 let result = cx
                     .global::<WindowRegistry>()
                     .session_persistence

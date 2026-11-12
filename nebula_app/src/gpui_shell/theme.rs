@@ -325,9 +325,8 @@ pub fn card_shadow(cx: &App) -> gpui::BoxShadow {
     }
 }
 
-/// 卡内容层底色 = 当前生效的终端背景。终端 tab 之外的卡内容（设置页）
-/// 也用它，让每个 tab 都读作同一张浮在壳上的圆角卡。带窗口透明度
-/// （与终端元素的默认背景同 alpha，透明窗口下整卡一致）。
+/// 终端卡底色使用当前生效的终端背景，并应用窗口背景不透明度。
+/// 设置页通过 `settings_content_bg` 保留主题面板色，复用同一份 alpha。
 pub fn card_content_bg(cx: &App) -> Hsla {
     let mut bg: Hsla = cx
         .try_global::<crate::gpui_shell::config::Settings>()
@@ -411,7 +410,14 @@ pub fn paint_shell_around_card(
     }
 }
 
-/// 旧壳设置页使用不透明 `Skin.panel`，不让终端壁纸穿透设置内容。
+/// 设置页正文与终端卡共用背景不透明度；背景只由 workspace 卡容器绘制。
+pub(crate) fn settings_content_bg(cx: &App) -> Hsla {
+    let mut bg = settings_panel_bg(cx);
+    bg.a *= crate::gpui_shell::wallpaper::card_surface_opacity(cx);
+    bg
+}
+
+/// 弹窗和控件的实色底，独立于正文不透明度以保持可读性。
 pub fn settings_panel_bg(cx: &App) -> Hsla {
     solid(resolved_skin(cx).panel)
 }
@@ -476,28 +482,7 @@ pub(crate) fn completion_colors(cx: &App, _term_bg: GpuiRgba) -> CompletionColor
     }
 }
 
-/// 设置页悬停/选中水洗与旧壳 `settings_skin` 同源：使用当前主题 accent，
-/// 深浅主题分别控制透明度。通用 chrome hover 仍保持中性，两种语义不混用。
-/// 设置页"这一项我改过"的标记色。
-///
-/// 不复用 accent：那是给按钮和选中底用的，饱和度是按"要被点"调的。这里只
-/// 需要在一条 2px 的细线上被扫到，高饱和的紫在深底上会发光振动，细元素尤其
-/// 明显——那就是"刺眼"的来源。所以**降饱和、保亮度**：可辨来自亮度差，刺眼
-/// 来自饱和度，两者可以拆开。
-pub fn settings_mark(cx: &App) -> Hsla {
-    if resolved_skin(cx).is_light {
-        // 浅色底上要更暗才看得见，同样压饱和。
-        hsla(250.0 / 360.0, 0.40, 0.47, 1.0)
-    } else {
-        hsla(250.0 / 360.0, 0.36, 0.71, 1.0)
-    }
-}
-
-/// 设置页的结构分割线（导航↔内容、页头↔正文）。
-///
-/// 比行左侧轨道更淡：轨道在说"这几行是一组"，是内容的一部分；这条线只是
-/// 在说"这是两个区"，属于容器。两者同色同粗的话，画面上就出现两条同等分量
-/// 的线在争同一件事的解释权。
+/// 设置页导航与分组卡内的细分隔线。
 pub fn settings_hairline(cx: &App) -> Hsla {
     let sk = resolved_skin(cx);
     // 浅色底上黑线比深色底上白线更"重"（同 alpha 视觉对比更高），所以浅色
@@ -523,6 +508,63 @@ fn sync_component_focus_ring_for_input(last_input_was_keyboard: bool, cx: &mut A
     Theme::global_mut(cx).ring = ring;
 }
 
+/// 设置卡片借用当前主题的中性色阶，独立于选中与焦点色。
+pub(super) fn settings_card_fill(cx: &App) -> Hsla {
+    settings_card_fill_for_theme(&resolved_theme(cx))
+}
+
+fn settings_card_fill_for_theme(theme: &ResolvedTheme) -> Hsla {
+    let sk = theme.skin();
+    if sk.is_light {
+        return solid(sk.panel).blend(hsla(0.0, 0.0, 1.0, 0.86));
+    }
+
+    let panel = sk.panel;
+    let card = sk.card;
+    // The built-in opaque picker fills are the next step in each neutral ramp.
+    if !theme.is_custom()
+        && card.a == 255
+        && luma(card.r, card.g, card.b) > luma(panel.r, panel.g, panel.b)
+    {
+        return solid(crate::display::ui::surface::over(Rgba { a: 128, ..card }, panel));
+    }
+
+    // Custom cards describe the shell; translucent picker fills describe selection.
+    // Lift the panel in its own hue when there is no suitable raised swatch.
+    let base = solid(panel);
+    Hsla { l: (base.l + 7.0 / 255.0).min(1.0), ..base }
+}
+
+pub(super) fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    if !resolved_skin(cx).is_light {
+        return Vec::new();
+    }
+    [(0.06, 0.0, 0.0, 1.0), (0.08, 4.0, 12.0, 0.0)]
+        .into_iter()
+        .map(|(alpha, y, blur, spread)| gpui::BoxShadow {
+            color: hsla(220.0 / 360.0, 0.4, 0.14, alpha),
+            offset: point(px(0.0), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset: false,
+        })
+        .collect()
+}
+
+pub(super) fn settings_canvas_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
+    } else {
+        gpui::transparent_black()
+    }
+}
+
+/// 中性悬停色用于次要操作，强调色留给选中、开启和焦点。
+pub(super) fn neutral_hover(cx: &App) -> Hsla {
+    ink(resolved_skin(cx).ink).opacity(0.05)
+}
+
+/// 设置页悬停与选中使用当前主题的强调色。
 pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
     let sk = resolved_skin(cx);
     let (hover_alpha, strong_alpha) = if sk.is_light { (10, 18) } else { (30, 46) };
@@ -535,6 +577,7 @@ pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
 /// 所有主题（含 Nord / Nord Light / Warm Sand）共用同一条 token 应用路径。启动、设置变更、系统外观变化
 /// 都走这里；主题名先经 [`effective_theme_name`] 折算 follow_system。
 pub fn apply_chrome_theme(cx: &mut App) {
+    super::font_loading::ensure_selected(cx);
     // 视效（模糊/透明度/壁纸）与主题同一时机刷新：设置热应用、系统外观
     // 变化都会走到这里，窗口级效果与 token 保持同帧一致。
     crate::gpui_shell::wallpaper::refresh(cx);
@@ -602,6 +645,15 @@ fn apply_shell_opacity(chrome: &ResolvedTheme, cx: &mut App) {
     theme.tokens.sidebar_border = shell.into();
     theme.tokens.title_bar = shell.into();
     theme.tokens.title_bar_border = shell.into();
+}
+
+/// Shared tab surface for sidebar and top layouts. Text/icons keep their alpha.
+pub(super) fn tab_bar_background(cx: &App) -> Hsla {
+    // The prepared shell token already contains the resolved theme color.
+    // Replace its alpha, avoiding both a second multiplication and render-time I/O.
+    let mut color = cx.theme().background;
+    color.a = crate::gpui_shell::wallpaper::tab_bar_surface_opacity(cx);
+    color
 }
 
 /// 旧壳 [`Skin`] → gpui-component 全局 token。改全局而不是逐组件覆样式：
@@ -796,8 +848,8 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     // 我们是终端，所以等宽在这里是**语义标记**而不是全局字体：路径、键帽、
     // 命令、数值这类"机器读、要逐字符对齐、要能整段复制"的东西显式走 mono；
     // 标题和说明是给人读的，走 sans。
-    // UI 等宽元数据使用随应用提供的 Normal 字体，终端仍读取自己的字体组。
-    theme.mono_font_family = crate::font_install::REQUIRED_FONT_FAMILY.into();
+    // 元数据用系统等宽字体，不能因界面显示路径而隐式加载完整中文字体。
+    theme.mono_font_family = crate::font_install::SYSTEM_MONO_FONT_FAMILY.into();
     let default_ui_font = super::typography::UI_FONT_FAMILY;
     theme.font_family = ui_font_family.unwrap_or_else(|| default_ui_font.to_owned()).into();
     theme.radius = px(6.0);

@@ -54,6 +54,7 @@ $temporaryZip = Join-Path $outputRoot ".$PackageBrand-v$Version-windows-$Archite
 
 $manifest = [ordered]@{
     'pebrel.exe'                                     = Join-Path $targetRoot 'pebrel.exe'
+    'pebrel.com'                                     = Join-Path $targetRoot 'pebrel-cli.exe'
     'README.md'                                      = Join-Path $repo 'README.md'
     'README.zh-CN.md'                                = Join-Path $repo 'README.zh-CN.md'
     'runtime/pebrel-hook.exe'                        = Join-Path $targetRoot 'pebrel-hook.exe'
@@ -136,6 +137,7 @@ function Assert-FreshBinaries {
     )
     $checks = @(
         @{ Binary = $manifest['pebrel.exe']; Newest = Get-NewestSourceTime $appSources },
+        @{ Binary = $manifest['pebrel.com']; Newest = Get-NewestSourceTime $appSources },
         @{ Binary = $manifest['runtime/pebrel-hook.exe']; Newest = Get-NewestSourceTime @(
             (Join-Path $repo 'nebula_hook'), (Join-Path $repo 'Cargo.toml')) }
     )

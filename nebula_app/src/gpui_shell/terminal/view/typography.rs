@@ -13,6 +13,9 @@ use nebula_settings::CellWidthModeName;
 use super::Settings;
 use crate::font_install::{REQUIRED_FONT_FAMILY, gpui_font_with_fallbacks};
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod native_tests;
+
 /// Set every ligature feature explicitly, including the off case: platform
 /// defaults differ, and the Windows backend ignores an empty feature list.
 pub(super) fn mono_font(

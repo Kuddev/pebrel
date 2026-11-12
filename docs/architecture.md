@@ -31,6 +31,7 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_app/src/ai_hook` | Normalized provider facts, bounded ordering, one shared pane lifecycle and owned installation policy; native Windows/Unix transports | Screen keyword rules or a separate state machine per UI shell |
 | `nebula_app/src/platform/ssh_agent.rs` | Native agent endpoints, transport connection and bounded identity discovery | Host authentication policy or private key selection |
 | `nebula_app/src/ssh_session/agent.rs` | SSH agent identity selection, signing outcomes and total discovery budget; fresh scope per host | A second authentication plan, credential store or agent forwarding service |
+| `nebula_app/src/serial_session.rs` | Native serial port transport for non-PTY panes and the `serial:` destination syntax | SSH authentication, remote files or a settings form |
 | `nebula_app/src/ssh_session/integration.rs` | Authenticated exec/PTY orchestration for remote hook installation and shell startup | Provider policy or a second Agent state machine |
 | `nebula_app/src/ai_agents` | Agent identity and structurally constrained screen observations | Authority to overwrite hook results or infer remote completion from silence |
 | `nebula_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |

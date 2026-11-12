@@ -2,7 +2,7 @@
 
 use std::sync::{
     Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use crate::directory_history::DirectoryHistory;
@@ -152,7 +152,8 @@ impl Session {
         } else {
             None
         };
-        let connections = local.then(|| self.connections.clone());
+        let connections = connections::Scope::capture(&env, execution)
+            .map(|scope| (self.connections.clone(), scope));
         Request { cwd, env, line, cursor, style, git, semantic, scripts, connections, syntax }
     }
 }
@@ -167,7 +168,7 @@ pub(crate) struct Request {
     git: Option<(Arc<crate::git_completion::Cache>, metadata::Execution)>,
     semantic: Option<SemanticContext>,
     scripts: Option<(Arc<project_scripts::Cache>, metadata::Execution)>,
-    connections: Option<Arc<connections::Cache>>,
+    connections: Option<(Arc<connections::Cache>, connections::Scope)>,
     syntax: ShellSyntax,
 }
 
@@ -209,9 +210,12 @@ impl Request {
                 })
             },
             Source::SshHosts { .. } | Source::WslDistributions => {
-                Some(self.connections.as_ref().map_or_else(Vec::new, |cache| {
-                    cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
-                }))
+                self.connections.as_ref().map_or_else(
+                    || Some(Vec::new()),
+                    |(cache, scope)| {
+                        cache.complete(&self.cwd, context, scope, &|| cancellation.is_cancelled())
+                    },
+                )
             },
             Source::None | Source::Paths { .. } => Some(Vec::new()),
         });
@@ -329,7 +333,24 @@ impl Request {
 pub(crate) fn cache_key(cwd: &str, env: &SuggestEnv, line: &str, style: CompletionStyle) -> String {
     let commands = crate::display::nebula_commands_handle();
     let generation = commands.lock().map(|commands| commands.len()).unwrap_or(0);
-    suggest_engine::suggestion_key(&Input { cwd, env, line }, style, generation)
+    let key = suggest_engine::suggestion_key(&Input { cwd, env, line }, style, generation);
+    format!("{key}\0history={}", history_revision())
+}
+
+static HISTORY_REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Reading the revision never initializes history or performs filesystem I/O.
+pub(crate) fn history_revision() -> u64 {
+    HISTORY_REVISION.load(Ordering::Acquire)
+}
+
+/// Run on a worker. The shared lock orders file removal with concurrent records.
+pub(crate) fn clear_command_history() -> Result<(), String> {
+    let mut history = shared().history.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let result = history.clear_at(&crate::platform::dirs::data_dir());
+    // Even a partial clear invalidates every pending query and cached result.
+    HISTORY_REVISION.fetch_add(1, Ordering::Release);
+    result
 }
 
 pub(crate) fn record_command(scope: &HistoryScope, line: &str, cwd: &str) {
@@ -338,6 +359,8 @@ pub(crate) fn record_command(scope: &HistoryScope, line: &str, cwd: &str) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .record(scope, line, cwd);
+    // Repeating a command changes its rank even when the candidate text is unchanged.
+    HISTORY_REVISION.fetch_add(1, Ordering::Release);
 }
 
 pub(crate) fn record_directory(cwd: &str) {
@@ -359,6 +382,63 @@ pub(crate) fn history_hint_for_test(scope: &HistoryScope, prefix: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an owned WSL distribution and an isolated SSH config fixture"]
+    fn wsl_ssh_completion_reads_the_captured_guest_config() {
+        assert_eq!(crate::platform::Platform::current(), crate::platform::Platform::Windows);
+        let distro = std::env::var("PEBREL_WSL_SSH_QA_DISTRO").unwrap();
+        let user = std::env::var("PEBREL_WSL_SSH_QA_USER").unwrap();
+        let config = std::env::var("PEBREL_WSL_SSH_QA_CONFIG").unwrap();
+        assert!(config.starts_with('/') && !config.contains('\''));
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            shell: Some(nebula_terminal::tty::Shell::new(
+                "wsl.exe".into(),
+                vec!["-d".into(), distro.clone(), "-u".into(), user],
+            )),
+            ..Default::default()
+        });
+        let session = Session::default();
+        let env = SuggestEnv::Wsl { distro };
+        let query = |line: &str, style, cancellation: &Cancellation| {
+            session
+                .request_with_syntax(
+                    "/".into(),
+                    env.clone(),
+                    line.into(),
+                    line.len(),
+                    style,
+                    Some(&execution),
+                    Some(ShellSyntax::Posix),
+                )
+                .calculate(cancellation)
+        };
+        let line = format!("ssh -F '{config}' me@pebrel-qa-pr");
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            let result = query(&line, style, &Cancellation::default());
+            if style == CompletionStyle::Popup {
+                assert_eq!(result.completion_items.len(), 1);
+                assert_eq!(result.completion_items[0].insert, "oduction");
+            } else {
+                assert_eq!(result.suggestion, "oduction");
+            }
+        }
+        let jump = format!("ssh -F '{config}' -J me@pebrel-qa-pr");
+        assert_eq!(
+            query(&jump, CompletionStyle::Popup, &Cancellation::default()).completion_items[0]
+                .insert,
+            "oduction"
+        );
+        assert!(
+            query("ssh -F none pebrel-qa-", CompletionStyle::Popup, &Cancellation::default())
+                .completion_items
+                .is_empty()
+        );
+        session.invalidate();
+        let cancelled = Cancellation::default();
+        cancelled.cancel();
+        assert!(query(&line, CompletionStyle::Popup, &cancelled).completion_items.is_empty());
+    }
 
     #[test]
     fn unavailable_foreign_metadata_keeps_scoped_history_without_host_fallback() {
@@ -584,6 +664,44 @@ mod tests {
             )
             .calculate(&Cancellation::default());
         assert!(result.completion_items.is_empty(), "stale local labels must not read host paths");
+    }
+
+    #[test]
+    fn nested_directory_completion_stays_inside_the_typed_parent() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["lingting/lingting-agent", "lingting/lingting-boot", "licenseManagerShellext"]
+        {
+            std::fs::create_dir_all(root.path().join(name)).unwrap();
+        }
+        let session = Session::default();
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            for (line, expected) in
+                [("cd lin", "cd lingting/"), ("cd lingting/li", "cd lingting/lingting-agent/")]
+            {
+                let result = session
+                    .request_with_syntax(
+                        root.path().to_string_lossy().into_owned(),
+                        SuggestEnv::Local,
+                        line.into(),
+                        line.len(),
+                        style,
+                        None,
+                        Some(ShellSyntax::Posix),
+                    )
+                    .calculate(&Cancellation::default());
+                let item = if style == CompletionStyle::Popup {
+                    &result.completion_items[0]
+                } else {
+                    result.suggestion_edit.as_ref().unwrap()
+                };
+                let accepted: String = line
+                    .chars()
+                    .take(line.chars().count() - item.replace_chars)
+                    .chain(item.insert.chars())
+                    .collect();
+                assert_eq!(accepted, expected, "{style:?}: {line}");
+            }
+        }
     }
 
     #[test]
@@ -885,6 +1003,111 @@ mod tests {
                 .completion_items
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn editor_file_history_only_ranks_candidates_in_the_current_directory() {
+        use crate::remote_dirs::RemoteEntry;
+
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        let empty = root.path().join("empty");
+        for path in [&first, &second, &empty] {
+            std::fs::create_dir(path).unwrap();
+        }
+        for name in ["issue845-a.txt", "issue845-z.txt"] {
+            std::fs::write(first.join(name), b"").unwrap();
+        }
+        std::fs::write(second.join("issue845-b.txt"), b"").unwrap();
+        let session = Session::default();
+        for env in [
+            SuggestEnv::Local,
+            SuggestEnv::Wsl { distro: "editor-cwd-845".into() },
+            SuggestEnv::Ssh { destination: "editor-cwd-845.invalid".into() },
+        ] {
+            let cwds = if env.is_this_machine() {
+                [&first, &second, &empty].map(|path| path.to_string_lossy().into_owned())
+            } else {
+                let cwds = ["/editor-first", "/editor-second", "/editor-empty"].map(str::to_owned);
+                for (cwd, names) in cwds.iter().zip([
+                    vec!["issue845-a.txt", "issue845-z.txt"],
+                    vec!["issue845-b.txt"],
+                    vec![],
+                ]) {
+                    crate::remote_dirs::finish_fetch(
+                        &env,
+                        cwd,
+                        Some(
+                            names
+                                .into_iter()
+                                .map(|name| RemoteEntry { name: name.into(), is_dir: false })
+                                .collect(),
+                        ),
+                    );
+                }
+                cwds
+            };
+            for command in ["nvim", "code", "cat"] {
+                let line = format!("{command} ");
+                record_command(&env.history_scope(), &format!("{line}issue845-z.txt"), &cwds[0]);
+                for style in
+                    [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+                {
+                    for (cwd, expected) in cwds.iter().zip([
+                        vec!["issue845-z.txt", "issue845-a.txt"],
+                        vec!["issue845-b.txt"],
+                        vec![],
+                    ]) {
+                        let result = session
+                            .request_with_syntax(
+                                cwd.clone(),
+                                env.clone(),
+                                line.clone(),
+                                line.len(),
+                                style,
+                                None,
+                                Some(ShellSyntax::Posix),
+                            )
+                            .calculate(&Cancellation::default());
+                        if style == CompletionStyle::Popup {
+                            assert_eq!(
+                                result
+                                    .completion_items
+                                    .iter()
+                                    .map(|item| item.insert.as_str())
+                                    .collect::<Vec<_>>(),
+                                expected,
+                                "{env:?}: {line} in {cwd}"
+                            );
+                        } else {
+                            assert_eq!(
+                                result.suggestion,
+                                expected.first().copied().unwrap_or_default(),
+                                "{env:?}: {line} in {cwd}"
+                            );
+                        }
+                        assert!(result.pending_remote_dir.is_none());
+                    }
+                }
+                if !env.is_this_machine() {
+                    let result = session
+                        .request(
+                            "/editor-pending".into(),
+                            env.clone(),
+                            line,
+                            CompletionStyle::Inline,
+                            None,
+                        )
+                        .calculate(&Cancellation::default());
+                    assert_eq!(result.pending_remote_dir.as_deref(), Some("/editor-pending"));
+                    assert!(
+                        result.suggestion.is_empty(),
+                        "pending directories cannot fall back to stale history"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

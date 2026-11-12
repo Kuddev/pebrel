@@ -1,20 +1,7 @@
-//! 读取用户配置：`nebula.toml` + `nebula_settings.txt`，与 `nebula_app`
-//! 共享同一套文件与语义。
-//!
-//! 两个来源、一个优先级：`nebula_settings.txt`（设置界面持久化的运行时
-//! 意图，经共享 crate `nebula-settings` 读取）覆盖 `nebula.toml` 的对应
-//! 字段；主题对终端色表的影响永远在最后叠加（镜像旧壳 `apply_term_colors`
-//! 的次序：用户配色是 defaults，主题裁定背景/浅色替换/Powerline 槽位）。
-//!
-//! 解析全程宽容：未知字段忽略、非法值回退默认，任何用户配置都不会阻止
-//! 启动。toml 查找路径与主应用 `config::installed_config` 一致；
-//! `general.import`（及顶层 `import`）按主应用语义值级合并。
-//!
-//! 尚未对齐的字段（记录在案，后续步骤处理）：
-//! - `font.offset` / `font.glyph_offset`（cell 度量微调）
-//! - `colors.cursor` 的 `CellForeground`/`CellBackground` 反色语义
-//! - `follow_system_theme`（系统外观联动切主题）
-//! - 配置热重载（主应用用 notify 监视；本壳目前启动读一次）
+//! Native presentation settings. Startup evaluates the shared config once, then
+//! settings saves reuse the cached plain data. Explicit Settings preferences win
+//! over script defaults; theme resolution stays with its existing owner.
+//! GPUI script edits currently require a restart.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +14,7 @@ use serde::Deserialize;
 use crate::display::{LanguagePreference, UiLanguage};
 use crate::gpui_shell::terminal::colors::Palette;
 
+pub(crate) mod source;
 /// GPUI 对齐 legacy 的产品默认：配置未写 `cursor_blink` 时光标闪烁。
 pub(crate) const DEFAULT_CURSOR_BLINK: bool = true;
 
@@ -95,6 +83,7 @@ pub struct Settings {
     /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
     /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
     pub ghost: bool,
+    pub prompt_suggestions_enabled: bool,
     pub completion_style: crate::display::CompletionStyle,
     /// 单元格宽度取整方式；同一窗口宽度下必须与旧壳得到相同列数。
     pub cell_width_mode: nebula_settings::CellWidthModeName,
@@ -200,12 +189,13 @@ impl Settings {
         let resolved_theme =
             Arc::new(crate::gpui_shell::theme::ResolvedTheme::from_runtime(&runtime, theme));
         let ui_language = resolve_ui_language(runtime.language);
-        let path = find_config_file();
         let mut load_notice = resolved_theme.notice.clone();
-        let raw = path
-            .as_deref()
-            .map(|p| load_merged_toml(p, &mut load_notice, ui_language))
-            .unwrap_or_else(|| toml::Value::Table(Default::default()));
+        let raw = source::raw(&mut load_notice).unwrap_or_else(|| {
+            find_config_file()
+                .as_deref()
+                .map(|p| load_merged_toml(p, &mut load_notice, ui_language))
+                .unwrap_or_else(|| toml::Value::Table(Default::default()))
+        });
         let raw: RawConfig = match raw.try_into() {
             Ok(config) => config,
             Err(err) => {
@@ -307,16 +297,14 @@ impl Settings {
             tab_close_visible: runtime.tab_close_visible,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,
+            prompt_suggestions_enabled: runtime.prompt_suggestions.enabled,
             completion_style: runtime.completion_style,
             cell_width_mode: runtime.cell_width_mode,
             cjk_bold_regular: runtime.cjk_bold_regular,
             shell_id: runtime.shell.clone(),
             font_family: normal_family,
-            font_cjk: Some({
-                let family = runtime
-                    .font_family_cjk
-                    .as_deref()
-                    .unwrap_or(crate::font_install::REQUIRED_FONT_FAMILY);
+            // 未指定中文字体时沿用主字体及平台缺字回退，不隐式指定完整 Maple。
+            font_cjk: runtime.font_family_cjk.as_deref().map(|family| {
                 use gpui::{FontStyle, FontWeight};
                 [
                     (FontWeight::NORMAL, FontStyle::Normal),
@@ -364,14 +352,12 @@ impl Settings {
 }
 
 fn default_font_offset() -> RawDelta {
-    #[cfg(windows)]
-    {
-        RawDelta { x: 0, y: 4 }
-    }
-    #[cfg(not(windows))]
-    {
-        RawDelta { x: 0, y: 0 }
-    }
+    // 恢复 2.2.2 的默认留白，不再为字符画比例压缩普通正文。
+    let y = match crate::platform::Platform::current() {
+        crate::platform::Platform::Windows => 4,
+        _ => 0,
+    };
+    RawDelta { x: 0, y }
 }
 
 fn runtime_background(
@@ -471,20 +457,24 @@ fn default_font_family() -> &'static str {
     crate::font_install::REQUIRED_FONT_FAMILY
 }
 
-/// `config.window.dimensions`：启动窗口的网格行列。
+/// 显式窗口网格、物理坐标与首个普通窗口的冷启动恢复值。
 ///
 /// 单独驻留而不是并入 [`Settings`]，因为生命周期不同：`Settings` 随设置页写入
 /// 反复重载，启动网格按定义只在开窗时生效一次，而 Lua 配置求值不该出现在每次
-/// 保存设置的路径上。显式 `--config-file` 优先；否则复用主应用发现顺序（`pebrel.lua`
+/// 保存设置的路径上。显式 `--config-file` 优先；否则复用主应用发现顺序（`pebrel.luau`
 /// 优先于 `pebrel.toml`，YAML 同路）和 `pebrel config check` 的同一解析器。
 #[derive(Default)]
 pub(crate) struct StartupWindow {
     pub dimensions: Option<crate::config::window::Dimensions>,
+    pub position: Option<crate::config::ui_config::Delta<i32>>,
+    // Remembered geometry is scoped to the window being created.
+    pub(crate) restored: Option<(u64, crate::session::WindowState)>,
 }
 
 impl Global for StartupWindow {}
 
 impl StartupWindow {
+    #[cfg(test)]
     pub(crate) fn load(config_file: Option<PathBuf>) -> Self {
         let source = match crate::config::source::discover(config_file) {
             Ok(Some(source)) => source,
@@ -510,7 +500,11 @@ impl StartupWindow {
 
     /// `dimensions()` 自带「行列必须同时非零」的旧壳合同。
     fn from_config(config: &crate::config::UiConfig) -> Self {
-        Self { dimensions: config.window.dimensions() }
+        Self {
+            dimensions: config.window.dimensions(),
+            position: config.window.position,
+            restored: None,
+        }
     }
 }
 
@@ -866,6 +860,23 @@ mod tests {
     }
 
     #[test]
+    fn font_offset_restores_2_2_2_padding_and_preserves_explicit_values() {
+        let default_y = match crate::platform::Platform::current() {
+            crate::platform::Platform::Windows => 4,
+            _ => 0,
+        };
+        for (input, expected) in [
+            ("", (0, default_y)),
+            ("[font.offset]\nx = 2\ny = 4", (2, 4)),
+            ("[font.offset]\ny = -2", (0, -2)),
+        ] {
+            let raw: super::RawConfig = toml::from_str(input).unwrap();
+            let offset = raw.font.offset.unwrap_or_else(super::default_font_offset);
+            assert_eq!((offset.x, offset.y), expected);
+        }
+    }
+
+    #[test]
     fn explicit_runtime_languages_resolve_without_reading_system_locale() {
         assert_eq!(resolve_ui_language(LanguagePref::ZhCn), UiLanguage::ZhCn);
         assert_eq!(resolve_ui_language(LanguagePref::EnUs), UiLanguage::EnUs);
@@ -881,7 +892,7 @@ mod tests {
             &path,
             "local pebrel = require 'pebrel'\n\
              local config = pebrel.config_builder()\n\
-             config.window = { dimensions = { columns = 123, lines = 37 } }\n\
+             config.window = { dimensions = { columns = 123, lines = 37 }, position = { x = 197, y = 102 } }\n\
              return config\n",
         )
         .unwrap();
@@ -892,10 +903,9 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(
-            StartupWindow::load(options.config_file).dimensions,
-            Some(Dimensions { columns: 123, lines: 37 })
-        );
+        let startup = StartupWindow::load(options.config_file);
+        assert_eq!(startup.dimensions, Some(Dimensions { columns: 123, lines: 37 }));
+        assert_eq!(startup.position, Some(crate::config::ui_config::Delta { x: 197, y: 102 }));
     }
 
     /// 用户写在 `pebrel.lua` 里的 `config.window.dimensions` 必须真的决定启动
@@ -933,6 +943,7 @@ mod tests {
         );
         let configured = |columns: usize, lines: usize| StartupWindow {
             dimensions: Some(Dimensions { columns, lines }),
+            ..Default::default()
         };
         cx.update(|cx| {
             assert_eq!(startup_grid(cx), builtin);

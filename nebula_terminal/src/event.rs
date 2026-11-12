@@ -31,10 +31,21 @@ pub enum Event {
 
     /// An OSC 1337 inline image, sniffed out of the PTY stream.
     ///
-    /// `abs_line` anchors the image's top row in the grid's absolute line
-    /// numbering (see `Grid::scrolled_out`); `width`/`height` are the display
-    /// size in pixels, already scaled to fit the terminal width.
-    InlineImage { data: Arc<Vec<u8>>, abs_line: usize, width: f32, height: f32 },
+    /// Grid cells own placement and lifetime; frontends only decode/cache pixels.
+    InlineImage { data: Arc<Vec<u8>>, placement: crate::inline_image::ImagePlacement },
+
+    /// A Kitty protocol image, published once its cells are already in the grid.
+    ///
+    /// `data` is raw pixels (`channels` 3 = RGB, 4 = RGBA), never an encoded
+    /// container: the protocol transfers pixels, and re-encoding them would put
+    /// a compressor between the PTY reader and the frontend. `placement.layout`
+    /// carries the bitmap's pixel size, so neither side divides by a cell size
+    /// it may not know.
+    KittyImage {
+        data: std::sync::Weak<Vec<u8>>,
+        channels: u8,
+        placement: crate::inline_image::ImagePlacement,
+    },
 
     /// OSC 133;C — a command started executing in this pane.
     CommandStart,
@@ -78,6 +89,11 @@ pub enum Event {
     /// Write some text to the PTY.
     PtyWrite(String),
 
+    /// A remote program started a ZMODEM transfer, which Pebrel does not
+    /// implement. The stream has already queued the cancel sequence as a
+    /// preceding `PtyWrite`; frontends only tell the user what happened.
+    ZmodemCancelled(crate::zmodem::ZmodemOffer),
+
     /// Request to write the text area size.
     TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Sync + Send + 'static>),
 
@@ -110,11 +126,20 @@ impl Debug for Event {
             Event::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
             Event::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
             Event::PtyWrite(text) => write!(f, "PtyWrite({text})"),
+            Event::ZmodemCancelled(offer) => write!(f, "ZmodemCancelled({offer:?})"),
             Event::Title(title) => write!(f, "Title({title})"),
             Event::CwdReport(cwd) => write!(f, "CwdReport({cwd})"),
-            Event::InlineImage { data, abs_line, width, height } => {
-                write!(f, "InlineImage({} bytes @{abs_line}, {width}x{height})", data.len())
+            Event::InlineImage { data, placement } => {
+                write!(f, "InlineImage({} bytes, id={})", data.len(), placement.id)
             },
+            Event::KittyImage { data, channels, placement } => write!(
+                f,
+                "KittyImage({} bytes, {channels} channels, {}x{} cells, id={})",
+                data.upgrade().map_or(0, |data| data.len()),
+                placement.layout.columns,
+                placement.layout.rows,
+                placement.id
+            ),
             Event::CommandStart => write!(f, "CommandStart"),
             Event::CommandDone { exit_code } => write!(f, "CommandDone({exit_code:?})"),
             Event::UserVar { name, value } => {
@@ -179,6 +204,15 @@ pub trait OnResize {
 /// Event Loop for notifying the renderer about terminal events.
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
+
+    /// The host chooses a renderer for a literal shell command. Core only owns its source range.
+    fn command_view(
+        &self,
+        _shell: &str,
+        _command: &str,
+    ) -> Option<crate::inline_content::CommandView> {
+        None
+    }
 }
 
 /// Null sink for events.

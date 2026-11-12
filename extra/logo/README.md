@@ -150,6 +150,30 @@ removed. The viewBox and path geometry are unchanged. The two embedded SVGs tota
 2,393 bytes; the other settings icons reuse the sidebar's existing small textures.
 These marks identify the installed tools and do not imply endorsement.
 
+### Qoder, Qwen Code, CodeBuddy, Antigravity, Droid and Hermes settings icons
+
+The Agents settings page preserves the source colors through the shared background
+texture cache. Qoder and Qwen Code use `ai_qoder.svg` and `ai_qwen.svg`, retrieved
+unchanged on 2026-10-31 from `@lobehub/icons-static-svg` 1.95.0:
+
+- https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/qoder-color.svg
+- https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/qwen-color.svg
+- License: [MIT](LICENSE-lobe-icons), copyright LobeHub.
+
+CodeBuddy and Antigravity reuse `ai_codebuddy.svg` and `ai_antigravity.svg`, with
+sources and notices below. Their monochrome `nebula-agent-*.svg` assets remain
+available for mask-based controls. The Qoder/Qwen monochrome assets came from the
+same package (`icons/{qoder,qwen}.svg`) on 2026-10-07.
+
+Droid uses `ai_droid.svg`, retrieved unchanged from Factory's official
+https://factory.ai/favicon.svg on 2026-10-31 (also served by
+https://docs.factory.ai/favicon.svg). The official mark is black and white.
+Hermes reuses `nebula_app/assets/icons/nebula-agent-hermes.svg`, including its
+white background and black illustration. Both retain their source artwork rather
+than rendering the opaque background as a single-color mask. These marks identify
+the installed products and do not imply endorsement; trademarks remain with their
+owners. The matching `.svgz` files are lossless gzip copies with timestamp zero.
+
 ### Claude Code and Trae CLI
 
 `ai_claude.svg` and `ai_trae.svg` are vector masters from LobeHub's icon
@@ -266,6 +290,14 @@ Both UI shells keep its original colors on light and dark themes and resize it
 only for rendering. No LobeHub asset is embedded for Antigravity.
 
 ## Sponsor Logos
+
+### AIAPI
+
+`sponsor_aiapi.png` is the unmodified 2400 x 893 PNG supplied and selected by the
+maintainer for AIAPI sponsorship. Its off-white background, dark brown wordmark,
+letterforms and aspect ratio are preserved. The asset appears first in both
+README sponsor sections and in the application's Sponsors page, linking to
+https://cn.aiapi.bot/invite?code=MCYLZ5H6FR. It is resized only when displayed.
 
 ### Sidrune AI
 

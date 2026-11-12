@@ -300,7 +300,8 @@ fn fetch_latest_release() -> Result<LatestRelease, String> {
         let agent = test_source::agent(Duration::from_secs(10));
         return fetch_release_with_agent(&agent, &url);
     }
-    let agent = crate::update_proxy::agent(RELEASES_API, Duration::from_secs(10));
+    let agent = crate::update_proxy::agent(RELEASES_API, Duration::from_secs(10))
+        .map_err(|error| format!("GitHub 请求失败：{error}"))?;
     fetch_release_with_fallback(&agent, RELEASES_API, fallback::fetch_latest)
 }
 
@@ -430,9 +431,11 @@ mod tests {
             "Content-Type: application/json\r\n",
             r#"{"tag_name":"v1.7.0","assets":[]}"#,
         )]);
-        let result =
-            super::fetch_release_with_agent(&server.agent(&[]), "http://api.update.invalid/latest")
-                .unwrap();
+        let result = super::fetch_release_with_agent(
+            &server.network_agent("http", None, &[]),
+            "http://api.update.invalid/latest",
+        )
+        .unwrap();
         assert_eq!(result.version, "1.7.0");
         let requests = server.finish();
         assert!(requests[0].0.starts_with("CONNECT api.update.invalid:80 "));

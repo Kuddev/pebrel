@@ -32,12 +32,15 @@ mod exec;
 mod forward;
 mod integration;
 mod lifecycle;
+mod pane_connection;
+mod resume;
 mod route;
-mod transcript;
+mod sftp;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
+pub use pane_connection::PaneConnection;
+pub use resume::{ResumeTarget, TmuxActivity};
 use route::{ResolvedRoute, RouteTransport};
-pub use transcript::TranscriptReader;
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
 pub(crate) fn terminal_config(
@@ -73,8 +76,18 @@ struct OpenedTransport {
 pub trait SshEventHost:
     nebula_terminal::event::EventListener + Clone + Send + Sync + 'static
 {
-    /// A read capability belongs to this pane's live authenticated transport.
-    fn ssh_transcript_reader(&self, _reader: Option<TranscriptReader>) {}
+    /// Access is scoped to this pane's live authenticated transport.
+    fn ssh_pane_connection(&self, _connection: Option<PaneConnection>) {}
+
+    /// Last positively identified target survives transport loss; only a confirmed shell clears it.
+    fn ssh_resume_target(&self, _target: Option<ResumeTarget>) {}
+
+    /// An observation belongs to this channel's currently active remote pane.
+    fn ssh_tmux_activity(&self, _activity: Option<TmuxActivity>) {}
+
+    /// A terminal multiplexer client owns this channel's PTY, whether or not
+    /// its server can be queried from the authenticated account.
+    fn ssh_multiplexer_client(&self, _present: bool) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
@@ -590,6 +603,24 @@ impl client::Handler for ClientHandler {
             },
         }
     }
+
+    // A pane only sees its channel vanish; keep the transport cause
+    // (keepalive timeout, socket error, server disconnect) in the log.
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(info) => {
+                info!("SSH 连接 {}:{} 已关闭: {info:?}", self.host, self.port);
+                Ok(())
+            },
+            client::DisconnectReason::Error(error) => {
+                warn!("SSH 连接 {}:{} 异常断开: {error:?}", self.host, self.port);
+                Err(error)
+            },
+        }
+    }
 }
 
 pub(crate) fn runtime() -> io::Result<&'static tokio::runtime::Runtime> {
@@ -647,10 +678,29 @@ pub fn spawn_session_at<H: SshEventHost>(
     terminal: Arc<FairMutex<Term<H>>>,
     event_proxy: H,
 ) -> io::Result<EventLoopSender> {
+    spawn_session_resuming(
+        destination,
+        initial_remote_cwd,
+        None,
+        initial_size,
+        terminal,
+        event_proxy,
+    )
+}
+
+pub fn spawn_session_resuming<H: SshEventHost>(
+    destination: String,
+    initial_remote_cwd: Option<String>,
+    resume_target: Option<ResumeTarget>,
+    initial_size: WindowSize,
+    terminal: Arc<FairMutex<Term<H>>>,
+    event_proxy: H,
+) -> io::Result<EventLoopSender> {
     let (sender, receiver) = EventLoopSender::standalone()?;
     runtime()?.spawn(lifecycle::run(
         destination,
         initial_remote_cwd,
+        resume_target,
         initial_size,
         terminal,
         event_proxy,
@@ -758,10 +808,12 @@ async fn authenticated_route<H: SshEventHost>(
         evict_pooled_session(&key, &existing).await;
     }
 
+    // Same budget as the managed OpenSSH launch. 15 s × 3 ended idle panes
+    // after one minute of server silence that OpenSSH survives (#816).
     let config = Arc::new(client::Config {
         inactivity_timeout: None,
-        keepalive_interval: Some(Duration::from_secs(15)),
-        keepalive_max: 3,
+        keepalive_interval: Some(crate::ssh::SERVER_ALIVE_INTERVAL),
+        keepalive_max: crate::ssh::SERVER_ALIVE_COUNT_MAX,
         ..Default::default()
     });
     report_stage(progress, SshStage::Connect);
@@ -1101,16 +1153,13 @@ pub(crate) async fn open_sftp(
 
     // SFTP 面板自己有加载态，不参与终端 pane 的连接卡片。
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
-    let channel = lifecycle::network("SFTP channel", session.channel_open_session()).await?;
-    channel.request_subsystem(true, "sftp").await?;
-    // 显式给参数而不是用上游默认值：默认单包 256 KiB 会让每个 READ/WRITE 都
-    // 顶满一个巨型请求（部分服务端在这个尺寸上会静默出错），而默认在途写
-    // 请求只有 8 个，高时延链路上填不满管道。判据见 `ssh_sftp::limits`。
-    Ok(russh_sftp::client::SftpSession::new_with_config(
-        channel.into_stream(),
-        crate::ssh_sftp::limits::session_config(),
-    )
-    .await?)
+    sftp_on_session(&session).await
+}
+
+async fn sftp_on_session(
+    session: &ClientSession,
+) -> Result<russh_sftp::client::SftpSession, SessionError> {
+    sftp::open(session).await
 }
 
 // ---- 「测试连接」（SSH 编辑器页脚，spec ui-redesign 稿一） ----

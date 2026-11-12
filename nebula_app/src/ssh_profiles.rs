@@ -8,6 +8,7 @@ mod connection;
 pub(crate) mod duplication;
 #[path = "ssh_profiles/exchange.rs"]
 pub(crate) mod exchange;
+pub(crate) mod host_lists;
 #[path = "ssh_profiles/organization.rs"]
 mod organization;
 pub(crate) use connection::validate_ssh_destination;

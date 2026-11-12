@@ -23,20 +23,27 @@ fn event(source: &str, session: &str, name: &str) -> AiHookEvent {
     parse_remote_envelope(wire.as_bytes(), Some(1)).unwrap()
 }
 
+fn event_with_turn(source: &str, session: &str, name: &str, turn: &str) -> AiHookEvent {
+    let mut event = event(source, session, name);
+    event.turn_id = Some(turn.to_owned());
+    event
+}
+
 fn screen(status: AgentStatus) -> Option<Detection> {
-    Some(Detection { agent: AgentKind::Codex, status, rule_id: "test.chrome".into() })
+    Some(Detection { agent: AgentKind::Codex, status, rule_id: format!("test.{status:?}") })
 }
 
 #[test]
 fn complete_hooks_own_every_state_even_when_screen_disagrees() {
-    for provider in ["claude", "opencode"] {
+    // An opencode stop without a classified outcome proves nothing about the answer.
+    for (provider, stopped) in [("claude", AgentStatus::Done), ("opencode", AgentStatus::Idle)] {
         let mut activity = AgentActivity::default();
         for (name, status) in [
             ("SessionStart", AgentStatus::Idle),
             ("UserPromptSubmit", AgentStatus::Working),
             ("PermissionRequest", AgentStatus::Blocked),
             ("PostToolUse", AgentStatus::Working),
-            ("Stop", AgentStatus::Done),
+            ("Stop", stopped),
         ] {
             assert!(activity.apply_hook(&event(provider, "primary", name)));
             for candidate in [AgentStatus::Idle, AgentStatus::Blocked, AgentStatus::Working] {
@@ -44,6 +51,11 @@ fn complete_hooks_own_every_state_even_when_screen_disagrees() {
                     assert!(!activity.observe_screen(screen(candidate)));
                 }
                 assert_eq!(activity.status(), status, "{provider}/{name}/{candidate:?}");
+                assert_eq!(activity.source(), AgentStatusSource::Hook);
+            }
+            for _ in 0..6 {
+                assert!(!activity.observe_screen(None));
+                assert_eq!(activity.status(), status, "{provider}/{name}");
                 assert_eq!(activity.source(), AgentStatusSource::Hook);
             }
         }
@@ -133,6 +145,151 @@ fn fallback_requires_consecutive_idle_and_work_before_a_completion() {
     assert_eq!(activity.status(), AgentStatus::Done);
     assert_eq!(screen_notification(AgentStatus::Working, activity.status(), false), Some(false));
     assert_eq!(screen_notification(activity.status(), activity.status(), false), None);
+}
+
+#[test]
+fn claude_form_disappearing_into_an_unmatched_running_layout_clears_attention() {
+    let mut activity = AgentActivity::default();
+    activity.submitted();
+    let form = "Do you want to proceed?\n❯ 1. Yes\n2. No\nEsc to cancel · Tab to amend";
+    assert!(activity.observe_screen(crate::ai_agents::detect("claude", form)));
+    assert_eq!(activity.status(), AgentStatus::Blocked);
+    let running = "* Ideating… (2m · 123 tokens)\n────────\n❯\n────────\n版本 2.1.301\n上下文 25%\n状态 运行中\n/project";
+    assert!(crate::ai_agents::detect("claude", running).is_none());
+    assert!(!activity.observe_screen(crate::ai_agents::detect("claude", running)));
+    assert_eq!(activity.status(), AgentStatus::Blocked, "one redraw is inconclusive");
+    assert!(activity.observe_screen(crate::ai_agents::detect("claude", running)));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    assert_eq!(activity.source(), AgentStatusSource::Process);
+    assert_eq!(activity.rule(), None);
+    assert_eq!(screen_notification(AgentStatus::Blocked, activity.status(), false), None);
+    for _ in 0..8 {
+        assert!(!activity.observe_screen(None));
+        assert_eq!(activity.status(), AgentStatus::Working, "silence cannot finish a turn");
+    }
+}
+
+#[test]
+fn expired_screen_attention_restores_work_evidence_including_partial_hooks() {
+    for source in [AgentStatusSource::Process, AgentStatusSource::Screen, AgentStatusSource::Hook] {
+        let mut activity = AgentActivity::default();
+        match source {
+            AgentStatusSource::Process => activity.submitted(),
+            AgentStatusSource::Screen => {
+                activity.observe_screen(screen(AgentStatus::Working));
+            },
+            AgentStatusSource::Hook => {
+                activity.apply_hook(&event("pi", "partial", "UserPromptSubmit"));
+            },
+            _ => unreachable!(),
+        }
+        let rule = activity.rule().map(str::to_owned);
+        activity.observe_screen(screen(AgentStatus::Blocked));
+        assert!(!activity.observe_screen(None));
+        assert!(activity.observe_screen(None));
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(activity.source(), source);
+        assert_eq!(activity.rule(), rule.as_deref());
+        for _ in 0..2 {
+            activity.observe_screen(screen(AgentStatus::Idle));
+        }
+        assert_eq!(
+            activity.status(),
+            if source == AgentStatusSource::Hook {
+                AgentStatus::Working
+            } else {
+                AgentStatus::Done
+            },
+            "real idle evidence still respects completion ownership"
+        );
+    }
+}
+
+#[test]
+fn expired_screen_attention_without_work_evidence_becomes_unknown() {
+    let mut activity = AgentActivity::default();
+    activity.observe_screen(screen(AgentStatus::Blocked));
+    assert!(!activity.observe_screen(None));
+    assert!(activity.observe_screen(None));
+    assert_eq!(activity.status(), AgentStatus::Unknown);
+    assert_eq!(activity.source(), AgentStatusSource::Unknown);
+    assert_eq!(activity.rule(), None);
+    assert!(!activity.turn_observed, "an expired form is not a submitted turn");
+    assert_eq!(screen_notification(AgentStatus::Blocked, activity.status(), false), None);
+}
+
+#[test]
+fn live_forms_and_other_screen_evidence_interrupt_unmatched_samples() {
+    let mut activity = AgentActivity::default();
+    activity.submitted();
+    activity.observe_screen(screen(AgentStatus::Blocked));
+    for _ in 0..6 {
+        assert!(!activity.observe_screen(None));
+        assert!(!activity.observe_screen(screen(AgentStatus::Blocked)));
+        assert_eq!(activity.status(), AgentStatus::Blocked);
+    }
+    assert!(!activity.observe_screen(None));
+    assert!(!activity.observe_screen(screen(AgentStatus::Idle)));
+    assert!(!activity.observe_screen(None), "the idle sample interrupted absence evidence");
+    assert_eq!(activity.status(), AgentStatus::Blocked);
+    assert!(activity.observe_screen(None));
+    assert_eq!(activity.status(), AgentStatus::Working);
+}
+
+#[test]
+fn input_and_unidentified_snapshots_interrupt_attention_expiry() {
+    for input in [false, true] {
+        let mut activity = AgentActivity::default();
+        activity.submitted();
+        activity.observe_screen(screen(AgentStatus::Blocked));
+        assert!(!activity.observe_screen(None));
+        if input {
+            activity.input_sent();
+        } else {
+            activity.reset_screen_samples();
+        }
+        assert!(!activity.observe_screen(None));
+        assert_eq!(activity.status(), AgentStatus::Blocked);
+        assert!(activity.observe_screen(None));
+        assert_eq!(activity.status(), AgentStatus::Working);
+    }
+}
+
+#[test]
+fn new_work_and_command_boundaries_discard_previous_attention_evidence() {
+    for boundary in ["submit", "hook", "command"] {
+        let mut activity = AgentActivity::default();
+        activity.observe_screen(screen(AgentStatus::Working));
+        activity.observe_screen(screen(AgentStatus::Blocked));
+        activity.observe_screen(None);
+        match boundary {
+            "submit" => activity.submitted(),
+            "hook" => {
+                assert!(activity.apply_hook(&event("pi", "new-work", "UserPromptSubmit")));
+            },
+            "command" => {
+                activity.command_finished();
+                assert!(!activity.observe_screen(None));
+                activity.begin_command(true);
+            },
+            _ => unreachable!(),
+        }
+        activity.observe_screen(screen(AgentStatus::Blocked));
+        assert!(!activity.observe_screen(None));
+        assert!(activity.observe_screen(None));
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(
+            activity.source(),
+            if boundary == "hook" { AgentStatusSource::Hook } else { AgentStatusSource::Process }
+        );
+        assert_eq!(activity.rule(), None, "old screen rule cannot survive new work");
+        if boundary == "command" {
+            for _ in 0..2 {
+                activity.observe_screen(screen(AgentStatus::Idle));
+            }
+            assert_eq!(activity.status(), AgentStatus::Idle, "launching is not a submitted turn");
+        }
+    }
 }
 
 #[test]
@@ -267,16 +424,18 @@ fn ordinary_idle_reminders_are_not_blocking_requests() {
 }
 
 #[test]
-fn untyped_legacy_notifications_cannot_reopen_an_idle_or_finished_turn() {
+fn untyped_legacy_notifications_cannot_override_any_explicit_state() {
     let wire = b"nebula-hook/1 source=claude\n{\"hook_event_name\":\"Notification\",\"session_id\":\"s\",\"message\":\"waiting for input\"}";
-    let notification = parse_remote_envelope(wire, Some(1)).unwrap();
+    assert!(parse_remote_envelope(wire, Some(1)).is_none());
+    let mut notification = event("claude", "s", "PermissionRequest");
+    notification.legacy_attention = true;
     let mut activity = AgentActivity::default();
     activity.apply_hook(&event("claude", "s", "SessionStart"));
     assert!(!activity.apply_hook(&notification));
     assert_eq!(activity.status(), AgentStatus::Idle);
     activity.apply_hook(&event("claude", "s", "UserPromptSubmit"));
-    assert!(activity.apply_hook(&notification));
-    assert_eq!(activity.status(), AgentStatus::Blocked);
+    assert!(!activity.apply_hook(&notification));
+    assert_eq!(activity.status(), AgentStatus::Working);
     activity.apply_hook(&event("claude", "s", "Stop"));
     assert!(!activity.apply_hook(&notification));
     assert_eq!(activity.status(), AgentStatus::Done);
@@ -299,4 +458,69 @@ fn shell_command_end_rejects_late_hooks_until_a_new_command_starts() {
     }
     activity.begin_command(true);
     assert!(activity.apply_hook(&event("codex", "new", "notify")));
+}
+
+/// Age and familiar screen forms cannot replace a complete provider lifecycle.
+#[test]
+fn full_hook_states_remain_authoritative_after_long_silence() {
+    for (name, expected) in [
+        ("UserPromptSubmit", AgentStatus::Working),
+        ("PermissionRequest", AgentStatus::Blocked),
+        ("Stop", AgentStatus::Done),
+    ] {
+        let mut activity = AgentActivity::default();
+        activity.apply_hook(&event("claude", "s", "UserPromptSubmit"));
+        activity.apply_hook(&event("claude", "s", name));
+        activity.backdate_activity_for_test(std::time::Duration::from_secs(3600));
+        for _ in 0..4 {
+            for status in [AgentStatus::Idle, AgentStatus::Working, AgentStatus::Blocked] {
+                assert!(!activity.observe_screen(screen(status)));
+                assert_eq!(activity.status(), expected);
+                assert_eq!(activity.source(), AgentStatusSource::Hook);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_silent_submission_waits_for_an_explicit_result() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event("claude", "s", "Stop"));
+    activity.submitted();
+    activity.backdate_activity_for_test(std::time::Duration::from_secs(3600));
+    for _ in 0..4 {
+        assert!(!activity.observe_screen(screen(AgentStatus::Idle)));
+        assert_eq!(activity.status(), AgentStatus::Working);
+    }
+    assert!(activity.apply_hook(&event("claude", "s", "Stop")));
+    assert_eq!(activity.status(), AgentStatus::Done);
+}
+
+#[test]
+fn a_delayed_failure_is_not_preceded_by_screen_success() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event_with_turn("claude", "f", "UserPromptSubmit", "f-1"));
+    activity.backdate_activity_for_test(std::time::Duration::from_secs(3600));
+    for _ in 0..4 {
+        assert!(!activity.observe_screen(screen(AgentStatus::Idle)));
+        assert_eq!(activity.status(), AgentStatus::Working);
+    }
+    let mut failed = event_with_turn("claude", "f", "Stop", "f-1");
+    failed.turn_outcome = crate::ai_hook::AiTurnOutcome::Failed;
+    assert!(activity.apply_hook(&failed));
+    assert_eq!(activity.status(), AgentStatus::Idle);
+    assert_eq!(activity.source(), AgentStatusSource::Hook);
+}
+
+#[test]
+fn answering_attention_requires_a_client_signal_to_resume() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event("claude", "s", "PermissionRequest"));
+    activity.backdate_activity_for_test(std::time::Duration::from_secs(3600));
+    for _ in 0..4 {
+        assert!(!activity.observe_screen(screen(AgentStatus::Working)));
+        assert_eq!(activity.status(), AgentStatus::Blocked);
+    }
+    assert!(activity.apply_hook(&event("claude", "s", "PostToolUse")));
+    assert_eq!(activity.status(), AgentStatus::Working);
 }

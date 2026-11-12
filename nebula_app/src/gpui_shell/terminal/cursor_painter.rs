@@ -117,6 +117,19 @@ pub(super) fn paint_box_glyph(
                 }
                 window.paint_path(path, color);
             },
+            Primitive::Circle { center, radius } => {
+                let radius = px(*radius);
+                window.paint_quad(
+                    fill(
+                        Bounds::new(
+                            at(center) - point(radius, radius),
+                            size(radius * 2.0, radius * 2.0),
+                        ),
+                        color,
+                    )
+                    .corner_radii(radius),
+                );
+            },
         }
     }
 }

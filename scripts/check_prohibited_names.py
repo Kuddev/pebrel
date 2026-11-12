@@ -21,7 +21,6 @@ PROHIBITED_PATTERNS = (
     re.compile(r"(?<![A-Za-z0-9_])herdr(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])kaku(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])orca(?![A-Za-z0-9_])", re.IGNORECASE),
-    re.compile(r"(?<![A-Za-z0-9_])tmux(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])wezterm(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])windows[-_ ]?terminal(?![A-Za-z0-9_])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_])alacritty(?![A-Za-z0-9_])", re.IGNORECASE),
@@ -54,7 +53,6 @@ PROHIBITED_EXAMPLES = (
     "herdr",
     "kaku",
     "orca",
-    "tmux",
     "wezterm",
     "Windows Terminal",
     "Alacritty",
@@ -81,21 +79,22 @@ LEGAL_ATTRIBUTION_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+NOTICE_DERIVATION_PATTERN = re.compile(r"\bderives from [A-Z][A-Za-z0-9-]*\s*$")
 DEPENDENCY_REFERENCE_PATTERNS = (
     re.compile(r"\bgit\s*=\s*[\"']https?://[^\"']+[\"']", re.IGNORECASE),
     re.compile(r"\bsource\s*=\s*[\"']git\+https?://[^\"']+[\"']", re.IGNORECASE),
 )
 PROTOCOL_COMPATIBILITY_PATTERNS = (
+    re.compile(r"\bkitty\s+(?:graphics\s+protocol\b|图形协议)", re.IGNORECASE),
     re.compile(r"\bKITTY_[A-Z0-9_]+\b"),
     re.compile(r"\bkitty_(?:keyboard|seq|event|release|escape|input)[A-Za-z0-9_]*\b", re.IGNORECASE),
-    re.compile(r"\b(?:kitty|tmux)/(?:legacy|style|protocol)\b", re.IGNORECASE),
-    re.compile(r"\b(?:kitty|tmux)\s+(?:keyboard|protocol|escape|sequence)\b", re.IGNORECASE),
+    re.compile(r"\bkitty/(?:legacy|style|protocol)\b", re.IGNORECASE),
+    re.compile(r"\bkitty\s+(?:keyboard|protocol|escape|sequence)\b", re.IGNORECASE),
     re.compile(r"\bThemeFormat::(?:WindowsTerminal|Kitty|Ghostty|WezTerm|Alacritty)\b"),
     re.compile(
         r"unsupported theme format; use Pebrel JSON, Windows Terminal JSON, Kitty, Ghostty, WezTerm or Alacritty",
         re.IGNORECASE,
     ),
-    re.compile(r"\\x1bPtmux;"),
 )
 
 # 移动端的原生依赖路径和远端命令是构建/兼容接口；只剔除这些确切引用，
@@ -108,14 +107,11 @@ MOBILE_BUILD_REFERENCE_PATTERNS = tuple(re.compile(pattern) for pattern in (
     r"[\"']include/ghostty/vt\.h[\"']",
 ))
 REMOTE_SESSION_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r"\bSshSessionMode\.(?:TMUX|HERDR)\b",
-    r"\b(?:exec )?tmux (?:new-session -A -s|kill-session -t) '[^'\n]+'",
+    r"\bSshSessionMode\.HERDR\b",
     r"\bexec herdr(?=[\"'\s])",
     r"\bherdr session (?:attach|stop) '[^'\n]+'",
-    r"\bcommand -v (?:tmux|herdr)(?=\s+>)",
+    r"\bcommand -v herdr(?=\s+>)",
     r"\bGet-Command herdr(?= -ErrorAction\b)",
-    r"\btmux (?:list-sessions|list-windows)(?= -[a-zA-Z]\b)",
-    r"\btmux (?:select-window -t|display-message -p -t|attach-session -t)(?= )",
     r"\bherdr session list --json\b",
     r"\bherdr session attach(?= \$\{psQuote\()",
     r"\bherdr --session(?= \$\{(?:quote|psQuote)\()",
@@ -123,13 +119,38 @@ REMOTE_SESSION_PATTERNS = tuple(re.compile(pattern) for pattern in (
 # 发现器的类型标签是线协议的一部分；只允许明确的构造/分派位置，
 # 不放行任意字符串字面量，更不能吞掉同行的说明、链接或比较文案。
 REMOTE_DISCOVERY_TAG_PATTERNS = tuple(re.compile(pattern) for pattern in (
-    r'\bdata\["(?:tmux|herdr)"\]',
-    r'\bRemoteSession\("(?:tmux|herdr)"(?=,)',
-    r'\bsession\.kind (?:==|!=) "(?:tmux|herdr)"',
-    r'^\s*"(?:tmux|herdr)"(?= ->)',
+    r'\bdata\["herdr"\]',
+    r'\bSshSessionMode\.HERDR\s+->\s+"herdr"',
+    r'^\s*"herdr"(?= ->)',
     r'\bwarnings \+= "herdr"',
     r"\[char\]30 \+ 'herdr'(?= \+ \[char\]10)",
 ))
+# Model tags belong to the remote-session consumers and their behavioral tests,
+# not to arbitrary labels or UI strings elsewhere in the mobile tree.
+REMOTE_MODEL_REFERENCE_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r'\bRemoteSession\("herdr"(?=,)',
+    r'\b(?:session|it)\??\.kind (?:==|!=) "herdr"',
+))
+REMOTE_MODEL_CONSUMERS = (
+    "/connection/RemoteSessions.kt", "/connection/TmuxSessionControl.kt",
+    "/session/SessionRepository.kt",
+)
+
+
+def remote_reference_remainder(path: str, text: str) -> str:
+    is_test = path.startswith(("mobile/android/app/src/test/", "mobile/android/app/src/androidTest/"))
+    model_test = is_test and path.endswith("Test.kt") and any(
+        part in path for part in ("/connection/", "/session/")
+    )
+    if path.endswith(REMOTE_MODEL_CONSUMERS) or model_test:
+        for pattern in REMOTE_MODEL_REFERENCE_PATTERNS:
+            text = pattern.sub("", text)
+    if path.endswith("/connection/RemoteSessions.kt"):
+        for pattern in REMOTE_DISCOVERY_TAG_PATTERNS:
+            text = pattern.sub("", text)
+    for pattern in REMOTE_SESSION_PATTERNS:
+        text = pattern.sub("", text)
+    return text
 
 
 def mobile_reference_remainder(path: str, text: str) -> str:
@@ -151,13 +172,9 @@ def mobile_reference_remainder(path: str, text: str) -> str:
             "", text,
         )
     if path.startswith("mobile/android/app/src/") and path.endswith(".kt"):
-        for pattern in REMOTE_SESSION_PATTERNS:
-            text = pattern.sub("", text)
-        if path.endswith("/connection/RemoteSessions.kt"):
-            for pattern in REMOTE_DISCOVERY_TAG_PATTERNS:
-                text = pattern.sub("", text)
+        text = remote_reference_remainder(path, text)
         if path.endswith("/connection/SshSessionMode.kt"):
-            text = text.replace('TMUX("tmux")', "").replace('HERDR("herdr")', "")
+            text = text.replace('HERDR("herdr")', "")
     return text
 
 
@@ -172,6 +189,9 @@ def prohibited(text: str) -> bool:
 def source_without_allowed_occurrences(path: str, text: str) -> str:
     for pattern in LEGAL_ATTRIBUTION_PATTERNS:
         text = pattern.sub("", text)
+    if path == "THIRD-PARTY-NOTICES":
+        # 许可证要求的来源声明：只放行行尾的“derives from 上游名”，同行其他文字仍检查。
+        text = NOTICE_DERIVATION_PATTERN.sub("", text)
     if Path(path).name in {"Cargo.toml", "Cargo.lock"} and any(
         pattern.search(text) for pattern in DEPENDENCY_REFERENCE_PATTERNS
     ):
@@ -186,25 +206,42 @@ def prohibited_source_line(path: str, text: str) -> bool:
     return prohibited(source_without_allowed_occurrences(path, text))
 
 
-def changed_paths(*revision_args: str) -> list[str]:
-    raw = git("diff", *revision_args, "--name-only", "-z", "--diff-filter=ACMR", "--", ".")
-    return [path.decode("utf-8") for path in raw.split(b"\0") if path]
+def changed_paths(*revision_args: str) -> list[tuple[str, ...]]:
+    """Changed paths; a rename is (new, old) so its patch keeps both sides."""
+    raw = git("diff", *revision_args, "-M", "--name-status", "-z", "--diff-filter=ACMR", "--", ".")
+    fields = [field.decode("utf-8") for field in raw.split(b"\0")]
+    paths: list[tuple[str, ...]] = []
+    index = 0
+    while index < len(fields) and fields[index]:
+        if fields[index].startswith("R"):
+            paths.append((fields[index + 2], fields[index + 1]))
+            index += 3
+        else:
+            paths.append((fields[index + 1],))
+            index += 2
+    return paths
 
 
-def added_lines(path: str, *revision_args: str) -> Iterable[tuple[int, str]]:
-    patch = git("diff", *revision_args, "--no-ext-diff", "--unified=0", "--", path)
+def added_lines(paths: tuple[str, ...], *revision_args: str) -> Iterable[tuple[int, str]]:
+    # 只给新路径时 Git 看不到旧文件，移动的整份文件都会变成新增行；
+    # 两个路径一起给，改名检测后只剩真正改动的行，移动后新加的内容照样检查。
+    patch = git("diff", *revision_args, "-M", "--no-ext-diff", "--unified=0", "--", *paths)
     yield from added_patch_lines(patch, None)
+
+
+def scan_changed_paths(hits: list[str], prefix: str, *revision_args: str) -> None:
+    for paths in changed_paths(*revision_args):
+        normalized = paths[0].replace("\\", "/")
+        if normalized in EXEMPT_PATHS:
+            continue
+        for line_no, line in added_lines(paths, *revision_args):
+            if prohibited_source_line(normalized, line):
+                hits.append(f"{prefix}{normalized}:{line_no}:{line}")
 
 
 def scan_added_lines(*revision_args: str) -> list[str]:
     hits: list[str] = []
-    for path in changed_paths(*revision_args):
-        normalized = path.replace("\\", "/")
-        if normalized in EXEMPT_PATHS:
-            continue
-        for line_no, line in added_lines(path, *revision_args):
-            if prohibited_source_line(normalized, line):
-                hits.append(f"{normalized}:{line_no}:{line}")
+    scan_changed_paths(hits, "", *revision_args)
     return hits
 
 
@@ -242,7 +279,8 @@ def scan_pending_commits(revision_range: str) -> list[str]:
         elif parent:
             # Comparing against the first parent includes a merge resolution's
             # actual additions for ordinary commits.
-            paths = git("diff", "--name-only", "-z", "--diff-filter=ACMR", parent, commit, "--", ".")
+            scan_changed_paths(hits, f"{commit}:", parent, commit)
+            continue
         else:
             paths = git("diff-tree", "--root", "--no-commit-id", "--name-only", "-z", "-r", commit)
         for raw_path in paths.split(b"\0"):
@@ -254,8 +292,6 @@ def scan_pending_commits(revision_range: str) -> list[str]:
                 continue
             if merge_commit:
                 patch = git("show", "--format=", "--cc", "--no-ext-diff", "--unified=0", commit, "--", path)
-            elif parent:
-                patch = git("diff", "--no-ext-diff", "--unified=0", parent, commit, "--", path)
             else:
                 patch = git("show", "--format=", "--no-ext-diff", "--unified=0", commit, "--", path)
             for line_no, line in added_patch_lines(

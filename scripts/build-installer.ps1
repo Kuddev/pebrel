@@ -65,6 +65,7 @@ $setupPath = Join-Path $outputRoot "$PackageBrand-v$Version-windows-$Architectur
 
 $requiredFiles = @(
     (Join-Path $targetRoot 'pebrel.exe'),
+    (Join-Path $targetRoot 'pebrel-cli.exe'),
     (Join-Path $targetRoot 'pebrel-hook.exe'),
     (Join-Path $targetRoot 'conpty.dll'),
     (Join-Path $targetRoot 'OpenConsole.exe'),
@@ -111,6 +112,7 @@ if (-not $AllowStale) {
         'nebula-completions', 'nebula_gpui', 'nebula_settings', 'nebula_split'
     ) | ForEach-Object { Join-Path $repo $_ }
     $sourceScopes = @(
+        @{ Binary = (Join-Path $targetRoot 'pebrel-cli.exe'); Roots = $memberDirs + @((Join-Path $repo 'Cargo.toml')) },
         @{ Binary = $packagedExe; Roots = $memberDirs + @(
             (Join-Path $repo 'Cargo.toml'), (Join-Path $repo '..\gpui-component-fork\crates')) },
         @{ Binary = (Join-Path $targetRoot 'pebrel-hook.exe'); Roots = @(

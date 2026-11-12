@@ -57,6 +57,18 @@ impl SshConnectionOptions {
     }
 
     pub fn validate(&self, destination: &str) -> Result<(), String> {
+        if destination.starts_with(crate::serial_session::SCHEME) {
+            destination
+                .parse::<crate::serial_session::SerialConfig>()
+                .map_err(|e| e.to_string())?;
+            return if self.is_default() {
+                Ok(())
+            } else {
+                Err(crate::i18n::UiLanguage::EnUs
+                    .text(crate::i18n::Message::TerminalSerialSshOptions)
+                    .to_owned())
+            };
+        }
         validate_ssh_destination(destination)?;
         if self.has_custom_proxy() {
             validate_host(&self.normalized_proxy_host()).map_err(|_| {

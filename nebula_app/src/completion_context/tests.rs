@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn native_confirmation_counts_once_but_repeated_submissions_increase_frequency() {
+    let scope = HistoryScope::Ssh(format!("frequency-{}", std::process::id()));
+    let mut state = pane(SuggestEnv::Shell { scope: scope.clone() }, "frequency-owner");
+    for _ in 0..2 {
+        state.completion_shell_report(INPUT_VAR, "frequency-owner\necho frequent");
+        state.completion_shell_report(SHELL_VAR, "frequency-owner");
+    }
+    state.record_submitted_command("echo once");
+    state.completion_shell_report(INPUT_VAR, "frequency-owner\necho once");
+    assert_eq!(
+        crate::completion::history_hint_for_test(&scope, "echo ").as_deref(),
+        Some("frequent")
+    );
+    state.completion_shell_report(SHELL_VAR, "frequency-owner");
+    state.completion_shell_report(INPUT_VAR, "frequency-owner\necho once");
+    assert_eq!(crate::completion::history_hint_for_test(&scope, "echo ").as_deref(), Some("once"));
+}
+
+#[test]
 fn native_accepted_input_requires_a_known_owner_and_records_the_complete_line() {
     let scope = HistoryScope::Ssh("native-editor-history-qa".into());
     let mut state = NebulaPaneState::default();

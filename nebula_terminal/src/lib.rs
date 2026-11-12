@@ -8,6 +8,9 @@ pub mod event;
 pub mod event_loop;
 pub mod grid;
 pub mod index;
+pub mod inline_content;
+pub mod inline_image;
+pub mod kitty_graphics;
 pub mod osc_cwd;
 pub mod program_status;
 pub mod render;
@@ -17,6 +20,7 @@ pub mod term;
 pub mod thread;
 pub mod tty;
 pub mod vi_mode;
+pub mod zmodem;
 
 pub use crate::grid::Grid;
 pub use crate::term::Term;

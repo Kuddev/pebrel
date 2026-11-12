@@ -47,9 +47,25 @@ impl ImagePasteState {
 enum ClipboardPayload {
     Text(String),
     Image(Vec<u8>),
+    Files(Vec<std::path::PathBuf>),
 }
 
 fn clipboard_payload(item: ClipboardItem) -> Option<ClipboardPayload> {
+    // Native file copies may also offer a text representation. Only the file
+    // payload authorizes reading/uploading; path-looking text stays ordinary text.
+    let files: Vec<_> = item
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect();
+    if !files.is_empty() {
+        return Some(ClipboardPayload::Files(files));
+    }
     if let Some(text) = item.text().filter(|text| !text.is_empty()) {
         return Some(ClipboardPayload::Text(text));
     }
@@ -77,6 +93,9 @@ impl TerminalView {
         let Some(payload) = cx.read_from_clipboard().and_then(clipboard_payload) else { return };
         match payload {
             ClipboardPayload::Text(text) => {
+                if self.try_native_clipboard_paste(&text, true, cx) {
+                    return;
+                }
                 let lines = paste_line_count(&text);
                 if nebula_settings::RuntimeSettings::load().multiline_paste_confirm
                     && paste_needs_confirmation(&text, self.term_mode())
@@ -87,6 +106,7 @@ impl TerminalView {
                 }
             },
             ClipboardPayload::Image(bytes) => self.paste_image(bytes, window, cx),
+            ClipboardPayload::Files(paths) => self.drop_external_paths(&paths, window, cx),
         }
     }
 
@@ -120,6 +140,19 @@ impl TerminalView {
         }
 
         let target = self.image_target();
+        let connection = self
+            .session
+            .as_ref()
+            .and_then(|session| session.remote_connection.lock().ok()?.clone());
+        if matches!(target, ImageTarget::Ssh(_)) && connection.is_none() {
+            toast::toast(
+                window,
+                cx,
+                ToastKind::Warning,
+                ui_language().text(Message::CommonImagePasteDisconnected),
+            );
+            return;
+        }
         let staged_target = target.clone();
         let term = Arc::downgrade(&self.session.as_ref().unwrap().term);
         let owner = (
@@ -136,7 +169,7 @@ impl TerminalView {
             if png.len() > remaining {
                 return Err("temporary images exceed the 128 MiB tab limit".to_owned());
             }
-            stage_image(staged_target, png).await
+            stage_image(staged_target, connection, png).await
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -262,11 +295,16 @@ impl TerminalView {
     }
 }
 
-async fn stage_image(target: ImageTarget, png: Vec<u8>) -> Result<StagedImage, String> {
+async fn stage_image(
+    target: ImageTarget,
+    connection: Option<crate::ssh_session::PaneConnection>,
+    png: Vec<u8>,
+) -> Result<StagedImage, String> {
     let bytes = png.len();
-    if let ImageTarget::Ssh(destination) = target {
+    if let ImageTarget::Ssh(_) = target {
         let (sender, receiver) = futures::channel::oneshot::channel();
-        crate::ssh_sftp::upload_clipboard_image_result(destination, png, move |result| {
+        let connection = connection.ok_or("SSH pane connection closed")?;
+        crate::ssh_sftp::upload_clipboard_image_on_pane(connection, png, move |result| {
             let _ = sender.send(result);
         });
         let path = receiver.await.map_err(|_| "image upload stopped".to_owned())??;
@@ -354,6 +392,25 @@ mod tests {
         assert!(
             matches!(clipboard_payload(mixed), Some(ClipboardPayload::Text(text)) if text == "text")
         );
+    }
+
+    #[test]
+    fn native_files_take_priority_but_path_looking_text_never_uploads() {
+        let path = std::path::PathBuf::from("report.pdf");
+        let item = ClipboardItem {
+            entries: vec![
+                ClipboardEntry::String(gpui::ClipboardString::new("report.pdf".into())),
+                ClipboardEntry::ExternalPaths(gpui::ExternalPaths(vec![path.clone()].into())),
+            ],
+        };
+        assert!(
+            matches!(clipboard_payload(item), Some(ClipboardPayload::Files(files)) if files == [path])
+        );
+        for text in ["C:\\Users\\me\\report.pdf", "/home/me/report.pdf"] {
+            assert!(
+                matches!(clipboard_payload(ClipboardItem::new_string(text.into())), Some(ClipboardPayload::Text(value)) if value == text)
+            );
+        }
     }
 
     #[test]

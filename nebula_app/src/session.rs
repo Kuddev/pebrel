@@ -60,6 +60,10 @@ pub enum LaunchSession {
     Ssh {
         host: String,
     },
+    /// A serial port (`serial:COM3,115200,8N1`); restoring reopens it.
+    Serial {
+        destination: String,
+    },
 }
 
 /// Split axis, mirrored from `display::SplitDirection` so the display layer
@@ -118,6 +122,11 @@ impl AgentSession {
             // 当前目录最近一次对话——pane 的 cwd 已经先被恢复，语义正好。
             None if agent == crate::ai_agents::AgentKind::Claude => {
                 Some("claude --continue".to_owned())
+            },
+            // opencode 的插件默认不装，缺 id 是常态（#651）；它的 `--continue`
+            // 同样按目录取最近会话（1.19.0 实测，非 git 目录也是）。
+            None if agent == crate::ai_agents::AgentKind::OpenCode => {
+                Some("opencode --continue".to_owned())
             },
             // codex 没有按目录 continue 的形式，缺 id 只能放弃接续。
             _ => None,
@@ -219,16 +228,19 @@ impl TabSession {
 }
 
 /// Last normal (non-maximized, non-fullscreen) inner size in logical pixels.
-/// Logical units keep the perceived size stable when the next launch lands on
-/// a monitor with a different DPI scale factor. Write-only since v4: startup
-/// always sizes the window from the configured column/line count, so this
-/// record is diagnostic and forward-compat data, never replayed at boot.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Logical units keep the perceived size stable across display DPI changes.
+/// Windows position is the normal client origin in physical desktop pixels;
+/// the stable display identity keeps an existing monitor as the restore target.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
     pub width: u32,
     pub height: u32,
     #[serde(default)]
     pub maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(i32, i32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<[u8; 16]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -447,7 +459,8 @@ mod tests {
     #[test]
     fn window_state_round_trip_preserves_logical_size_and_maximize() {
         let mut session = Session::new(0, Vec::new());
-        session.window = Some(WindowState { width: 1280, height: 720, maximized: true });
+        session.window =
+            Some(WindowState { width: 1280, height: 720, maximized: true, ..Default::default() });
         let json = serde_json::to_string(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.window, session.window);
@@ -556,6 +569,15 @@ mod tests {
             Some("codex resume b5f6c1c2-1111-2222-3333-444455556666")
         );
         assert_eq!(agent("codex", None).resume_command(), None);
+        assert_eq!(
+            agent("opencode", Some("ses_e4c1029e1ffeyJshk44b1N5nP1")).resume_command().as_deref(),
+            Some("opencode --session ses_e4c1029e1ffeyJshk44b1N5nP1")
+        );
+        assert_eq!(
+            agent("opencode", None).resume_command().as_deref(),
+            Some("opencode --continue")
+        );
+        assert_eq!(agent("opencode", Some("x; calc")).resume_command(), None);
         assert_eq!(
             agent("gemini", Some("abc")).resume_command().as_deref(),
             Some("gemini --resume abc")

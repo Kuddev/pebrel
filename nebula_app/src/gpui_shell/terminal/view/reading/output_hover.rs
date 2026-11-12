@@ -56,8 +56,9 @@ impl TerminalView {
         let (viewport_top, _, _) = self.output_viewport(term);
         let start = target.span.start.line as i64;
         let end = target.span.end.line as i64 + i64::from(target.span.end.column != 0);
-        let first = (start - viewport_top).max(0);
-        let last = (end - viewport_top).min(self.rows as i64);
+        let vertical = self.native_results.projection.borrow();
+        let first = vertical.row((start - viewport_top) as f32).max(0.0);
+        let last = vertical.row((end - viewport_top) as f32).min(self.rows as f32);
         if first >= last {
             return None;
         }

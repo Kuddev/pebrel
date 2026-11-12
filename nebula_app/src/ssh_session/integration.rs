@@ -9,7 +9,12 @@ use crate::ai_hook::remote::{self, Action, Snapshot};
 const BUDGET: Duration = Duration::from_secs(6);
 const PYTHON: &str = "python3 -";
 
-pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<String> {
+pub(super) struct Prepared {
+    pub bootstrap: String,
+    pub tmux_helper: String,
+}
+
+pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<Prepared> {
     if nebula_settings::RawSettings::load().bool_on("ai_hooks") == Some(false) {
         return None;
     }
@@ -37,7 +42,14 @@ pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<Stri
             .await?;
             applied(&raw)?;
         }
-        Ok::<_, SessionError>(Some(snapshot.bootstrap(token)?))
+        Ok::<_, SessionError>(Some(Prepared {
+            bootstrap: snapshot.bootstrap(token)?,
+            tmux_helper: format!(
+                "{} {}",
+                remote::quote(&snapshot.python),
+                remote::quote(&format!("{}/remote_tmux.py", snapshot.root.trim_end_matches('/')))
+            ),
+        }))
     })
     .await;
     match result {

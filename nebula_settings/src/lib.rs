@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+mod config_defaults;
+pub use config_defaults::{UiValueKind, install_config_defaults, ui_value_kind};
 mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod app_icon;
@@ -25,6 +27,10 @@ mod background_effects;
 pub use background_effects::{BackgroundEffectRequest, BackgroundEffects};
 mod terminal_effects;
 pub use terminal_effects::{EffectAnimation, TerminalEffects};
+mod shader_parameters;
+pub use shader_parameters::ShaderTiming;
+mod tab_bar_material;
+pub use tab_bar_material::TabBarMaterial;
 mod cursor_motion;
 mod custom_theme;
 pub use cursor_motion::CursorMotion;
@@ -38,6 +44,8 @@ mod ligatures;
 pub use ligatures::Ligatures;
 mod notifications;
 pub use notifications::NotificationDuration;
+mod prompt_suggestions;
+pub use prompt_suggestions::PromptSuggestions;
 mod quick_terminal;
 mod scrolling;
 pub use scrolling::{
@@ -58,22 +66,33 @@ pub use paths::{
 
 /// `nebula_settings.txt` 的键值视图。行格式 `key=value`；键大小写不敏感，
 /// 值两端修剪；空值视为未设置。
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RawSettings {
     values: HashMap<String, String>,
 }
 
 impl RawSettings {
     pub fn load() -> Self {
-        Self::try_load().unwrap_or_default()
+        Self::try_load().unwrap_or_else(|_| config_defaults::apply(Self::default()))
     }
 
     /// 安装/卸载等授权路径不能把读取失败当成默认开启。
     pub fn try_load() -> std::io::Result<Self> {
-        match std::fs::read_to_string(settings_path()) {
+        let saved = match std::fs::read_to_string(settings_path()) {
             Ok(text) => Ok(Self::from_text(&text)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error),
+        }?;
+        Ok(config_defaults::apply(saved))
+    }
+
+    /// Already-decoded scalar preferences from the application configuration adapter.
+    pub fn from_values(values: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self {
+            values: values
+                .into_iter()
+                .map(|(key, value)| (key.to_ascii_lowercase(), value))
+                .collect(),
         }
     }
 
@@ -1034,6 +1053,7 @@ pub struct RuntimeSettings {
     pub ghost: bool,
     pub accept: AcceptKeyName,
     pub completion_style: CompletionStyleName,
+    pub prompt_suggestions: PromptSuggestions,
     /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗）。
     pub cjk_bold_regular: bool,
     pub tabs_position: TabsPositionName,
@@ -1067,6 +1087,8 @@ pub struct RuntimeSettings {
     pub tray: bool,
     pub blur: BlurModeName,
     pub opacity: f32,
+    /// File-only overrides shared by sidebar and top tab layouts.
+    pub tab_bar_material: TabBarMaterial,
     /// Whether the corresponding material value was explicitly present in
     /// `nebula_settings.txt`. Theme defaults may fill an absent value, while
     /// an explicit user value (including `none` or `1.0`) remains authoritative.
@@ -1225,6 +1247,7 @@ impl RuntimeSettings {
                 .value("completion_style")
                 .and_then(CompletionStyleName::from_settings)
                 .unwrap_or_default(),
+            prompt_suggestions: PromptSuggestions::from_raw(raw),
             cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
             tabs_position: raw
                 .value("tabs_position")
@@ -1267,6 +1290,7 @@ impl RuntimeSettings {
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
             opacity,
+            tab_bar_material: TabBarMaterial::from_raw(raw),
             opacity_explicit,
             blur_explicit,
             background: raw.value("background").and_then(parse_hex_rgb),

@@ -22,6 +22,7 @@ impl TerminalView {
         self.session = Some(session);
         self.error = None;
         self.exited = None;
+        self.retain_failed_session = false;
         self.exec_context = None;
         self.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
         receiver
@@ -119,10 +120,51 @@ fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<Termin
             &view.suggest.line_buf,
             &view.suggest.suggest_env,
         )
+        .or_else(|| {
+            view.suggest
+                .completion_popup_requested
+                .then(|| view.suggest.completion_prefix_from_raw_grid(&term, cursor))
+                .flatten()
+        })
         .map(|line| line.input);
         (line, Some((cursor.line.0 as usize, cursor.column.0)))
     };
     view.refresh_suggestion_from_snapshot(line, anchor, cx);
+}
+
+#[gpui::test]
+fn command_history_clear_invalidates_other_windows_and_cancels_pending_results(
+    cx: &mut TestAppContext,
+) {
+    use crate::gpui_shell::completion_history::ClearState;
+    let (first, window, _first_input) = open(cx);
+    window.run_until_parked();
+    first.update(window, |view, _| {
+        view.suggest.begin_completion_query("old query".into(), false);
+        view.suggest.suggestion = "old recorded command".into();
+        view.suggest.completion_popup_requested = true;
+    });
+    let (second, window, _second_input) = open(cx);
+    window.run_until_parked();
+    let cancellation = second.update(window, |view, cx| {
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+        let cancellation = view.suggestion_task.as_ref().unwrap().cancellation();
+        cx.set_global(ClearState::Finished(Ok(())));
+        cancellation
+    });
+    window.run_until_parked();
+    assert!(cancellation.is_cancelled());
+    for view in [first, second] {
+        view.read_with(window, |view, _| {
+            assert!(view.suggestion_task.is_none());
+            assert!(view.suggest.suggestion.is_empty());
+            assert!(!view.suggest.completion_query_matches("old query"));
+            assert!(view.suggest.completion_items.is_empty());
+            assert!(!view.suggest.completion_popup_requested);
+        });
+    }
 }
 
 #[gpui::test]
@@ -308,6 +350,56 @@ fn issue_353_history_uses_echoed_command_and_refreshes_on_all_platforms(cx: &mut
 }
 
 #[gpui::test]
+fn nested_path_completion_after_native_tab_keeps_the_shell_in_control(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.completion_style = crate::display::CompletionStyle::Inline;
+            // Some shell integrations report prompt start without OSC 133;B.
+            view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+            feed(view, b"> ");
+            view.ghost_enabled = false;
+            view.replace_text_in_range(None, "cd lin", window, cx);
+            feed(view, b"cd lin");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+            assert!(view.suggest.line_buf.is_empty());
+            // The shell completed the parent directory; only subsequent typing
+            // is present in the mirror when Pebrel next considers a suggestion.
+            feed(view, b"gting/");
+            view.ghost_enabled = true;
+            view.replace_text_in_range(None, "li", window, cx);
+            feed(view, b"li");
+            refresh_completion_from_grid(view, cx);
+            assert!(view.suggest.screen_line.is_empty(), "a path suffix is not a command line");
+        })
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert!(view.suggest.suggestion.is_empty());
+            assert!(view.suggest.completion_items.is_empty());
+            view.on_terminal_tab(&TerminalTab, window, cx);
+        })
+    });
+    // A prompt marker may precede its editor capability report. Let the normal
+    // bounded query fallback deliver Tab when this shell never reports one.
+    window.run_until_parked();
+    window.executor().advance_clock(std::time::Duration::from_secs(1));
+    window.run_until_parked();
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"cd lin\tli\t", "both Tabs must reach the native editor unchanged");
+}
+
+#[gpui::test]
 fn completion_never_accepts_a_candidate_for_partial_pty_echo(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler as _;
     let directory = tempfile::tempdir().unwrap();
@@ -356,12 +448,18 @@ fn completion_mode_hybrid_lists_without_writing_and_cancels_pending_results(
 ) {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("mode-candidate.txt"), b"").unwrap();
+    std::fs::write(directory.path().join("mode-choice.txt"), b"").unwrap();
+    crate::completion::record_command(
+        &crate::nebula_history::HistoryScope::Local,
+        "nvim mode-cached.txt",
+        directory.path().to_str().unwrap(),
+    );
     let (view, window, receiver) = open_at(cx, Some(directory.path().to_path_buf()));
     view.update(window, |view, cx| {
         view.suggest.suggest_env = crate::display::SuggestEnv::Local;
         view.ghost_enabled = true;
         view.completion_style = crate::display::CompletionStyle::Hybrid;
-        feed(view, "❯ cat mode-c".as_bytes());
+        feed(view, "❯ nvim mode-c".as_bytes());
         refresh_completion_from_grid(view, cx);
     });
     window.run_until_parked();
@@ -391,6 +489,12 @@ fn completion_mode_hybrid_lists_without_writing_and_cancels_pending_results(
     );
     view.update(window, |view, cx| {
         assert_eq!(view.suggest.completion_items[0].insert, "andidate.txt");
+        assert_eq!(view.suggest.completion_items[1].insert, "hoice.txt");
+        assert_eq!(view.suggest.completion_items.len(), 2);
+        assert_eq!(view.suggest.completion_selected, Some(0));
+        assert!(view.handle_completion_key("tab", cx));
+        assert_eq!(view.suggest.completion_selected, Some(1));
+        assert!(view.handle_completion_key("tab", cx));
         assert_eq!(view.suggest.completion_selected, Some(0));
         crate::display::nebula_input_char(&mut view.suggest, 'a');
         feed(view, b"a");
@@ -548,6 +652,138 @@ fn issue_358_history_popup_matches_a_command_prefix_without_a_trailing_space(
 }
 
 #[gpui::test]
+fn hybrid_tab_opens_history_behind_native_prediction_without_writing(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let scope = crate::nebula_history::HistoryScope::Wsl("issue358-prediction".into());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell { scope };
+        for command in ["cls;calc", "cls;notepad"] {
+            feed(view, format!("\x1b[2J\x1b[H❯ {command}").as_bytes());
+            view.commit_line(cx);
+            view.process_event(Event::CommandStart, cx);
+            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        }
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        feed(view, "\x1b[2J\x1b[H❯ ".as_bytes());
+        refresh_completion_from_grid(view, cx);
+        crate::display::nebula_input_text(&mut view.suggest, "cls");
+        feed(view, b"cls\x1b[90m;notepad\x1b[0m\x1b[8D");
+        refresh_completion_from_grid(view, cx);
+        assert!(view.suggest.screen_line.is_empty(), "normal capture rejects shell prediction");
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| view.on_terminal_tab(&TerminalTab, window, cx));
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert_eq!(view.suggest.screen_line, "cls");
+        assert_eq!(view.suggest.completion_items.len(), 2);
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        refresh_completion_from_grid(view, cx);
+        assert!(view.suggest.completion_popup_requested, "the next frame keeps the list open");
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.on_key_down(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("enter").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b";notepad", "acceptance excludes the prediction and never submits");
+}
+
+#[gpui::test]
+fn hybrid_tab_with_a_native_editor_queries_it_instead_of_the_mirror(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        view.completion_editor.advertise("fixture");
+        feed(view, "❯ ".as_bytes());
+        view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+        refresh_completion_from_grid(view, cx);
+        crate::display::nebula_input_text(&mut view.suggest, "cls");
+        feed(view, b"cls\x1b[90m;notepad\x1b[0m\x1b[8D");
+        refresh_completion_from_grid(view, cx);
+        {
+            let term = view.session.as_ref().unwrap().term.lock();
+            let cursor = term.grid().cursor.point;
+            assert!(view.suggest.completion_prefix_from_raw_grid(&term, cursor).is_some());
+        }
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| view.on_terminal_tab(&TerminalTab, window, cx));
+    });
+    view.update(window, |view, _| {
+        assert!(view.completion_editor.is_querying());
+        assert!(view.suggest.screen_line.is_empty(), "the mirror does not answer first");
+        assert_eq!(
+            receiver.try_iter().filter(|message| matches!(message, Msg::Input(_))).count(),
+            1,
+            "only the native editor query reaches the PTY"
+        );
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| view.on_terminal_tab(&TerminalTab, window, cx));
+    });
+    view.update(window, |view, _| {
+        assert!(view.completion_editor.is_querying());
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+    });
+}
+
+#[gpui::test]
+fn hybrid_tab_yields_after_cursor_edit_or_history_even_when_typed_prefix_matches(
+    cx: &mut TestAppContext,
+) {
+    for key in ["home", "up", "ctrl-r"] {
+        let (view, window, receiver) = open(cx);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.ghost_enabled = true;
+                view.completion_style = crate::display::CompletionStyle::Hybrid;
+                crate::display::nebula_input_text(&mut view.suggest, "existing");
+                feed(view, "❯ existing".as_bytes());
+                refresh_completion_from_grid(view, cx);
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse(key).unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                receiver.try_iter().for_each(drop);
+                // A frame before the control key echoes must not restore trust.
+                refresh_completion_from_grid(view, cx);
+                crate::display::nebula_input_text(&mut view.suggest, "cls");
+                feed(view, "\x1b[2J\x1b[H❯ clsexisting\x1b[8D".as_bytes());
+                refresh_completion_from_grid(view, cx);
+                view.on_terminal_tab(&TerminalTab, window, cx);
+                assert!(!view.suggest.completion_popup_requested, "{key} invalidates mirror trust");
+                assert!(receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+            });
+        });
+    }
+}
+
+#[gpui::test]
 fn native_shell_suggestion_and_zellij_alternate_screen_keep_their_input(cx: &mut TestAppContext) {
     let (view, window, receiver) = open(cx);
     window.update(|window, cx| {
@@ -681,18 +917,53 @@ fn ssh_tab_name_and_hover_preserve_host_identity_across_remote_titles(cx: &mut T
 }
 
 #[gpui::test]
-fn ai_tab_hover_shows_full_directory_and_reported_task_but_not_stale_task(cx: &mut TestAppContext) {
+fn ai_tab_name_shows_reported_task_and_restores_directory_on_exit(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.process_event(Event::CwdReport("/home/test/很长的项目目录".into()), cx);
-        view.running_program = Some("codex".into());
-        view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
-        assert_eq!(view.tab_label(), "很长的项目目录");
-        let hover = view.tab_tooltip(&view.tab_label());
-        assert!(hover.contains("/home/test/很长的项目目录"));
-        assert!(hover.contains("修复 SSH 标签名称"));
+        for program in ["codex", "claude", "pi", "opencode", "qoder"] {
+            view.running_program = Some(program.into());
+            assert_eq!(
+                view.tab_label(),
+                "很长的项目目录",
+                "a new task must not inherit an old title"
+            );
+            view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
+            assert_eq!(view.tab_label(), "修复 SSH 标签名称", "{program}");
+            let hover = view.tab_tooltip(&view.tab_label());
+            assert!(hover.contains("/home/test/很长的项目目录"));
+            assert!(hover.contains("修复 SSH 标签名称"));
+            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+            assert_eq!(view.tab_label(), "很长的项目目录");
+            assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
+        }
+    });
+}
+
+#[gpui::test]
+fn ai_task_name_preserves_remote_identity_in_hover_and_shell_fallback(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.ssh_destination = Some("root@192.0.2.10:2222".into());
+        view.ssh_label = Some("SG-1 新加坡".into());
+        view.cwd = "/srv/project".into();
+        view.running_program = Some("claude".into());
+        for title in ["", "shell", "claude", "Claude Code", "/srv/project", "root@192.0.2.10:2222"]
+        {
+            view.process_event(Event::Title(title.into()), cx);
+            assert_eq!(view.tab_label(), "SG-1 新加坡", "{title}");
+        }
+        view.process_event(Event::Title("修复登录失败".into()), cx);
+        assert_eq!(view.tab_label(), "修复登录失败");
+        assert_eq!(
+            view.tab_tooltip(&view.tab_label()),
+            "修复登录失败\nSG-1 新加坡\nroot@192.0.2.10:2222\n/srv/project\nclaude · 修复登录失败"
+        );
         view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
-        assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
+        assert_eq!(view.tab_label(), "SG-1 新加坡");
+        view.running_program = Some("htop".into());
+        view.process_event(Event::Title("ordinary application title".into()), cx);
+        assert_eq!(view.tab_label(), "SG-1 新加坡");
     });
 }
 
@@ -846,6 +1117,36 @@ fn review_regression_saved_identity_without_a_resume_command_is_not_live(cx: &mu
             assert!(view.running_program.is_none());
         })
     });
+}
+
+#[gpui::test]
+fn structural_layout_during_startup_commits_without_the_window_grace(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    window.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.mark_structural_resize();
+            view.set_layout(
+                point(px(0.0), px(0.0)),
+                px(10.0),
+                px(20.0),
+                size(px(1200.0), px(700.0)),
+                1.0,
+                cx,
+            );
+        });
+    });
+    let sizes: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Resize(size) => Some((size.num_cols, size.num_lines)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sizes, [(120, 35)], "explicit layout precedes the next input immediately");
+    window.run_until_parked();
+    window.executor().advance_clock(TerminalView::STARTUP_GRID_GRACE);
+    window.run_until_parked();
+    assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Resize(_))));
 }
 
 #[gpui::test]

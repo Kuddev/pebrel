@@ -1239,12 +1239,14 @@ name = "pebrel-mobile-ssh"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bytes",
  "jni",
  "pebrel-mobile-link",
  "russh",
  "russh-sftp",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tokio-util",
  "zeroize",

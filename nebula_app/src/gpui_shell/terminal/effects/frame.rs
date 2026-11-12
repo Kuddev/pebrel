@@ -34,16 +34,26 @@ mod tests {
             text_color: None,
         };
         let mut history = History::default();
-        let first = history.encode([100, 50], bounds, 1.0, Some(&cursor), true, &palette, &colors);
+        let config = nebula_settings::TerminalEffects::default();
+        let first =
+            history.encode([100, 50], bounds, 1.0, Some(&cursor), true, &palette, &colors, &config);
         let word = |bytes: &[u8], index: usize| {
             u32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap())
         };
         assert_eq!(first.len(), super::super::compiler::UNIFORM_BYTES);
-        assert_eq!((word(&first, 8), word(&first, 9), word(&first, 10)), (1, 0, 1));
+        assert_eq!((word(&first, 8), word(&first, 9), word(&first, 10)), (2, 0, 1));
         assert_eq!(&first[3 * 16..4 * 16], &first[4 * 16..5 * 16]);
         cursor.rect.origin.x = px(20.0);
-        let second =
-            history.encode([100, 50], bounds, 1.0, Some(&cursor), false, &palette, &colors);
+        let second = history.encode(
+            [100, 50],
+            bounds,
+            1.0,
+            Some(&cursor),
+            false,
+            &palette,
+            &colors,
+            &config,
+        );
         assert_eq!(word(&second, 9), 1);
         assert_eq!(word(&second, 10), 0);
         assert_eq!(f32::from_bits(word(&second, 12)), 20.0);
@@ -62,6 +72,7 @@ pub(super) struct History {
     cursor_changed: f32,
     focused: bool,
     focus_changed: f32,
+    speed: f32,
 }
 
 fn rgba(color: Rgba) -> [f32; 4] {
@@ -72,7 +83,8 @@ impl History {
     pub fn unfocus(&mut self) {
         if self.focused {
             self.focused = false;
-            self.focus_changed = self.started.map_or(0.0, |time| time.elapsed().as_secs_f32());
+            self.focus_changed =
+                self.started.map_or(0.0, |time| time.elapsed().as_secs_f32() * self.speed);
         }
     }
 
@@ -85,9 +97,11 @@ impl History {
         focused: bool,
         palette: &Palette,
         colors: &Colors,
+        config: &nebula_settings::TerminalEffects,
     ) -> Arc<[u8]> {
         let started = self.started.get_or_insert_with(Instant::now);
-        let seconds = started.elapsed().as_secs_f32();
+        self.speed = config.timing.speed;
+        let seconds = started.elapsed().as_secs_f32() * self.speed;
         let delta = if self.index == 0 { 0.0 } else { seconds - self.last_time };
         self.last_time = seconds;
         let current = cursor
@@ -146,7 +160,7 @@ impl History {
                 1.0 / extent[1] as f32,
             ]),
             floats([seconds, delta, self.cursor_changed, self.focus_changed]),
-            [1, self.index, focused as u32, current.visible as u32],
+            [2, self.index, focused as u32, current.visible as u32],
             floats(current.rect),
             floats(self.previous.rect),
             floats(current.color),
@@ -167,6 +181,9 @@ impl History {
             for word in floats(rgba(palette.resolve(Color::Indexed(index), colors, false))) {
                 bytes.extend_from_slice(&word.to_le_bytes());
             }
+        }
+        for word in floats(config.parameters) {
+            bytes.extend_from_slice(&word.to_le_bytes());
         }
         self.index = self.index.wrapping_add(1);
         debug_assert_eq!(bytes.len(), super::compiler::UNIFORM_BYTES);

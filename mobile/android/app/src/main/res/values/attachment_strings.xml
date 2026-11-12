@@ -1,7 +1,5 @@
 <resources>
     <string name="attachment_added">Attachment added to the draft</string>
-    <string name="attachment_auth_title">Upload to this SSH host</string>
-    <string name="attachment_auth_hint">Enter the login password for a separate file transfer. This password is used only for this upload.</string>
     <string name="attachment_upload">Upload</string>
     <string name="attachment_copy_path">Copy path</string>
     <string name="attachment_importing">Importing attachment…</string>
@@ -11,6 +9,5 @@
     <string name="attachment_too_large">Choose a file no larger than 16 MiB.</string>
     <string name="attachment_unreadable">The selected file could not be read. Choose it again.</string>
     <string name="attachment_storage">Allow shared storage access and check the available space.</string>
-    <string name="attachment_remote_tools">Uploading requires a POSIX shell with head and base64 on the SSH host.</string>
     <string name="attachment_transfer_failed">The file transfer did not complete. Check the connection and available space, then try again.</string>
 </resources>

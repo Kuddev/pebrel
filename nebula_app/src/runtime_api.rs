@@ -10,6 +10,7 @@ mod cli;
 mod command;
 pub(crate) mod conversation;
 pub(crate) mod git;
+mod handover;
 pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
@@ -238,6 +239,7 @@ pub enum RuntimeTaskState {
 pub enum RuntimeAgentStateSource {
     Hook,
     Osc7501,
+    Title,
     Screen,
     Process,
 }
@@ -924,6 +926,11 @@ pub struct RuntimeDispatch {
 }
 
 impl RuntimeDispatch {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn test(command: RuntimeCommand) -> (Arc<Self>, Receiver<Result<Value, ApiError>>) {
+        Self::new(command)
+    }
+
     fn new(command: RuntimeCommand) -> (Arc<Self>, Receiver<Result<Value, ApiError>>) {
         let (reply, receiver) = mpsc::sync_channel(1);
         (Arc::new(Self { command, reply }), receiver)
@@ -977,6 +984,7 @@ impl EventSink {
 
 #[derive(Clone, Default)]
 pub struct RuntimeHub {
+    predictions: Arc<crate::prompt_suggestions::service::Service>,
     inner: Arc<Mutex<HubState>>,
 }
 

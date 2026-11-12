@@ -33,8 +33,7 @@ pub(super) struct Editor {
 }
 
 impl Editor {
-    #[cfg(test)]
-    pub(super) fn ready_for_test(&self) -> bool {
+    pub(super) fn ready(&self) -> bool {
         self.owner.is_some()
     }
 
@@ -52,7 +51,7 @@ impl Editor {
         !self.basic_unicode || text.chars().all(|ch| u32::from(ch) <= 0xffff)
     }
 
-    fn advertise(&mut self, value: &str) -> bool {
+    pub(super) fn advertise(&mut self, value: &str) -> bool {
         let (owner, capability) = value.split_once('\n').unwrap_or((value, "unicode"));
         self.basic_unicode = capability == "basic";
         if self.owner.as_deref() == Some(owner) {

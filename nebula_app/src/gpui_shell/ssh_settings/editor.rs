@@ -316,6 +316,9 @@ impl SettingsPane {
                                                         .debug_selector(|| {
                                                             "ssh-editor-save".to_owned()
                                                         })
+                                                        .debug_selector(|| {
+                                                            "ssh-editor-save".to_owned()
+                                                        })
                                                         .label(language.pick("保存", "Save"))
                                                         .primary()
                                                         .small()

@@ -10,7 +10,7 @@ use super::*;
 #[derive(Clone, Debug, Default)]
 pub(super) struct TabMeta {
     pub(super) runtime_id: crate::runtime_api::tabs::TabId,
-    /// 用户重命名过的标签名；`None` = 跟着 cwd/文件名自动走。
+    /// 用户重命名过的标签名；`None` = 跟着任务、目录或文件名自动走。
     pub(super) custom_name: Option<String>,
     /// 色标（右键菜单的标签颜色）；`None` = 不画色条。
     pub(super) color: Option<Rgb>,
@@ -39,8 +39,8 @@ pub(super) struct TabPresentation {
     pub(super) shell_tag: Option<SharedString>,
     pub(super) color: Option<Rgb>,
     pub(super) renaming: Option<Entity<InputState>>,
-    /// 本 tab 的分屏数（Terminal tab 才 > 0）。`> 1` 时行首图标换成 2×2 分屏
-    /// 标记、行尾挂一枚数量胶囊；见 [`pane_header::split_badge`]。
+    /// 本 tab 的分屏数（Terminal tab 才 > 0）。`> 1` 时行尾显示布局缩略图；
+    /// 见 [`pane_header::split_layout_icon`]。
     pub(super) pane_count: usize,
     pub(super) local_administrator: bool,
 }
@@ -54,17 +54,19 @@ impl NebulaWorkspace {
             return custom.into();
         }
         match &self.tabs[ix] {
-            WorkspaceTab::Settings { .. } => "设置".into(),
+            WorkspaceTab::Settings { .. } => crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::CommonSettings)
+                .into(),
             WorkspaceTab::Image { view } => view.read(cx).title.clone().into(),
             WorkspaceTab::Document { view, .. } => view.read(cx).tab_title().into(),
             WorkspaceTab::Code { view, .. } => view.read(cx).tab_title(cx).into(),
             tab @ WorkspaceTab::Terminal { .. } => {
-                // 标签 = 聚焦 pane 的 cwd 末级目录名（旧壳 chrome_tab_label
-                // 规则）。分屏计数**不拼在这里**：这份字符串还要喂给 runtime
+                // 标签跟随聚焦 pane 的原生 AI 任务名，普通 shell 回退到目录或主机。
+                // 分屏计数**不拼在这里**：这份字符串还要喂给 runtime
                 // API 的 tab label、跨窗拖拽标题和重命名预填，掺进 "⊞2" 会
                 // 一路泄漏，而且长标题下会被 truncate_tab_label 截掉、被
                 // custom_name 整条顶掉。计数改由 TabPresentation::pane_count
-                // 单独画成胶囊，见 sidebar/top_tabs 的渲染。
+                // 决定是否显示布局缩略图，见 sidebar/top_tabs 的渲染。
                 match tab.focused_view() {
                     Some(view) => view.read(cx).tab_label().into(),
                     None => SharedString::from("shell"),

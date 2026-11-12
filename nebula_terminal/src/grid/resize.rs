@@ -173,7 +173,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     /// shrink will keep visible, making the settled reflow land without a
     /// visual jump.
     pub(crate) fn shrink_scroll_amount(&self, conpty: bool, target: usize) -> usize {
-        let cursor_line = self.cursor.point.line.0 as usize;
+        // Deferred viewport rendering can observe stale cursor coordinates.
+        // Clamp before converting a negative line to an unsigned scroll amount.
+        let cursor_line = self.cursor.point.line.grid_clamp(self, Boundary::Cursor).0 as usize;
 
         let mut required_scrolling = (cursor_line + 1).saturating_sub(target);
         if conpty {

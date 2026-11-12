@@ -4,13 +4,37 @@ use gpui::{Context, EventEmitter as _};
 use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::{Column, Line, Point};
 
-use crate::ai_agents::{AgentStatus, AgentStatusSource};
+use crate::ai_agents::{AgentKind, AgentStatus, AgentStatusSource};
 use crate::ai_hook::{AiHookEvent, AiHookKind};
 
 use super::{TerminalView, TerminalViewEvent, notifications};
 
 impl TerminalView {
+    pub(super) fn observe_agent_title(
+        &mut self,
+        observed_at: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) {
+        if self.exited.is_none()
+            && self.agent_activity.observe_native_title(
+                self.running_program.as_deref(),
+                &self.title,
+                observed_at,
+            )
+        {
+            self.confirmation.observe_waiting(self.agent_activity.status() == AgentStatus::Blocked);
+            cx.emit(TerminalViewEvent::TitleChanged);
+            cx.notify();
+        }
+    }
+
     pub fn handle_ai_hook(&mut self, event: &AiHookEvent, cx: &mut Context<Self>) -> bool {
+        self.sync_remote_activity(cx);
+        if self.ssh_destination.is_some() && event.remote_context != self.remote_activity.context {
+            // Reject queued events from a previous pane/job/connection before
+            // they can claim lifecycle ownership or advance the ordering gate.
+            return false;
+        }
         if let Some(client_pid) = event.client_pid
             && event.pane == Some(self.pane_id)
             && let Some(session) = &self.session
@@ -142,15 +166,26 @@ impl TerminalView {
     }
 
     /// Check shell boundaries first; only an integration lacking lifecycle
-    /// authority may then consume a screen observation. Silence has no meaning.
+    /// authority may then consume a screen observation. Missing matches cannot
+    /// establish completion.
     pub fn refresh_agent_screen_state(&mut self, cx: &mut Context<Self>) {
         if self.exited.is_some()
             || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
         {
             return;
         }
+        let remote_activity = self.sync_remote_activity(cx);
         self.flush_pending_runtime_submit(cx);
         self.flush_pending_shell_command(cx);
+        if self.observing_tmux() {
+            if let Some(observation) = remote_activity
+                && self.remote_activity.sample_at != Some(observation.observed_at)
+            {
+                self.remote_activity.sample_at = Some(observation.observed_at);
+                self.observe_agent_screen(&observation.screen, cx);
+            }
+            return;
+        }
         self.reconcile_shell_activity(cx);
         self.on_native_cmd_prompt(cx);
         self.probe_missing_codex_session(cx);
@@ -194,23 +229,48 @@ impl TerminalView {
             return;
         }
         let Some(screen) = screen else { return };
-        let detected = notifications::screen_identity_allowed(self.running_program.as_deref())
-            .then(|| crate::ai_agents::identify(&screen))
-            .flatten();
+        self.observe_agent_screen(&screen, cx);
+    }
+
+    fn observe_agent_screen(&mut self, screen: &str, cx: &mut Context<Self>) {
+        let passthrough = self.screen_passthrough();
+        let (screen, detected) = if passthrough {
+            super::remote_activity::passthrough_identity(screen)
+        } else {
+            // The shell boundary owns the lifecycle again once the relay is gone.
+            self.remote_activity.passthrough = None;
+            self.remote_activity.passthrough_missing = None;
+            let detected = notifications::screen_identity_allowed(self.running_program.as_deref())
+                .then(|| crate::ai_agents::identify(screen))
+                .flatten();
+            (screen, detected)
+        };
+        if passthrough && self.release_passthrough_agent(detected, cx) {
+            return;
+        }
         let Some(program) =
-            notifications::screen_program(self.running_program.as_deref(), detected)
+            notifications::screen_program(self.running_program.as_deref(), detected, passthrough)
         else {
-            self.agent_activity.observe_screen(None);
+            self.agent_activity.reset_screen_samples();
             return;
         };
         if self.running_program.as_deref() != Some(program.as_str()) {
+            if passthrough && self.running_program.as_deref().and_then(AgentKind::parse).is_none() {
+                self.remote_activity.passthrough = Some(self.running_program.clone());
+                self.remote_activity.passthrough_missing = None;
+            }
             self.running_program = Some(program.clone());
             self.agent_activity.identify(AgentStatusSource::Screen);
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
         }
+        // Explicit lifecycle signals retain authority on local and remote panes.
+        // Silence or a familiar screen form cannot rewrite a reported state.
+        if self.effective_program_status().is_some() || !self.agent_activity.allows_screen() {
+            return;
+        }
         let previous = self.agent_activity.status();
-        if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, &screen)) {
+        if !self.agent_activity.observe_screen(crate::ai_agents::detect(&program, screen)) {
             return;
         }
         let next = self.agent_activity.status();

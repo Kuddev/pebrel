@@ -118,6 +118,7 @@ internal fun ComposerToolbar(
     enabled: Boolean,
     shortcuts: List<String> = emptyList(),
     onKey: ((String) -> Unit)? = null,
+    onEditShortcuts: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     Row(
@@ -141,6 +142,9 @@ internal fun ComposerToolbar(
         }
         Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp)
             .background(colors.outlineVariant.copy(alpha = .45f)))
+        onEditShortcuts?.let { edit ->
+            ComposerIconButton(R.drawable.ic_command, stringResourceCompat(R.string.custom_shortcuts), onClick = edit)
+        }
         onEdit?.let { edit ->
             ComposerIconButton(
                 icon = R.drawable.ic_edit,

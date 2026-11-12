@@ -34,7 +34,7 @@ impl ShellSelectItem {
     pub(super) fn import_action(language: crate::display::UiLanguage) -> Self {
         Self {
             id: SHELL_IMPORT_ACTION_ID.to_owned(),
-            name: language.pick("导入终端目录…", "Import terminal directory...").into(),
+            name: language.text(crate::i18n::Message::SettingsPaneImportTerminalDirectory).into(),
             closed_image: None,
             row_image: None,
         }
@@ -61,7 +61,7 @@ impl ShellSelectItem {
             // 安全边距），codicon terminal 的墨迹约 0.88 em——乘 0.88 之后
             // 两种图标才真的同尺寸。
             div()
-                .font_family(crate::font_install::REQUIRED_FONT_FAMILY)
+                .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
                 .text_size(px(size * FALLBACK_ICON_SCALE))
                 .child(crate::shell_detect::icon_for_id(&self.id))
                 .into_any_element()

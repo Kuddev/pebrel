@@ -219,7 +219,7 @@ impl NebulaWorkspace {
         let selected_ring = theme.ring.opacity(0.16);
         // 文件树字位是内置 Nerd Font 图标；固定 Maple，不能让终端主字体
         // 改变折叠箭头和文件图标的 advance。
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let selected = self.side_panel.selected.as_ref() == Some(&row.path);
         let searching = !self.side_panel.search.trim().is_empty();
         let path_hint = searching.then(|| {
@@ -942,16 +942,27 @@ impl NebulaWorkspace {
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, _, cx| {
-                let _ = workspace.update(cx, |this, cx| {
-                    match crate::display::send_to_recycle_bin(&path) {
-                        Ok(()) => {
-                            this.side_panel.request_refresh();
-                            this.sync_side_panel_to_active(false, cx);
-                        },
-                        Err(error) => this.side_panel.set_notice(PanelNotice::DeleteFailed(error)),
-                    }
-                    cx.notify();
-                });
+                let path = path.clone();
+                let workspace = workspace.clone();
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { crate::display::send_to_recycle_bin(&path) });
+                cx.spawn(async move |cx| {
+                    let result = task.await;
+                    let _ = workspace.update(cx, |this, cx| {
+                        match result {
+                            Ok(()) => {
+                                this.side_panel.request_refresh();
+                                this.sync_side_panel_to_active(false, cx);
+                            },
+                            Err(error) => {
+                                this.side_panel.set_notice(PanelNotice::DeleteFailed(error))
+                            },
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
                 true
             })
         });

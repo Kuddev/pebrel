@@ -84,6 +84,46 @@ fn ligature_components_move_together_and_the_next_cell_keeps_its_column() {
 }
 
 #[test]
+fn monaco_fi_ligature_collapses_to_one_cell_and_must_be_expanded() {
+    // "file": the fi glyph sits on byte 0 and only advances one cell, while
+    // "l" is already indexed at byte 2. Snapping that index leaves byte 1 empty.
+    let natural = layout(&[(0, 0.0), (2, 10.0), (3, 20.0)], 4);
+    assert_eq!(super::collapsed_cluster_ranges(&natural, 10.0), vec![(0, 2)]);
+    assert!(super::cluster_collapses(2, 10.0, 10.0));
+}
+
+#[test]
+fn programming_ligature_uses_natural_advance_not_grid_spacing() {
+    // Natural column advance 10, two-column cluster advance 20. font.offset.x = 3
+    // at scale 1 makes the grid 13, and 20 < 13 * 1.55. That grid width must not
+    // be the collapse metric. Negative spacing (grid 7) must not be either.
+    assert!(!super::cluster_collapses(2, 20.0, 10.0));
+    assert!(20.0 < 13.0 * 1.55);
+    let natural = layout(&[(0, 0.0), (1, 10.0), (1, 14.0), (3, 30.0)], 4);
+    assert!(super::collapsed_cluster_ranges(&natural, 10.0).is_empty());
+    for grid in [7.0, 13.0] {
+        let aligned = grid_layout(&natural, px(grid));
+        let indices: Vec<_> = aligned.runs[0].glyphs.iter().map(|glyph| glyph.index).collect();
+        assert_eq!(indices, [0, 1, 1, 3]);
+        assert_eq!(positions(&aligned)[3], 3.0 * grid);
+    }
+}
+
+#[test]
+fn a_programming_ligature_that_covers_both_columns_stays_joined() {
+    let natural = layout(&[(0, 0.0), (1, 9.6), (1, 13.6), (3, 28.8)], 4);
+    assert!(super::collapsed_cluster_ranges(&natural, 9.6).is_empty());
+    assert!(!super::cluster_collapses(2, 19.2, 9.6));
+}
+
+#[test]
+fn a_trailing_one_cell_ligature_is_collapsed_against_the_shaped_width() {
+    let mut natural = layout(&[(0, 0.0)], 2);
+    natural.width = px(10.0);
+    assert_eq!(super::collapsed_cluster_ranges(&natural, 10.0), vec![(0, 2)]);
+}
+
+#[test]
 fn deleting_text_or_splitting_a_run_cannot_change_other_grid_origins() {
     let before = layout(&[(0, 0.0), (1, 9.6), (2, 19.2), (3, 28.8)], 4);
     let after = layout(&[(0, 0.0), (1, 9.6), (2, 19.2)], 3);

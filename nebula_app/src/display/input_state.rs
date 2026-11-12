@@ -27,6 +27,21 @@ pub(crate) struct PendingEcho {
 }
 
 impl NebulaPaneState {
+    /// A shell prediction may follow the cursor only while the complete typed
+    /// mirror still matches the echoed prefix. Cursor edits invalidate trust.
+    pub(crate) fn completion_prefix_from_raw_grid<T: EventListener>(
+        &self,
+        terminal: &Term<T>,
+        cursor: Point,
+    ) -> Option<PromptLineSnapshot> {
+        if !self.completion_mirror_at_end || self.line_buf.is_empty() {
+            return None;
+        }
+        let line =
+            prompt_line_from_raw_grid(terminal, cursor, &self.line_buf, &self.suggest_env, true)?;
+        (line.input == self.line_buf).then_some(line)
+    }
+
     pub(crate) fn pending_completion_line(&self) -> Option<&str> {
         self.completion_pending_input.as_ref().map(|pending| pending.expected.as_str())
     }
@@ -126,6 +141,7 @@ pub(crate) fn nebula_clear_line(state: &mut NebulaPaneState) {
     state.line_buf.clear();
     state.screen_line.clear();
     state.completion_pending_input = None;
+    state.completion_mirror_at_end = false;
     state.completion_suppressed_line = None;
     state.completion_popup_requested = false;
     state.clear_completion_hints();
@@ -187,8 +203,18 @@ pub(crate) fn nebula_prompt_line_from_raw_grid<T: EventListener>(
     typed_tail: &str,
     env: &SuggestEnv,
 ) -> Option<PromptLineSnapshot> {
+    prompt_line_from_raw_grid(terminal, cursor, typed_tail, env, false)
+}
+
+fn prompt_line_from_raw_grid<T: EventListener>(
+    terminal: &Term<T>,
+    cursor: Point,
+    typed_tail: &str,
+    env: &SuggestEnv,
+    allow_tail: bool,
+) -> Option<PromptLineSnapshot> {
     let input_start = terminal.nebula_prompt_input_point();
-    let (text, boundary) = raw_grid_line_with_boundary(terminal, cursor, input_start)?;
+    let (text, boundary) = raw_grid_line_with_boundary(terminal, cursor, input_start, allow_tail)?;
     if let Some(boundary) = boundary {
         let (prompt, input) = text.split_at(boundary);
         return Some(PromptLineSnapshot { prompt: prompt.to_owned(), input: input.to_owned() });
@@ -233,13 +259,14 @@ pub(crate) fn nebula_shell_prompt_restored_from_raw_grid<T: EventListener>(
 }
 
 fn raw_grid_logical_line<T: EventListener>(terminal: &Term<T>, cursor: Point) -> Option<String> {
-    raw_grid_line_with_boundary(terminal, cursor, None).map(|(text, _)| text)
+    raw_grid_line_with_boundary(terminal, cursor, None, false).map(|(text, _)| text)
 }
 
 fn raw_grid_line_with_boundary<T: EventListener>(
     terminal: &Term<T>,
     cursor: Point,
     input_start: Option<Point>,
+    allow_tail: bool,
 ) -> Option<(String, Option<usize>)> {
     let grid = terminal.grid();
     if !raw_grid_line_is_readable(cursor.line, grid.topmost_line(), grid.bottommost_line()) {
@@ -266,7 +293,7 @@ fn raw_grid_line_with_boundary<T: EventListener>(
         if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             continue;
         }
-        if !cell.c.is_whitespace() {
+        if !allow_tail && !cell.c.is_whitespace() {
             return None;
         }
     }
@@ -329,7 +356,13 @@ fn prompt_line_snapshot(
     let prefix = &text[..text.len() - typed_tail.len()];
     let prompt = prefix.trim_end();
     let marker = prompt.chars().next_back()?;
-    if marker != NEBULA_PROMPT_ARROW && !semantic_prompt && !likely_prompt(prompt, marker, env) {
+    // OSC 133;A proves prompt activity, not where its input begins. A native
+    // completion or cursor edit can leave only a suffix in typed_tail; accepting
+    // an arbitrary prefix would turn `> cd parent/li` into command input `li`.
+    // Unknown prompt shapes need an explicit input boundary or native editor query.
+    if !likely_prompt(prompt, marker, env)
+        && !(semantic_prompt && matches!(marker, '$' | '#' | '%' | '>'))
+    {
         return None;
     }
     Some(PromptLineSnapshot { prompt: prompt.to_owned(), input: typed_tail.to_owned() })
@@ -429,6 +462,32 @@ fn likely_prompt(prompt: &str, marker: char, env: &SuggestEnv) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_start_alone_does_not_turn_a_nested_path_suffix_into_a_command() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::event_loop::StreamProcessor;
+        use nebula_terminal::grid::Grid;
+
+        for boundary in ["", "\x1b]133;B\x07"] {
+            let size = Grid::<Cell>::new(2, 80, 0);
+            let mut terminal = Term::new(Default::default(), &size, VoidListener);
+            let bytes = format!("\x1b]133;A\x07> {boundary}cd lingting/li");
+            StreamProcessor::default().feed(&mut terminal, &VoidListener, bytes.as_bytes());
+            // A native Tab completion invalidated the keystroke mirror. Only
+            // the suffix typed since then is known; OSC 133;A is not its boundary.
+            let snapshot = nebula_prompt_line_from_raw_grid(
+                &terminal,
+                terminal.grid().cursor.point,
+                "li",
+                &SuggestEnv::Local,
+            );
+            assert_eq!(
+                snapshot.map(|snapshot| snapshot.input),
+                (!boundary.is_empty()).then(|| "cd lingting/li".to_owned()),
+            );
+        }
+    }
 
     #[test]
     fn completion_waits_for_append_and_delete_echo_but_releases_shell_rewrites() {
@@ -571,8 +630,9 @@ mod tests {
         let env = SuggestEnv::Wsl { distro: "Ubuntu".to_owned() };
         assert_eq!(input_after_prompt("dev@box:~$ git status", "git stat", &env, false), None);
         assert_eq!(input_after_prompt("dev@box:~$ ", "", &env, false), None);
+        assert_eq!(input_after_prompt("custom prompt :: cargo t", "cargo t", &env, true), None,);
         assert_eq!(
-            input_after_prompt("custom prompt :: cargo t", "cargo t", &env, true),
+            input_after_prompt("> cargo t", "cargo t", &env, true),
             Some("cargo t".to_owned())
         );
     }

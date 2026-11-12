@@ -2,11 +2,17 @@
 __pebrel_editor_ready_report() {
     if [ "${__pebrel_editor_ready:-0}" = 1 ] && [ -n "${__pebrel_shell_token:-}" ]; then
         printf '\033]1337;SetUserVar=pebrel_editor_ready=%s\007' "$__pebrel_shell_token"
+        if typeset -f __pebrel_pointer_ready_report >/dev/null; then __pebrel_pointer_ready_report; fi
     fi
 }
 
 __pebrel_editor_report() {
     local encoded owner cursor line prefix
+    local argument=${READLINE_ARGUMENT-${NUMERIC-}}
+    if [ -n "$argument" ] && typeset -f __pebrel_pointer_action >/dev/null; then
+        __pebrel_pointer_action "$argument"
+        return
+    fi
     owner=$(printf '%s' "$__pebrel_shell_token" | base64 -d)
     if [ -n "${BASH_VERSION-}" ]; then
         line=$READLINE_LINE

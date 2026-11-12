@@ -63,36 +63,42 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsNotificationsDurationPersistent),
         ],
         "cursor_shape" => vec![
-            language.pick("条形（│）", "Bar (│)"),
-            language.pick("下划线（_）", "Underscore (_)"),
-            language.pick("实心框（█）", "Filled box (█)"),
-            language.pick("空心框（□）", "Empty box (□)"),
+            language.text(crate::i18n::Message::SettingsOptionBar),
+            language.text(crate::i18n::Message::SettingsOptionUnderscore),
+            language.text(crate::i18n::Message::SettingsOptionFilledBox),
+            language.text(crate::i18n::Message::SettingsOptionEmptyBox),
         ],
         "cursor_motion" => vec![
             language.text(crate::i18n::Message::SettingsCursorMotionOff),
             language.text(crate::i18n::Message::SettingsCursorMotionSmooth),
         ],
         "tabs_position" => {
-            vec![language.pick("左侧边栏", "Left sidebar"), language.pick("顶部", "Top")]
+            vec![
+                language.text(crate::i18n::Message::CommonLeftSidebar),
+                language.text(crate::i18n::Message::CommonTop),
+            ]
         },
-        "tab_reveal" => vec![language.pick("滑动", "Slide"), language.pick("立即", "Instant")],
-        "density" => vec![language.pick("标准", "Standard"), language.pick("紧凑", "Compact")],
+        "tab_reveal" => vec![
+            language.text(crate::i18n::Message::SettingsOptionSlide),
+            language.text(crate::i18n::Message::SettingsOptionInstant),
+        ],
+        "density" => vec![
+            language.text(crate::i18n::Message::CommonStandard),
+            language.text(crate::i18n::Message::CommonCompact),
+        ],
         "new_tab_position" => vec![
-            language.pick("当前标签之后", "After current tab"),
-            language.pick("列表末尾", "End of list"),
+            language.text(crate::i18n::Message::SettingsOptionAfterCurrentTab),
+            language.text(crate::i18n::Message::SettingsOptionEndOfList),
         ],
         "windowing_behavior" => vec![
-            language.pick("创建新窗口", "Create a new window"),
-            language.pick("附加到最近使用的窗口", "Attach to the most recent window"),
-            language.pick(
-                "附加到此桌面最近使用的窗口",
-                "Attach to the most recent window on this desktop",
-            ),
+            language.text(crate::i18n::Message::SettingsOptionCreateANewWindow),
+            language.text(crate::i18n::Message::SettingsOptionAttachToTheMostRecent),
+            language.text(crate::i18n::Message::SettingsOptionAttachToTheMostRecentV2),
         ],
         "vcs_display" => vec![
-            language.pick("自动检测", "Auto detect"),
-            language.pick("仅 Git", "Git only"),
-            language.pick("仅 SVN", "SVN only"),
+            language.text(crate::i18n::Message::SettingsOptionAutoDetect),
+            language.text(crate::i18n::Message::SettingsOptionGitOnly),
+            language.text(crate::i18n::Message::SettingsOptionSvnOnly),
         ],
         "ligatures" => vec![
             language.text(crate::i18n::Message::SettingsFontLigaturesOn),
@@ -100,46 +106,49 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsFontLigaturesTheme),
         ],
         "cell_width_mode" => {
-            vec![language.pick("紧凑", "Compact"), language.pick("宽松", "Relaxed")]
+            vec![
+                language.text(crate::i18n::Message::CommonCompact),
+                language.text(crate::i18n::Message::CommonRelaxed),
+            ]
         },
         "bell" => vec![
-            language.pick("关", "Off"),
-            language.pick("闪烁", "Visual"),
-            language.pick("声音", "Sound"),
-            language.pick("闪烁 + 声音", "Visual + sound"),
+            language.text(crate::i18n::Message::CommonOff),
+            language.text(crate::i18n::Message::CommonVisual),
+            language.text(crate::i18n::Message::CommonSound),
+            language.text(crate::i18n::Message::SettingsOptionVisualSound),
         ],
         "blur" => vec![
-            language.pick("无", "None"),
-            language.pick("Mica（低开销）", "Mica (low cost)"),
-            language.pick("Mica Alt（低开销）", "Mica Alt (low cost)"),
-            language.pick("Aero（玻璃）", "Aero (glass)"),
-            language.pick("Acrylic（高开销）", "Acrylic (high cost)"),
+            language.text(crate::i18n::Message::CommonNone),
+            language.text(crate::i18n::Message::SettingsOptionMicaLowCost),
+            language.text(crate::i18n::Message::SettingsOptionMicaAltLowCost),
+            language.text(crate::i18n::Message::SettingsOptionAeroGlass),
+            language.text(crate::i18n::Message::SettingsOptionAcrylicHighCost),
         ],
         "accept" => vec![
-            language.pick("右方向键", "Right arrow"),
+            language.text(crate::i18n::Message::SettingsOptionRightArrow),
             "Tab",
-            language.pick("Tab 或右方向键", "Tab or Right arrow"),
+            language.text(crate::i18n::Message::SettingsOptionTabOrRightArrow),
         ],
         "completion_style" => nebula_settings::CompletionStyleName::ALL
             .into_iter()
             .map(|style| language.completion_style_label(style))
             .collect(),
         "background_image_fit" => vec![
-            language.pick("拉伸", "Fill"),
-            language.pick("适应", "Uniform"),
-            language.pick("填充", "Uniform to fill"),
-            language.pick("原始尺寸", "Original size"),
+            language.text(crate::i18n::Message::SettingsOptionFill),
+            language.text(crate::i18n::Message::SettingsOptionUniform),
+            language.text(crate::i18n::Message::SettingsOptionUniformToFill),
+            language.text(crate::i18n::Message::SettingsOptionOriginalSize),
         ],
         "background_image_alignment" => vec![
-            language.pick("左上", "Top left"),
-            language.pick("顶部", "Top"),
-            language.pick("右上", "Top right"),
-            language.pick("左侧", "Left"),
-            language.pick("居中", "Center"),
-            language.pick("右侧", "Right"),
-            language.pick("左下", "Bottom left"),
-            language.pick("底部", "Bottom"),
-            language.pick("右下", "Bottom right"),
+            language.text(crate::i18n::Message::SettingsOptionTopLeft),
+            language.text(crate::i18n::Message::CommonTop),
+            language.text(crate::i18n::Message::SettingsOptionTopRight),
+            language.text(crate::i18n::Message::CommonLeft),
+            language.text(crate::i18n::Message::CommonCenter),
+            language.text(crate::i18n::Message::CommonRight),
+            language.text(crate::i18n::Message::SettingsOptionBottomLeft),
+            language.text(crate::i18n::Message::CommonBottom),
+            language.text(crate::i18n::Message::SettingsOptionBottomRight),
         ],
         "ssh_proxy_mode" => vec![
             language.tr("settings.network.mode.off"),
@@ -156,11 +165,11 @@ pub(super) fn provider_input_placeholders(
     language: crate::display::UiLanguage,
 ) -> [&'static str; 5] {
     [
-        language.pick("供应商名称", "Provider name"),
-        language.pick("备注（可包含空格）", "Note (spaces allowed)"),
-        language.pick("官方网站", "Official website"),
-        language.pick("API 请求地址", "API endpoint"),
-        language.pick("默认模型", "Default model"),
+        language.text(crate::i18n::Message::SettingsOptionProviderName),
+        language.text(crate::i18n::Message::SettingsOptionNoteSpacesAllowed),
+        language.text(crate::i18n::Message::SettingsOptionOfficialWebsite),
+        language.text(crate::i18n::Message::SettingsOptionApiEndpoint),
+        language.text(crate::i18n::Message::SettingsOptionDefaultModel),
     ]
 }
 
@@ -169,18 +178,17 @@ pub(super) fn localized_input_placeholder(
     language: crate::display::UiLanguage,
 ) -> &'static str {
     match key {
-        "ssh_label" => language.pick("例如：开发服务器", "e.g. Development server"),
-        "ssh_password" => language.pick("留空则连接时询问", "Leave empty to ask when connecting"),
-        "ssh_proxy_username" => language.pick("可选", "Optional"),
+        "ssh_label" => language.text(crate::i18n::Message::SettingsOptionEGDevelopmentServer),
+        "ssh_password" => language.text(crate::i18n::Message::SettingsOptionLeaveEmptyToAskWhen),
+        "ssh_proxy_username" => language.text(crate::i18n::Message::SettingsOptionOptional),
         "ssh_proxy_password" => {
-            language.pick("留空则保留已存密码", "Leave empty to keep the saved password")
+            language.text(crate::i18n::Message::SettingsOptionLeaveEmptyToKeepThe)
         },
-        "ssh_jump_host" => language
-            .pick("user@bastion:22 或 SSH config 别名", "user@bastion:22 or SSH config alias"),
-        "ssh_icon_filter" => language.pick("搜索图标…", "Search icons..."),
-        "font_family" => language.pick("输入字体名称", "Enter a font family"),
+        "ssh_jump_host" => language.text(crate::i18n::Message::SettingsOptionUserBastionN22OrSsh),
+        "ssh_icon_filter" => language.text(crate::i18n::Message::SettingsOptionSearchIcons),
+        "font_family" => language.text(crate::i18n::Message::SettingsFontEnterAFontFamily),
         "backup_password" => {
-            language.pick("备份密码（至少 8 位）", "Backup password (at least 8 characters)")
+            language.text(crate::i18n::Message::SettingsOptionBackupPasswordAtLeastN8)
         },
         "backup_secret" => language.tr("settings.input.backup_secret"),
         _ => "",

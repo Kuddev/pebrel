@@ -150,9 +150,8 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> Button {
         let visible = self.side_panel.open && !self.reader_focus_active(cx);
-        toolbar_button("toggle-right-sidebar", IconName::PanelRight)
+        toolbar_button("toggle-right-sidebar", IconName::PanelRight, disabled)
             .debug_selector(|| "toggle-right-sidebar".to_owned())
-            .disabled(disabled)
             .selected(visible)
             .when(visible, |button| button.bg(cx.theme().secondary))
             .tooltip(crate::gpui_shell::config::ui_language(cx).text(Message::EditorRightSidebar))
@@ -366,7 +365,11 @@ impl NebulaWorkspace {
             .relative()
             .w(px(width))
             .h_full()
-            .pb(px(crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom))
+            .pb(px(if remote && matches!(self.side_panel.view, PanelView::Files) {
+                0.0
+            } else {
+                crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom
+            }))
             .child(self.render_details_header(width, window, cx))
             .child(div().flex_1().min_h_0().w_full().child(panel).with_animation(
                 ("details-content", self.details_panel.transition),
@@ -456,6 +459,10 @@ impl NebulaWorkspace {
         )
     }
 
+    pub(super) fn details_panel_resizing(&self) -> bool {
+        self.details_panel.resize.is_some()
+    }
+
     pub(super) fn update_details_panel_resize(
         &mut self,
         event: &gpui::MouseMoveEvent,
@@ -463,8 +470,13 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let Some(drag) = &mut self.details_panel.resize else { return };
-        if event.pressed_button != Some(MouseButton::Left) || !window.is_window_active() {
+        if !window.is_window_active() {
             self.cancel_details_panel_resize(cx);
+            return;
+        }
+        // Non-client moves can omit button state while capture is still active.
+        // Only MouseUp commits the drag; Escape or window deactivation cancels it.
+        if event.pressed_button != Some(MouseButton::Left) {
             return;
         }
         let maximum = panel_width(MAX_WIDTH, f32::from(window.viewport_size().width));

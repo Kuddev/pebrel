@@ -195,9 +195,18 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 任意终端字节注入接口。控制键走 `pane.send_key`：只开放命名键，字母必须配
 `control=true`，`repeat` 上限 64；API 不接受任意 bytes 或 ANSI 字符串。
 
-`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置相同的 id（`pwsh`、`cmd`、
-`wsl:Ubuntu`，或某个 profile 的 settings id），只作用于这一次创建；缺省照旧用设置里的
-默认 Shell。id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
+`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置及 `pebrel --shell` 相同的 id，
+只作用于这一次创建；缺省照旧用设置里的默认 Shell。Windows 上 `powershell` 指
+Windows PowerShell，`pwsh` 指检测到的 PowerShell 7，两者不是别名；其他例子有
+`cmd`、`wsl:Ubuntu`。检测不到的普通 Shell 不会出现在可用 id 中。
+
+导入终端配置的 settings id 来自 `terminal_profiles.json` 中的实际条目，形式为
+`profile:<shell-id>|<profile-id>`，完整 id 区分大小写。它不指 Lua `config.profiles`
+的 `name` 或 `shell_id`：后者表示 Shell 家族，不能创建 CLI 或 Runtime API 别名。
+`config check` 通过只表示配置有效，不表示其中的 `shell_id` 已注册。自定义程序和
+参数的命令行启动方式见 [Lua 配置中的 Shell 选择说明](lua-configuration.md#shell-ids-and-config-profiles)。
+
+id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
 静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
 升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
 需要重启驻留实例。
@@ -206,6 +215,11 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本
 转发。资源 CLI 可从字面文本、`--stdin` 或 `--from-file` 读取，但协议边界始终只接收验证后的
 文本，不接收本地路径或句柄。
+
+Windows 本地 PowerShell 的终端剪贴板操作可委托给当前 PSReadLine 的原生 Paste。
+该能力只用于用户剪贴板操作及其广播接收端，不能作为 Runtime API 目标已开启
+bracketed paste 的证明；`pane.paste` 和 `agent.paste` 仍遵循上述协议校验。
+详见[剪贴板能力边界](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
 
 ## 单请求编排
 
@@ -399,6 +413,29 @@ Shell/hook 结束事件归位；因此即使命令在 120ms Runtime pump 的两�
 服务端只监听 `127.0.0.1`，发现文件位于 Pebrel 数据目录下的 `runtime.port`，其中包含随机
 token。无 token 的连接会被静默丢弃。该边界用于阻止其他本机用户误调用，不承诺抵御已经
 能读取当前用户文件或注入当前用户进程的攻击者。
+
+### 地址发现与实例生命周期
+
+普通驻留实例为本地 PTY 导出 `PEBREL_RUNTIME_ENDPOINT=resident`。CLI 在每次新调用时读取
+当前 `runtime.port`，因此端口或 token 在驻留实例重启后变化时，终端继承的环境值仍然有效。
+此前，普通 PTY 与隔离实例一样继承固定的端口/token，已存在的 Shell 会一直使用旧地址。
+新标记沿用现有 `WSLENV` 透传与 `PEBREL_CLI` 可执行文件入口，不增加环境变量或后台轮询。
+
+管理员等隔离实例仍导出固定的端口/token，不写共享发现文件。显式填写的端口/token
+（包括旧格式末尾的协议版本号）也保持固定目标；无效的显式值不会回退到其他实例。
+正在托管 Runtime 的进程始终优先使用自己的服务端。`resident` 对应的发现文件缺失或损坏时，
+调用按现有 `runtime_unavailable` 路径失败，不复用缓存地址。
+
+这项变更在发送请求之前选择地址，不自动重发请求，也不重连已经建立的事件订阅。
+传输失败后的输入是否送达仍按 `submission_outcome_unknown` 处理。重新发现 Runtime 不会
+恢复旧的 Window/Pane/Agent 身份；调用方仍需核对当前目标及 generation。
+
+升级前已打开的终端可能仍继承固定的旧值。确认它属于普通驻留实例后，可重新打开终端，
+或在该 Shell 中一次性设置 `$env:PEBREL_RUNTIME_ENDPOINT = 'resident'`（PowerShell）/
+`export PEBREL_RUNTIME_ENDPOINT=resident`（POSIX），使后续 CLI 子进程使用当前发现记录。
+不要把隔离实例的专属地址改为此标记。旧版 CLI 不识别 `resident`，应使用当前 PTY 导出的
+`PEBREL_CLI`。生命周期取舍与验证边界见
+[地址发现决策](../architecture/notes/nebula_app/runtime_api/2026-10-23-resident-endpoint-lifetime.md)。
 
 旧版 `PING/ATTACH` 文本请求仍由同一服务端接受，保证单实例与会话重新挂载不因协议升级
 失效；新功能只通过版本化 JSON 协议开放。

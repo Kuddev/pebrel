@@ -1,5 +1,36 @@
 use super::*;
-use gpui::TestAppContext;
+use gpui::{AppContext as _, TestAppContext};
+
+#[gpui::test]
+fn background_refresh_keeps_root_transparent_without_native_wallpaper(cx: &mut TestAppContext) {
+    struct Content;
+    impl gpui::Render for Content {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().size_full()
+        }
+    }
+
+    cx.update(gpui_component::init);
+    let (root, window) = cx.add_window_view(|window, cx| {
+        let content = cx.new(|_| Content);
+        gpui_component::Root::new(content, window, cx).bg(gpui::transparent_black())
+    });
+    for opacity in [1.0, 0.8, 0.6, 0.4, 0.0, 1.0] {
+        window.update(|_, cx| {
+            test_install_visual_effects(cx, opacity, BlurModeName::None);
+            assert!(!native_underlay_active(cx));
+            refresh_surface_opacity(cx);
+        });
+        window.run_until_parked();
+        root.update(window, |root, _| {
+            assert_eq!(
+                gpui::Styled::style(root).background,
+                Some(gpui::Fill::from(gpui::transparent_black())),
+                "refresh must not restore the extra background at {opacity}"
+            );
+        });
+    }
+}
 
 #[test]
 fn letterbox_edges_stay_square_and_native_alignment_inherits_card_corners() {

@@ -883,6 +883,14 @@ fn explicit_delimiters_still_require_content_evidence() {
     assert_eq!(sources(&["$a/b$"]), vec![("a/b".into(), false)]);
 }
 
+#[test]
+fn escaped_parentheses_render_uppercase_variables_with_numeric_subscripts() {
+    assert_eq!(sources(&[r"│ \(R_0\)，大半径 │"]), vec![("R_0".into(), false)]);
+    for literal in [r"\(PATH_0\)", "$R_0$", "(R_0)"] {
+        assert!(sources(&[literal]).is_empty(), "{literal} should stay literal");
+    }
+}
+
 /// 普通 shell 里真实出现过的形状，一个都不许变成公式。
 /// 每一行都对应实测过的误报（见 PR #55 review）。
 #[test]
@@ -902,6 +910,24 @@ fn ordinary_shell_output_stays_literal() {
     // BRE 捕获组：`\(…\)` 撞 sed/grep 的日常写法。
     assert!(sources(&[r"sed 's/\(abc\)/x/' input.txt"]).is_empty());
     assert!(sources(&[r"grep '\(foo\|bar\)' log.txt"]).is_empty());
+}
+
+#[test]
+fn issue686_directory_listing_never_borrows_the_next_shell_prompt() {
+    for command in ["ls", "ls -l", "pwd"] {
+        let prompt = format!("(base) [user@host gmx_run_1000]$ {command}");
+        assert!(
+            sources(&[
+                &prompt,
+                "compact  files  gmx_run_1000  log.lammps  shake_1",
+                "(base) [user@host gmx_run_1000]$ ls",
+            ])
+            .is_empty(),
+            "shell command and filenames must stay literal: {command}"
+        );
+    }
+    assert_eq!(sources(&["formula $x^2", "+ y^2$ tail"]).len(), 1);
+    assert_eq!(sources(&[r"formula $ \frac{1}{2} $ ends"]).len(), 1);
 }
 
 /// 终端软折行和 AI 的硬折行都可接数学片段，但硬折行不能穿过普通正文。
@@ -1693,4 +1719,97 @@ fn measure_scan_and_compile_cost() {
             source.chars().take(28).map(|c| if c == '\n' { ' ' } else { c }).collect();
         println!("compile {head:<30} {per_compile:?} cold (cache hit is a map lookup)");
     }
+}
+
+#[test]
+fn image_projection_preserves_erased_tiles_row_offsets_and_clipping() {
+    use nebula_terminal::inline_image::ImageRun;
+    let projection = LineProjection {
+        spans: vec![ProjectionSpan {
+            source_index: 0,
+            row: 0,
+            source_start: 0,
+            source_end: 6,
+            visual_cells: 4,
+            shift_before: 0,
+            shift_after: -2,
+        }],
+    };
+    let runs = [
+        ImageRun {
+            id: 1,
+            row: 0,
+            column: 6,
+            source_row: 0,
+            source_column: 0,
+            columns: 1,
+            placement: None,
+        },
+        ImageRun {
+            id: 1,
+            row: 0,
+            column: 8,
+            source_row: 0,
+            source_column: 2,
+            columns: 2,
+            placement: None,
+        },
+        ImageRun {
+            id: 1,
+            row: 1,
+            column: 6,
+            source_row: 1,
+            source_column: 0,
+            columns: 4,
+            placement: None,
+        },
+    ];
+    let projected = projection.project_image_runs(&runs, 9);
+    let geometry: Vec<_> = projected
+        .iter()
+        .map(|r| (r.row, r.column, r.source_row, r.source_column, r.columns))
+        .collect();
+    assert_eq!(geometry, [(0, 4, 0, 0, 1), (0, 6, 0, 2, 2), (1, 6, 1, 0, 3)]);
+    // Pointer and selection inverse mapping agrees with the image's source grid.
+    assert_eq!(
+        projection.source_from_visual(Point::new(0, Column(4)), Side::Left),
+        (Point::new(0, Column(6)), Side::Left)
+    );
+    assert_eq!(
+        projection.source_from_visual(Point::new(0, Column(8)), Side::Left),
+        (Point::new(0, Column(10)), Side::Left)
+    );
+    // No formula (including a failed rasterization) restores original columns.
+    let restored = LineProjection::default().project_image_runs(&runs, 20);
+    assert_eq!(restored.iter().map(|r| r.column).collect::<Vec<_>>(), [6, 8, 6]);
+}
+
+#[test]
+fn expanded_formula_clips_image_without_changing_texture_origin() {
+    use nebula_terminal::inline_image::ImageRun;
+    let projection = LineProjection {
+        spans: vec![ProjectionSpan {
+            source_index: 0,
+            row: 0,
+            source_start: 0,
+            source_end: 3,
+            visual_cells: 6,
+            shift_before: 0,
+            shift_after: 3,
+        }],
+    };
+    let runs = [ImageRun {
+        id: 1,
+        row: 0,
+        column: 4,
+        source_row: 2,
+        source_column: 2,
+        columns: 4,
+        placement: None,
+    }];
+    let projected = projection.project_image_runs(&runs, 9);
+    assert_eq!(projected.len(), 1);
+    let r = &projected[0];
+    assert_eq!((r.column, r.source_row, r.source_column, r.columns), (7, 2, 2, 2));
+    assert!(projection.project_image_runs(&runs, 7).is_empty());
 }

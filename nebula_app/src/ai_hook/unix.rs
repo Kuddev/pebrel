@@ -11,18 +11,65 @@ use std::time::{Duration, Instant};
 
 use super::{AiHookEvent, HOOK_EXE_ENV, LEGACY_HOOK_EXE_ENV, LEGACY_PIPE_ENV, PIPE_ENV};
 
+#[cfg(test)]
+struct TransportTrace {
+    started: Instant,
+    phases: Mutex<Vec<(Duration, &'static str)>>,
+}
+
+#[cfg(test)]
+impl TransportTrace {
+    fn record(&self, phase: &'static str) {
+        let mut phases = self.phases.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = (self.started.elapsed(), phase);
+        if phases.len() < 32 {
+            phases.push(entry);
+        } else {
+            phases[31] = (entry.0, "trace-cap-reached");
+        }
+    }
+
+    fn snapshot(&self) -> Vec<(Duration, &'static str)> {
+        self.phases.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    }
+}
+
+#[cfg(test)]
+impl Drop for TransportTrace {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let phases = self.phases.get_mut().unwrap_or_else(|error| error.into_inner());
+            eprintln!("owned Unix hook final phases: {phases:?}");
+        }
+    }
+}
+
 struct Server {
     endpoint: PathBuf,
     helper: Option<PathBuf>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
+    #[cfg(test)]
+    trace: Option<Arc<TransportTrace>>,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if let Some(trace) = &self.trace {
+            trace.record("drop-stop");
+        }
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
+            #[cfg(test)]
+            if let Some(trace) = &self.trace {
+                trace.record("join-start");
+            }
             let _ = worker.join();
+            #[cfg(test)]
+            if let Some(trace) = &self.trace {
+                trace.record("join-returned");
+            }
         }
     }
 }
@@ -31,7 +78,11 @@ static SERVER: OnceLock<Mutex<Option<Server>>> = OnceLock::new();
 
 pub fn spawn_gpui_server() -> mpsc::Receiver<AiHookEvent> {
     let (tx, rx) = mpsc::sync_channel(256);
-    match start(tx) {
+    match start(
+        tx,
+        #[cfg(test)]
+        None,
+    ) {
         Ok(server) => {
             *SERVER.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(server);
@@ -41,7 +92,10 @@ pub fn spawn_gpui_server() -> mpsc::Receiver<AiHookEvent> {
     rx
 }
 
-fn start(tx: mpsc::SyncSender<AiHookEvent>) -> io::Result<Server> {
+fn start(
+    tx: mpsc::SyncSender<AiHookEvent>,
+    #[cfg(test)] trace: Option<Arc<TransportTrace>>,
+) -> io::Result<Server> {
     // Darwin 的 socket 路径长度有限；短的私有目录也避免复用/删除别的实例端点。
     let directory = tempfile::Builder::new().prefix("pebrel-hooks-").tempdir_in("/tmp")?;
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
@@ -50,29 +104,75 @@ fn start(tx: mpsc::SyncSender<AiHookEvent>) -> io::Result<Server> {
     listener.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = stop.clone();
+    #[cfg(test)]
+    let record = {
+        let trace = trace.clone();
+        move |phase| {
+            if let Some(trace) = &trace {
+                trace.record(phase);
+            }
+        }
+    };
     let worker = std::thread::Builder::new().name("pebrel-ai-socket".into()).spawn(move || {
         let _directory = directory;
+        #[cfg(test)]
+        record("worker-start");
         while !stopping.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let Some(client_pid) = peer_pid(&stream) else { continue };
-                    if let Ok(bytes) = read_message(&mut stream, &stopping)
-                        && let Some(mut event) = super::parse_envelope(&bytes)
+                    #[cfg(test)]
+                    record("peer-start");
+                    let Some(client_pid) = peer_pid(&stream) else {
+                        #[cfg(test)]
+                        record("peer-rejected");
+                        continue;
+                    };
+                    #[cfg(test)]
+                    record("peer-verified");
+                    #[cfg(test)]
+                    record("read-start");
+                    let bytes = read_message(&mut stream, &stopping);
+                    #[cfg(test)]
+                    record(if bytes.is_ok() { "read-ok" } else { "read-rejected" });
+                    if let Ok(bytes) = bytes
+                        && let Some(mut event) = {
+                            let event = super::parse_envelope(&bytes);
+                            #[cfg(test)]
+                            record(if event.is_some() { "parsed" } else { "parse-rejected" });
+                            event
+                        }
                     {
                         event.client_pid = Some(client_pid);
+                        #[cfg(test)]
+                        record("ancestor-start");
                         event.agent_pid = crate::process_tree::nearest_agent_ancestor(client_pid)
                             .map(|(pid, _)| pid);
+                        #[cfg(test)]
+                        record("ancestor-returned");
                         match tx.try_send(event) {
-                            Ok(()) => {},
+                            Ok(()) => {
+                                #[cfg(test)]
+                                record("send-ok");
+                            },
                             Err(mpsc::TrySendError::Full(_)) => {
+                                #[cfg(test)]
+                                record("send-full");
                                 log::warn!("ai_hook: event queue is full");
                                 continue;
                             },
-                            Err(mpsc::TrySendError::Disconnected(_)) => break,
+                            Err(mpsc::TrySendError::Disconnected(_)) => {
+                                #[cfg(test)]
+                                record("send-disconnected");
+                                break;
+                            },
                         }
                         // helper 等待确认后才退出，确保父进程身份取自仍存活的连接。
+                        #[cfg(test)]
+                        record("ack-start");
                         let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
                         let _ = stream.write_all(b"\n");
+                        #[cfg(test)]
+                        record("ack-returned");
                     }
                 },
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -84,8 +184,17 @@ fn start(tx: mpsc::SyncSender<AiHookEvent>) -> io::Result<Server> {
                 },
             }
         }
+        #[cfg(test)]
+        record("worker-exited");
     })?;
-    Ok(Server { endpoint, helper: super::local::helper_path(), stop, worker: Some(worker) })
+    Ok(Server {
+        endpoint,
+        helper: super::local::helper_path(),
+        stop,
+        worker: Some(worker),
+        #[cfg(test)]
+        trace,
+    })
 }
 
 pub(super) fn apply_child_environment(env: &mut HashMap<String, String>) {
@@ -180,13 +289,20 @@ mod tests {
     #[test]
     fn local_hook_socket_routes_identity_and_releases_its_private_directory() {
         let (tx, rx) = mpsc::sync_channel(1);
-        let server = start(tx).unwrap();
+        let trace = Arc::new(TransportTrace {
+            started: Instant::now(),
+            phases: Mutex::new(Vec::with_capacity(32)),
+        });
+        let server = start(tx, Some(trace.clone())).unwrap();
         let directory = server.endpoint.parent().unwrap().to_path_buf();
         assert_eq!(std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777, 0o700);
         let mut stream = UnixStream::connect(&server.endpoint).unwrap();
         stream.write_all(b"nebula-hook/1 source=claude pane=42\n{\"hook_event_name\":\"Stop\",\"session_id\":\"fixture\"}").unwrap();
         stream.shutdown(std::net::Shutdown::Write).unwrap();
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|error| {
+            let phases = trace.snapshot();
+            panic!("owned Unix hook receive failed: {error:?}; phases: {phases:?}");
+        });
         assert_eq!(event.pane, Some(42));
         assert_eq!(event.client_pid, Some(std::process::id()));
         assert_eq!(event.kind, super::super::AiHookKind::TurnDone);

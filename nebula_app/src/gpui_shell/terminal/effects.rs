@@ -97,6 +97,10 @@ impl TerminalEffect {
     }
 
     fn configure(&mut self, config: TerminalEffects, revision: u64) {
+        if self.config.timing != config.timing {
+            self.timer.take();
+            self.history = frame::History::default();
+        }
         if self.config.paths != config.paths
             || self.config.enabled != config.enabled
             || self.revision != revision
@@ -136,6 +140,7 @@ impl TerminalEffect {
             || !self.ready
             || cx.reduce_motion()
             || self.config.animation == EffectAnimation::Off
+            || self.config.timing.speed == 0.0
         {
             return false;
         }
@@ -177,8 +182,9 @@ impl TerminalEffect {
             return;
         }
         let epoch = self.epoch;
+        let interval = self.config.timing.interval();
         self.timer = Some(cx.spawn(async move |entity, cx| {
-            cx.background_executor().timer(Duration::from_millis(50)).await;
+            cx.background_executor().timer(interval).await;
             let _ = entity.update(cx, |this, cx| {
                 if this.epoch != epoch {
                     return;
@@ -384,6 +390,7 @@ pub(super) fn paint(
                     focused && this.activity.focused(),
                     palette,
                     colors,
+                    &this.config,
                 );
                 if let Err(error) =
                     window.paint_postprocess(bounds, &owner, uniforms, this.feedback.clone())

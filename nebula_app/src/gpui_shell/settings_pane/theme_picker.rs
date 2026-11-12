@@ -150,7 +150,7 @@ fn theme_sample_values(colors: ThemeSampleColors, token: bool, compact: bool) ->
             .border_color(ink.opacity(0.10))
             .bg(background)
             .font(crate::font_install::gpui_font_with_fallbacks(
-                "Maple Mono Normal NF CN, Cascadia Code, Consolas, monospace",
+                crate::font_install::SYSTEM_MONO_FONT_FAMILY,
             ))
             .text_size(px(if compact { 9.5 } else { 10.0 }))
             .line_height(gpui::relative(1.5))
@@ -422,11 +422,15 @@ impl SettingsPane {
                     .child(language.format(Message::ThemeEditorLibraryError, &[("error", error)]))
             })
         };
-        let grid_column = v_flex()
-            .w(px(grid_width))
-            .gap(px(8.0))
-            .when_some(picker_status, |column, status| column.child(status))
-            .child(grid);
+        let grid_column = if picker.filter == super::theme_community::COMMUNITY_FILTER {
+            self.community_list(grid_width, compact, cx)
+        } else {
+            v_flex()
+                .w(px(grid_width))
+                .gap(px(8.0))
+                .when_some(picker_status, |column, status| column.child(status))
+                .child(grid)
+        };
         let (is_light, original_foreground, preview) = match draft {
             AppearanceSelection::Theme(name) => (
                 chrome_theme(name).palette().is_light,

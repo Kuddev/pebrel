@@ -173,6 +173,7 @@ pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
     ("cmd+v", Action::Paste),
     ("ctrl+cmd+f", Action::ToggleFullscreen),
     ("shift+cmd+o", Action::OpenQuickJump),
+    ("cmd+m", Action::Minimize),
     ("cmd+q", Action::Quit),
 ];
 
@@ -180,11 +181,67 @@ pub(crate) fn action_label(
     row: &(Action, &'static str, &'static str),
     language: super::UiLanguage,
 ) -> &'static str {
-    if row.0 == Action::RenameTab {
-        language.text(crate::i18n::Message::CommonRenameTab)
-    } else {
-        language.pick(row.1, row.2)
-    }
+    action_message(&row.0)
+        .map_or_else(|| language.pick(row.1, row.2), |message| language.text(message))
+}
+
+fn action_message(action: &Action) -> Option<crate::i18n::Message> {
+    use crate::i18n::Message;
+    Some(match action {
+        Action::ToggleCommandPalette => Message::SettingsKeymapActionCommandPalette,
+        Action::OpenQuickJump => Message::SettingsKeymapActionQuickJump,
+        Action::ToggleShellPicker => Message::SettingsKeymapActionShellPicker,
+        Action::CreateNewWindow => Message::CommonNewWindow,
+        Action::ToggleFullscreen => Message::SettingsKeymapActionFullscreen,
+        Action::CreateNewTab => Message::SettingsKeymapActionNewTab,
+        Action::CloseTab => Message::SettingsKeymapActionCloseTabPane,
+        Action::RenameTab => Message::CommonRenameTab,
+        Action::SelectNextTab => Message::SettingsKeymapActionNextTab,
+        Action::SelectPreviousTab => Message::SettingsKeymapActionPreviousTab,
+        Action::SplitRight => Message::SettingsKeymapActionSplitRight,
+        Action::SplitDown => Message::SettingsKeymapActionSplitDown,
+        Action::ToggleZoom => Message::SettingsKeymapActionZoomCurrentPane,
+        Action::FocusPaneLeft => Message::SettingsKeymapActionFocusPaneLeft,
+        Action::FocusPaneRight => Message::SettingsKeymapActionFocusPaneRight,
+        Action::FocusPaneUp => Message::SettingsKeymapActionFocusPaneUp,
+        Action::FocusPaneDown => Message::SettingsKeymapActionFocusPaneDown,
+        Action::ToggleFilesPanel => Message::SettingsKeymapActionFilesPanel,
+        Action::ToggleGitPanel => Message::SettingsKeymapActionGitPanel,
+        Action::PromptJumpUp => Message::SettingsKeymapActionPreviousPrompt,
+        Action::PromptJumpDown => Message::SettingsKeymapActionNextPrompt,
+        Action::SearchForward => Message::SettingsKeymapActionSearchForward,
+        Action::SearchBackward => Message::SettingsKeymapActionSearchBackward,
+        Action::Copy => Message::CommonCopy,
+        Action::Paste => Message::CommonPaste,
+        Action::IncreaseFontSize => Message::SettingsKeymapActionFontSizeUp,
+        Action::DecreaseFontSize => Message::SettingsKeymapActionFontSizeDown,
+        Action::ResetFontSize => Message::SettingsKeymapActionResetFontSize,
+        _ => return None,
+    })
+}
+
+/// Settings-page heading for `GROUPS[index]`.
+pub(crate) fn group_label(index: usize, language: super::UiLanguage) -> &'static str {
+    use crate::i18n::Message;
+    language.text(match index {
+        0 => Message::SettingsKeymapGroupGlobal,
+        1 => Message::SettingsKeymapGroupTabs,
+        2 => Message::SettingsKeymapGroupPanes,
+        3 => Message::SettingsKeymapGroupSidePanels,
+        4 => Message::SettingsSidebarProfiles,
+        _ => return GROUPS.get(index).map_or("", |(zh, en, _)| language.pick(zh, en)),
+    })
+}
+
+/// Label for `READONLY_ROWS[index]`.
+pub(crate) fn readonly_label(index: usize, language: super::UiLanguage) -> &'static str {
+    use crate::i18n::Message;
+    language.text(match index {
+        0 => Message::SettingsKeymapReadonlySelectTabN,
+        1 => Message::SettingsKeymapReadonlyLaunchProfileN,
+        2 => Message::SettingsKeymapReadonlyPasteAiFixSuggestion,
+        _ => return READONLY_ROWS.get(index).map_or("", |(zh, en, _)| language.pick(zh, en)),
+    })
 }
 
 #[cfg(test)]
@@ -951,6 +1008,13 @@ mod tests {
             assert!(READONLY_ROWS[0].2.contains("Ctrl+1"));
             assert!(!GPUI.readonly_rows()[0].2.contains("Ctrl+1"));
             assert_eq!(GPUI.effective_combo(&Action::Quit, &[]), Some(("Command+Q".into(), false)));
+            assert_eq!(
+                GPUI.effective_combo(&Action::Minimize, &[]),
+                Some(("Command+M".into(), false))
+            );
+        } else {
+            // 其他平台无默认最小化键；用户仍可 keybind= 自配（适配臂跨平台）。
+            assert_eq!(GPUI.effective_combo(&Action::Minimize, &[]), None);
         }
     }
 

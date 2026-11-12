@@ -131,6 +131,10 @@ impl ThemeEditor {
         window: &mut Window,
         cx: &mut App,
     ) {
+        crate::gpui_shell::font_loading::ensure_family(
+            self.draft.typography.font_family.as_deref().unwrap_or(current_font),
+            cx,
+        );
         let values = [
             (EditorInput::Name, &self.name_input, self.draft.name.clone()),
             (
@@ -460,6 +464,10 @@ impl SettingsPane {
         let current_font = self.current_font_chain(cx);
         let current_size = self.terminal_font_size_px(cx);
         let font_options = self.theme_font_options(&current_font, &draft);
+        crate::gpui_shell::font_loading::ensure_family(
+            draft.typography.font_family.as_deref().unwrap_or(&current_font),
+            cx,
+        );
         let selected_font = draft
             .typography
             .font_family
@@ -975,6 +983,12 @@ impl SettingsPane {
         // The shared model is the authority for scalar bounds and finite values.
         // Only a fully valid candidate reaches preview layout or serialization.
         if parsed && candidate.validate().is_ok() {
+            if field == EditorInput::FontFamily {
+                crate::gpui_shell::font_loading::ensure_family(
+                    candidate.typography.font_family.as_deref().unwrap_or_default(),
+                    cx,
+                );
+            }
             editor.draft = candidate;
             editor.invalid_inputs.remove(&field);
             if let Some(color) = parse_hex_rgb(&value) {

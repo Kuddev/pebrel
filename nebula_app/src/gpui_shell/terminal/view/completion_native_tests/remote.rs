@@ -51,7 +51,7 @@ fn remote_editor_completion_native_shell_end_to_end() {
                     fixture.known_hosts.as_deref().unwrap(),
                 ))
                 .unwrap();
-            TerminalLaunch::Ssh { destination, cwd: Some(fixture.cwd.clone()) }
+            TerminalLaunch::Ssh { destination, cwd: Some(fixture.cwd.clone()), resume_target: None }
         },
         _ => panic!("unknown owned fixture route"),
     };
@@ -208,7 +208,7 @@ async fn ready(
     view: &gpui::Entity<TerminalView>,
 ) -> Result<(), String> {
     wait_for(cx, window, view, |view| {
-        view.completion_editor.ready_for_test()
+        view.completion_editor.ready()
             && view.session.as_ref().is_some_and(|s| s.term.lock().nebula_prompt_active())
     })
     .await?;

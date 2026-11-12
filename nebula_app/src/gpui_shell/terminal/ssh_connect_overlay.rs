@@ -20,12 +20,21 @@ use crate::gpui_shell::prelude::*;
 pub(super) fn update_connection_state(
     state: &mut Option<SshConnectState>,
     destination: Option<&str>,
+    previous: Option<&crate::ssh_session::SshStage>,
     stage: crate::ssh_session::SshStage,
 ) {
     use crate::ssh_session::SshStage;
 
     if stage == SshStage::Ready {
         *state = None;
+        return;
+    }
+    // Once connected, a failure belongs beside the retained terminal output.
+    // Repeated failure notifications must not recreate the startup overlay.
+    if state.is_none()
+        && matches!(previous, Some(SshStage::Ready | SshStage::Failed(_)))
+        && matches!(stage, SshStage::Failed(_))
+    {
         return;
     }
     let Some(destination) = destination else { return };
@@ -43,31 +52,37 @@ mod connection_state_tests {
     use crate::ssh_session::SshStage;
 
     #[test]
-    fn a_disconnected_ready_session_regains_a_retry_surface() {
+    fn a_disconnected_ready_session_keeps_the_startup_overlay_hidden() {
         let mut state = Some(SshConnectState::new("test@example.invalid".to_owned()));
-        update_connection_state(&mut state, Some("test@example.invalid"), SshStage::Ready);
+        update_connection_state(&mut state, Some("test@example.invalid"), None, SshStage::Ready);
         assert!(state.is_none());
         update_connection_state(
             &mut state,
             Some("test@example.invalid"),
+            Some(&SshStage::Ready),
             SshStage::Failed("Connection lost".to_owned()),
         );
-        let state = state.unwrap();
-        assert!(state.failed());
-        assert!(state.visible());
-        assert_eq!(state.destination(), "test@example.invalid");
-        assert_eq!(state.failure(), Some("Connection lost"));
+        assert!(state.is_none());
+        update_connection_state(
+            &mut state,
+            Some("test@example.invalid"),
+            Some(&SshStage::Failed("Connection lost".into())),
+            SshStage::Failed("Connection lost again".into()),
+        );
+        assert!(state.is_none());
     }
 
     #[test]
     fn retry_resets_failure_and_ready_removes_the_surface() {
         let mut state = None;
-        update_connection_state(&mut state, Some("host"), SshStage::Failed("failed".into()));
-        update_connection_state(&mut state, Some("host"), SshStage::Resolve);
+        update_connection_state(&mut state, Some("host"), None, SshStage::Failed("failed".into()));
+        assert!(state.as_ref().unwrap().failed());
+        assert!(state.as_ref().unwrap().visible());
+        update_connection_state(&mut state, Some("host"), None, SshStage::Resolve);
         assert!(!state.as_ref().unwrap().failed());
-        update_connection_state(&mut state, Some("host"), SshStage::Authenticate);
+        update_connection_state(&mut state, Some("host"), None, SshStage::Authenticate);
         assert_eq!(state.as_ref().unwrap().stage(), SshStage::Authenticate);
-        update_connection_state(&mut state, Some("host"), SshStage::Ready);
+        update_connection_state(&mut state, Some("host"), None, SshStage::Ready);
         assert!(state.is_none());
     }
 }
@@ -289,7 +304,7 @@ pub(super) fn overlay(
         .map(|settings| settings.ui_font_size_px)
         .unwrap_or(15.0);
     let chrome_family = theme.font_family.clone();
-    let log_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+    let log_family = theme.mono_font_family.clone();
     let ink_strong = theme.sidebar_accent_foreground;
     let ink = theme.foreground;
     let ink_dim = theme.muted_foreground;
@@ -599,9 +614,7 @@ pub(super) fn overlay(
                                             && state.destination() == retry_destination.as_str()
                                     });
                                 if still_same_failure {
-                                    cx.emit(super::view::TerminalViewEvent::RetrySsh(
-                                        retry_destination.clone(),
-                                    ));
+                                    this.retry_ssh(&retry_destination, cx);
                                 }
                             });
                         }

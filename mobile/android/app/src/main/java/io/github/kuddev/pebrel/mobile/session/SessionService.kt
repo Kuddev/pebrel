@@ -224,7 +224,7 @@ class SessionService : Service() {
         private const val REQUEST_OPEN = 10
         private const val REQUEST_EXIT = 11
         private const val REQUEST_WAKE_LOCK = 12
-        private val LIVE_STATES = setOf("connecting", "approval", "ready")
+        private val LIVE_STATES = setOf("connecting", "reconnecting", "approval", "ready")
 
         /** Starts the service from an activity or another user initiated app action. */
         fun start(context: Context) {

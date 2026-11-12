@@ -25,6 +25,13 @@ class HostCredentialStore(context: Context) {
         val encoded = preferences.getString(record(hostKey), null) ?: return null
         require(encoded.length <= MAX_RECORD_CHARS)
         val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+        return try { unseal(hostKey, bytes) } finally { bytes.fill(0) }
+    }
+
+    /** Session-only encrypted records reuse the same Keystore boundary, without writing preferences. */
+    @Synchronized
+    internal fun unseal(hostKey: String, bytes: ByteArray): CharArray {
+        record(hostKey)
         require(bytes.size >= IV_BYTES + 16)
         val cipher = Cipher.getInstance(CIPHER)
         cipher.init(Cipher.DECRYPT_MODE, key(create = false), GCMParameterSpec(128, bytes.copyOfRange(0, IV_BYTES)))
@@ -41,18 +48,25 @@ class HostCredentialStore(context: Context) {
     fun save(hostKey: String, password: CharArray) {
         require(password.isNotEmpty() && password.size <= 1024)
         require(preferences.contains(record(hostKey)) || ids().size < 256)
+        val encrypted = seal(hostKey, password)
+        val encoded = Base64.encodeToString(encrypted, Base64.NO_WRAP)
+        encrypted.fill(0)
+        check(preferences.edit().putString(record(hostKey), encoded).commit())
+    }
+
+    @Synchronized
+    internal fun seal(hostKey: String, password: CharArray): ByteArray {
+        record(hostKey)
+        require(password.size <= 1024)
         val buffer = StandardCharsets.UTF_8.encode(CharBuffer.wrap(password))
         val plain = ByteArray(buffer.remaining()).also { buffer.get(it) }
         if (buffer.hasArray()) buffer.array().fill(0)
-        val encrypted = try {
+        return try {
             val cipher = Cipher.getInstance(CIPHER)
             cipher.init(Cipher.ENCRYPT_MODE, key(create = true))
             cipher.updateAAD(hostKey.toByteArray(StandardCharsets.UTF_8))
             cipher.iv + cipher.doFinal(plain)
         } finally { plain.fill(0) }
-        val encoded = Base64.encodeToString(encrypted, Base64.NO_WRAP)
-        encrypted.fill(0)
-        check(preferences.edit().putString(record(hostKey), encoded).commit())
     }
 
     @Synchronized

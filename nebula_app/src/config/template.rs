@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CHINESE_TEMPLATE: &str = include_str!("templates/pebrel.zh-CN.lua");
-pub const ENGLISH_TEMPLATE: &str = include_str!("templates/pebrel.en-US.lua");
+pub const CHINESE_TEMPLATE: &str = include_str!("templates/pebrel.zh-CN.luau");
+pub const ENGLISH_TEMPLATE: &str = include_str!("templates/pebrel.en-US.luau");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateLanguage {
@@ -136,7 +136,10 @@ fn create_backup(path: &Path) -> Result<PathBuf, std::io::Error> {
         } else {
             format!("bak-{timestamp}-{sequence}")
         };
-        let backup = path.with_extension(format!("lua.{suffix}"));
+        let backup = path.with_extension(format!(
+            "{}.{suffix}",
+            path.extension().and_then(|ext| ext.to_str()).unwrap_or("luau")
+        ));
         let mut destination =
             match fs::OpenOptions::new().write(true).create_new(true).open(&backup) {
                 Ok(file) => file,

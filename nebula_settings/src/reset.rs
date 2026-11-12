@@ -36,6 +36,9 @@ const RESET_KEYS: &[&str] = &[
     "ghost",
     "accept",
     "completion_style",
+    "prompt_suggestions_enabled",
+    "prompt_suggestions_provider_id",
+    "prompt_suggestions_model",
     "cjk_bold_regular",
     "tabs_position",
     "tab_reveal",
@@ -57,6 +60,8 @@ const RESET_KEYS: &[&str] = &[
     "silent_start",
     "blur",
     "opacity",
+    "tab_bar_opacity",
+    "tab_bar_blur",
     "background",
     "theme_foreground",
     "custom_theme",
@@ -72,6 +77,9 @@ const RESET_KEYS: &[&str] = &[
     "background_effect_liquid_silk",
     "background_wgsl_enabled",
     "background_wgsl_path",
+    "background_shader_speed",
+    "background_shader_frame_rate",
+    "background_shader_parameter",
     "terminal_effect_enabled",
     "terminal_effect_path",
     "terminal_effect_path_2",
@@ -82,6 +90,12 @@ const RESET_KEYS: &[&str] = &[
     "terminal_effect_path_7",
     "terminal_effect_path_8",
     "terminal_effect_animation",
+    "terminal_effect_speed",
+    "terminal_effect_frame_rate",
+    "terminal_effect_parameter_1",
+    "terminal_effect_parameter_2",
+    "terminal_effect_parameter_3",
+    "terminal_effect_parameter_4",
     "panel_resize",
     "sidebar_w",
     "ssh_proxy_mode",
@@ -250,6 +264,16 @@ mod tests {
     }
 
     #[test]
+    fn reset_restores_inherited_tab_material_and_keeps_unknown_keys() {
+        let restored = default_settings_text(
+            "tab_bar_opacity=0.6\n TAB_BAR_BLUR = acrylic\nfuture_setting=keep\n",
+        );
+        assert_eq!(restored, "future_setting=keep\n");
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert_eq!(runtime.tab_bar_material, crate::TabBarMaterial::default());
+    }
+
+    #[test]
     fn reset_removes_all_overrides_and_keeps_user_data() {
         let text = "# preferences\r\n THEME = Nord\r\ncopy_on_select=1\nkeybind=ctrl+x:Copy\nFONT_SIZE=30\nexecutor=custom\nblur=acrylic\nopacity=0.65\nbackground=#101216\ntheme_foreground=#d6dae6\ncustom_theme=my-night\nssh_hosts=saved-host\nai_provider=custom\nfuture_setting=keep\n";
         let result = default_settings_text(text);
@@ -305,6 +329,18 @@ mod tests {
                 assert!(RESET_KEYS.contains(&key), "missing reset key: {key}");
             }
         }
+    }
+
+    #[test]
+    fn reset_disables_predictions_without_erasing_provider_or_cli_data() {
+        let text = "prompt_suggestions_enabled=1\nprompt_suggestions_provider_id=one\nprompt_suggestions_model=sol\nprovider_metadata=keep\ncli_model=keep\n";
+        let saved = default_settings_text(text);
+        assert_eq!(saved, "provider_metadata=keep\ncli_model=keep\n");
+        assert_eq!(
+            crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(&saved))
+                .prompt_suggestions,
+            crate::PromptSuggestions::default()
+        );
     }
 
     #[test]

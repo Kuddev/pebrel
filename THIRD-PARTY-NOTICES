@@ -17,6 +17,12 @@ The bundled AI-CLI screen-state evidence in
 nebula_app/src/agent_detection derives from Herdr
 (github.com/AmrDeveloper/herdr), distributed under the Apache License 2.0.
 
+The unmodified next-message prediction prompt in
+nebula_app/res/prompts/codex_prompt_suggestion.txt and its JSON-schema suffix
+come from OpenAI Codex (github.com/openai/codex), revision
+814de47b69dd63a2660fd14f9af66690888d183e, under the Apache License 2.0
+(full text below). OpenAI Codex, Copyright 2025 OpenAI.
+
 The embedded Latin Modern Math font is distributed under the GUST Font
 License 1.0. Its complete license text is included as
 licenses/LICENSE-LATIN-MODERN-MATH.
@@ -37,6 +43,13 @@ distributed under the MIT License, whose text is reproduced below.
 Copyright (c) 2023 LobeHub. Unused SVG metadata was removed; path geometry
 is unchanged. Product names and trademarks belong to their respective
 owners and identify the tools without implying endorsement.
+
+The Qoder, Qwen Code, CodeBuddy and Antigravity settings icons are adapted from LobeHub's
+@lobehub/icons-static-svg 1.95.0 (github.com/lobehub/lobe-icons),
+distributed under the MIT License reproduced below. Copyright (c) 2023 LobeHub.
+Unused SVG metadata was removed; path geometry is unchanged. Product names and
+trademarks belong to their respective owners and identify the tools without
+implying endorsement.
 
 The bundled conpty.dll and OpenConsole.exe come from the Windows
 Terminal project (github.com/microsoft/terminal), distributed under the
@@ -401,3 +414,16 @@ Hermes Agent SVG mark
 ---------------------
 Source: https://github.com/NousResearch/hermes-agent/blob/ddabd3837862022a6053331fe3ba97cf9716b9e3/assets/icon-master.svg
 See licenses/hermes-agent-MIT.txt. Geometry is preserved; SVGZ is lossless gzip.
+
+
+Pebrel Symbols is a renamed symbol-only derivative of the bundled Maple Mono
+Normal NF CN Regular font (SIL Open Font License 1.1). The original copyright
+and license metadata are retained in the font; see licenses/LICENSE-PEBREL-SYMBOLS.
+Source: https://github.com/subframe7536/maple-font
+Regeneration: python scripts/build_symbol_font.py (requires fontTools).
+It also keeps Maple's unchanged `m` glyph, required by GPUI's macOS font loader.
+The complete Maple face remains unchanged and separately selectable.
+
+nebula-waiting-hand.svg preserves the U+F256 outline from that bundled font,
+translated and flipped into a centered SVG viewBox without changing the outline.
+Copyright (c) 2022, subframe7536. See licenses/LICENSE-PEBREL-SYMBOLS (OFL 1.1).

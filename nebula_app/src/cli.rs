@@ -48,6 +48,10 @@ pub struct Options {
     #[cfg_attr(not(feature = "legacy-shell"), clap(long))]
     pub gpui: bool,
 
+    /// Identify a launch from the per-user login item.
+    #[clap(long = "launched-at-login", hide = true)]
+    pub launched_at_login: bool,
+
     /// Launch the legacy winit shell instead of GPUI.
     #[cfg(all(feature = "gpui-shell", feature = "legacy-shell"))]
     #[clap(long = "legacy-shell")]
@@ -169,10 +173,14 @@ pub struct TerminalOptions {
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub working_directory: Option<PathBuf>,
 
-    /// Start this shell instead of the configured default one, by the same id the
-    /// `shell` setting uses (`pwsh`, `cmd`, `wsl:Ubuntu`, or a profile's settings id).
+    /// Start a detected shell or an imported terminal profile by its settings id.
     ///
-    /// The Explorer menu uses it to open a folder in a specific WSL distribution.
+    /// Uses the same id as the `shell` setting: `powershell` (Windows PowerShell),
+    /// `pwsh` (PowerShell 7, when detected), `cmd`, `wsl:Ubuntu`, or an imported
+    /// profile's `profile:<shell-id>|<profile-id>` from terminal_profiles.json.
+    /// Luau config.profiles names and shell_id fields do not register ids here.
+    /// To supply a program and custom arguments directly, use -e instead.
+    ///
     /// An id that no longer resolves still starts `wsl.exe` for `wsl:<distro>`
     /// rather than silently falling back to the default shell.
     #[clap(long, value_name = "ID", conflicts_with = "command")]
@@ -290,6 +298,10 @@ impl WindowIdentity {
 /// Available CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Subcommands {
+    /// Start a native AI agent with process-local Pebrel prompt predictions.
+    Predict(crate::prompt_suggestions::launcher::Options),
+    /// Render Markdown, JSON tables, or Git progress in the current terminal.
+    View(crate::native_view_cli::Options),
     /// Agent-oriented terminal control: split panes, run commands, start Codex/Claude,
     /// send prompts, wait for state changes, and read verified terminal output.
     Ctl(ControlOptions),
@@ -314,6 +326,7 @@ pub enum Subcommands {
     /// Check or invoke a local plugin package without starting a GUI or plugin daemon.
     Plugin(crate::plugins::cli::Options),
     /// Export, verify, or import a portable ZIP theme package.
+    #[cfg(feature = "gpui-shell")]
     Theme(crate::theme_library::package::cli::Options),
     /// Test system notification (toast) delivery.
     #[cfg(windows)]
@@ -870,9 +883,9 @@ pub struct ConfigOptions {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommand {
-    /// Validate a Lua, TOML, or YAML configuration without opening the GUI.
+    /// Validate a Luau, TOML, or YAML configuration without opening the GUI.
     Check(ConfigCheckOptions),
-    /// Create an annotated Lua configuration template.
+    /// Create an annotated Luau configuration template.
     Init(ConfigInitOptions),
 }
 
@@ -885,7 +898,7 @@ pub struct ConfigCheckOptions {
 
 #[derive(Args, Debug)]
 pub struct ConfigInitOptions {
-    /// Lua configuration path; otherwise use the platform user config directory.
+    /// Luau configuration path; otherwise use the platform user config directory.
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub config_file: Option<PathBuf>,
 
@@ -1485,6 +1498,15 @@ mod tests {
     use clap::CommandFactory;
     use clap_complete::Shell;
     use toml::Table;
+
+    #[test]
+    fn ordinary_gui_launch_has_no_login_intent() {
+        let options = Options::try_parse_from(["pebrel", "--gpui"]).unwrap();
+        assert!(!options.launched_at_login);
+        let terminal = &options.window_options.terminal_options;
+        assert!(terminal.directory.is_none());
+        assert!(terminal.command.is_empty());
+    }
 
     #[test]
     fn dynamic_title_ignoring_options_by_default() {

@@ -1552,7 +1552,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -2201,7 +2201,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3300,7 +3300,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3387,7 +3387,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/Kuddev/gpui-component?rev=78e1d0c48867f69fec297d9016f48b0ce1b8c146#78e1d0c48867f69fec297d9016f48b0ce1b8c146"
+source = "git+https://github.com/Kuddev/gpui-component?rev=4b62121bac83e103b4176708a98aecf0b51c84ab#4b62121bac83e103b4176708a98aecf0b51c84ab"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3470,7 +3470,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/Kuddev/gpui-component?rev=78e1d0c48867f69fec297d9016f48b0ce1b8c146#78e1d0c48867f69fec297d9016f48b0ce1b8c146"
+source = "git+https://github.com/Kuddev/gpui-component?rev=4b62121bac83e103b4176708a98aecf0b51c84ab#4b62121bac83e103b4176708a98aecf0b51c84ab"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3484,7 +3484,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/Kuddev/gpui-component?rev=78e1d0c48867f69fec297d9016f48b0ce1b8c146#78e1d0c48867f69fec297d9016f48b0ce1b8c146"
+source = "git+https://github.com/Kuddev/gpui-component?rev=4b62121bac83e103b4176708a98aecf0b51c84ab#4b62121bac83e103b4176708a98aecf0b51c84ab"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3494,7 +3494,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3546,7 +3546,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3596,7 +3596,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3607,7 +3607,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "console_error_panic_hook",
  "gpui",
@@ -3620,7 +3620,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "schemars",
  "serde",
@@ -3630,7 +3630,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "anyhow",
  "log",
@@ -3640,7 +3640,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3663,7 +3663,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3694,7 +3694,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3991,7 +3991,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4863,6 +4863,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "luau0-src"
+version = "0.18.3+luau709"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e73f7d752fe2ef0a41f132b83d0be154c6ae0ed84967b4df80a16901866be075"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "lyon"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5038,7 +5047,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -5186,6 +5195,7 @@ dependencies = [
  "libc",
  "lua-src",
  "luajit-src",
+ "luau0-src",
  "pkg-config",
 ]
 
@@ -5249,6 +5259,7 @@ dependencies = [
  "log",
  "num-traits",
  "once_cell",
+ "pp-rs",
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror 2.0.18",
@@ -5287,7 +5298,7 @@ dependencies = [
 
 [[package]]
 name = "nebula"
-version = "2.2.2"
+version = "2.5.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "aes-gcm",
@@ -5371,6 +5382,7 @@ dependencies = [
  "toml_edit 0.24.0+spec-1.1.0",
  "tray-icon",
  "ttf-parser",
+ "unicode-segmentation",
  "unicode-width",
  "ureq",
  "windows 0.61.3",
@@ -5401,15 +5413,15 @@ dependencies = [
 
 [[package]]
 name = "nebula-settings"
-version = "2.2.2"
+version = "2.5.0"
 
 [[package]]
 name = "nebula-split"
-version = "2.2.2"
+version = "2.5.0"
 
 [[package]]
 name = "nebula_config"
-version = "2.2.2"
+version = "2.5.0"
 dependencies = [
  "log",
  "nebula_config_derive",
@@ -5419,7 +5431,7 @@ dependencies = [
 
 [[package]]
 name = "nebula_config_derive"
-version = "2.2.2"
+version = "2.5.0"
 dependencies = [
  "log",
  "nebula_config",
@@ -5436,7 +5448,7 @@ version = "0.6.0"
 
 [[package]]
 name = "nebula_terminal"
-version = "2.2.2"
+version = "2.5.0"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.0",
@@ -6507,7 +6519,7 @@ dependencies = [
 
 [[package]]
 name = "pebrel-completions"
-version = "2.2.2"
+version = "2.5.0"
 dependencies = [
  "lscolors",
  "nu-ansi-term",
@@ -6573,7 +6585,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "collections",
  "serde",
@@ -6900,6 +6912,15 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "pp-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb458bb7f6e250e6eb79d5026badc10a3ebb8f9a15d1fff0f13d17c71f4d6dee"
+dependencies = [
+ "unicode-xid",
+]
 
 [[package]]
 name = "ppv-lite86"
@@ -7503,7 +7524,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "derive_refineable",
 ]
@@ -8025,9 +8046,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -8107,7 +8128,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "async-task",
  "backtrace",
@@ -8988,7 +9009,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "heapless",
  "log",
@@ -10388,7 +10409,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "perf",
  "quote",
@@ -10766,9 +10787,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -11829,7 +11850,7 @@ checksum = "2fb433233f2df9344722454bc7e96465c9d03bff9d77c248f9e7523fe79585b5"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/MeshedPoto/xim-rs?rev=422473ff3be2ce58ea70f3fad35cecafcf7ae6a9#422473ff3be2ce58ea70f3fad35cecafcf7ae6a9"
 dependencies = [
  "encoding_rs",
 ]
@@ -11837,7 +11858,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/MeshedPoto/xim-rs?rev=422473ff3be2ce58ea70f3fad35cecafcf7ae6a9#422473ff3be2ce58ea70f3fad35cecafcf7ae6a9"
 dependencies = [
  "bitflags 2.13.0",
 ]
@@ -12167,7 +12188,7 @@ dependencies = [
 [[package]]
 name = "zed-xim"
 version = "0.4.0-zed"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/MeshedPoto/xim-rs?rev=422473ff3be2ce58ea70f3fad35cecafcf7ae6a9#422473ff3be2ce58ea70f3fad35cecafcf7ae6a9"
 dependencies = [
  "ahash",
  "hashbrown 0.14.5",
@@ -12299,7 +12320,7 @@ checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 [[package]]
 name = "zlog"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "anyhow",
  "chrono",
@@ -12316,7 +12337,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -12327,7 +12348,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/Kuddev/zed?rev=1e716d16ec54b361499931b4278903cdcaae8949#1e716d16ec54b361499931b4278903cdcaae8949"
+source = "git+https://github.com/Kuddev/zed?rev=4f2c269fd288d29b58b641da56a0dd5608fb22df#4f2c269fd288d29b58b641da56a0dd5608fb22df"
 
 [[package]]
 name = "zune-core"

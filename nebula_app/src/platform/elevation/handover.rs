@@ -23,6 +23,8 @@ pub(crate) struct Request {
     pub cwd: Option<PathBuf>,
     pub command: Option<Program>,
     pub shell_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_restore: Option<PathBuf>,
 }
 
 impl Request {
@@ -35,6 +37,12 @@ impl Request {
                 command.program().trim().is_empty()
                     || !valid_text(command.program())
                     || command.args().iter().any(|argument| !valid_text(argument))
+            })
+            || self.update_restore.as_ref().is_some_and(|path| {
+                !path.is_absolute()
+                    || path.to_str().is_none_or(|value| !valid_text(value))
+                    || self.command.is_some()
+                    || self.shell_id.is_some()
             })
         {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid elevated launch"));

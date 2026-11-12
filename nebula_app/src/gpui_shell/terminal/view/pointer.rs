@@ -6,11 +6,22 @@ use gpui_component::WindowExt as _;
 mod tests;
 
 impl TerminalView {
+    pub(in crate::gpui_shell::terminal) fn native_result_width(&self) -> Pixels {
+        // 结果层不能遮住主滚动条及其真实命中余量。
+        (self.cell_width * self.cols as f32 - px(SCROLLBAR_W + SCROLLBAR_SLOP)).max(px(0.0))
+    }
+
     pub(in crate::gpui_shell::terminal) fn scrollbar_thumb(
         &self,
         display_offset: usize,
         history: usize,
     ) -> Option<Bounds<Pixels>> {
+        let (display_offset, history) = self
+            .native_results
+            .projection
+            .borrow()
+            .scroll_state()
+            .unwrap_or((display_offset, history));
         let visible = self.scrollbar_drag.is_some()
             || match self.scrollbar_visibility {
                 nebula_settings::ScrollbarVisibility::Auto => display_offset > 0,
@@ -71,6 +82,9 @@ impl TerminalView {
 
     /// 回滚历史行数：拇指高度与拖拽反算的分母来源。
     pub(in crate::gpui_shell::terminal) fn history_size(&self) -> usize {
+        if let Some((_, history)) = self.native_results.projection.borrow().scroll_state() {
+            return history;
+        }
         self.session.as_ref().map(|s| s.term.lock().history_size()).unwrap_or(0)
     }
 
@@ -113,6 +127,9 @@ impl TerminalView {
 
     /// 一次取锁读出滚动条几何要的两个量：当前回滚位置与历史行数。
     pub(super) fn scroll_state(&self) -> (usize, usize) {
+        if let Some(state) = self.native_results.projection.borrow().scroll_state() {
+            return state;
+        }
         self.session
             .as_ref()
             .map(|s| {
@@ -124,6 +141,11 @@ impl TerminalView {
 
     /// 把回滚位置落到 `target`（滚动条拖拽的落点提交）。
     pub(super) fn scroll_to_offset(&self, target: usize, current: usize) {
+        if let Some(session) = &self.session
+            && self.native_results.scroll_to(target, &mut session.term.lock())
+        {
+            return;
+        }
         if target == current {
             return;
         }
@@ -137,14 +159,28 @@ impl TerminalView {
         let rel_x = (position.x - self.origin.x).as_f32() / self.cell_width.as_f32().max(1.0);
         let rel_y = (position.y - self.origin.y).as_f32() / self.line_height.as_f32().max(1.0);
         let col = (rel_x.floor().max(0.0) as usize).min(self.cols.saturating_sub(1));
-        let row = (rel_y.floor().max(0.0) as usize).min(self.rows.saturating_sub(1));
+        let projection = self.native_results.projection.borrow();
+        let art_row = self.character_art.frame.mapped_source_row(rel_x, rel_y);
+        let rel_y = art_row.unwrap_or_else(|| projection.source_row(rel_y));
+        let row = (rel_y.floor().max(0.0) as usize)
+            .min(projection.source_rows(self.rows).saturating_sub(1));
         let side = if rel_x.fract() > 0.5 { Side::Right } else { Side::Left };
         let Some(session) = self.session.as_ref() else {
             return (TermPoint::new(Line(row as i32), Column(col)), side);
         };
         let term = session.term.lock();
         let viewport_origin = term.viewport_origin_for(self.rows);
-        let point = term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)));
+        let point = if let Some(row) = art_row {
+            // 压缩图案仍可显示源视口外的保留行，命中须返回真实源格。
+            TermPoint::new(
+                (viewport_origin + row.floor() as i32)
+                    .max(term.topmost_line())
+                    .min(term.bottommost_line()),
+                Column(col),
+            )
+        } else {
+            term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)))
+        };
         if self.reading.panel.is_some() {
             (point, side)
         } else {
@@ -156,6 +192,19 @@ impl TerminalView {
         self.session.as_ref().is_none_or(|session| {
             session.term.lock().selection.as_ref().is_none_or(|selection| selection.is_empty())
         })
+    }
+
+    pub(in crate::gpui_shell::terminal) fn toggle_output_fold(
+        &mut self,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        self.selecting = false;
+        self.stop_selection_scroll();
+        self.pending_link_open = false;
+        self.link_hover = None;
+        self.native_results.toggle_fold(id);
+        cx.notify();
     }
 
     pub(super) fn update_link_hover(
@@ -175,7 +224,7 @@ impl TerminalView {
                         super::super::osc_links::hover_from_hint(
                             &term,
                             hint,
-                            self.rows,
+                            self.native_results.projection.borrow().source_rows(self.rows),
                             self.cols,
                             crate::gpui_shell::config::ui_language(cx),
                         )
@@ -258,6 +307,8 @@ impl TerminalView {
             return None;
         }
         let (cursor_row, cursor_col) = self.suggest_anchor?;
+        let cursor_row =
+            self.native_results.projection.borrow().row(cursor_row as f32).max(0.0) as usize;
         completion_popup_layout(
             &self.suggest.completion_items,
             self.suggest.completion_selected,
@@ -435,6 +486,8 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell_pointer.invalidate();
+        self.cancel_pointer_gesture();
         window.focus(&self.focus_handle, cx);
         self.pending_link_open = false;
         cx.emit(TerminalViewEvent::FocusRequested);
@@ -495,14 +548,10 @@ impl TerminalView {
             }
         }
         if self.mouse_mode_active(&event.modifiers) {
-            self.send_mouse_report(
-                event.position,
-                mouse_protocol::BUTTON_LEFT,
-                true,
-                &event.modifiers,
-            );
+            self.begin_application_mouse(event, cx);
             return;
         }
+        self.begin_shell_pointer(event);
         let (point, side) = self.grid_point(event.position);
         let ty = match event.click_count {
             1 => SelectionType::Simple,
@@ -537,6 +586,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.move_application_mouse(event) {
+            return;
+        }
         self.update_output_hover(event, cx);
         self.update_scrollbar_hover(event.position, cx);
         // Retain the pressed link until release; dragging must not retarget it
@@ -611,6 +663,11 @@ impl TerminalView {
             }
         }
         if self.mouse_mode_active(&event.modifiers) {
+            // A press from another pane, toolbar or a consumed popup click
+            // cannot start an application's drag just by entering its hitbox.
+            if event.pressed_button == Some(MouseButton::Left) {
+                return;
+            }
             self.clear_link_hover(cx);
             // 鼠标模式的移动上报：拖动 = 按钮码+32（需 DRAG 或 MOTION 任一），
             // 无按键纯移动 = 35（仅 MOTION）；同一单元格内的移动不重报。
@@ -651,6 +708,10 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.finish_application_mouse(Some(event)) {
+            cx.stop_propagation();
+            return;
+        }
         if self.finish_completion_popup_scrollbar(event.position, cx) {
             cx.stop_propagation();
             return;
@@ -662,14 +723,11 @@ impl TerminalView {
             return;
         }
         let pending_link_open = std::mem::take(&mut self.pending_link_open);
-        if !pending_link_open && !self.selecting && self.mouse_mode_active(&event.modifiers) {
-            self.send_mouse_report(
-                event.position,
-                mouse_protocol::BUTTON_LEFT,
-                false,
-                &event.modifiers,
-            );
+        if !pending_link_open && !self.selecting {
             return;
+        }
+        if self.selecting && !pending_link_open {
+            self.finish_shell_pointer(event);
         }
         self.selecting = false;
         let (point, _) = self.grid_point(event.position);
@@ -694,6 +752,11 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell_pointer.invalidate();
+        if self.finish_application_mouse(Some(event)) {
+            cx.stop_propagation();
+            return;
+        }
         if self.finish_completion_popup_scrollbar(event.position, cx) {
             cx.stop_propagation();
             return;
@@ -797,7 +860,9 @@ impl TerminalView {
             return true;
         }
         if let Some(session) = &self.session {
-            session.term.lock().scroll_display(Scroll::Delta(lines));
+            let (offset, history) = self.scroll_state();
+            let target = (offset as i64 + i64::from(lines)).clamp(0, history as i64) as usize;
+            self.scroll_to_offset(target, offset);
         }
         // 滚动换了视口到绝对行的映射，选区末端必须按滚动后的网格重算——
         // 否则视口滑过去了，选区还钉在原来那几行。两段各自取一次锁：
@@ -812,8 +877,7 @@ impl TerminalView {
         true
     }
 
-    /// Manual selection uses the context menu. Copy-on-select keeps quick
-    /// copy/paste, while Ctrl+right-click always requests the menu.
+    /// 选中复制只控制左键松手；右键始终按选区复制或粘贴，Ctrl 保留显式菜单入口。
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -844,7 +908,7 @@ impl TerminalView {
             .as_ref()
             .and_then(|session| session.term.lock().selection_to_string())
             .filter(|text| !text.is_empty());
-        if event.modifiers.control || !self.copy_on_select {
+        if event.modifiers.control {
             cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
                 position: event.position,
                 text: selected_text.unwrap_or_default(),
@@ -917,7 +981,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub(super) fn on_scroll(
+    pub(in crate::gpui_shell::terminal) fn on_scroll(
         &mut self,
         event: &ScrollWheelEvent,
         window: &mut Window,
@@ -991,14 +1055,39 @@ impl TerminalView {
                 control: event.modifiers.control,
             };
             if let Some(bytes) = mouse_protocol::report(&mode, point, code, true, mods) {
-                for _ in 0..lines.unsigned_abs() {
-                    session.notifier.notify(bytes.clone());
-                }
+                // Preserve every report, but wake the transport once per wheel event.
+                session.notifier.notify(bytes.repeat(lines.unsigned_abs() as usize));
             }
             cx.notify();
             return;
         }
         if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+            // Pi's transcript uses paging keys; arrows edit its input. A saved
+            // conversation is not evidence that Pi still owns the foreground.
+            let agent = self
+                .effective_program_status()
+                .and_then(|status| status.app.as_deref())
+                .map_or_else(
+                    || {
+                        super::runtime::runtime_chat_agent_kind(
+                            self.running_program.as_deref(),
+                            self.command_running_disproved,
+                        )
+                    },
+                    crate::ai_agents::AgentKind::parse,
+                );
+            if let Some(key) = pi_wheel_paging_key(mode, agent, &event.modifiers, lines) {
+                // One page per accumulated wheel event, regardless of line count.
+                let bytes = crate::input::terminal_input::build_runtime_sequence(
+                    key,
+                    Default::default(),
+                    1,
+                    mode,
+                );
+                session.notifier.notify(bytes);
+                cx.notify();
+                return;
+            }
             // 备用屏（less/vim）：滚轮翻译成方向键。
             let seq: &[u8] = if mode.contains(TermMode::APP_CURSOR) {
                 if lines > 0 { b"\x1bOA" } else { b"\x1bOB" }
@@ -1013,10 +1102,40 @@ impl TerminalView {
             }
             session.notifier.notify(bytes);
         } else if !application_only {
-            term.scroll_display(Scroll::Delta(lines));
+            let (offset, history) = self
+                .native_results
+                .projection
+                .borrow()
+                .scroll_state()
+                .unwrap_or((term.grid().display_offset(), term.history_size()));
+            let target = (offset as i64 + i64::from(lines)).clamp(0, history as i64) as usize;
+            if !self.native_results.scroll_to(target, &mut term) {
+                term.scroll_display(Scroll::Delta(lines));
+            }
         }
         cx.notify();
     }
+}
+
+fn pi_wheel_paging_key(
+    mode: TermMode,
+    agent: Option<crate::ai_agents::AgentKind>,
+    modifiers: &gpui::Modifiers,
+    lines: i32,
+) -> Option<crate::runtime_api::RuntimeKey> {
+    if agent != Some(crate::ai_agents::AgentKind::Pi)
+        || !mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
+        || mode.intersects(TermMode::MOUSE_MODE)
+        || *modifiers != gpui::Modifiers::default()
+        || lines == 0
+    {
+        return None;
+    }
+    Some(if lines > 0 {
+        crate::runtime_api::RuntimeKey::PageUp
+    } else {
+        crate::runtime_api::RuntimeKey::PageDown
+    })
 }
 
 /// Preserve fractional deltas across events. Wheel speed must not rescale
@@ -1044,8 +1163,90 @@ fn wheel_scroll_lines(
 
 #[cfg(test)]
 mod scrolling_tests {
-    use super::wheel_scroll_lines;
+    use super::{pi_wheel_paging_key, wheel_scroll_lines};
     use gpui::{ScrollDelta, point, px};
+
+    #[test]
+    fn pi_wheel_pages_only_without_application_mouse_reporting() {
+        use crate::ai_agents::AgentKind;
+        use crate::runtime_api::RuntimeKey;
+        use nebula_terminal::term::TermMode;
+        let mode = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        let modifiers = gpui::Modifiers::default();
+        for (lines, key) in [(1, RuntimeKey::PageUp), (-3, RuntimeKey::PageDown)] {
+            assert_eq!(
+                pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, lines),
+                Some(key)
+            );
+        }
+        for mode in [
+            TermMode::empty(),
+            TermMode::ALT_SCREEN,
+            TermMode::ALTERNATE_SCROLL,
+            mode | TermMode::MOUSE_REPORT_CLICK,
+            mode | TermMode::MOUSE_DRAG,
+            mode | TermMode::MOUSE_MOTION,
+        ] {
+            assert_eq!(pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, 1), None);
+        }
+        for agent in [None, Some(AgentKind::Claude), Some(AgentKind::OhMyPi)] {
+            assert_eq!(pi_wheel_paging_key(mode, agent, &modifiers, 1), None);
+        }
+        for modifiers in [
+            gpui::Modifiers { shift: true, ..modifiers },
+            gpui::Modifiers { control: true, ..modifiers },
+            gpui::Modifiers { alt: true, ..modifiers },
+            gpui::Modifiers { platform: true, ..modifiers },
+        ] {
+            assert_eq!(pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, 1), None);
+        }
+        assert_eq!(pi_wheel_paging_key(mode, Some(AgentKind::Pi), &modifiers, 0), None);
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn application_mouse_wheel_batches_reports_and_preserves_direction(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::startup_tests::{feed, open};
+        use nebula_terminal::event_loop::Msg;
+        let (view, window, receiver) = open(cx);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                feed(view, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
+                for (delta, code) in [(24.0, 64), (-24.0, 65)] {
+                    view.on_scroll(
+                        &gpui::ScrollWheelEvent {
+                            delta: ScrollDelta::Lines(point(0.0, delta)),
+                            position: point(px(0.0), px(0.0)),
+                            ..Default::default()
+                        },
+                        window,
+                        cx,
+                    );
+                    let Msg::Input(bytes) = receiver.try_recv().unwrap() else {
+                        panic!("expected wheel input")
+                    };
+                    assert_eq!(bytes.as_ref(), format!("\x1b[<{code};1;1M").repeat(24).as_bytes());
+                    assert!(receiver.try_recv().is_err(), "one event wakes the transport once");
+                }
+                feed(view, b"\x1b[?1049l");
+                view.on_scroll_target(
+                    &gpui::ScrollWheelEvent {
+                        delta: ScrollDelta::Lines(point(0.0, 24.0)),
+                        ..Default::default()
+                    },
+                    true,
+                    window,
+                    cx,
+                );
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "stale application gestures cannot reach the primary shell"
+                );
+            });
+        });
+    }
 
     #[test]
     fn normal_wheel_speed_preserves_existing_steps() {

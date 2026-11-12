@@ -1,6 +1,7 @@
 //! Normalized provider facts. No terminal scanning, I/O or pane mutation.
 
 use super::payload::{MESSAGE_MAX_CHARS, truncate};
+use super::protocol::claude_style;
 
 /// What a lifecycle event means for the pane's turn state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,11 +104,20 @@ pub fn capabilities_for(source: &str) -> AiHookCapabilities {
             bridge_sequence: false,
             serialized_delivery: false,
         },
-        "cursor" => AiHookCapabilities {
+        // Claude Code's lifecycle and attention contract without its background-task payload.
+        source if claude_style(source) => AiHookCapabilities {
+            lifecycle: true,
+            attention_events: true,
+            attention_context: true,
+            background_tasks: false,
+            bridge_sequence: false,
+            serialized_delivery: false,
+        },
+        "cursor" | "antigravity" => AiHookCapabilities {
             lifecycle: true,
             attention_events: false,
             attention_context: false,
-            background_tasks: false,
+            background_tasks: source == "antigravity",
             bridge_sequence: false,
             serialized_delivery: false,
         },
@@ -255,6 +265,8 @@ pub struct AiHookEvent {
     /// Identity supplied by our bridge on an authenticated SSH channel. Kept
     /// separate from local kernel PIDs; never used for host process queries.
     pub(crate) remote_process: Option<String>,
+    /// Authenticated remote pane/foreground/connection scope, never provider JSON.
+    pub(crate) remote_context: Option<String>,
     pub(crate) turn_id: Option<String>,
     /// Compaction starts hooks inside an existing turn; it is not an idle edge.
     pub(crate) session_compacted: bool,

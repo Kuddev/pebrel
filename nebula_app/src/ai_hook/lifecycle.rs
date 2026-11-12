@@ -7,6 +7,10 @@ use crate::ai_agents::{AgentStatus, AgentStatusSource, Detection};
 
 use super::{AiHookEvent, AiHookKind};
 
+/// A stop from these sources proves nothing about the answer unless it carries a result, so
+/// an unclassified one returns the pane to idle instead of announcing completion.
+const UNPROVEN_STOP: [&str; 6] = ["pi", "omp", "cursor", "copilot", "antigravity", "opencode"];
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum HookCoverage {
     #[default]
@@ -34,6 +38,9 @@ pub(crate) struct AgentActivity {
     coverage: HookCoverage,
     owner: Option<Owner>,
     idle_samples: u8,
+    unmatched_samples: u8,
+    /// Only a preceding Working state may survive a screen form's expiry.
+    screen_blocked_fallback: Option<(AgentStatusSource, Option<String>)>,
     turn_observed: bool,
     pending_submit: bool,
     /// A completion-only hook latches its result until an idle screen or an
@@ -41,8 +48,13 @@ pub(crate) struct AgentActivity {
     screen_armed: bool,
     command_ended: bool,
     native_codex: bool,
+    /// Fresh provider title evidence is separate from the underlying lifecycle.
+    /// Removing a title marker cannot manufacture a completion or approval.
+    native_title: Option<AgentStatus>,
     turn_id: Option<String>,
     last_remote_sequence: Option<u64>,
+    /// Reject title snapshots captured before a newer submission or Hook.
+    last_activity_at: Option<std::time::Instant>,
 }
 
 impl Default for AgentActivity {
@@ -54,26 +66,34 @@ impl Default for AgentActivity {
             coverage: HookCoverage::None,
             owner: None,
             idle_samples: 0,
+            unmatched_samples: 0,
+            screen_blocked_fallback: None,
             turn_observed: false,
             pending_submit: false,
             screen_armed: true,
             command_ended: false,
             native_codex: false,
+            native_title: None,
             turn_id: None,
             last_remote_sequence: None,
+            last_activity_at: None,
         }
     }
 }
 
 impl AgentActivity {
     pub fn status(&self) -> AgentStatus {
-        self.status
+        self.native_title.unwrap_or(self.status)
     }
     pub fn source(&self) -> AgentStatusSource {
-        self.source
+        if self.native_title.is_some() { AgentStatusSource::Title } else { self.source }
     }
     pub fn rule(&self) -> Option<&str> {
-        self.rule.as_deref()
+        match self.native_title {
+            Some(AgentStatus::Blocked) => Some("codex.title.action_required"),
+            Some(AgentStatus::Working) => Some("codex.title.working"),
+            _ => self.rule.as_deref(),
+        }
     }
     pub fn hook_seen(&self) -> bool {
         self.coverage != HookCoverage::None
@@ -82,7 +102,44 @@ impl AgentActivity {
         self.owner.as_ref().and_then(|owner| owner.pid)
     }
     pub fn allows_screen(&self) -> bool {
-        !self.command_ended && self.coverage != HookCoverage::Lifecycle
+        !self.command_ended
+            && self.native_title.is_none()
+            && self.coverage != HookCoverage::Lifecycle
+    }
+
+    /// The adapter supplies a real OSC update or a fresh authenticated remote pane
+    /// sample from the already identified foreground Agent. Old snapshots must
+    /// not override a newer Hook/submission. Title evidence never owns requests,
+    /// session identity, results, or notifications.
+    pub fn observe_native_title(
+        &mut self,
+        program: Option<&str>,
+        title: &str,
+        observed_at: std::time::Instant,
+    ) -> bool {
+        if self.command_ended
+            || self.last_activity_at.is_some_and(|at| observed_at <= at)
+            || self.owner.as_ref().is_some_and(|owner| {
+                crate::ai_agents::AgentKind::parse(&owner.source)
+                    != program.and_then(crate::ai_agents::AgentKind::parse)
+            })
+        {
+            return false;
+        }
+        let signal = crate::ai_agents::native_title::activity(program, title);
+        if signal == self.native_title {
+            return false;
+        }
+        self.native_title = signal;
+        self.reset_screen_samples();
+        if signal.is_some() {
+            self.pending_submit = false;
+        }
+        if signal == Some(AgentStatus::Working) {
+            self.turn_observed = true;
+            self.screen_armed = true;
+        }
+        true
     }
 
     pub fn reset(&mut self) {
@@ -113,11 +170,14 @@ impl AgentActivity {
     /// A concrete runtime submission or accepted confirmation starts work. The
     /// previous input frame must not manufacture a completion before work starts.
     pub fn submitted(&mut self) {
+        self.native_title = None;
         self.status = AgentStatus::Working;
         self.source = AgentStatusSource::Process;
         self.rule = None;
+        self.screen_blocked_fallback = None;
         self.turn_observed = true;
         self.pending_submit = true;
+        self.last_activity_at = Some(std::time::Instant::now());
         self.input_sent();
     }
 
@@ -135,7 +195,14 @@ impl AgentActivity {
     /// new turn; it is not itself a successful submission or a completion.
     pub fn input_sent(&mut self) {
         self.screen_armed = true;
+        self.reset_screen_samples();
+    }
+
+    /// An unavailable or unidentified snapshot interrupts consecutive evidence
+    /// without revoking a state. Only a known agent's real snapshot can do that.
+    pub fn reset_screen_samples(&mut self) {
         self.idle_samples = 0;
+        self.unmatched_samples = 0;
     }
 
     /// Check ownership before the ordering gate records this event. An ignored
@@ -144,9 +211,7 @@ impl AgentActivity {
         if self.command_ended && event.kind != AiHookKind::SessionStart {
             return false;
         }
-        if event.legacy_attention
-            && !matches!(self.status, AgentStatus::Working | AgentStatus::Blocked)
-        {
+        if event.legacy_attention {
             return false;
         }
         // Both bridges stay installed for old clients and pending hook trust.
@@ -239,6 +304,7 @@ impl AgentActivity {
             return false;
         }
         self.record_owner(event);
+        self.native_title = None;
         self.native_codex |= event.codex_hooks.is_some();
         if event.remote_process.is_some() && event.bridge_sequence.is_some() {
             self.last_remote_sequence = event.bridge_sequence;
@@ -266,7 +332,8 @@ impl AgentActivity {
         self.coverage = coverage;
         self.source = AgentStatusSource::Hook;
         self.rule = None;
-        self.idle_samples = 0;
+        self.screen_blocked_fallback = None;
+        self.reset_screen_samples();
         if event.kind != AiHookKind::SessionStart {
             self.pending_submit = false;
         }
@@ -295,7 +362,7 @@ impl AgentActivity {
                     super::AiTurnOutcome::Failed
                         | super::AiTurnOutcome::Incomplete
                         | super::AiTurnOutcome::Cancelled
-                ) || (matches!(event.source.as_str(), "pi" | "omp" | "cursor" | "copilot")
+                ) || (UNPROVEN_STOP.contains(&event.source.as_str())
                     && event.turn_outcome == super::AiTurnOutcome::Unknown)
                 {
                     AgentStatus::Idle
@@ -306,19 +373,39 @@ impl AgentActivity {
             AiHookKind::NeedsAttention => AgentStatus::Blocked,
             AiHookKind::SessionEnd => unreachable!("handled above"),
         };
+        self.last_activity_at = Some(std::time::Instant::now());
         true
     }
 
-    /// No match resets consecutive-idle evidence. Full lifecycle hooks never
-    /// consult screen rules, even if the current frame contains a real old form.
+    /// Observe a real snapshot of a known agent. No match can revoke stale
+    /// screen attention, but cannot establish idle or completion. Full lifecycle
+    /// hooks never consult screen rules, even if a frame contains an old form.
     pub fn observe_screen(&mut self, detection: Option<Detection>) -> bool {
         if !self.allows_screen() {
             return false;
         }
         let Some(detection) = detection else {
             self.idle_samples = 0;
-            return false;
+            if self.source != AgentStatusSource::Screen || self.status != AgentStatus::Blocked {
+                return false;
+            }
+            self.unmatched_samples = self.unmatched_samples.saturating_add(1);
+            if self.unmatched_samples < 2 {
+                return false;
+            }
+            self.unmatched_samples = 0;
+            if let Some((source, rule)) = self.screen_blocked_fallback.take() {
+                self.status = AgentStatus::Working;
+                self.source = source;
+                self.rule = rule;
+            } else {
+                self.status = AgentStatus::Unknown;
+                self.source = AgentStatusSource::Unknown;
+                self.rule = None;
+            }
+            return true;
         };
+        self.unmatched_samples = 0;
         let next = match detection.status {
             AgentStatus::Idle => {
                 if self.pending_submit {
@@ -363,10 +450,24 @@ impl AgentActivity {
         if next == self.status {
             return false;
         }
+        self.screen_blocked_fallback =
+            if next == AgentStatus::Blocked && self.status == AgentStatus::Working {
+                Some((self.source, self.rule.take()))
+            } else {
+                None
+            };
         self.status = next;
         self.source = AgentStatusSource::Screen;
         self.rule = Some(detection.rule_id);
         true
+    }
+
+    /// Backdate the latest submission/hook boundary without sleeping in tests.
+    #[cfg(test)]
+    pub(crate) fn backdate_activity_for_test(&mut self, back: std::time::Duration) {
+        if let Some(at) = &mut self.last_activity_at {
+            *at = std::time::Instant::now().checked_sub(back).unwrap_or(std::time::Instant::now());
+        }
     }
 }
 

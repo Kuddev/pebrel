@@ -47,10 +47,10 @@ fn every_builtin_theme_keeps_message_surfaces_and_braille_stars() {
         let (mut snapshot, user) = capture(&palette);
         assert_ne!(from_ansi_rgb(user), palette.background, "{name:?}");
         let star_colors: Vec<_> = snapshot
-            .segments
+            .box_glyphs
             .iter()
-            .filter(|seg| seg.row == 1)
-            .flat_map(|seg| seg.cells.iter().map(|cell| cell.fg))
+            .filter(|glyph| glyph.row == 1)
+            .map(|glyph| glyph.fg)
             .collect();
         let mut resolver = TerminalColorResolver::default();
         resolve_app_colors_into(&mut snapshot, &palette, &Colors::default(), &mut resolver);
@@ -63,17 +63,17 @@ fn every_builtin_theme_keeps_message_surfaces_and_braille_stars() {
             "{name:?}: AI reply acquired a message background"
         );
         let stars: String = snapshot
-            .segments
+            .box_glyphs
             .iter()
-            .filter(|seg| seg.row == 1)
-            .flat_map(|seg| seg.cells.iter().map(|cell| cell.text.as_str()))
+            .filter(|glyph| glyph.row == 1)
+            .map(|glyph| glyph.ch)
             .collect();
         assert_eq!(stars, "⠁⠂⠄⠈⠐⠠⡀⢀");
         let after: Vec<_> = snapshot
-            .segments
+            .box_glyphs
             .iter()
-            .filter(|seg| seg.row == 1)
-            .flat_map(|seg| seg.cells.iter().map(|cell| cell.fg))
+            .filter(|glyph| glyph.row == 1)
+            .map(|glyph| glyph.fg)
             .collect();
         assert_eq!(star_colors, after, "{name:?}: star colors were changed");
     }

@@ -45,6 +45,7 @@ fun SftpFileScreen(session: LocalSession, tab: SftpTab, onBack: () -> Unit, onTa
     var imageReset by remember { mutableIntStateOf(0) }
     var download by remember(tab.id) { mutableStateOf<Job?>(null) }
     var cancelling by remember { mutableStateOf(false) }
+    var waitingForConnection by remember { mutableStateOf(false) }
     var transferred by remember { mutableLongStateOf(0) }
     var transferTotal by remember { mutableStateOf<Long?>(null) }
     val ready = session.status == "ready"
@@ -97,7 +98,7 @@ fun SftpFileScreen(session: LocalSession, tab: SftpTab, onBack: () -> Unit, onTa
                 try {
                     withContext(Dispatchers.IO) {
                         checkNotNull(context.contentResolver.openOutputStream(uri, "w")).use { output ->
-                            client.download(file.path, output) { count, total -> transferred = count; transferTotal = total }
+                            client.download(file.path, output, waiting = { waitingForConnection = it }) { count, total -> transferred = count; transferTotal = total }
                         }
                     }
                     complete = true; notice = R.string.sftp_downloaded
@@ -159,7 +160,7 @@ fun SftpFileScreen(session: LocalSession, tab: SftpTab, onBack: () -> Unit, onTa
         if (clipboard.copied == -1) HelperText(copiedLabel, Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
         notice?.let { HelperText(stringResource(it), Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (download != null) SftpTransferProgress(transferred, transferTotal, cancelling) { cancelling = true; download?.cancel() }
+        if (download != null) SftpTransferProgress(transferred, transferTotal, cancelling, waitingForConnection) { cancelling = true; download?.cancel() }
         failure?.let { code -> SftpFailureRow(code, if (ready && !loading) ({ refresh++ }) else null) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val prepared = document

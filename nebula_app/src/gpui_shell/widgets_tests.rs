@@ -20,7 +20,7 @@ impl Render for ControlProbe {
                     .on_click(move |_, _, _| action.set(action.get() + 1)),
             )
             .child(
-                toolbar_button("comfort-tool", IconName::Settings)
+                toolbar_button("comfort-tool", IconName::Settings, false)
                     .debug_selector(|| "comfort-tool".to_owned())
                     .on_click(move |_, _, _| tool.set(tool.get() + 1)),
             )

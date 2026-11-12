@@ -48,6 +48,9 @@ class SshStatusTest {
     @Test fun arbitraryFailureDoesNotBlameCredentials() {
         assertEquals(SshFailureKind.UNKNOWN, classifySshFailure(IllegalStateException()))
     }
+    @Test fun aClosedHandleAfterResumeIsATransportFailure() {
+        assertEquals(SshFailureKind.NETWORK, classifySshFailure(NativeSshException("CLOSED")))
+    }
     @Test fun nativeErrorsKeepNegotiationChannelAndTrustDistinct() {
         listOf(SshFailureKind.NEGOTIATION, SshFailureKind.CHANNEL, SshFailureKind.TRUST_REJECTED).forEach {
             assertEquals(it, classifySshFailure(IOException("wrapper", NativeSshException(it.name))))

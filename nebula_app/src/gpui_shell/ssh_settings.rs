@@ -30,6 +30,8 @@ use crate::gpui_shell::widgets::NebulaButton;
 mod advanced;
 mod editor;
 pub(super) mod library;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod serial_tests;
 use crate::i18n::Message;
 
 /// 删除撤销窗口时长，旧壳 Undo 条同值。
@@ -510,13 +512,18 @@ impl SettingsPane {
         &self,
         cx: &gpui::App,
     ) -> Result<String, SshValidationError> {
+        let address = self.ssh_destination_input.read(cx).value().trim().to_string();
+        // A serial address owns its port and baud settings. In particular, the
+        // editor's default SSH username must not turn it into root@serial:….
+        if address.starts_with(crate::serial_session::SCHEME) {
+            return Ok(address);
+        }
         let port = self.ssh_port_input.read(cx).value().trim().to_string();
         if !port.is_empty() && !port.parse::<u16>().is_ok_and(|value| value > 0) {
             // en-dash 区间写法与旧壳一字不差。
             return Err(SshValidationError::InvalidPort);
         }
         let username = self.ssh_username_input.read(cx).value().trim().to_string();
-        let address = self.ssh_destination_input.read(cx).value().trim().to_string();
         let (_, host) = crate::display::split_destination_user(&address);
         if host.is_empty() {
             return Err(SshValidationError::MissingDestination);
@@ -590,6 +597,15 @@ impl SettingsPane {
                 return;
             },
         };
+        if destination.starts_with(crate::serial_session::SCHEME) {
+            self.ssh_status = Some(SshStatus::Error(
+                crate::gpui_shell::config::ui_language(cx)
+                    .text(Message::TerminalSerialTestHint)
+                    .to_owned(),
+            ));
+            cx.notify();
+            return;
+        }
         let connection = match self.ssh_connection_from_draft(&destination, cx) {
             Ok(connection) => connection,
             Err(error) => {
@@ -1062,9 +1078,11 @@ impl SettingsPane {
             .child(
                 div()
                     .w(px(target_ink_width))
-                    .font_family(crate::font_install::REQUIRED_FONT_FAMILY)
+                    .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
                     .text_size(px(icon_size))
-                    .child(icon.glyph.to_string()),
+                    .child(crate::gpui_shell::widgets::terminal_glyph(
+                        icon.glyph.to_string(), target_ink_width,
+                    )),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_ssh_icon_picker(window, cx);
@@ -1157,7 +1175,7 @@ impl SettingsPane {
         let muted = theme.muted_foreground;
         let hover_bg = theme.list_hover;
         let selected_bg = theme.list_active;
-        let font_chain: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let font_chain: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let current = self
             .ssh_editor
             .as_ref()
@@ -1226,7 +1244,10 @@ impl SettingsPane {
                                         .w(px(PICKER_ICON_INK_W))
                                         .font_family(font_chain.clone())
                                         .text_size(px(icon_size))
-                                        .child(icon.glyph.to_string()),
+                                        .child(crate::gpui_shell::widgets::terminal_glyph(
+                                            icon.glyph.to_string(),
+                                            PICKER_ICON_INK_W,
+                                        )),
                                 ),
                         )
                         .child(div().flex_1().min_w_0().truncate().text_sm().child(name))

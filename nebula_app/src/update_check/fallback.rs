@@ -15,16 +15,22 @@ const TAG_PREFIX: &str = "https://github.com/Kuddev/pebrel/releases/tag/";
 pub(super) fn fetch_latest(status: u16) -> Result<LatestRelease, String> {
     log::info!("update-check: API returned HTTP {status}; checking official latest-release page");
     // Resolve proxy settings for github.com independently of api.github.com.
-    let agent = crate::update_proxy::agent(LATEST_PAGE, Duration::from_secs(10));
     let language =
         LanguagePreference::from(nebula_settings::RuntimeSettings::load().language).resolved();
+    let agent =
+        crate::update_proxy::agent(LATEST_PAGE, Duration::from_secs(10)).map_err(|error| {
+            language.format(
+                Message::UpdateCheckFallbackFailed,
+                &[("status", &status.to_string()), ("error", &error.to_string())],
+            )
+        })?;
     let uri = redirected_uri(&agent, LATEST_PAGE).map_err(|error| {
         language.format(
             Message::UpdateCheckFallbackFailed,
             &[("status", &status.to_string()), ("error", &error.to_string())],
         )
     })?;
-    let mut release = release_from_uri(&uri)
+    let release = release_from_uri(&uri)
         .ok_or_else(|| language.text(Message::UpdateCheckUnrecognizedRelease).to_owned())?;
     // The official manifest restores verified download metadata during API limits.
     // If it is unavailable, version discovery still works with manual download.
@@ -33,12 +39,21 @@ pub(super) fn fetch_latest(status: u16) -> Result<LatestRelease, String> {
         release.version
     );
     let agent = crate::update_proxy::agent(&url, Duration::from_secs(10));
-    if let Ok(mut response) = agent.get(&url).header("User-Agent", "pebrel").call()
+    Ok(with_checksums(release, &url, agent))
+}
+
+fn with_checksums(
+    mut release: LatestRelease,
+    url: &str,
+    agent: Result<ureq::Agent, ureq::Error>,
+) -> LatestRelease {
+    if let Ok(agent) = agent
+        && let Ok(mut response) = agent.get(url).header("User-Agent", "pebrel").call()
         && let Ok(text) = response.body_mut().with_config().limit(64 * 1024).read_to_string()
     {
         release.asset = super::assets::from_checksums(&release.version, &text);
     }
-    Ok(release)
+    release
 }
 
 fn redirected_uri(agent: &ureq::Agent, url: &str) -> Result<String, ureq::Error> {
@@ -78,6 +93,28 @@ fn release_from_uri(uri: &str) -> Option<LatestRelease> {
 mod tests {
     use super::*;
     use crate::update_proxy::test_support::{Server, response};
+
+    #[test]
+    fn unavailable_optional_manifest_keeps_the_discovered_version_for_manual_download() {
+        let discovered = || release_from_uri(&format!("{TAG_PREFIX}v1.9.0")).unwrap();
+        let release = with_checksums(
+            discovered(),
+            "http://checksums.update.invalid/SHA256SUMS",
+            Err(ureq::Error::InvalidProxyUrl),
+        );
+        assert_eq!(release.version, "1.9.0");
+        assert!(release.asset.is_none());
+
+        let server = Server::start(vec![response("503 Service Unavailable", "", "unavailable")]);
+        let release = with_checksums(
+            discovered(),
+            "http://checksums.update.invalid/SHA256SUMS",
+            Ok(server.network_agent("http", None, &[])),
+        );
+        assert_eq!(release.version, "1.9.0");
+        assert!(release.asset.is_none());
+        assert_eq!(server.finish().len(), 1);
+    }
 
     #[test]
     fn rate_limited_api_falls_back_and_discovers_an_upgrade_without_install_authority() {

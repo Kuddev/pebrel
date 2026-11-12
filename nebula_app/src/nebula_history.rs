@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const HISTORY_MAX: usize = 5_000;
 pub(crate) const LOCAL_HISTORY_FILE: &str = "pebrel_history.jsonl";
@@ -61,7 +61,14 @@ fn normalize_ssh_identity(destination: &str) -> String {
 #[derive(Debug, Default)]
 struct HistoryIndex {
     entries: Vec<String>,
-    index: BTreeMap<String, usize>,
+    index: BTreeMap<String, HistoryRank>,
+}
+
+/// Accepted submissions rank by frequency first; the latest use breaks ties.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct HistoryRank {
+    uses: u64,
+    position: usize,
 }
 
 impl HistoryIndex {
@@ -73,8 +80,8 @@ impl HistoryIndex {
         if prefix.is_empty() {
             return None;
         }
-        let mut best: Option<(usize, &str)> = None;
-        for (cmd, &pos) in self.index.range(prefix.to_owned()..) {
+        let mut best: Option<(HistoryRank, &str)> = None;
+        for (cmd, &rank) in self.index.range(prefix.to_owned()..) {
             if cancelled() {
                 return None;
             }
@@ -84,8 +91,8 @@ impl HistoryIndex {
             if cmd.len() == prefix.len() {
                 continue;
             }
-            if best.is_none_or(|(best_pos, _)| pos > best_pos) {
-                best = Some((pos, &cmd[prefix.len()..]));
+            if best.is_none_or(|(best_rank, _)| rank > best_rank) {
+                best = Some((rank, &cmd[prefix.len()..]));
             }
         }
         best.map(|(_, remainder)| remainder)
@@ -95,13 +102,13 @@ impl HistoryIndex {
         if prefix.is_empty() || limit == 0 {
             return Vec::new();
         }
-        let mut matches: Vec<(usize, &str)> = Vec::new();
-        for (cmd, &pos) in self.index.range(prefix.to_owned()..) {
+        let mut matches: Vec<(HistoryRank, &str)> = Vec::new();
+        for (cmd, &rank) in self.index.range(prefix.to_owned()..) {
             if !cmd.starts_with(prefix) {
                 break;
             }
             if cmd.len() != prefix.len() {
-                matches.push((pos, cmd.as_str()));
+                matches.push((rank, cmd.as_str()));
             }
         }
         matches.sort_unstable_by(|a, b| b.0.cmp(&a.0));
@@ -109,25 +116,27 @@ impl HistoryIndex {
     }
 
     fn insert(&mut self, cmd: String) {
-        if let Some(&old) = self.index.get(&cmd) {
-            self.entries.remove(old);
+        if let Some(rank) = self.index.get_mut(&cmd) {
+            rank.uses = rank.uses.saturating_add(1);
+            self.entries.remove(rank.position);
             self.entries.push(cmd);
             self.reindex();
             return;
         }
         self.entries.push(cmd.clone());
-        self.index.insert(cmd, self.entries.len() - 1);
+        self.index.insert(cmd, HistoryRank { uses: 1, position: self.entries.len() - 1 });
         if self.entries.len() > HISTORY_MAX {
             let drop = self.entries.len() - HISTORY_MAX;
-            self.entries.drain(0..drop);
+            for removed in self.entries.drain(0..drop) {
+                self.index.remove(&removed);
+            }
             self.reindex();
         }
     }
 
     fn reindex(&mut self) {
-        self.index.clear();
         for (position, command) in self.entries.iter().enumerate() {
-            self.index.insert(command.clone(), position);
+            self.index.get_mut(command).expect("history entry is indexed").position = position;
         }
     }
 }
@@ -140,9 +149,13 @@ pub struct NebulaHistory {
 impl NebulaHistory {
     pub fn load() -> Self {
         let mut history = Self::default();
-        history.load_file(&HistoryScope::Local);
-        history.load_file(&HistoryScope::Wsl(String::new()));
-        history.load_file(&HistoryScope::Ssh(String::new()));
+        for scope in [
+            HistoryScope::Local,
+            HistoryScope::Wsl(String::new()),
+            HistoryScope::Ssh(String::new()),
+        ] {
+            history.load_file(&scope, &history_path(scope.file_name()));
+        }
         history_debug_log(format!(
             "history_load scopes={} entries={}",
             history.pools.len(),
@@ -158,12 +171,6 @@ impl NebulaHistory {
             return;
         }
         let pool = self.pools.entry(scope.clone()).or_default();
-        if pool.entries.last().map(String::as_str) == Some(cmd) {
-            history_debug_log(format!(
-                "history_record_skip_repeat scope={scope:?} cmd={cmd:?} cwd={cwd:?}"
-            ));
-            return;
-        }
         append(&scope, cmd, cwd);
         pool.insert(cmd.to_owned());
         history_debug_log(format!(
@@ -172,7 +179,7 @@ impl NebulaHistory {
         ));
     }
 
-    /// Popup search retains the stored spelling and ranks ties by recency.
+    /// Popup search retains spelling and ranks matching commands by frequency, then recency.
     /// Inline ghost suggestions remain literal suffixes of the current input.
     pub fn search(&self, scope: &HistoryScope, text: &str, limit: usize) -> Vec<&str> {
         self.search_with_cancel(scope, text, limit, &|| false)
@@ -193,20 +200,19 @@ impl NebulaHistory {
         let mut matches: Vec<_> = pool
             .entries
             .iter()
-            .enumerate()
             .take_while(|_| !cancelled())
-            .filter_map(|(index, command)| {
+            .filter_map(|command| {
                 (command != text)
                     .then(|| query.score(command))
                     .flatten()
-                    .map(|score| (score, index, command.as_str()))
+                    .map(|_| (pool.index[command], command.as_str()))
             })
             .collect();
         if cancelled() {
             return Vec::new();
         }
-        matches.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-        matches.into_iter().take(limit).map(|(_, _, command)| command).collect()
+        matches.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        matches.into_iter().take(limit).map(|(_, command)| command).collect()
     }
 
     pub fn hint(&self, scope: &HistoryScope, prefix: &str) -> Option<&str> {
@@ -228,8 +234,23 @@ impl NebulaHistory {
             .map_or_else(Vec::new, |pool| pool.hints(prefix, limit))
     }
 
-    fn load_file(&mut self, category: &HistoryScope) {
-        let path = history_path(category.file_name());
+    /// The caller serializes this with recording. Failed categories retain their
+    /// in-memory entries, while successfully removed files cannot reappear on exit.
+    pub(crate) fn clear_at(&mut self, directory: &Path) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for file in history_file_names() {
+            match std::fs::remove_file(directory.join(file)) {
+                Ok(()) => self.pools.retain(|scope, _| scope.file_name() != file),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.pools.retain(|scope, _| scope.file_name() != file);
+                },
+                Err(error) => errors.push(format!("{file}: {error}")),
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    }
+
+    fn load_file(&mut self, category: &HistoryScope, path: &Path) {
         let Ok(data) = std::fs::read_to_string(path) else { return };
         for line in data.lines() {
             let Some((scope, cmd)) = parse_record(category, line) else { continue };
@@ -237,6 +258,9 @@ impl NebulaHistory {
         }
     }
 }
+
+#[cfg(test)]
+mod deletion_tests;
 
 pub(crate) fn history_file_names() -> [&'static str; 3] {
     [LOCAL_HISTORY_FILE, WSL_HISTORY_FILE, SSH_HISTORY_FILE]
@@ -432,6 +456,57 @@ mod tests {
         let scope = HistoryScope::Local;
         let history = hist(scope.clone(), &["ls", "ll", "ls"]);
         assert_eq!(history.hint(&scope, "l"), Some("s"));
+    }
+
+    #[test]
+    fn frequency_precedes_recency_for_inline_popup_and_list_suggestions() {
+        let scope = HistoryScope::Ssh("user@host".into());
+        let history = hist(scope.clone(), &["git status", "git status", "git pull", "git push"]);
+        assert_eq!(history.hint(&scope, "git "), Some("status"));
+        assert_eq!(history.search(&scope, "git", 3), vec!["git status", "git push", "git pull"]);
+        assert_eq!(history.hints(&scope, "git ", 1), vec![("git status", "status")]);
+        assert!(history.search(&HistoryScope::Local, "git", 3).is_empty());
+        let mut history = history;
+        history.pools.get_mut(&scope).unwrap().insert("git pull".into());
+        assert_eq!(history.search(&scope, "git", 3), vec!["git pull", "git status", "git push"]);
+    }
+
+    #[test]
+    fn reloading_existing_records_recovers_frequency_without_a_format_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(SSH_HISTORY_FILE);
+        std::fs::write(
+            &path,
+            [
+                r#"{"scope":"ssh","target":"user@host","cmd":"git status"}"#,
+                r#"{"scope":"ssh","target":"user@host","cmd":"git status"}"#,
+                r#"{"scope":"ssh","target":"user@host","cmd":"git pull"}"#,
+                r#"{"scope":"ssh","target":"other@host","cmd":"git push"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut history = NebulaHistory::default();
+        history.load_file(&HistoryScope::Ssh(String::new()), &path);
+        assert_eq!(history.hint(&HistoryScope::Ssh("user@host".into()), "git "), Some("status"));
+        history.clear_at(directory.path()).unwrap();
+        assert!(history.pools.is_empty());
+    }
+
+    #[test]
+    fn eviction_removes_frequency_and_recency_together() {
+        let mut pool = HistoryIndex::default();
+        for _ in 0..10 {
+            pool.insert("stale".into());
+        }
+        for i in 0..HISTORY_MAX {
+            pool.insert(format!("command {i}"));
+        }
+        assert!(!pool.index.contains_key("stale"));
+        pool.insert("stale".into());
+        assert_eq!(pool.index["stale"].uses, 1);
+        assert_eq!(pool.entries.len(), HISTORY_MAX);
+        assert_eq!(pool.index.len(), HISTORY_MAX);
     }
 
     #[test]

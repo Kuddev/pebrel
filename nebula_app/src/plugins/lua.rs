@@ -1,18 +1,17 @@
-//! 托管协程把宿主调用让出到 Rust；读取 Runtime 时不持有 Lua 的执行栈。
+//! 托管协程把宿主调用让出到 Rust；读取 Runtime 时不持有 Luau 的执行栈。
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::PoisonError;
+use std::time::Duration;
 
 use mlua::{
-    ChunkMode, Function, HookTriggers, Lua, LuaOptions, LuaSerdeExt, MultiValue, StdLib, Table,
-    ThreadStatus, Value as LuaValue, VmState,
+    ChunkMode, Function, Lua, LuaSerdeExt, MultiValue, StdLib, Table, ThreadStatus,
+    Value as LuaValue,
 };
 use serde_json::Value;
 
 use super::{
-    Error, Execution, INSTRUCTION_QUANTUM, MAX_INSTRUCTIONS, MAX_LUA_MEMORY, MAX_RUNTIME_CALLS,
-    Package, Result, RuntimeCall, json,
+    Error, Execution, MAX_LUA_MEMORY, MAX_LUAU_INTERRUPTS, MAX_RUNTIME_CALLS, Package, Result,
+    RuntimeCall, json,
 };
 
 const REQUEST: &str = "pebrel.runtime.request";
@@ -28,20 +27,13 @@ pub(super) fn vm_creation_count() -> usize {
 }
 
 struct Budget {
-    deadline: Instant,
-    ticks: Arc<AtomicUsize>,
+    vm: crate::luau::Budget,
     calls: usize,
 }
 
 impl Budget {
     fn remaining(&self) -> Result<Duration> {
-        if self.ticks.load(Ordering::Relaxed) >= MAX_INSTRUCTIONS {
-            return Err(Error::new("lua_instruction_limit", "Lua instruction budget exhausted"));
-        }
-        self.deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| Error::new("plugin_timeout", "plugin execution deadline reached"))
+        self.vm.remaining().map_err(limit_error)
     }
 }
 
@@ -52,51 +44,98 @@ pub(super) fn execute(
     timeout: Duration,
     call: &mut RuntimeCall<'_>,
 ) -> Result<Execution> {
-    let mut budget = Budget {
-        deadline: Instant::now() + timeout,
-        ticks: Arc::new(AtomicUsize::new(0)),
-        calls: 0,
-    };
+    let mut budget =
+        Budget { vm: crate::luau::Budget::new(timeout, MAX_LUAU_INTERRUPTS), calls: 0 };
     let source = package.source()?;
     budget.remaining()?;
     #[cfg(test)]
     VM_CREATIONS.with(|count| count.set(count.get() + 1));
-    let lua = Lua::new_with(
-        StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
-        LuaOptions::default(),
-    )
-    .map_err(lua_error)?;
-    lua.set_memory_limit(MAX_LUA_MEMORY).map_err(lua_error)?;
-    let request: Function = lua
-        .load(
-            r#"
+    let lua = budget
+        .vm
+        .vm(
+            StdLib::TABLE
+                | StdLib::STRING
+                | StdLib::MATH
+                | StdLib::UTF8
+                | StdLib::COROUTINE
+                | StdLib::BIT
+                | StdLib::BUFFER
+                | StdLib::VECTOR,
+            MAX_LUA_MEMORY,
+        )
+        .map_err(lua_error)?;
+    // Luau 的 pcall 内不能 yield，驱动侧的拒绝会被插件吞掉；让出前先按同一规则判定，
+    // 并记下第一次拒绝：无论处理函数怎样处理这个 Lua 错误，本次调用都失败，请求也到不了 Runtime。
+    let denied = std::sync::Arc::new(std::sync::Mutex::new(None::<Error>));
+    let authorize = {
+        let denied = denied.clone();
+        let permissions = package.manifest.permissions.clone();
+        lua.create_function(move |_, method: LuaValue| {
+            let LuaValue::String(method) = method else { return Ok(()) };
+            let Ok(method) = method.to_str() else { return Ok(()) };
+            match super::package::allow_method(&permissions, &method) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let message = error.to_string();
+                    denied.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert(error);
+                    Err(mlua::Error::runtime(message))
+                },
+            }
+        })
+        .map_err(lua_error)?
+    };
+    let request: Function = budget
+        .vm
+        .run(|| {
+            lua.load(
+                r#"
         local yield, raise = coroutine.yield, error
+        local authorize = ...
         return function(method, params)
+            authorize(method)
             local ok, result = yield('pebrel.runtime.request', method, params or {})
             if not ok then raise(result, 0) end
             return result
         end
     "#,
-        )
-        .eval()
+            )
+            .call(authorize)
+        })
         .map_err(lua_error)?;
+    let refused = || denied.lock().unwrap_or_else(PoisonError::into_inner).take();
     let globals = lua.globals();
     // 不留绕过宿主的文件入口，也不让非托管 coroutine 绕过指令分片。
-    for name in
-        ["coroutine", "dofile", "loadfile", "load", "require", "print", "warn", "collectgarbage"]
-    {
+    for name in [
+        "coroutine",
+        "dofile",
+        "loadfile",
+        "load",
+        "loadstring",
+        "require",
+        "print",
+        "warn",
+        "collectgarbage",
+        "getfenv",
+        "setfenv",
+        "debug",
+    ] {
         globals.raw_set(name, LuaValue::Nil).map_err(lua_error)?;
     }
+    lua.sandbox(true).map_err(lua_error)?;
     let entry = lua
         .load(source.strip_prefix('\u{feff}').unwrap_or(&source))
         .set_mode(ChunkMode::Text)
         .set_name(package.manifest.entry.as_deref().unwrap_or("plugin"))
         .into_function()
         .map_err(lua_error)?;
-    let exports = drive(&lua, entry, MultiValue::new(), package, &mut budget, call)?;
+    let exports = drive(&lua, entry, MultiValue::new(), package, &mut budget, call);
+    let exports = match refused() {
+        Some(error) => return Err(error),
+        None => exports?,
+    };
     let LuaValue::Table(exports) = exports else {
         return Err(Error::new(
-            "invalid_lua_entry",
+            "invalid_luau_entry",
             "entry must return a table of command functions",
         ));
     };
@@ -123,13 +162,17 @@ pub(super) fn execute(
         .map_err(lua_error)?;
     let arguments = lua.to_value(&arguments).map_err(lua_error)?;
     let args = MultiValue::from_vec(vec![LuaValue::Table(context), arguments]);
-    let result = drive(&lua, function, args, package, &mut budget, call)?;
+    let result = drive(&lua, function, args, package, &mut budget, call);
+    let result = match refused() {
+        Some(error) => return Err(error),
+        None => result?,
+    };
     let result = json::from_lua(&lua, result)?;
     Ok(Execution {
         result,
-        engine: "lua",
+        engine: "luau",
         lua_memory_bytes: lua.used_memory(),
-        instruction_ticks: budget.ticks.load(Ordering::Relaxed),
+        interrupt_count: budget.vm.interrupt_count(),
     })
     // 命令作用域结束即释放 VM；这里没有全局缓存或常驻插件对象。
 }
@@ -143,25 +186,14 @@ fn drive(
     call: &mut RuntimeCall<'_>,
 ) -> Result<LuaValue> {
     let thread = lua.create_thread(function).map_err(lua_error)?;
-    let ticks = budget.ticks.clone();
-    thread
-        .set_hook(
-            HookTriggers::new().every_nth_instruction(INSTRUCTION_QUANTUM as u32),
-            move |_, _| {
-                ticks.fetch_add(INSTRUCTION_QUANTUM, Ordering::Relaxed);
-                // 使用 yield 而非可被 pcall 吞掉的异常，让预算裁定回到 Rust。
-                Ok(VmState::Yield)
-            },
-        )
-        .map_err(lua_error)?;
     loop {
         budget.remaining()?;
-        let values: MultiValue = thread.resume(args).map_err(lua_error)?;
+        let values: MultiValue = budget.vm.run(|| thread.resume(args)).map_err(lua_error)?;
         budget.remaining()?;
         if thread.status() != ThreadStatus::Resumable {
             if values.len() > 1 {
                 return Err(Error::new(
-                    "invalid_lua_result",
+                    "invalid_luau_result",
                     "commands return one JSON-compatible value",
                 ));
             }
@@ -212,11 +244,27 @@ fn drive(
     }
 }
 
+fn limit_error(limit: crate::luau::Limit) -> Error {
+    let code = match limit {
+        crate::luau::Limit::Interrupts => "luau_interrupt_limit",
+        crate::luau::Limit::Deadline => "plugin_timeout",
+    };
+    Error::new(code, limit)
+}
+
 fn lua_error(error: mlua::Error) -> Error {
+    if let Some(limit) =
+        error.chain().find_map(|source| source.downcast_ref::<crate::luau::Limit>())
+    {
+        return limit_error(*limit);
+    }
     if let Some(original) = error.chain().find_map(|source| source.downcast_ref::<Error>()) {
         return original.clone();
     }
-    let code =
-        if matches!(error, mlua::Error::MemoryError(_)) { "lua_memory_limit" } else { "lua_error" };
+    let code = if matches!(error, mlua::Error::MemoryError(_)) {
+        "luau_memory_limit"
+    } else {
+        "luau_error"
+    };
     Error::new(code, error)
 }

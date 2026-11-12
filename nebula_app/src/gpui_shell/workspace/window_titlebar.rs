@@ -1,5 +1,7 @@
 use super::*;
-use crate::{gpui_shell::widgets::toolbar_button, i18n::Message};
+use crate::{
+    gpui_shell::widgets::toolbar_button, i18n::Message, platform::window_chrome::TitleBarLayout,
+};
 
 fn title_bar_height(_density: nebula_settings::DensityName) -> f32 {
     // Content density must not compress the application chrome.
@@ -8,9 +10,9 @@ fn title_bar_height(_density: nebula_settings::DensityName) -> f32 {
 
 pub(super) fn effective_title_bar_height(
     density: nebula_settings::DensityName,
-    native_layout: Option<(f32, f32)>,
+    native_layout: Option<TitleBarLayout>,
 ) -> f32 {
-    native_layout.map_or_else(|| title_bar_height(density), |(height, _)| height)
+    native_layout.map_or_else(|| title_bar_height(density), |layout| layout.height)
 }
 
 /// Prepaint records the actual pane column before any titlebar paint runs. Keep
@@ -24,14 +26,19 @@ impl TitleBarBackground {
         self.0.set(Some(bounds));
     }
 
-    fn element(&self) -> gpui::Canvas<()> {
+    fn element(&self, top_tabs: bool) -> gpui::Canvas<()> {
         let pane_bounds = self.0.clone();
         canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
                 let card = crate::gpui_shell::theme::PaneCardStyle::current(cx);
                 let shell = cx.theme().background;
-                let Some(pane) = pane_bounds.get().filter(|_| card.radius == 0.0) else {
+                let tabs = crate::gpui_shell::theme::tab_bar_background(cx);
+                if top_tabs && crate::gpui_shell::wallpaper::tab_bar_material_is_custom(cx) {
+                    window.paint_quad(fill(bounds, tabs));
+                    return;
+                }
+                let Some(pane) = pane_bounds.get() else {
                     window.paint_quad(fill(bounds, shell));
                     return;
                 };
@@ -39,12 +46,16 @@ impl TitleBarBackground {
                 let title_right = title_left + f32::from(bounds.size.width);
                 let pane_left = f32::from(pane.origin.x).clamp(title_left, title_right);
                 let pane_right = f32::from(pane.right()).clamp(pane_left, title_right);
-                let content = crate::gpui_shell::theme::card_content_bg(cx);
+                let content = if card.radius == 0.0 {
+                    crate::gpui_shell::theme::card_content_bg(cx)
+                } else {
+                    shell
+                };
 
                 // Adjacent bands receive alpha once. The actual pane bounds also
                 // account for a hidden sidebar and an open file tree.
                 for (left, right, color) in [
-                    (title_left, pane_left, shell),
+                    (title_left, pane_left, tabs),
                     (pane_left, pane_right, content),
                     (pane_right, title_right, shell),
                 ] {
@@ -97,6 +108,13 @@ fn title_bar_frame() -> gpui::Div {
     })
 }
 
+/// 标题栏右侧工具组；右缘留白由平台层决定（见 `RIGHT_CONTROLS_INSET`）。
+pub(super) fn title_bar_right_controls() -> gpui::Div {
+    title_bar_panel_controls()
+        .gap(px(8.0))
+        .pr(px(crate::platform::window_chrome::RIGHT_CONTROLS_INSET))
+}
+
 impl NebulaWorkspace {
     pub(super) fn render_terminal_find_button(
         &self,
@@ -104,12 +122,10 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> gpui_component::button::Button {
         let language = crate::gpui_shell::config::ui_language(cx);
-        toolbar_button("terminal-find", IconName::Search)
+        let disabled = settings_active
+            || self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).is_none();
+        toolbar_button("terminal-find", IconName::Search, disabled)
             .debug_selector(|| "terminal-find".to_owned())
-            .disabled(
-                settings_active
-                    || self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).is_none(),
-            )
             .aria_label(language.text(Message::TerminalReadingOpen))
             .tooltip(language.text(Message::TerminalReadingShortcut))
             .on_click(cx.listener(|this, _, window, cx| {
@@ -130,6 +146,8 @@ impl NebulaWorkspace {
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
         let native_layout = crate::platform::window_chrome::layout(window);
         let title_bar_height = effective_title_bar_height(self.density, native_layout);
+        let align_with_native_controls =
+            native_layout.is_some_and(|layout| layout.native_controls_visible);
         let bar = TitleBar::new()
             .on_close_window(cx.listener(|workspace, _, window, cx| {
                 // Linux 的客户端标题栏默认直接销毁窗口；必须复用系统关窗的会话与文档守卫。
@@ -139,9 +157,11 @@ impl NebulaWorkspace {
             }))
             .h(px(title_bar_height))
             .when(!settings_active, |bar| {
-                // The window root normally supplies the shell color here; a
-                // native wallpaper below GPUI clears it, so the bar paints its own.
-                let fill = if crate::gpui_shell::wallpaper::native_underlay_active(cx) {
+                // Explicit tab surfaces are painted once by TitleBarBackground.
+                // Keep the pre-existing native-wallpaper path for inherited mode.
+                let fill = if crate::gpui_shell::wallpaper::native_underlay_active(cx)
+                    && !crate::gpui_shell::wallpaper::tab_bar_material_is_custom(cx)
+                {
                     cx.theme().title_bar
                 } else {
                     gpui::transparent_black()
@@ -154,16 +174,24 @@ impl NebulaWorkspace {
             .when(top_tabs && native_layout.is_none(), |bar| {
                 bar.pl(px(top_tabs::TOP_TAB_LEFT_INSET))
             })
-            .when(top_tabs, |bar| bar.child(self.render_top_title_bar(settings_active, window, cx)))
+            .when(top_tabs, |bar| {
+                bar.child(self.render_top_title_bar(
+                    settings_active,
+                    align_with_native_controls,
+                    window,
+                    cx,
+                ))
+            })
             .when(!top_tabs, |bar| bar.child(self.render_sidebar_title_bar(settings_active, cx)));
 
         // AppKit owns both the control group and its geometry. Read the live
         // frames so system layout, resize and full-screen transitions agree.
-        let bar = if let Some((_, inset)) = native_layout { bar.pl(px(inset)) } else { bar };
+        let bar =
+            if let Some(layout) = native_layout { bar.pl(px(layout.left_inset)) } else { bar };
 
         title_bar_frame()
             .debug_selector(|| "workspace-titlebar".to_owned())
-            .when(!settings_active, |title| title.child(self.titlebar_background.element()))
+            .when(!settings_active, |title| title.child(self.titlebar_background.element(top_tabs)))
             .child(bar)
     }
 }
@@ -259,7 +287,7 @@ mod tests {
 
 #[cfg(test)]
 mod density_tests {
-    use super::{effective_title_bar_height, title_bar_height};
+    use super::{TitleBarLayout, effective_title_bar_height, title_bar_height};
     use nebula_settings::DensityName;
 
     #[test]
@@ -268,7 +296,9 @@ mod density_tests {
         assert_eq!(title_bar_height(DensityName::Compact), 48.0);
         assert_eq!(effective_title_bar_height(DensityName::Standard, None), 48.0);
         assert_eq!(effective_title_bar_height(DensityName::Compact, None), 48.0);
-        assert_eq!(effective_title_bar_height(DensityName::Compact, Some((34.0, 7.0))), 34.0);
+        let native =
+            TitleBarLayout { height: 34.0, left_inset: 7.0, native_controls_visible: true };
+        assert_eq!(effective_title_bar_height(DensityName::Compact, Some(native)), 34.0);
         assert!(title_bar_height(DensityName::Compact) >= 32.0 + 2.0 * 4.0);
     }
 }

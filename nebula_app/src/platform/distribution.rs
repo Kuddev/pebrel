@@ -165,7 +165,7 @@ mod tests {
                 };
                 assert!(crate::update_download::begin(&asset).is_err());
                 assert!(crate::update_download::handoff::prepare(&asset).is_err());
-                assert!(crate::update_download::handoff::schedule(&asset).is_err());
+                assert!(crate::update_download::handoff::schedule(&asset, &[]).is_err());
                 assert!(!crate::update_download::handoff::apply_scheduled());
                 assert!(!crate::update_download::handoff::installation_in_progress().unwrap());
                 crate::update_download::hydrate();

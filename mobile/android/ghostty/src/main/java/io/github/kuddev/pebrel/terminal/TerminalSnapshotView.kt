@@ -19,6 +19,9 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/** The desktop grid scale is independent of the user's base font size. */
+fun normalizedSnapshotZoom(value: Float): Float = value.takeIf { it.isFinite() }?.coerceIn(.5f, 5f) ?: 1f
+
 /** A grid mirror with optional authorized input. Gestures never resize the PC PTY. */
 class TerminalSnapshotView(context: Context) : View(context) {
     private var inputGeneration = 0
@@ -78,6 +81,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
     }
     private var fontPixels = 14f * resources.displayMetrics.scaledDensity
     private var zoom = 1f
+    private var pinchInProgress = false
+    val zoomScale: Float get() = zoom
+    var onZoomScaleChanged: ((Float) -> Unit)? = null
     private var offsetX = 0f
     private var offsetY = 0f
     private var cellWidth = 1f
@@ -163,15 +169,27 @@ class TerminalSnapshotView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun setZoomScale(value: Float) {
+        val bounded = normalizedSnapshotZoom(value)
+        if (pinchInProgress || zoom == bounded) return
+        selection.clear()
+        zoom = bounded
+        stopScrolling()
+        metrics()
+        reproject()
+        constrainOffsets()
+        invalidate()
+    }
+
     private fun metrics() {
         paint.textSize = fontPixels
         // Keep the chosen font readable. Pan across desktop columns instead of
         // compressing a wide desktop down to a few illegible phone pixels.
         paint.textSize = fontPixels * zoom
-        cellWidth = max(.1f, paint.measureText("M"))
-        val metrics = paint.fontMetrics
-        cellHeight = ceil(metrics.descent - metrics.ascent + metrics.leading)
-        baseline = -metrics.ascent
+        val metrics = TerminalGridMetrics.measure(paint)
+        cellWidth = metrics.width
+        cellHeight = metrics.height
+        baseline = metrics.baseline
     }
 
     private fun reproject() {
@@ -255,6 +273,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
         val first = (offsetY / cellHeight).toInt().coerceAtLeast(0)
         val last = ceil((offsetY + height) / cellHeight).toInt().coerceAtMost(frame.rows.size)
         for (y in first until last) frame.rows[y]?.let {
+            TerminalCellPainter.backgrounds(canvas, paint, frame, it, y, cellWidth, cellHeight)
+        }
+        for (y in first until last) frame.rows[y]?.let {
             TerminalCellPainter.row(canvas, paint, frame, it, y, cellWidth, cellHeight, baseline)
         }
         if (frame.cursorVisible && !selection.active) {
@@ -278,6 +299,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
     private val scaling = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
             if (!pinchZoom) return false
+            pinchInProgress = true
             stopScrolling()
             reportZoom(true)
             return true
@@ -286,7 +308,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
             if (!pinchZoom) return false
             val oldWidth = cellWidth
             val oldHeight = cellHeight
-            zoom = (zoom * detector.scaleFactor).coerceIn(.5f, 5f)
+            zoom = normalizedSnapshotZoom(zoom * detector.scaleFactor)
             metrics()
             reproject()
             offsetX = (offsetX + detector.focusX) * cellWidth / oldWidth - detector.focusX
@@ -296,7 +318,11 @@ class TerminalSnapshotView(context: Context) : View(context) {
             reportZoom(true)
             return true
         }
-        override fun onScaleEnd(detector: ScaleGestureDetector) { reportZoom(false) }
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            pinchInProgress = false
+            onZoomScaleChanged?.invoke(zoom)
+            reportZoom(false)
+        }
     })
 
     private fun reportZoom(gesturing: Boolean) {
@@ -510,6 +536,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
     private fun resetZoom() {
         stopScrolling()
         zoom = 1f
+        onZoomScaleChanged?.invoke(zoom)
         metrics(); reproject()
         offsetX = 0f; offsetY = 0f
         followOutput = true

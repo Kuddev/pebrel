@@ -51,6 +51,15 @@ pub(super) fn handle_connection(
         );
     }
 
+    if line.starts_with("GET ") || line.starts_with("POST ") {
+        return crate::prompt_suggestions::http::handle(
+            &mut stream,
+            &line,
+            &mut limited.into_inner(),
+            &hub.predictions,
+        );
+    }
+
     if !line.trim_start().starts_with('{') {
         return handle_legacy(&mut stream, &line, token, sink);
     }
@@ -559,10 +568,93 @@ pub(super) fn write_response(
 }
 
 pub(super) fn write_json_line<T: Serialize>(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     value: &T,
 ) -> Result<(), IoError> {
-    serde_json::to_writer(&mut *stream, value).map_err(IoError::other)?;
-    stream.write_all(b"\n")?;
+    // Serializing cells straight into TcpStream issues a write for every JSON
+    // punctuation/string fragment, delaying input behind a screen response.
+    let mut bytes = serde_json::to_vec(value).map_err(IoError::other)?;
+    bytes.push(b'\n');
+    stream.write_all(&bytes)?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn prediction_http_and_runtime_control_keep_separate_tokens_on_the_same_listener() {
+        let hub = RuntimeHub {
+            predictions: Arc::new(crate::prompt_suggestions::service::Service::test_disabled()),
+            ..RuntimeHub::new()
+        };
+        let runtime_token = "11111111111111111111111111111111";
+        let exchange = |request: String| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            client.write_all(request.as_bytes()).unwrap();
+            let (server, _) = listener.accept().unwrap();
+            let sink = EventSink::Callback(Arc::new(|_| panic!("no UI command is permitted")));
+            handle_connection(server, runtime_token, &sink, &hub).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            response
+        };
+        let config = |token: &str| {
+            format!(
+                "GET /v1/prompt-suggestions/config HTTP/1.1\r\nAuthorization: Bearer {token}\r\n\r\n"
+            )
+        };
+        assert!(exchange(config(runtime_token)).starts_with("HTTP/1.1 401"));
+        let response = exchange(config(&hub.predictions.token));
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"enabled\":false"));
+        let request = |token: &str| {
+            serde_json::to_string(&ApiRequest::new(token.into(), "runtime.describe", json!({})))
+                .unwrap()
+                + "\n"
+        };
+        assert!(exchange(request(&hub.predictions.token)).is_empty());
+        assert!(exchange(request(runtime_token)).contains("\"ok\":true"));
+        // The transport's first-line read may already buffer this entire body.
+        let body = r#"{"agent":"pi","session":"s","turn":"t","revision":1,"messages":[{"role":"user","text":"继续测试中文"}]}"#;
+        let response = exchange(format!(
+            "POST /v1/prompt-suggestions HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{body}",
+            hub.predictions.token,
+            body.len()
+        ));
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"suggestion\":null"));
+    }
+
+    #[derive(Default)]
+    struct CountingWriter {
+        writes: usize,
+        bytes: Vec<u8>,
+    }
+    impl Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn mobile_latency_screen_response_is_one_contiguous_write_with_identical_bytes() {
+        let row = vec![json!(["字", 1, -257, -258, 0]); 120];
+        let screen = json!({"screen": {"columns":120,"rows":vec![row; 50]}});
+        let mut before = CountingWriter::default();
+        serde_json::to_writer(&mut before, &screen).unwrap();
+        before.write_all(b"\n").unwrap();
+        let mut after = CountingWriter::default();
+        write_json_line(&mut after, &screen).unwrap();
+        assert_eq!(before.bytes, after.bytes);
+        assert!(before.writes > 50_000, "fixture must exercise fragmented serialization");
+        assert_eq!(after.writes, 1);
+    }
 }

@@ -535,7 +535,8 @@ impl WindowContext {
             None,
         );
         if let Some(screen) = screen {
-            let palette = |index| term.colors()[index].unwrap_or(*self.display.colors[index]);
+            let palette =
+                |index: usize| term.colors()[index].unwrap_or(*self.display.colors[index]);
             let capture = match screen {
                 crate::runtime_api::ScreenMode::History { start, rows } => {
                     crate::runtime_api::capture_terminal_history(&term, palette, start, rows)
@@ -728,6 +729,7 @@ fn runtime_agent(pane: &super::Pane) -> Option<RuntimeAgent> {
     let kind = crate::ai_agents::AgentKind::parse(raw)?;
     let state_source = match state.agent_activity.source() {
         crate::ai_agents::AgentStatusSource::Hook => RuntimeAgentStateSource::Hook,
+        crate::ai_agents::AgentStatusSource::Title => RuntimeAgentStateSource::Title,
         crate::ai_agents::AgentStatusSource::Screen => RuntimeAgentStateSource::Screen,
         crate::ai_agents::AgentStatusSource::Process
         | crate::ai_agents::AgentStatusSource::Unknown => RuntimeAgentStateSource::Process,
