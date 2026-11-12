@@ -228,7 +228,7 @@ fn clear_screen_sends_the_owned_powershell_chord_for_pwsh(cx: &mut TestAppContex
         })
         .collect();
     let expected = view.read_with(cx, |view, _| {
-        let key = gpui::Keystroke::parse("ctrl-shift-f11").unwrap();
+        let key = gpui::Keystroke::parse("ctrl-shift-f9").unwrap();
         vec![keymap::encode(&key, &view.term_mode()).unwrap()]
     });
     assert_eq!(writes, expected);

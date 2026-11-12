@@ -51,9 +51,10 @@ established macOS ⌘K clear convention had no path to that behavior.
     redraw capability advertised (`pebrel_editor_redraw`, independent of the
     query readiness `pebrel_editor_ready`): write the integration-owned clear
     key — `\e[46~` bound to the readline/zle `clear-screen` function, or the
-    PSReadLine `Ctrl+Shift+F11` → `ClearScreen` chord — so the shell's own
-    line editor clears the glass and repaints prompt, buffer and caret,
-    keeping its line state in sync.
+    PSReadLine `Ctrl+Shift+F9` → `ClearScreen` chord (`Ctrl+Shift+F11` stays
+    with clipboard.ps1's native paste) — so the shell's own line editor
+    clears the glass and repaints prompt, buffer and caret, keeping its line
+    state in sync.
   - Prompt without the advertised redraw capability — no integration at all,
     a pre-redraw (2.5.3) integration whose query-only readiness says nothing
     about the unbound key, a user-owned redraw key, or a same-shell rebind

@@ -62,6 +62,7 @@ class PowerShellPointerTests(unittest.TestCase):
         script = home / "init.ps1"
         (home / "native-editor.ps1").write_text(
             (root / "completion.ps1").read_text(encoding="utf-8") + "\n" +
+            (root / "clipboard.ps1").read_text(encoding="utf-8") + "\n" +
             (root / "pointer.ps1").read_text(encoding="utf-8"), encoding="utf-8",
         )
         bootstrap = home / "bootstrap.ps1"
@@ -224,23 +225,38 @@ class PowerShellPointerTests(unittest.TestCase):
         self.assertEqual(self.snapshot(session), (5, "echo abc"))
         # The owned redraw chord clears the glass through the line editor: the
         # buffer and caret survive it in place.
-        os.write(session.master, b"\x1b[23;6~")
+        os.write(session.master, b"\x1b[20;6~")
         self.assertEqual(self.snapshot(session), (5, "echo abc"))
 
     def test_user_owned_redraw_chord_withdraws_the_editor_channel(self) -> None:
-        # Ctrl+Shift+F11 is the owned prompt-redraw chord: a user binding on it
-        # withdraws only the redraw capability. Query, completion and pointer
-        # support keep working exactly as in the pre-redraw releases.
-        session = self.start(before="Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function BeginningOfLine")
+        # Ctrl+Shift+F9 is the owned prompt-redraw chord: a user binding on it
+        # withdraws only the redraw capability. Query, completion, pointer and
+        # the native paste chord keep working exactly as in the pre-redraw
+        # releases.
+        session = self.start(
+            before="Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function BeginningOfLine"
+        )
         self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
         self.assertIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
         self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
         os.write(session.master, b"echo probe\x1b[24;6~")
         self.assertEqual(self.value(session, "pebrel_editor")[3], "echo probe")
-        os.write(session.master, b"\x1b[23;6~")
+        os.write(session.master, b"\x1b[20;6~")
         # The user's BeginningOfLine still owns the chord, not ClearScreen.
         session.settle()
         self.assertEqual(self.snapshot(session), (0, "echo probe"))
+
+    def test_production_load_order_keeps_paste_and_redraw_independent(self) -> None:
+        # Production loads completion.ps1 before clipboard.ps1: the redraw
+        # chord must never squat on the native paste's Ctrl+Shift+F11.
+        session = self.start()
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9).Function\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"ClearScreen", output)
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11).Function\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"PebrelClipboardPaste", output)
+        self.assertNotIn(b"ClearScreen", output.split(b"(Get-PSReadLineKeyHandler")[-1])
 
     def test_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
         # The advertisement follows the live chord: rebinding it in the same
@@ -250,11 +266,11 @@ class PowerShellPointerTests(unittest.TestCase):
         self.assertIn(b"SetUserVar=pebrel_editor_redraw=cHdzaDpmaXh0dXJl\x07", session.output)
         os.write(
             session.master,
-            b"Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function BeginningOfLine\r",
+            b"Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function BeginningOfLine\r",
         )
         output = session.wait(b"PS> ")
         self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
-        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11).Function\r")
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9).Function\r")
         output = session.wait(b"PS> ")
         self.assertIn(b"BeginningOfLine", output)
         self.assertNotIn(b"ClearScreen", output)

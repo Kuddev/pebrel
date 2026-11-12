@@ -242,7 +242,7 @@ impl TerminalView {
 
     /// 提示符重绘字节：`pebrel_editor_redraw` 声明的 shell 集成自有键
     /// （completion.sh 的 `\e[46~` → readline/zle 原生 clear-screen，
-    /// completion.ps1 的 Ctrl+Shift+F11 → PSReadLine ClearScreen）。redraw
+    /// completion.ps1 的 Ctrl+Shift+F9 → PSReadLine ClearScreen）。redraw
     /// 是独立于查询能力（`pebrel_editor_ready`）的显式声明：2.5.3 旧集成
     /// 只报 query、不装 redraw 键，只看 ready 会把键发进未绑定它的活动
     /// shell；用户占用 redraw 键时声明整体缺席，query/补全/指针照常。
@@ -254,9 +254,9 @@ impl TerminalView {
             return None;
         }
         if owner.starts_with("pwsh:") {
-            let key = gpui::Keystroke::parse("ctrl-shift-f11").unwrap();
+            let key = gpui::Keystroke::parse("ctrl-shift-f9").unwrap();
             super::super::keymap::encode(&key, &self.term_mode())
-                .or_else(|| Some(b"\x1b[23;6~".to_vec()))
+                .or_else(|| Some(b"\x1b[20;6~".to_vec()))
         } else {
             Some(b"\x1b[46~".to_vec())
         }

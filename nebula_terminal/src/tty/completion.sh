@@ -5,14 +5,20 @@
 # the ownership, while a binding the integration still owns keeps announcing.
 __pebrel_redraw_owned() {
     if [ -n "${BASH_VERSION-}" ]; then
-        local tables
-        tables=$(bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null)
-        # Match the entry's tail: the key's ESC escape renders differently
-        # across readline versions, but our key's entry always ends with
-        # 46~": followed by the clear-screen function name.
-        [[ $tables == *"46~\": clear-screen"* ]]
+        # grep -F matches the key's complete binding entry without any pattern
+        # escaping: [[ ]] patterns mangle the entry's "\" and "[" combination,
+        # and a tail-only match would also accept a binding on \e[146~. The
+        # fixed string takes the table's literal single backslash. An
+        # unrecognized table counts as not owned.
+        { bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; } |
+            grep -qF '"\e[46~": clear-screen'
     else
-        [[ $(bindkey '\e[46~') == *clear-screen* ]]
+        # The bound widget must be the built-in original: bindkey reports the
+        # value space-separated, so a space-anchored ".clear-screen" tail only
+        # matches the built-in widget. A bindkey -s macro reporting a quoted
+        # body (even one reading ".clear-screen") ends in a quote, and a user
+        # widget shadowing the name reports the bare name — both revoke.
+        [[ $(bindkey '\e[46~' 2>/dev/null) == *' .clear-screen' ]]
     fi
 }
 
@@ -91,7 +97,10 @@ elif [ -n "${ZSH_VERSION-}" ]; then
     # A bindkey -s string macro also reports a non-widget body, so the
     # undefined-key probe treats it as user-owned and leaves it in place.
     if [[ $(bindkey '\e[46~') == *undefined-key ]]; then
-        bindkey '\e[46~' clear-screen
+        # Bind the built-in widget's canonical name: a user widget may shadow
+        # `clear-screen`, and binding the original keeps the redraw independent
+        # of such shadowing.
+        bindkey '\e[46~' .clear-screen
         __pebrel_editor_redraw=1
     fi
 fi

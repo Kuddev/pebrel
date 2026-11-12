@@ -292,24 +292,41 @@ class CompletionEditorTests(unittest.TestCase):
 
     def check_redraw_rebind(self, shell: str, route: str) -> None:
         # The advertisement follows the live binding: rebinding the chord in
-        # the same shell — without reconnecting — revokes the capability on the
-        # next prompt, and the user's new binding keeps firing.
+        # the same shell — without reconnecting — revokes the capability on
+        # the next prompt, and the user's new binding keeps firing.
+        # zsh additionally covers the two lookalike rebinds from review: a
+        # macro whose text is exactly the widget's name, and a user widget
+        # shadowing that name — neither may keep the capability announced.
+        rebinds = {
+            "bash": [("bind '\"\\e[46~\": \"PEBREL-REBIND\"'", "PEBREL-REBIND")],
+            "zsh": [
+                ("bindkey -s '\\e[46~' 'PEBREL-REBIND'", "PEBREL-REBIND"),
+                ("bindkey -s '\\e[46~' 'clear-screen'", "clear-screen"),
+                (
+                    "userfn() { BUFFER+='USERWID'; }; zle -N clear-screen userfn;"
+                    " bindkey '\\e[46~' clear-screen",
+                    "USERWID",
+                ),
+            ],
+        }[shell]
         session = self.start_bootstrap(shell, route)
         if self.check_legacy_bash(shell, session):
             return
         token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
         self.assertIsNotNone(token, session.output)
         if shell == "bash":
-            rebind = "bind '\"\\e[46~\": \"PEBREL-REBIND\"'"
-        else:
-            rebind = "bindkey -s '\\e[46~' 'PEBREL-REBIND'"
-        session.command(rebind + "; printf 'REBIND-DONE\\n'", b"REBIND-DONE\r\n")
-        output = session.command("printf 'REBOUND\\n'", b"REBOUND\r\n")
-        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
-        self.assertIn(b"SetUserVar=pebrel_editor_ready=", output)
-        os.write(session.master, b"echo tail\x1b[46~")
-        _, _, line = self.snapshot(session)
-        self.assertEqual(line, "echo tailPEBREL-REBIND")
+            # A decoy clear-screen on \e[146~ must not satisfy the probe for
+            # \e[46~: the following rebind revokes despite the decoy staying.
+            session.command("bind '\"\\e[146~\": clear-screen'; printf 'DECOY\\n'", b"DECOY\r\n")
+        for rebind, inserted in rebinds:
+            os.write(session.master, b"\x15")  # discard any line from the prior case
+            session.command(rebind + "; printf 'REBIND-DONE\\n'", b"REBIND-DONE\r\n")
+            output = session.command("printf 'REBOUND\\n'", b"REBOUND\r\n")
+            self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+            self.assertIn(b"SetUserVar=pebrel_editor_ready=", output)
+            os.write(session.master, b"echo tail\x1b[46~")
+            _, _, line = self.snapshot(session)
+            self.assertEqual(line, f"echo tail{inserted}", f"{shell}: {rebind}")
 
     def test_ssh_bash_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
         self.check_redraw_rebind("bash", "ssh")

@@ -29,18 +29,19 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
                 }
             } -BriefDescription $global:PebrelEditorHandlerName
             # The prompt-redraw pairing: an owned chord bound to the native
-            # ClearScreen, probed separately so a user-held F11 leaves query,
+            # ClearScreen, probed separately so a user-held chord leaves query,
             # completion and pointer support untouched — the redraw capability
             # is simply not advertised, and the terminal never falls back to a
-            # keyboard byte that invokes user rebinding.
+            # keyboard byte that invokes user rebinding. Ctrl+Shift+F9 keeps
+            # Ctrl+Shift+F11 free for clipboard.ps1's native paste binding.
             $clearExisting = if ($query.Parameters.ContainsKey('Chord')) {
-                Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue
+                Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ErrorAction SilentlyContinue
             } else {
-                @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F11','Shift+Ctrl+F11' })
+                @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F9','Shift+Ctrl+F9' })
             }
             if (-not $clearExisting -or $clearExisting.Function -eq 'Unbound' -or
                 $clearExisting.Function -eq 'ClearScreen') {
-                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function ClearScreen
+                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function ClearScreen
                 $global:PebrelRedrawReady = $true
             }
             # PSReadLine 2.0 loses surrogate pairs inserted after native editing.
@@ -51,4 +52,19 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             $global:PebrelCompletionInputReady = $true
         }
     } catch { $global:PebrelCompletionInputReady = $false }
+}
+
+# Prompt-redraw re-verification shared by both bootstraps. Reuses the same
+# lookup fallback as the installation for PSReadLine builds without -Chord.
+function global:Test-PebrelRedrawBinding {
+    try {
+        if (-not $global:PebrelRedrawReady) { return $false }
+        $query = Get-Command Get-PSReadLineKeyHandler -ErrorAction Stop
+        $bound = if ($query.Parameters.ContainsKey('Chord')) {
+            Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ErrorAction SilentlyContinue
+        } else {
+            @(Get-PSReadLineKeyHandler -ErrorAction Stop | Where-Object { $_.Key -in 'Ctrl+Shift+F9','Shift+Ctrl+F9' })
+        }
+        $bound -and $bound.Function -eq 'ClearScreen'
+    } catch { $false }
 }

@@ -22,8 +22,7 @@ if (-not $global:PebrelUnixReadLineInstalled) {
         if ($global:PebrelRedrawReady) {
             # Re-verify the live chord each prompt: a same-shell rebind revokes
             # the capability with an empty value so the view forgets it.
-            $redrawChord = Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue
-            if ($redrawChord -and $redrawChord.Function -eq 'ClearScreen') {
+            if (Test-PebrelRedrawBinding) {
                 [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$global:PebrelShellToken$([char]7)")
             } else {
                 [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$([char]7)")
