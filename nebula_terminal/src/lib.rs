@@ -15,6 +15,7 @@ pub mod osc_cwd;
 pub mod program_status;
 pub mod render;
 pub mod selection;
+pub mod sixel;
 pub mod sync;
 pub mod term;
 pub mod thread;

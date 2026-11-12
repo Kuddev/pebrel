@@ -386,3 +386,6 @@ fn uncommitted_command_markers_do_not_record_image_output() {
         assert_eq!(snap(&term).image_runs.len(), 2);
     }
 }
+
+#[path = "inline_image/sixel.rs"]
+mod sixel;
