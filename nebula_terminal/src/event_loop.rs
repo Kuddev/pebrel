@@ -203,6 +203,11 @@ impl StreamProcessor {
         self.gfx.lock().resize(window_size);
     }
 
+    fn resize_and_answer<U: EventListener>(&mut self, window_size: WindowSize, listener: &U) {
+        self.resize(window_size);
+        self.gfx.lock().answer_cell_size_queries(Some(window_size), listener);
+    }
+
     pub fn set_remote_hook_token(&mut self, token: String) {
         self.remote_hook_token = Some(token);
     }
@@ -551,12 +556,7 @@ where
                     // Metrics only: the console keeps its geometry, but the
                     // stream can now answer cell-size queries — including ones
                     // that arrived before the first layout.
-                    state.stream.resize(window_size);
-                    state
-                        .stream
-                        .gfx
-                        .lock()
-                        .answer_cell_size_queries(Some(window_size), &self.event_proxy);
+                    state.stream.resize_and_answer(window_size, &self.event_proxy);
                 },
                 Msg::Shutdown => return Err(()),
             }
@@ -860,7 +860,8 @@ where
                         self.event_proxy.send_event(Event::Wakeup);
                     } else {
                         self.pty.on_resize(window_size);
-                        state.stream.resize(window_size);
+                        // A child waiting for its cell size may never write another byte.
+                        state.stream.resize_and_answer(window_size, &self.event_proxy);
                         // 对账的唯一可信时点就是这里：`ResizePseudoConsole` 是同步
                         // 的，返回时 conhost 已按新宽度 rewrap 完毕，而本地网格还是
                         // 纯 reflow 的结果——两侧都没有被重绘字节动过，行号差就是

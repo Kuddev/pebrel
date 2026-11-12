@@ -253,7 +253,9 @@ pub fn spawn(
     if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
         event_loop.set_remote_hook_token(token.clone());
     }
-    let notifier = Notifier(event_loop.channel());
+    let mut notifier = Notifier(event_loop.channel());
+    // Seed the stream with the geometry used to open the PTY before any child output is read.
+    notifier.on_cell_metrics(window_size);
     let _io_thread = event_loop.spawn();
 
     Ok((
