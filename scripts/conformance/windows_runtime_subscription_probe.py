@@ -1,4 +1,4 @@
-"""Compare the first local session snapshot from two published Pebrel ZIPs."""
+"""Compare the first local session snapshot from two Windows builds."""
 
 import argparse
 import json
@@ -131,6 +131,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--old", type=Path, required=True)
     parser.add_argument("--new", type=Path, required=True)
+    parser.add_argument("--old-version", default="2.4.0")
+    parser.add_argument("--new-version", default="2.5.3")
+    parser.add_argument("--new-commit")
+    parser.add_argument("--require-new-cold", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     require(os.name == "nt", "this comparison requires native Windows")
@@ -140,12 +144,19 @@ def main():
         old, new = ResolvedApp(args.old), ResolvedApp(args.new)
         try:
             for label, app, version, profile, prepare in [
-                ("2.4.0-fresh", old, "2.4.0", "shared", True),
-                ("2.5.3-after-2.4.0", new, "2.5.3", "shared", False),
-                ("2.5.3-fresh", new, "2.5.3", "fresh", True),
+                (f"{args.old_version}-fresh", old, args.old_version, "shared", True),
+                (f"{args.new_version}-after-{args.old_version}", new, args.new_version, "shared", False),
+                (f"{args.new_version}-fresh", new, args.new_version, "fresh", True),
             ]:
                 try:
-                    report["cases"][label] = run(app, version, root / profile, root / "logs" / label, prepare=prepare)
+                    case = run(app, version, root / profile, root / "logs" / label, prepare=prepare)
+                    report["cases"][label] = case
+                    if app is new and args.new_commit:
+                        commit = case["version"].partition(" (")[2].removesuffix(")")
+                        require(bool(commit) and args.new_commit.startswith(commit),
+                                "candidate runtime did not report the checked-out commit")
+                    if app is new and args.require_new_cold and case["needed_explicit_snapshot"]:
+                        case.update(status="failed", error="candidate still needed an explicit snapshot")
                 except (OSError, RuntimeError, ValueError, KeyError) as error:
                     report["cases"][label] = {"status": "incomplete", "error": str(error)}
         finally:
