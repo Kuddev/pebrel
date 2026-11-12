@@ -28,20 +28,27 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
                     [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor=$payload$([char]7)")
                 }
             } -BriefDescription $global:PebrelEditorHandlerName
-            # The prompt-redraw pairing: an owned chord bound to the native
+            # The prompt-redraw pairing: an owned chord re-bound to the native
             # ClearScreen, probed separately so a user-held chord leaves query,
             # completion and pointer support untouched — the redraw capability
             # is simply not advertised, and the terminal never falls back to a
             # keyboard byte that invokes user rebinding. Ctrl+Shift+F9 keeps
             # Ctrl+Shift+F11 free for clipboard.ps1's native paste binding.
+            # Identity is the binding we installed, not the Function display:
+            # PSReadLine reports a scriptblock's BriefDescription as Function,
+            # so -BriefDescription ClearScreen can imitate the native name and
+            # Function alone proves nothing. The Description token below is
+            # what installation and the per-prompt re-check match; anything
+            # else already on the chord is user-owned and stays untouched.
             $clearExisting = if ($query.Parameters.ContainsKey('Chord')) {
                 Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ErrorAction SilentlyContinue
             } else {
                 @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F9','Shift+Ctrl+F9' })
             }
-            if (-not $clearExisting -or $clearExisting.Function -eq 'Unbound' -or
-                $clearExisting.Function -eq 'ClearScreen') {
-                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function ClearScreen
+            if (-not $clearExisting -or $clearExisting.Function -eq 'Unbound') {
+                $global:PebrelRedrawDescription = 'PebrelRedraw:' + $global:PebrelShellToken
+                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function ClearScreen `
+                    -Description $global:PebrelRedrawDescription
                 $global:PebrelRedrawReady = $true
             }
             # PSReadLine 2.0 loses surrogate pairs inserted after native editing.
@@ -65,6 +72,10 @@ function global:Test-PebrelRedrawBinding {
         } else {
             @(Get-PSReadLineKeyHandler -ErrorAction Stop | Where-Object { $_.Key -in 'Ctrl+Shift+F9','Shift+Ctrl+F9' })
         }
-        $bound -and $bound.Function -eq 'ClearScreen'
+        # Function is only a display description (see the installation probe):
+        # the token in Description is what proves the chord still carries the
+        # binding this session installed.
+        $bound -and $bound.Function -eq 'ClearScreen' -and
+            $bound.Description -eq $global:PebrelRedrawDescription
     } catch { $false }
 }

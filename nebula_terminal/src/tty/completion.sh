@@ -5,20 +5,44 @@
 # the ownership, while a binding the integration still owns keeps announcing.
 __pebrel_redraw_owned() {
     if [ -n "${BASH_VERSION-}" ]; then
-        # grep -F matches the key's complete binding entry without any pattern
+        # grep -x matches the key's complete binding line without any pattern
         # escaping: [[ ]] patterns mangle the entry's "\" and "[" combination,
-        # and a tail-only match would also accept a binding on \e[146~. The
-        # fixed string takes the table's literal single backslash. An
-        # unrecognized table counts as not owned.
+        # a tail-only match would also accept a binding on \e[146~, and a
+        # plain fixed-string search would match a lookalike line that merely
+        # contains the entry (a chord sequence ending in \e[46~ bound to
+        # clear-screen). Only our own binding's full line proves ownership.
+        # An unrecognized table counts as not owned.
         { bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; } |
-            grep -qF '"\e[46~": clear-screen'
+            grep -qxF '"\e[46~": clear-screen'
     else
         # The bound widget must be the built-in original: bindkey reports the
         # value space-separated, so a space-anchored ".clear-screen" tail only
         # matches the built-in widget. A bindkey -s macro reporting a quoted
         # body (even one reading ".clear-screen") ends in a quote, and a user
         # widget shadowing the name reports the bare name — both revoke.
-        [[ $(bindkey '\e[46~' 2>/dev/null) == *' .clear-screen' ]]
+        [[ $(bindkey '\e[46~' 2>/dev/null) == *' .clear-screen' ]] || return 1
+        # One prompt can switch keymaps mid-line (viins -> vicmd via ESC), and
+        # the check above only sees the current one: a viins announcement
+        # would still send the byte into a user widget waiting in vicmd. The
+        # chord must therefore resolve to the built-in (or be unbound — an
+        # unbound key is inert, no user code runs) in every keymap; a string
+        # macro or a user widget anywhere revokes ownership. The probe only
+        # reads, so the user's vicmd binding stays untouched.
+        local -a keymaps reports
+        local keymap line owned=1
+        keymaps=(${(f)"$(bindkey -l 2>/dev/null)"})
+        (( ${#keymaps} )) || return 1
+        reports=(${(f)"$(for keymap in "${keymaps[@]}"; do
+            bindkey -M "$keymap" '\e[46~' 2>/dev/null
+        done)"})
+        (( ${#reports} )) || return 1
+        for line in "${reports[@]}"; do
+            case $line in
+                *undefined-key*|*' .clear-screen') ;;
+                *) owned=0; break ;;
+            esac
+        done
+        (( owned ))
     fi
 }
 

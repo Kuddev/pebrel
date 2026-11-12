@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import unittest
 
 from scripts.tests import test_shell_integration as shell_integration
@@ -40,7 +41,8 @@ class CompletionEditorTests(unittest.TestCase):
         return owner, int(cursor), line
 
     def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False,
-                        owned_redraw: bool = False, owned_macro: bool = False) -> shell_integration.ShellSession:
+                        owned_redraw: bool = False, owned_macro: bool = False,
+                        vicmd_widget: bool = False) -> shell_integration.ShellSession:
         root = Path(__file__).resolve().parents[2]
         program = shutil.which(shell)
         if not program:
@@ -65,7 +67,7 @@ class CompletionEditorTests(unittest.TestCase):
             rc.write_text(body.group(1) + "\n" + adapter)
             args = ["--noprofile", "--rcfile", str(rc), "-i"] if shell == "bash" else ["-d", "-i"]
             env = {} if shell == "bash" else {"ZDOTDIR": str(directory)}
-        if owned_binding or owned_redraw or owned_macro:
+        if owned_binding or owned_redraw or owned_macro or vicmd_widget:
             if shell == "bash":
                 inputrc = self.fixture.home / ".inputrc"
                 lines = ""
@@ -86,6 +88,14 @@ class CompletionEditorTests(unittest.TestCase):
                     zshrc += "bindkey '\\e[46~' beginning-of-line\n"
                 if owned_macro:
                     zshrc += "bindkey -s '\\e[46~' 'PEBREL-USER-MACRO'\n"
+                if vicmd_widget:
+                    # vi mode: the chord is free in viins but carries a user
+                    # widget in vicmd, reachable mid-prompt via ESC.
+                    zshrc += (
+                        "bindkey -v\n"
+                        "userwid() { BUFFER+='VICMD-USER' }; zle -N userwid\n"
+                        "bindkey -M vicmd '\\e[46~' userwid\n"
+                    )
                 (self.fixture.home / ".zshrc").write_text(zshrc)
         session = shell_integration.ShellSession(program, self.fixture.home, args, env)
         self.addCleanup(session.close)
@@ -298,7 +308,18 @@ class CompletionEditorTests(unittest.TestCase):
         # macro whose text is exactly the widget's name, and a user widget
         # shadowing that name — neither may keep the capability announced.
         rebinds = {
-            "bash": [("bind '\"\\e[46~\": \"PEBREL-REBIND\"'", "PEBREL-REBIND")],
+            "bash": [
+                # Review repro: a lookalike line that merely CONTAINS the
+                # entry (a chord sequence ending in \e[46~ bound to
+                # clear-screen) must not satisfy the probe once the real
+                # entry is gone — the quoted macro keeps the chord and fires.
+                (
+                    "bind '\"\\C-x\\\"\\e[46~\": clear-screen';"
+                    " bind '\"\\e[46~\": \"QUOTED-KEY-MACRO\"'",
+                    "QUOTED-KEY-MACRO",
+                ),
+                ("bind '\"\\e[46~\": \"PEBREL-REBIND\"'", "PEBREL-REBIND"),
+            ],
             "zsh": [
                 ("bindkey -s '\\e[46~' 'PEBREL-REBIND'", "PEBREL-REBIND"),
                 ("bindkey -s '\\e[46~' 'clear-screen'", "clear-screen"),
@@ -316,7 +337,7 @@ class CompletionEditorTests(unittest.TestCase):
         self.assertIsNotNone(token, session.output)
         if shell == "bash":
             # A decoy clear-screen on \e[146~ must not satisfy the probe for
-            # \e[46~: the following rebind revokes despite the decoy staying.
+            # \e[46~: the following rebinds revoke despite the decoy staying.
             session.command("bind '\"\\e[146~\": clear-screen'; printf 'DECOY\\n'", b"DECOY\r\n")
         for rebind, inserted in rebinds:
             os.write(session.master, b"\x15")  # discard any line from the prior case
@@ -333,6 +354,32 @@ class CompletionEditorTests(unittest.TestCase):
 
     def test_ssh_zsh_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
         self.check_redraw_rebind("zsh", "ssh")
+
+    def check_redraw_keymap_switch(self, route: str) -> None:
+        # vi mode: the prompt validates the main keymap, but one prompt can
+        # switch keymaps mid-line (ESC -> vicmd). A user widget on the chord
+        # in vicmd keeps the capability revoked — announcing from viins alone
+        # would send the byte into user code — while the widget itself stays.
+        session = self.start_bootstrap("zsh", route, vicmd_widget=True)
+        self.assertIsNotNone(
+            re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output),
+            session.output,
+        )
+        token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
+        self.assertIsNone(token, session.output)
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", session.output)
+        # Within the same prompt: ESC switches to vicmd and the chord fires
+        # the user's widget into the line, then Enter runs the buffer.
+        os.write(session.master, b"echo tail")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b[46~\n")
+        output = session.wait(b"tailVICMD-USER\r\n")
+        self.assertIn(b"tailVICMD-USER\r\n", output)
+
+    def test_ssh_zsh_redraw_keymap_switch_in_the_same_prompt_revokes(self) -> None:
+        self.check_redraw_keymap_switch("ssh")
 
     def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
         self.check_query_only_session("bash", "ssh")

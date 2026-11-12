@@ -275,6 +275,38 @@ class PowerShellPointerTests(unittest.TestCase):
         self.assertIn(b"BeginningOfLine", output)
         self.assertNotIn(b"ClearScreen", output)
 
+    def test_same_name_scriptblock_before_startup_stays_user_owned(self) -> None:
+        # Function is PSReadLine's display description, not handler identity:
+        # a scriptblock wearing BriefDescription ClearScreen keeps the chord
+        # user-owned — the integration may neither overwrite it nor advertise
+        # the redraw capability.
+        session = self.start(before=(
+            "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ScriptBlock { "
+            "[Microsoft.PowerShell.PSConsoleReadLine]::Insert('USER-F9') } -BriefDescription ClearScreen"
+        ))
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"\x1b[20;6~")
+        session.settle()
+        # The user's scriptblock still owns the chord and keeps firing.
+        self.assertEqual(self.snapshot(session)[1], "USER-F9")
+
+    def test_rebinding_to_a_same_name_scriptblock_revokes_the_advertisement(self) -> None:
+        # Rebinding the chord to a scriptblock described as ClearScreen must
+        # revoke the capability on the next prompt: the description alone does
+        # not make it the native handler this session installed.
+        session = self.start()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=cHdzaDpmaXh0dXJl\x07", session.output)
+        os.write(session.master, (
+            "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ScriptBlock { "
+            "[Microsoft.PowerShell.PSConsoleReadLine]::Insert('USER-F9') } -BriefDescription ClearScreen\r"
+        ).encode())
+        output = session.wait(b"PS> ")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        os.write(session.master, b"\x1b[20;6~")
+        session.settle()
+        self.assertEqual(self.snapshot(session)[1], "USER-F9")
+
     def test_production_bootstrap_preserves_native_prompt_and_command_lifecycle(self) -> None:
         session = self.start(before="function prompt { if ($?) { 'native-ok> ' } else { 'native-failed> ' } }")
         self.assertIn(b"native-ok> ", session.output)
