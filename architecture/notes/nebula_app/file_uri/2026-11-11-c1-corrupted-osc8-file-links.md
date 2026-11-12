@@ -23,10 +23,10 @@ ConPTY (`1.24.260710001`, reported upstream as `google-antigravity/antigravity-c
 
 - ConPTY and `nebula_terminal`'s `vte` parser pass both raw UTF-8 and percent-encoded OSC 8 URIs
   intact; the corruption originates in the CLI emitter before PTY output.
-- In premature-termination cases (`3_批号更新现有记录_39行_可直接导入_v2.xlsx`), the cell's
-  `Hyperlink` URI ends at `.../3_批号更新现\u{FFFD}` while the contiguous hyperlinked cells end
+- In premature-termination cases (`03_示例清单现有条目_42行_测试样本_v2.xlsx`), the cell's
+  `Hyperlink` URI ends at `.../03_示例清单现\u{FFFD}` while the contiguous hyperlinked cells end
   with the intact label right before `\x1b]8;;\x1b\\`.
-- In mid-segment cases (`批号导入_最终汇总执行包_20261111.xlsx`), the URI decodes with interior
+- In mid-segment cases (`示例报表_最终汇总结果_2026.xlsx`), the URI decodes with interior
   `U+FFFD` runs while the visible label (or parent directory on disk) holds the intact filename.
 
 ## Decision
@@ -49,7 +49,9 @@ and I/O contract:
    unconditional priority. Only when the raw explicit `file:` target is missing and contains `U+FFFD`
    does classification consult the revalidated visible-text candidate (`repaired_uri`) or, when no
    visible filename candidate exists, bounded parent-directory recovery (`repair_corrupted_local_path_on_disk`),
-   resolving only unambiguous matches and leaving ordinary paths untouched.
+   filtering directory candidates to those containing UTF-8 byte `0x9C` at every replaced/truncated
+   span before uniqueness matching so unrelated non-C1 files remain `LocalMissing`, and leaving
+   ordinary paths untouched.
 
 ## Rejected alternatives
 

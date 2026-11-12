@@ -53,6 +53,7 @@ pub fn repair_corrupted_file_uri_with_text(raw_uri: &str, visible_text: &str) ->
                 seg,
                 candidates.iter().copied(),
                 !has_sep && path_truncated,
+                false,
             )?);
         } else {
             repaired.push_str(seg);
@@ -100,7 +101,8 @@ pub(super) fn repair_corrupted_local_path_on_disk(path: &Path) -> Option<PathBuf
                         names.push(name);
                     }
                 }
-                let matched = pick_unique_match(&seg, names.iter().map(String::as_str), is_last)?;
+                let matched =
+                    pick_unique_match(&seg, names.iter().map(String::as_str), is_last, true)?;
                 current.push(OsString::from(matched));
                 repaired_any = true;
             },
@@ -164,6 +166,7 @@ fn pick_unique_match<'a>(
     corrupted: &str,
     candidates: impl Iterator<Item = &'a str>,
     allow_trailing_cut: bool,
+    require_c1: bool,
 ) -> Option<String> {
     let mut matches: Vec<&str> = Vec::new();
     let mut c1_matches: Vec<&str> = Vec::new();
@@ -176,6 +179,9 @@ fn pick_unique_match<'a>(
                 c1_matches.push(cand);
             }
         }
+    }
+    if require_c1 {
+        return (c1_matches.len() == 1).then(|| c1_matches[0].to_owned());
     }
     if matches.len() == 1 {
         Some(matches[0].to_owned())
@@ -228,7 +234,7 @@ fn match_corrupted_segment(
         {
             return None;
         }
-        all_0x9c &= gap.as_bytes().contains(&0x9C);
+        all_0x9c &= gap.chars().all(|c| c.encode_utf8(&mut [0; 4]).as_bytes().contains(&0x9C));
         rem = after;
     }
 
@@ -251,29 +257,29 @@ mod tests {
     fn repairs_mid_filename_truncated_and_punctuated_osc8_file_uris() {
         assert_eq!(
             repair_corrupted_file_uri_with_text(
-                "file:///D:/erpnext/cqboyue/.inputdata/output/批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx",
-                "批号导入_最终汇总执行包_20261111.xlsx。",
+                "file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx",
+                "示例报表_最终汇总结果_2026.xlsx。",
             )
             .as_deref(),
-            Some("file:///D:/erpnext/cqboyue/.inputdata/output/批号导入_最终汇总执行包_20261111.xlsx")
+            Some("file:///D:/workspace/demo/output/示例报表_最终汇总结果_2026.xlsx")
         );
 
-        let truncated = "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}";
+        let truncated = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
         assert_eq!(
             repair_corrupted_file_uri_with_text(
                 truncated,
-                "记录_39行_可直接导入_v2.xlsx.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx，",
+                "条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx，",
             )
             .as_deref(),
-            Some("file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx")
+            Some("file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx")
         );
         assert_eq!(
             repair_corrupted_file_uri_with_text(
                 truncated,
-                "记录_39行_可直接导入.xlsx.inputdata/output/3_批号更新现有记录_39行_可直接导入.xlsx",
+                "条目_42行_测试样本.xlsx.cache/output/03_示例清单现有条目_42行_测试样本.xlsx",
             )
             .as_deref(),
-            Some("file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入.xlsx")
+            Some("file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本.xlsx")
         );
         assert_eq!(
             repair_corrupted_file_uri_with_text(
@@ -312,26 +318,26 @@ mod tests {
     #[test]
     fn disk_fallback_only_runs_for_confirmed_osc8_file_uris_and_keeps_ordinary_paths_exact() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("批号导入_最终汇总执行包_20261111.xlsx");
+        let target = dir.path().join("示例报表_最终汇总结果_2026.xlsx");
         std::fs::write(&target, b"ok").unwrap();
         let slash = dir.path().to_string_lossy().replace('\\', "/");
         let corrupted_uri = format!(
-            "[打开文件](file:/{}/批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx)",
+            "[打开文件](file:/{}/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx)",
             slash.trim_start_matches('/')
         );
 
         // Ordinary path entrypoints preserve exact matching even when a single prefix-sibling exists.
         assert!(matches!(
-            classify_link_target_with_cwd("批号导入_\u{FFFD}", Some(dir.path())),
+            classify_link_target_with_cwd("示例报表_\u{FFFD}", Some(dir.path())),
             LinkTargetKind::LocalMissing(_)
         ));
         assert!(matches!(
-            classify_link_target_with_cwd("./批号导入_\u{FFFD}", Some(dir.path())),
+            classify_link_target_with_cwd("./示例报表_\u{FFFD}", Some(dir.path())),
             LinkTargetKind::LocalMissing(_)
         ));
         assert!(matches!(classify_link_target(&corrupted_uri), LinkTargetKind::LocalMissing(_)));
         assert!(matches!(
-            classify_osc8_link_target_with_cwd("批号导入_\u{FFFD}", None, Some(dir.path())),
+            classify_osc8_link_target_with_cwd("示例报表_\u{FFFD}", None, Some(dir.path())),
             LinkTargetKind::LocalMissing(_)
         ));
 
@@ -342,14 +348,74 @@ mod tests {
         );
 
         let amb_dir = tempfile::tempdir().unwrap();
-        std::fs::write(amb_dir.path().join("3_批号更新现有记录.xlsx"), b"1").unwrap();
-        std::fs::write(amb_dir.path().join("3_批号更新现有记录_v2.xlsx"), b"2").unwrap();
+        std::fs::write(amb_dir.path().join("03_示例清单现有条目.xlsx"), b"1").unwrap();
+        std::fs::write(amb_dir.path().join("03_示例清单现有条目_v2.xlsx"), b"2").unwrap();
         let amb_slash = amb_dir.path().to_string_lossy().replace('\\', "/");
-        let amb_uri = format!("file:/{}/3_批号更新现\u{FFFD}", amb_slash.trim_start_matches('/'));
+        let amb_uri = format!("file:/{}/03_示例清单现\u{FFFD}", amb_slash.trim_start_matches('/'));
         assert!(matches!(
             classify_osc8_link_target_with_cwd(&amb_uri, None, Some(amb_dir.path())),
             LinkTargetKind::LocalMissing(_)
         ));
+    }
+
+    #[test]
+    fn disk_fallback_requires_c1_byte_evidence_at_replaced_span() {
+        let non_c1_dir = tempfile::tempdir().unwrap();
+        // `中` (`E4 B8 AD`) contains no `0x9C` byte; a single candidate without C1 evidence
+        // must remain `LocalMissing` instead of opening an unrelated file.
+        std::fs::write(non_c1_dir.path().join("report中.txt"), b"non-c1").unwrap();
+        let non_c1_base = non_c1_dir
+            .path()
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_owned();
+        for raw in [
+            format!("file:/{non_c1_base}/report\u{FFFD}.txt"),
+            format!("file:/{non_c1_base}/report\u{FFFD}"),
+        ] {
+            assert!(
+                matches!(
+                    classify_osc8_link_target_with_cwd(&raw, None, Some(non_c1_dir.path())),
+                    LinkTargetKind::LocalMissing(_)
+                ),
+                "expected LocalMissing for {raw}"
+            );
+        }
+
+        // A `0x9C` character elsewhere in the filename does not excuse a non-C1 replaced span.
+        let elsewhere_dir = tempfile::tempdir().unwrap();
+        std::fs::write(elsewhere_dir.path().join("report中_最.txt"), b"elsewhere").unwrap();
+        let elsewhere_base = elsewhere_dir
+            .path()
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_owned();
+        for raw in [
+            format!("file:/{elsewhere_base}/report\u{FFFD}_最.txt"),
+            format!("file:/{elsewhere_base}/report\u{FFFD}"),
+        ] {
+            assert!(
+                matches!(
+                    classify_osc8_link_target_with_cwd(&raw, None, Some(elsewhere_dir.path())),
+                    LinkTargetKind::LocalMissing(_)
+                ),
+                "expected LocalMissing for {raw}"
+            );
+        }
+
+        // Filtering non-C1 candidates before uniqueness check preserves a unique `0x9C` match.
+        let c1_target = non_c1_dir.path().join("report最.txt");
+        std::fs::write(&c1_target, b"c1").unwrap();
+        assert_eq!(
+            classify_osc8_link_target_with_cwd(
+                &format!("file:/{non_c1_base}/report\u{FFFD}.txt"),
+                None,
+                Some(non_c1_dir.path()),
+            ),
+            LinkTargetKind::LocalExisting(c1_target)
+        );
     }
 
     #[test]
@@ -359,17 +425,14 @@ mod tests {
         let base = slash.trim_start_matches('/');
 
         // 1. Mid-filename `U+FFFD`: literal file wins while present; falls back once absent.
-        let literal_mid = dir.path().join("批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx");
-        let repaired_mid = dir.path().join("批号导入_最终汇总执行包_20261111.xlsx");
+        let literal_mid = dir.path().join("示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx");
+        let repaired_mid = dir.path().join("示例报表_最终汇总结果_2026.xlsx");
         std::fs::write(&literal_mid, b"literal").unwrap();
         std::fs::write(&repaired_mid, b"repaired").unwrap();
-        let raw_mid_uri =
-            format!("file:/{base}/批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx");
-        let cand_mid_uri = repair_corrupted_file_uri_with_text(
-            &raw_mid_uri,
-            "批号导入_最终汇总执行包_20261111.xlsx",
-        )
-        .unwrap();
+        let raw_mid_uri = format!("file:/{base}/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx");
+        let cand_mid_uri =
+            repair_corrupted_file_uri_with_text(&raw_mid_uri, "示例报表_最终汇总结果_2026.xlsx")
+                .unwrap();
         assert_eq!(
             classify_osc8_link_target_with_cwd(&raw_mid_uri, Some(&cand_mid_uri), Some(dir.path()),),
             LinkTargetKind::LocalExisting(literal_mid.clone())
@@ -383,16 +446,16 @@ mod tests {
         // 2. Truncated `U+FFFD`: literal wins first; once absent, visible-label candidate resolves
         // `_v2.xlsx` deterministically alongside `.xlsx`, and stays `LocalMissing` if `_v2.xlsx`
         // itself is deleted rather than opening sibling `.xlsx`.
-        let literal_trunc = dir.path().join("3_批号更新现\u{FFFD}");
-        let v1_file = dir.path().join("3_批号更新现有记录_39行_可直接导入.xlsx");
-        let v2_file = dir.path().join("3_批号更新现有记录_39行_可直接导入_v2.xlsx");
+        let literal_trunc = dir.path().join("03_示例清单现\u{FFFD}");
+        let v1_file = dir.path().join("03_示例清单现有条目_42行_测试样本.xlsx");
+        let v2_file = dir.path().join("03_示例清单现有条目_42行_测试样本_v2.xlsx");
         std::fs::write(&literal_trunc, b"literal").unwrap();
         std::fs::write(&v1_file, b"v1").unwrap();
         std::fs::write(&v2_file, b"v2").unwrap();
-        let raw_trunc_uri = format!("file:/{base}/3_批号更新现\u{FFFD}");
+        let raw_trunc_uri = format!("file:/{base}/03_示例清单现\u{FFFD}");
         let cand_v2_uri = repair_corrupted_file_uri_with_text(
             &raw_trunc_uri,
-            "记录_39行_可直接导入_v2.xlsx/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx",
+            "条目_42行_测试样本_v2.xlsx/output/03_示例清单现有条目_42行_测试样本_v2.xlsx",
         )
         .unwrap();
         assert_eq!(

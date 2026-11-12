@@ -1325,27 +1325,26 @@ mod tests {
 
         let mut term = Term::new(Config::default(), &TermSize::new(120, 6), VoidListener);
         let stream = concat!(
-            "• \x1b]8;;file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}\x1b\\",
-            "记录_39行_可直接导入_v2.xlsx.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx",
+            "• \x1b]8;;file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}\x1b\\",
+            "条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx",
             "\x1b]8;;\x1b\\ (及 \r\n",
-            "  \x1b]8;;file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}\x1b\\",
-            "记录_39行_可直接导入.xlsx.inputdata/output/3_批号更新现有记录_39行_可直接导入.xlsx",
+            "  \x1b]8;;file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}\x1b\\",
+            "条目_42行_测试样本.xlsx.cache/output/03_示例清单现有条目_42行_测试样本.xlsx",
             "\x1b]8;;\x1b\\，已核验\r\n",
-            "  \x1b]8;;file:///D:/erpnext/cqboyue/.inputdata/output/批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx\x1b\\",
-            "批号导入_最\x1b]8;;\x1b\\   \r\n",
-            "  \x1b]8;;file:///D:/erpnext/cqboyue/.inputdata/output/批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx\x1b\\",
-            "终汇总执行包_20261111.xlsx\x1b]8;;\x1b\\"
+            "  \x1b]8;;file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx\x1b\\",
+            "示例报表_最\x1b]8;;\x1b\\   \r\n",
+            "  \x1b]8;;file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx\x1b\\",
+            "终汇总结果_2026.xlsx\x1b]8;;\x1b\\"
         );
         Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
         let config = UiConfig::default();
 
-        let raw_trunc = "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}";
-        let raw_pkg = "file:///D:/erpnext/cqboyue/.inputdata/output/批号导入_\u{FFFD}\u{FFFD}终汇总执行包_20261111.xlsx";
-        let v2 = "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx";
-        let v1 =
-            "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入.xlsx";
-        let pkg =
-            "file:///D:/erpnext/cqboyue/.inputdata/output/批号导入_最终汇总执行包_20261111.xlsx";
+        let raw_trunc = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
+        let raw_pkg =
+            "file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx";
+        let v2 = "file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx";
+        let v1 = "file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本.xlsx";
+        let pkg = "file:///D:/workspace/demo/output/示例报表_最终汇总结果_2026.xlsx";
         for (line, col, raw_expected, repaired_expected) in [
             (0, 4, raw_trunc, v2),
             (1, 4, raw_trunc, v1),

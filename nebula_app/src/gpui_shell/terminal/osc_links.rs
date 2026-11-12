@@ -264,8 +264,8 @@ mod path_tests {
 
         let mut term = Term::new(Config::default(), &TermSize::new(120, 4), VoidListener);
         let stream = concat!(
-            "\x1b]8;;file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}\x1b\\",
-            "记录_39行_可直接导入_v2.xlsx.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx",
+            "\x1b]8;;file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}\x1b\\",
+            "条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx",
             "\x1b]8;;\x1b\\"
         );
         Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
@@ -276,7 +276,7 @@ mod path_tests {
         let hover = hover_from_hint(&term, hint, 4, 120, UiLanguage::ZhCn).unwrap();
         assert!(
             hover.preview.starts_with(
-                "D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx · "
+                "D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx · "
             ),
             "unexpected preview: {}",
             hover.preview
@@ -288,8 +288,8 @@ mod path_tests {
     fn custom_hint_commands_receive_original_corrupted_osc8_uri() {
         let custom =
             Program::WithArgs { program: "custom-link-handler".into(), args: vec!["--raw".into()] };
-        let raw = "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}";
-        let repaired = "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx";
+        let raw = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
+        let repaired = "file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx";
         assert_eq!(
             resolve_hint_command(&custom, true, raw, Some(repaired), None, UiLanguage::ZhCn),
             Ok(Some(vec!["--raw".to_owned(), raw.to_owned()]))
@@ -437,9 +437,9 @@ mod tests {
         use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
 
         let mut term = Term::new(Config::default(), &TermSize::new(120, 4), VoidListener);
-        let raw_uri = "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现\u{FFFD}";
+        let raw_uri = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
         let stream = format!(
-            "\x1b]8;;{raw_uri}\x1b\\记录_39行_可直接导入_v2.xlsx.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx\x1b]8;;\x1b\\"
+            "\x1b]8;;{raw_uri}\x1b\\条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx\x1b]8;;\x1b\\"
         );
         Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
 
@@ -458,9 +458,7 @@ mod tests {
         assert_eq!(text, raw_uri);
         assert_eq!(
             repaired.as_deref(),
-            Some(
-                "file:///D:/erpnext/cqboyue/.inputdata/output/3_批号更新现有记录_39行_可直接导入_v2.xlsx"
-            )
+            Some("file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx")
         );
 
         let (_, window) = cx.add_window_view(|_, _| Surface);
