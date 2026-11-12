@@ -102,8 +102,8 @@ pub(crate) fn installation_in_progress() -> io::Result<bool> {
     if !crate::platform::CAPABILITIES.self_update_install {
         return Ok(false);
     }
-    // MSIX 包目录只读，外部渠道也不参与普通安装器事务，因此不创建旁置锁。
-    if crate::platform::distribution::current().externally_managed() {
+    // Only copies that participate in the installer transaction need its lock.
+    if crate::platform::distribution::require_direct_update().is_err() {
         return Ok(false);
     }
     let executable = canonical(&std::env::current_exe()?)?;
@@ -415,7 +415,7 @@ fn scheduled_windows() -> Result<Vec<Session>, String> {
 /// Before resident resources/windows exist, apply an explicitly armed update.
 /// A failed attempt is disarmed and normal startup remains available.
 pub(crate) fn apply_scheduled() -> bool {
-    if crate::platform::distribution::current().externally_managed() {
+    if crate::platform::distribution::require_direct_update().is_err() {
         return false;
     }
     let Ok(root) = super::state_directory("") else { return false };
