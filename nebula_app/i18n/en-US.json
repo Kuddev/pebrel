@@ -202,7 +202,7 @@
       "terms": {
         "application": "application app update version github support",
         "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl glsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
-        "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
+        "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss automatic command output views render structured",
         "providers": "providers provider ai api prediction prompt suggestions",
         "ssh": "ssh host remote connection",
         "network": "network proxy connectivity",
@@ -237,6 +237,11 @@
       "hybrid": "Hybrid",
       "description": "Choose how suggestions appear and which key accepts them.",
       "details": "Inline: Tab accepts the suggestion after the cursor. List: candidates appear as you type; use arrow keys to select and Tab to insert. Hybrid: Right arrow accepts the inline suggestion; Tab opens the list, arrow keys select and Enter inserts. Escape closes the list. Accepting a suggestion never runs the command. Changes apply to open terminals."
+    },
+    "command_output": {
+      "title": "Command output",
+      "automatic": "Automatic command output views",
+      "description": "Show supported command output in a structured view. Turn off to keep the terminal's original colors and layout. Manually opened views still work."
     },
     "environment": {
       "refresh": "Refresh system environment for new terminals",

@@ -40,8 +40,33 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) -> Vec<AnyElement> {
         let Some(session) = &self.session else { return Vec::new() };
+        let automatic_command_views = session.automatic_command_views_enabled();
+        if !automatic_command_views
+            && let Some(focused) = window.focused(cx)
+            && self.native_results.entities.values().any(|entity| {
+                let result = entity.read(cx);
+                result.focus.contains_focused(window, cx)
+                    && result.source.upgrade().is_some_and(|source| source.has_grid_source())
+            })
+        {
+            cx.on_next_frame(window, move |view, window, cx| {
+                if window.focused(cx) == Some(focused)
+                    && view
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| !session.automatic_command_views_enabled())
+                {
+                    window.focus(&view.focus_handle, cx);
+                }
+            });
+        }
         self.native_results.reconcile_retention(cx);
-        self.native_results.sync(&mut session.term.lock(), self.grid_rows(), cx);
+        self.native_results.sync(
+            &mut session.term.lock(),
+            self.grid_rows(),
+            automatic_command_views,
+            cx,
+        );
         let placements = self.native_results.placements();
         let available_width = self.native_result_width();
         let parent = cx.entity().downgrade();
@@ -144,6 +169,11 @@ pub(super) struct NativeResult {
 }
 
 impl NativeResult {
+    #[cfg(test)]
+    pub(super) fn focus_handle_for_test(&self) -> FocusHandle {
+        self.focus.clone()
+    }
+
     #[cfg(test)]
     pub(super) fn height(&self) -> Pixels {
         self.measured_height
