@@ -150,11 +150,16 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> Button {
         let visible = self.side_panel.open && !self.reader_focus_active(cx);
-        toolbar_button("toggle-right-sidebar", IconName::PanelRight, disabled)
+        let icon = if visible {
+            Icon::new(Icon::empty()).path(crate::gpui_shell::assets::nav::SIDEBAR_RIGHT_EXPANDED)
+        } else {
+            Icon::new(IconName::PanelRight)
+        };
+        let label = crate::gpui_shell::config::ui_language(cx).text(Message::EditorRightSidebar);
+        toolbar_button("toggle-right-sidebar", icon, disabled)
             .debug_selector(|| "toggle-right-sidebar".to_owned())
-            .selected(visible)
-            .when(visible, |button| button.bg(cx.theme().secondary))
-            .tooltip(crate::gpui_shell::config::ui_language(cx).text(Message::EditorRightSidebar))
+            .aria_label(label)
+            .tooltip(label)
             .on_click(cx.listener(|this, _, _, cx| {
                 if this.reader_focus_active(cx) {
                     this.clear_reader_focus(cx);

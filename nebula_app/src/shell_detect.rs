@@ -114,17 +114,16 @@ pub fn icon_for_id(id: &str) -> &'static str {
 
 /// 回落字形相对图标槽边长的字号系数。
 ///
-/// 品牌 PNG 是从矢量图按 12% 安全边距栅格化的，可见部分约为自身边长的
+/// 品牌矢量图按 12% 安全边距光栅化，可见部分约为自身边长的
 /// 0.77；`icon_for_id` 返回的 codicon terminal 墨迹约 0.88 em。两者乘上这
 /// 个系数之后才在视觉上是同一个尺寸——不乘就会「有的图标大、有的小」。
 pub const FALLBACK_ICON_SCALE: f32 = 0.88;
 
-/// Full-color brand icon (embedded PNG, rasterized from vector artwork with
-/// a 12% safe margin; see THIRD-PARTY-NOTICES) for a shell id — the terminal picker draws this textured
-/// quad instead of the flat Nerd Font glyph. WSL distro ids map by distro
+/// Compressed vector artwork for a shell id (see THIRD-PARTY-NOTICES).
+/// The picker renders it at the destination DPI. WSL distro ids map by distro
 /// name (`wsl:Ubuntu` → the Ubuntu roundel), falling back to the generic
 /// Tux for unknown distros. `None` = no brand asset; caller keeps the glyph.
-pub fn color_icon_png(id: &str) -> Option<&'static [u8]> {
+pub fn color_icon_svgz(id: &str) -> Option<&'static [u8]> {
     let lower = profile_shell_id(id).unwrap_or(id).to_ascii_lowercase();
     if let Some(distro) = lower.strip_prefix("wsl:") {
         // Match the distro family in its name (registry names vary:
@@ -170,20 +169,20 @@ fn profile_shell_id(id: &str) -> Option<&str> {
         .and_then(|value| value.split_once('|').map(|(shell, _)| shell))
 }
 
-const ICON_PWSH: &[u8] = include_bytes!("../../extra/shell-icons/powershell-core.png");
-const ICON_POWERSHELL: &[u8] = include_bytes!("../../extra/shell-icons/powershell.png");
-const ICON_CMD: &[u8] = include_bytes!("../../extra/shell-icons/cmd.png");
-const ICON_GIT_BASH: &[u8] = include_bytes!("../../extra/shell-icons/git-bash.png");
-const ICON_NUSHELL: &[u8] = include_bytes!("../../extra/shell-icons/nushell.png");
-const ICON_LINUX: &[u8] = include_bytes!("../../extra/shell-icons/linux.png");
-const ICON_UBUNTU: &[u8] = include_bytes!("../../extra/shell-icons/ubuntu.png");
-const ICON_DEBIAN: &[u8] = include_bytes!("../../extra/shell-icons/debian.png");
-const ICON_KALI: &[u8] = include_bytes!("../../extra/shell-icons/kali.png");
-const ICON_ALPINE: &[u8] = include_bytes!("../../extra/shell-icons/alpine.png");
-const ICON_SUSE: &[u8] = include_bytes!("../../extra/shell-icons/suse.png");
-const ICON_ALMA: &[u8] = include_bytes!("../../extra/shell-icons/alma.png");
-const ICON_ORACLE: &[u8] = include_bytes!("../../extra/shell-icons/oracle-linux.png");
-const ICON_EULER: &[u8] = include_bytes!("../../extra/shell-icons/open-euler.png");
+const ICON_PWSH: &[u8] = include_bytes!("../../extra/shell-icons/powershell-core.svgz");
+const ICON_POWERSHELL: &[u8] = include_bytes!("../../extra/shell-icons/powershell.svgz");
+const ICON_CMD: &[u8] = include_bytes!("../../extra/shell-icons/cmd.svgz");
+const ICON_GIT_BASH: &[u8] = include_bytes!("../../extra/shell-icons/git-bash.svgz");
+const ICON_NUSHELL: &[u8] = include_bytes!("../../extra/shell-icons/nushell.svgz");
+const ICON_LINUX: &[u8] = include_bytes!("../../extra/shell-icons/linux.svgz");
+const ICON_UBUNTU: &[u8] = include_bytes!("../../extra/shell-icons/ubuntu.svgz");
+const ICON_DEBIAN: &[u8] = include_bytes!("../../extra/shell-icons/debian.svgz");
+const ICON_KALI: &[u8] = include_bytes!("../../extra/shell-icons/kali.svgz");
+const ICON_ALPINE: &[u8] = include_bytes!("../../extra/shell-icons/alpine.svgz");
+const ICON_SUSE: &[u8] = include_bytes!("../../extra/shell-icons/suse.svgz");
+const ICON_ALMA: &[u8] = include_bytes!("../../extra/shell-icons/alma.svgz");
+const ICON_ORACLE: &[u8] = include_bytes!("../../extra/shell-icons/oracle-linux.svgz");
+const ICON_EULER: &[u8] = include_bytes!("../../extra/shell-icons/open-euler.svgz");
 
 /// Human label for a saved shell id, without touching the filesystem — the
 /// settings row redraws every frame, so it can't afford `detect_shells`.
@@ -1628,7 +1627,7 @@ test "$token" = "$__pebrel_shell_token" || exit 96
     fn imported_profile_shell_keys_reuse_brand_assets() {
         let profile_key = "profile:pwsh|pwsh-1234";
         assert_eq!(icon_for_id(profile_key), icon_for_id("pwsh"));
-        assert!(color_icon_png(profile_key).is_some());
+        assert!(color_icon_svgz(profile_key).is_some());
     }
 
     /// 回归锁：没有品牌贴图的 shell 必须共用同一个字形码位。下拉把它们排在同

@@ -49,14 +49,21 @@ impl AiLogo {
     pub(crate) fn render(self, ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
         let size = size.clamp(1, 512);
         let source_ink = if matches!(self, Self::OpenCode) { [255; 3] } else { ink };
-        let mut pixels = rasterize_svg(self.svg(), source_ink, size * 4)?;
+        let mut pixels = rasterize_svg(self.svg(), source_ink, size * 4, false)?;
         self.tint_pixels(&mut pixels, ink);
         Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
     }
 
     pub(crate) fn render_brand(svg: &[u8], ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
         let size = size.clamp(1, 512);
-        let pixels = rasterize_svg(svg, ink, size * 4)?;
+        let pixels = rasterize_svg(svg, ink, size * 4, false)?;
+        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
+    }
+
+    /// Fit shell artwork by its visible bounds so wide and tall marks share the same slot.
+    pub(crate) fn render_shell_brand(svg: &[u8], size: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let size = size.clamp(1, 512);
+        let pixels = rasterize_svg(svg, [113, 132, 154], size * 4, true)?;
         Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
     }
 
@@ -115,7 +122,7 @@ impl AiLogo {
 }
 
 /// 保留 SVG 的原色，currentColor 则由使用位置的主题文字色提供。
-fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32) -> Option<Vec<u8>> {
+fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32, fit_ink: bool) -> Option<Vec<u8>> {
     let options = resvg::usvg::Options {
         default_size: resvg::usvg::Size::from_wh(24.0, 24.0)?,
         style_sheet: Some(format!("svg {{ color: rgb({}, {}, {}); }}", ink[0], ink[1], ink[2])),
@@ -123,12 +130,23 @@ fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32) -> Option<Vec<u8>> {
     };
     let tree = resvg::usvg::Tree::from_data(svg, &options).ok()?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
-    let scale = size as f32 / tree.size().width().max(tree.size().height());
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    let canvas = size as f32;
+    let transform = if fit_ink {
+        let bounds = tree.root().abs_layer_bounding_box();
+        let scale = canvas * 0.76 / bounds.width().max(bounds.height());
+        resvg::tiny_skia::Transform::from_row(
+            scale,
+            0.0,
+            0.0,
+            scale,
+            (canvas - bounds.width() * scale) * 0.5 - bounds.x() * scale,
+            (canvas - bounds.height() * scale) * 0.5 - bounds.y() * scale,
+        )
+    } else {
+        let scale = canvas / tree.size().width().max(tree.size().height());
+        resvg::tiny_skia::Transform::from_scale(scale, scale)
+    };
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
     let mut pixels = pixmap.data().to_vec();
     // tiny-skia 使用预乘 alpha，纹理接口要求 straight RGBA。
     for pixel in pixels.chunks_exact_mut(4) {
@@ -247,6 +265,47 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_brand_artwork_renders_from_vectors_at_each_scale() {
+        let ids = [
+            "pwsh",
+            "powershell",
+            "cmd",
+            "git-bash",
+            "nu",
+            "wsl",
+            "wsl:Ubuntu",
+            "wsl:Debian",
+            "wsl:Kali",
+            "wsl:Alpine",
+            "wsl:SUSE",
+            "wsl:Alma",
+            "wsl:Oracle",
+            "wsl:Euler",
+        ];
+        for id in ids {
+            let svg = crate::shell_detect::color_icon_svgz(id).expect(id);
+            assert!(svg.starts_with(&[0x1f, 0x8b]), "{id}");
+            for target in [22, 33, 44] {
+                let (rgba, width, height) = AiLogo::render_shell_brand(svg, target).expect(id);
+                assert_eq!((width, height), (target, target), "{id}");
+                let visible = rgba
+                    .chunks_exact(4)
+                    .enumerate()
+                    .filter_map(|(i, p)| (p[3] >= 96).then_some(i as u32))
+                    .collect::<Vec<_>>();
+                assert!(visible.len() > target as usize, "{id} is blank or undersized");
+                assert!(
+                    visible.iter().all(|i| {
+                        let (x, y) = (i % width, i / width);
+                        x > 0 && y > 0 && x + 1 < width && y + 1 < height
+                    }),
+                    "{id} is clipped at {target}px"
+                );
+            }
+        }
+    }
 
     #[test]
     fn compressed_vectors_render_at_physical_sizes_on_both_themes() {

@@ -24,7 +24,7 @@ const FALLBACK_ICON_SCALE: f32 = crate::shell_detect::FALLBACK_ICON_SCALE;
 impl ShellSelectItem {
     pub(super) fn new(id: String, name: String, scale_factor: f32) -> Self {
         // Select 的闭态和菜单行尺寸不同。分别生成与物理像素一一对应的纹理，
-        // 避免把 128px 原图交给 GPUI 在每帧缩小而产生模糊边缘。
+        // 从同一份 SVG 按各自的逻辑尺寸和窗口 DPI 渲染。
         let closed_image = crate::gpui_shell::widgets::shell_brand_image(&id, 20.0, scale_factor);
         let row_image = crate::gpui_shell::widgets::shell_brand_image(&id, 24.0, scale_factor);
         Self { id, name: name.into(), closed_image, row_image }
@@ -57,7 +57,7 @@ impl ShellSelectItem {
         } else {
             // 没有品牌贴图的 shell 沿用旧壳那张按 id 取字的 Nerd Font 表
             // （`icon_for_id`，设置行/命令面板同一口径）。字号按回落字形的
-            // 墨迹比例配平：品牌 PNG 的可见部分是自己边长的约 0.77（12%
+            // 墨迹比例配平：品牌图标的可见部分是自己边长的约 0.77（12%
             // 安全边距），codicon terminal 的墨迹约 0.88 em——乘 0.88 之后
             // 两种图标才真的同尺寸。
             div()
@@ -71,7 +71,7 @@ impl ShellSelectItem {
             .items_center()
             // 图标槽固定成同一个边长，绝不随图标种类伸缩：gpui-component 的
             // `List` 只量首行（这里是「导入终端目录」动作行）的高度，再拿它
-            // 排所有行；品牌 PNG 有 24px、回落图标只有 xsmall，混排时高行会
+            // 排所有行；品牌图标有 24px、回落图标只有 xsmall，混排时高行会
             // 溢出自己的槽位，压住上下相邻行（选中高亮错位就是这么来的）。
             .child(
                 div()

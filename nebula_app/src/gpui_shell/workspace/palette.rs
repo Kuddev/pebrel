@@ -344,6 +344,10 @@ impl NebulaWorkspace {
                     )
                     .into_any_element(),
                 )
+            } else if let Some(glyph) = item.icon_glyph
+                && matches!(&item.action, WorkspacePaletteAction::LaunchSshHost(_))
+            {
+                Some(crate::gpui_shell::widgets::host_icon(glyph, PALETTE_ICON_PX, foreground))
             } else if let Some(glyph) = item.icon_glyph {
                 // shell 行没有品牌贴图时画的是同一个 id-keyed 字形，字号要
                 // 跟品牌贴图配平；SSH 主机等行保持原来的字号。

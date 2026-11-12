@@ -211,59 +211,11 @@ fn split_icon_rects(
         .collect()
 }
 
-/// 广播记号：中心点 + 左右各两段同心弧。fork 的 `IconName` 里没有
-/// radio/broadcast（已核对 `crates/ui/src/icon.rs`），与其硬凑一个语义不对的
-/// 现成图标，不如自绘——弧沿用 `sidebar.rs::spinner` 那套"沿弧铺圆点"的画法，
-/// 笔画与 SVG 线性图标同粗，混在一排 ghost 按钮里不出戏。
-fn broadcast_mark(side: f32, color: Hsla) -> impl IntoElement {
-    canvas(
-        move |_, _, _| {},
-        move |bounds, _, window, _| {
-            let ox = f32::from(bounds.origin.x);
-            let oy = f32::from(bounds.origin.y);
-            let box_side = f32::from(bounds.size.width);
-            let (cx, cy) = (ox + box_side * 0.5, oy + box_side * 0.5);
-            let stroke = (box_side * 0.13).max(1.2);
-            // 中心点：实心，直径略大于笔画，才不会被两侧的弧压成一根线。
-            let dot = stroke * 1.6;
-            window.paint_quad(
-                gpui::fill(
-                    Bounds::new(
-                        gpui::point(px(cx - dot * 0.5), px(cy - dot * 0.5)),
-                        size(px(dot), px(dot)),
-                    ),
-                    color,
-                )
-                .corner_radii(px(dot * 0.5)),
-            );
-            // 两对同心弧，各覆盖 ±44°：右侧朝 0°、左侧朝 180°。相邻点重叠约
-            // 一半，与 spinner 同一条不留缝也不过密的间距规则。
-            const SPAN: f32 = 0.77; // 弧度，≈44°
-            for ring in 0..2 {
-                let radius = box_side * (0.26 + 0.16 * ring as f32);
-                let steps = ((radius * SPAN * 2.0 / (stroke * 0.5)).ceil() as usize).clamp(6, 40);
-                for centre in [0.0_f32, std::f32::consts::PI] {
-                    for step in 0..=steps {
-                        let t = step as f32 / steps as f32 * 2.0 - 1.0;
-                        let angle = centre + t * SPAN;
-                        let x0 = cx + radius * angle.cos() - stroke * 0.5;
-                        let y0 = cy + radius * angle.sin() - stroke * 0.5;
-                        window.paint_quad(
-                            gpui::fill(
-                                Bounds::new(
-                                    gpui::point(px(x0), px(y0)),
-                                    size(px(stroke), px(stroke)),
-                                ),
-                                color,
-                            )
-                            .corner_radii(px(stroke * 0.5)),
-                        );
-                    }
-                }
-            }
-        },
-    )
-    .size(px(side))
+fn broadcast_mark(side: f32, color: Hsla) -> Icon {
+    Icon::new(Icon::empty())
+        .path(crate::gpui_shell::assets::nav::BROADCAST)
+        .size(px(side))
+        .text_color(color)
 }
 
 /// 一个 pane 的标题信息：图标（AI 品牌图 / Nerd Font 字位）+ 一行标题。

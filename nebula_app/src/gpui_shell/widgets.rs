@@ -48,26 +48,16 @@ pub(super) fn file_read_progress(
     )
 }
 
-/// Shell 的彩色品牌图标（`extra/shell-icons` 的 PNG）预缩放成与物理像素
-/// 一一对应的纹理。设置页的默认 Shell 下拉与新建终端的 Shell 选择弹窗
-/// 共用同一份资产和同一条缩放路径——把 128px 原图交给 GPUI 每帧缩小会糊
-/// 边，两处各写一遍缩放又迟早缩出两种观感。
-///
-/// `logical_size` 是控件里图标的逻辑边长，`scale_factor` 是窗口 DPI 缩放。
-/// 返回 `None` 表示该 id 没有品牌资产，调用方保留自己的字形回落。
+/// Render the shared shell vectors at the destination DPI before upload to GPUI.
 pub fn shell_brand_image(
     id: &str,
     logical_size: f32,
     scale_factor: f32,
 ) -> Option<Arc<RenderImage>> {
-    let bytes = crate::shell_detect::color_icon_png(id)?;
-    let source = image::load_from_memory(bytes).ok()?.into_rgba8();
-    let (width, height) = source.dimensions();
+    let bytes = crate::shell_detect::color_icon_svgz(id)?;
     let target_size = (logical_size * scale_factor).round().max(1.0) as u32;
-    let (mut rgba, width, height) =
-        crate::display::prepare_ai_logo_texture(source.as_raw(), width, height, target_size);
-    // GPUI RenderImage 使用 BGRA；预缩放必须在 RGBA 上完成，换序放在最后，
-    // 否则 Lanczos 会把红蓝通道按错误语义混合。
+    let (mut rgba, width, height) = crate::display::AiLogo::render_shell_brand(bytes, target_size)?;
+    // GPUI RenderImage stores BGRA.
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
@@ -87,6 +77,63 @@ pub(crate) fn terminal_glyph(glyph: impl Into<SharedString>, size: f32) -> gpui:
     } else {
         glyph.into_any_element()
     }
+}
+
+/// Center the glyph's ink, not its monospace advance or the surrounding text line.
+pub(crate) fn host_icon(glyph: char, side: f32, color: gpui::Hsla) -> gpui::AnyElement {
+    if glyph == '\u{f489}' {
+        return Icon::new(Icon::empty())
+            .path(crate::gpui_shell::assets::nav::TERMINAL)
+            .size(px(side))
+            .text_color(color)
+            .into_any_element();
+    }
+    gpui::canvas(
+        move |bounds, window, _| {
+            let font = gpui::font(crate::font_install::SYMBOL_FONT_FAMILY);
+            let text_system = window.text_system();
+            let font_id = text_system.resolve_font(&font);
+            let ink_side = side * 0.825;
+            let base_size = px(ink_side);
+            let ink = text_system.typographic_bounds(font_id, base_size, glyph).ok();
+            let scale = ink
+                .filter(|ink| ink.size.width > px(0.0) && ink.size.height > px(0.0))
+                .map(|ink| ink_side / f32::from(ink.size.width.max(ink.size.height)))
+                .unwrap_or(1.0);
+            let font_size = base_size * scale;
+            let text: SharedString = glyph.to_string().into();
+            let line = text_system.shape_line(
+                text.clone(),
+                font_size,
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font,
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let height = line.ascent + line.descent;
+            let origin = if let Some(ink) = ink {
+                // Font coordinates are relative to the baseline with positive Y upwards.
+                let center = ink.center() * scale;
+                bounds.center() - gpui::point(center.x, line.ascent - center.y)
+            } else {
+                bounds.center() - gpui::point(line.width / 2.0, height / 2.0)
+            };
+            (line, origin, height)
+        },
+        |_, (line, origin, height), window, cx| {
+            if let Err(error) = line.paint(origin, height, gpui::TextAlign::Left, None, window, cx)
+            {
+                log::warn!("Unable to paint SSH host icon: {error}");
+            }
+        },
+    )
+    .size(px(side))
+    .into_any_element()
 }
 
 /// Desktop form controls keep their padding even with a small UI font.
