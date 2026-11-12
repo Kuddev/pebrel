@@ -24,6 +24,17 @@ if [[ -r ${ZDOTDIR-$HOME}/.zshrc ]]; then
     source "${ZDOTDIR-$HOME}/.zshrc"
 fi
 
+# The terminal sends xterm's Alt+arrow sequences. Fill missing Emacs bindings
+# after loading the user's rc file, leaving other keymaps alone.
+if [[ -o zle && $(builtin bindkey -lL main) == 'bindkey -A emacs main' ]]; then
+    if [[ $(builtin bindkey -M emacs '\e[1;3D') == *' undefined-key' ]]; then
+        builtin bindkey -M emacs '\e[1;3D' backward-word
+    fi
+    if [[ $(builtin bindkey -M emacs '\e[1;3C') == *' undefined-key' ]]; then
+        builtin bindkey -M emacs '\e[1;3C' forward-word
+    fi
+fi
+
 # BSD ls accepts CLICOLOR without -G. Supply missing defaults after the user's
 # rc file, preserving explicit values (including empty ones) and ls wrappers.
 # Do not impose BSD flags on a GNU ls selected through the user's PATH.

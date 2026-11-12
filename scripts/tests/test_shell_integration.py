@@ -150,6 +150,18 @@ class ShellIntegrationTests(unittest.TestCase):
     def test_zsh_command_status_and_utf8_cwd(self) -> None:
         self.check_protocol("zsh")
 
+    def test_zsh_alt_arrows_move_between_words(self) -> None:
+        session = self.start("zsh", "bindkey -e\n")
+        os.write(session.master, b"print -r -- alpha beta gamma\x1b[1;3D\x1b[1;3DX\x1b[1;3CY\n")
+        output = session.wait(b"\x1b]133;A\x07")
+        self.assertIn(b"\x1b]133;C\x07alpha Xbeta Ygamma\r\n", output)
+
+    def test_zsh_alt_arrow_keeps_user_binding(self) -> None:
+        session = self.start("zsh", "bindkey -e\nbindkey '\\e[1;3D' backward-char\n")
+        os.write(session.master, b"print -r -- alpha beta\x1b[1;3DX\n")
+        output = session.wait(b"\x1b]133;A\x07")
+        self.assertIn(b"\x1b]133;C\x07alpha betXa\r\n", output)
+
     def test_zsh_loads_user_rcs_without_host_global_rcs(self) -> None:
         session = self.start("zsh")
         session.command('print -r -- "RCS=$options[rcs] GLOBAL_RCS=$options[globalrcs]"',
