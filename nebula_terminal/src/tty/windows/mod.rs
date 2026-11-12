@@ -1221,7 +1221,7 @@ mod test {
     use crate::tty::windows::{
         NEBULA_BASH_RC, NEBULA_PROMPT_PS1, NebulaRuntimeSettings, NebulaShellExecutor, cmdline,
         explicit_bash_integration_args, nebula_default_shell, nebula_find_bash,
-        powershell_integration_args, push_escaped_arg,
+        powershell_integration_args, push_escaped_arg, resolve_launch_shell,
     };
     use crate::tty::{Options, Shell};
 
