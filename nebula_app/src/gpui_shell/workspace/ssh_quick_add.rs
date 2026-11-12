@@ -128,21 +128,51 @@ pub(super) enum QuickAddError {
     KeysNeedAdvancedEditor,
 }
 
+/// 保存事务里的凭据操作。事务要读事务前的密码（回滚起点）、写新密码、
+/// 提交失败时恢复旧值或删掉本次写入；真实实现直连系统凭据库，测试注入
+/// 内存库，顺带保证测试永远不触碰用户钥匙串。
+enum CredentialOp<'a> {
+    /// 读该目的地当前已存的密码，作为提交失败时的回滚起点。
+    Prior(&'a str),
+    /// 写入表单里的密码。
+    Store(&'a str, &'a [u8]),
+    /// 提交失败后的回滚：`Prior` 读到过旧值时恢复它。
+    Restore(&'a str, &'a [u8]),
+    /// 提交失败后的回滚：`Prior` 是 `None` 时删掉本次写入。
+    Forget(&'a str),
+}
+
 /// 落盘一次快捷添加。独立函数让测试能指向临时文件，避免触碰真实主机库。
 fn persist_quick_add(
     state: &SshQuickAddState,
     path: &std::path::Path,
     cx: &gpui::App,
 ) -> Result<String, QuickAddError> {
-    persist_quick_add_with(state, path, crate::ssh_credentials::store_password, cx)
+    persist_quick_add_with(state, path, system_credentials, cx)
 }
 
-/// 凭据写入由调用方注入：真实路径直连系统凭据库，测试注入假存储来验证
-/// 落盘顺序，顺带保证测试永远不触碰用户钥匙串。
+fn system_credentials(op: CredentialOp<'_>) -> std::io::Result<Option<Vec<u8>>> {
+    match op {
+        CredentialOp::Prior(destination) => {
+            crate::ssh_credentials::load_stored_password(destination)
+        },
+        CredentialOp::Store(destination, secret) | CredentialOp::Restore(destination, secret) => {
+            crate::ssh_credentials::store_password(destination, secret).map(|()| None)
+        },
+        CredentialOp::Forget(destination) => {
+            crate::ssh_credentials::forget_password(destination).map(|()| None)
+        },
+    }
+}
+
+/// 一笔保存事务：重复检查、凭据写入和主机库提交全程持有同一份 OS 句柄
+/// 租约，其它窗口的保存插不进来；提交失败时把凭据回滚到事务前——有旧值
+/// 恢复旧值，没有就删掉本次写入——两个存储都不留「库是别人的、密码是
+/// 我的」这类半笔状态。
 fn persist_quick_add_with(
     state: &SshQuickAddState,
     path: &std::path::Path,
-    mut store_password: impl FnMut(&str, &[u8]) -> std::io::Result<()>,
+    mut credential: impl FnMut(CredentialOp<'_>) -> std::io::Result<Option<Vec<u8>>>,
     cx: &gpui::App,
 ) -> Result<String, QuickAddError> {
     let destination = state.draft_destination(cx)?;
@@ -157,23 +187,32 @@ fn persist_quick_add_with(
         let label = state.label.read(cx).value().trim().to_owned();
         (!label.is_empty()).then_some(label)
     };
+    let lease = crate::atomic_file::try_lifetime_lock(path)
+        .map_err(|error| QuickAddError::Io(error.to_string()))?
+        .ok_or_else(|| {
+            QuickAddError::Io("Host profiles are being saved by another window".to_owned())
+        })?;
     let mut profiles = crate::ssh_profiles::SshProfiles::load(path)
         .map_err(|error| QuickAddError::Io(error.to_string()))?;
     if profiles.contains_destination(&destination) {
         // 目的地已有保存的 profile：私钥、跳板、图标只存在于完整编辑器里，
         // 这份子集表单没有资格整体替换它。原样复用交给连接链路——返回
         // destination 后 `add_ssh_terminal` 会按已存 profile 建会话；凭据
-        // 同样不碰，改密码或密钥请走「更多设置」。
+        // 同样不碰，改密码或密钥请走「更多设置」。检查发生在租约内的最新
+        // 快照上，别的窗口刚保存完的同目标不会漏判。
         return Ok(destination);
     }
-    // 密码先于主机库落盘：凭据写失败时表单报错，主机库文件必须还是原样，
-    // 不能留下「报了错却已经改了文件」的半写状态。
-    if auth == crate::ssh_profiles::SshAuthMode::Password
-        && !password.is_empty()
-        && let Err(error) = store_password(&destination, password.as_bytes())
-    {
-        return Err(QuickAddError::Io(error.to_string()));
-    }
+    let wants_password = auth == crate::ssh_profiles::SshAuthMode::Password && !password.is_empty();
+    let prior = if wants_password {
+        let prior = credential(CredentialOp::Prior(&destination))
+            .map_err(|error| QuickAddError::Io(error.to_string()))?;
+        // 密码仍先于主机库提交：凭据写失败时表单报错，主机库文件还没动。
+        credential(CredentialOp::Store(&destination, password.as_bytes()))
+            .map_err(|error| QuickAddError::Io(error.to_string()))?;
+        prior
+    } else {
+        None
+    };
     profiles.upsert(crate::ssh_profiles::SshProfileAuth {
         destination: destination.clone(),
         auth,
@@ -182,7 +221,20 @@ fn persist_quick_add_with(
         icon: None,
         connection: crate::ssh_profiles::SshConnectionOptions::default(),
     });
-    profiles.save(path).map_err(|error| QuickAddError::Io(error.to_string()))?;
+    if let Err(error) = profiles.save_leased(path, &lease) {
+        // 提交失败：文件只会被绕过保存 API 的写入方改掉（或磁盘出错）。
+        // `save_leased` 在租约内比对过快照，按事务语义回滚凭据。
+        let restore = match prior {
+            Some(prior) => credential(CredentialOp::Restore(&destination, &prior)),
+            None => credential(CredentialOp::Forget(&destination)),
+        };
+        return Err(match restore {
+            Ok(_) => QuickAddError::Io(error.to_string()),
+            Err(restore_error) => QuickAddError::Io(format!(
+                "{error}; rolling the password back failed too: {restore_error}"
+            )),
+        });
+    }
     Ok(destination)
 }
 
@@ -526,208 +578,4 @@ impl NebulaWorkspace {
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
-mod tests {
-    use super::*;
-
-    /// `add_window_view` 需要一个 Render 根视图；浮层状态在闭包里创建，
-    /// 这里只当窗口宿主。
-    struct TestHost;
-    impl gpui::Render for TestHost {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _cx: &mut gpui::Context<Self>,
-        ) -> impl IntoElement {
-            gpui::div()
-        }
-    }
-
-    /// 临时主机库目录：唯一命名避免测试并行互踩，用完整目录删除。
-    fn temp_profile_dir(tag: &str) -> std::path::PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "pebrel-quick-add-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
-    }
-
-    #[gpui::test]
-    fn quick_add_collision_reuses_the_saved_profile_untouched(cx: &mut gpui::TestAppContext) {
-        let (mut state, cx) = init_and_build("other.example", cx);
-        let directory = temp_profile_dir("collision");
-        let path = directory.join("ssh_profiles.json");
-        // 库里先有一台带完整配置的主机：私钥、跳板、名称、图标都是浮层
-        // 这份子集表单覆盖不了的权威数据。
-        let mut profiles = crate::ssh_profiles::SshProfiles::default();
-        profiles.upsert(crate::ssh_profiles::SshProfileAuth {
-            destination: "deploy@box.example".to_owned(),
-            auth: crate::ssh_profiles::SshAuthMode::Password,
-            private_keys: vec![std::path::PathBuf::from("~/.id_ed25519")],
-            label: Some("Deploy box".to_owned()),
-            icon: Some("debian".to_owned()),
-            connection: {
-                let mut connection = crate::ssh_profiles::SshConnectionOptions::default();
-                connection.jump_mode = crate::ssh_profiles::SshHostJumpMode::Host;
-                connection.jump_host = "bastion.example".to_owned();
-                connection
-            },
-        });
-        profiles.save(&path).unwrap();
-        let before = std::fs::read(&path).unwrap();
-        // 表单地址改成已有主机的目的地，还填了密码：保存必须原样复用，
-        // 连凭据都不能替编辑器写。
-        cx.update(|window, cx| {
-            state.address.update(cx, |input, cx| {
-                input.set_value("deploy@box.example", window, cx)
-            });
-            state.auth = crate::ssh_profiles::SshAuthMode::Password;
-            state.password.update(cx, |input, cx| {
-                input.set_value("typed-for-other-host", window, cx)
-            });
-        });
-        let mut credential_writes = Vec::new();
-        cx.update(|_, cx| {
-            let destination = persist_quick_add_with(
-                &state,
-                &path,
-                |destination, secret| {
-                    credential_writes.push((destination.to_owned(), secret.to_vec()));
-                    Ok(())
-                },
-                cx,
-            )
-            .unwrap();
-            assert_eq!(destination, "deploy@box.example");
-        });
-        assert!(
-            credential_writes.is_empty(),
-            "collision must not touch credentials behind the editor"
-        );
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            before,
-            "collision must not rewrite the saved profile"
-        );
-        let profile = crate::ssh_profiles::SshProfiles::load(&path)
-            .unwrap()
-            .for_destination("deploy@box.example");
-        assert_eq!(profile.private_keys, vec![std::path::PathBuf::from("~/.id_ed25519")]);
-        assert_eq!(profile.label.as_deref(), Some("Deploy box"));
-        assert_eq!(profile.icon.as_deref(), Some("debian"));
-        assert_eq!(profile.connection.jump_host, "bastion.example");
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-
-    #[gpui::test]
-    fn quick_add_password_failure_leaves_the_host_library_untouched(cx: &mut gpui::TestAppContext) {
-        let (mut state, cx) = init_and_build("core.example.cn", cx);
-        let directory = temp_profile_dir("password-failure");
-        let path = directory.join("ssh_profiles.json");
-        cx.update(|window, cx| {
-            state.auth = crate::ssh_profiles::SshAuthMode::Password;
-            state.password.update(cx, |input, cx| input.set_value("secret", window, cx));
-        });
-        cx.update(|_, cx| {
-            let error = persist_quick_add_with(
-                &state,
-                &path,
-                |_, _| Err(std::io::Error::other("keychain unavailable")),
-                cx,
-            )
-            .unwrap_err();
-            assert!(matches!(error, QuickAddError::Io(_)));
-        });
-        // 密码先于主机库落盘：凭据失败时表单报错，文件必须还没被写出来。
-        assert!(!path.exists(), "credential failure must not write the profile file");
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-
-    fn init_and_build<'a>(
-        destination: &str,
-        cx: &'a mut gpui::TestAppContext,
-    ) -> (SshQuickAddState, &'a mut gpui::VisualTestContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            cx.set_global(crate::gpui_shell::config::Settings::load(
-                nebula_settings::ThemeName::Nord,
-            ));
-        });
-        let mut state = None;
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            state = Some(SshQuickAddState::new(destination, window, cx));
-            TestHost
-        });
-        (state.expect("state built"), cx)
-    }
-
-    #[test]
-    fn quick_add_prefills_user_and_port_from_the_typed_address() {
-        // 不依赖窗口：预填拆分只走 `split_destination_*`。
-        let (address_with_user, port) =
-            crate::display::split_destination_port("deploy@box.example:2222");
-        let (username, address) = crate::display::split_destination_user(&address_with_user);
-        assert_eq!(
-            (username.as_str(), address.as_str(), port.as_str()),
-            ("deploy", "box.example", "2222")
-        );
-    }
-
-    #[gpui::test]
-    fn quick_add_draft_composes_and_validates(cx: &mut gpui::TestAppContext) {
-        let (state, cx) = init_and_build("core.example.cn", cx);
-        cx.update(|window, cx| {
-            assert_eq!(state.draft_destination(cx).unwrap(), "root@core.example.cn");
-            // 端口非法直接拒绝，不进入落盘。
-            state.port.update(cx, |input, cx| input.set_value("70000", window, cx));
-            assert_eq!(state.draft_destination(cx).unwrap_err(), QuickAddError::InvalidPort);
-            state.port.update(cx, |input, cx| input.set_value("2222", window, cx));
-            assert_eq!(state.draft_destination(cx).unwrap(), "root@core.example.cn:2222");
-            // 带非法字符交给权威校验拒绝；空地址单独报"缺地址"。
-            state.address.update(cx, |input, cx| input.set_value("bad host", window, cx));
-            assert!(matches!(state.draft_destination(cx), Err(QuickAddError::Rejected(_))));
-            state.address.update(cx, |input, cx| input.set_value("", window, cx));
-            assert_eq!(state.draft_destination(cx).unwrap_err(), QuickAddError::MissingAddress);
-        });
-    }
-
-    #[gpui::test]
-    fn quick_add_persists_a_nameless_profile_before_any_connection(cx: &mut gpui::TestAppContext) {
-        let (mut state, cx) = init_and_build("core.example.cn", cx);
-        let directory = std::env::temp_dir().join(format!(
-            "pebrel-quick-add-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("ssh_profiles.json");
-        cx.update(|_, cx| {
-            let destination = persist_quick_add(&state, &path, cx).unwrap();
-            assert_eq!(destination, "root@core.example.cn");
-        });
-        let profiles = crate::ssh_profiles::SshProfiles::load(&path).unwrap();
-        let profile = profiles.for_destination("root@core.example.cn");
-        // 没填名称：保持空，列表回落显示地址，而不是自动起「主机 N」。
-        assert_eq!(profile.label, None);
-        assert_eq!(profile.auth, crate::ssh_profiles::SshAuthMode::Auto);
-        // 公钥模式：浮层收集不了私钥文件，落盘必须被守卫拦下，
-        // 且不能把空私钥的坏 profile 写进文件。
-        cx.update(|_, cx| {
-            state.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
-            assert_eq!(
-                persist_quick_add(&state, &path, cx).unwrap_err(),
-                QuickAddError::KeysNeedAdvancedEditor
-            );
-        });
-        assert_eq!(
-            crate::ssh_profiles::SshProfiles::load(&path)
-                .unwrap()
-                .for_destination("root@core.example.cn")
-                .auth,
-            crate::ssh_profiles::SshAuthMode::Auto,
-            "rejected save must not overwrite the stored profile"
-        );
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-}
+mod tests;

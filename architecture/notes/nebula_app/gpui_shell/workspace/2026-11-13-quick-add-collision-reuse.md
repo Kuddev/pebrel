@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (#869 review, 2026-11-12).
+Accepted (#869 review, 2026-11-12). Amended 2026-11-13: the credential
+ordering bullet was superseded by the leased save transaction below (#869
+review round 2).
 
 ## Context
 
@@ -25,6 +27,11 @@ reported by the form after the profile file had already changed.
   `SshProfiles::contains_destination`).
 - Review reproduction on PR #869 (2026-11-12): a populated
   `deploy@box.example` profile replaced through a quick-add save.
+- Review reproduction on PR #869 (2026-11-13): with the plain
+  "credential first" ordering, two windows quick-adding the same destination
+  interleave as A loads the library, B saves profile and password, A writes
+  its password, then A's `profiles.save()` fails on the changed file — the
+  library keeps B's profile while A has already overwritten B's credential.
 
 ## Decision
 
@@ -33,10 +40,15 @@ reported by the form after the profile file had already changed.
   nothing and writes no credentials; it returns the destination and
   `add_ssh_terminal` connects through the saved profile. Editing keys, jump,
   label or icon remains the Settings editor's job via "More settings".
-- Credential storage runs before the profile file is written: a
-  credential-storage failure leaves the host library untouched and the overlay
-  open with the error. The write set is one profile plus one credential, so
-  all-or-nothing ordering is achievable here.
+- Duplicate check, credential write and library commit run as one save
+  transaction under a single `atomic_file` lifetime lease
+  (`SshProfiles::save_leased`): another window's save cannot slip between
+  the check and the commit, and the lease-busy error tells it to retry.
+  Within the transaction the credential write still precedes the commit, so
+  a credential-storage failure leaves the host library untouched. When the
+  commit itself fails (a lease-bypassing writer changed the file, or the
+  disk errored), the credential is rolled back to its pre-transaction state
+  — the prior password is restored, or the just-written one is deleted.
 
 ## Rejected alternatives
 
@@ -49,14 +61,23 @@ reported by the form after the profile file had already changed.
 - Auto-route the collision into the Settings editor: the overlay's purpose is
   connecting; silently switching pages breaks the one-flow intent recorded in
   `2026-11-03-launcher-add-and-connect-ssh.md`.
+- Commit first with a file rollback on credential failure: restoring the
+  pre-save bytes also works while the lease is held, but the interleaving
+  and commit-failure regressions the review asked for then have no seam to
+  pin them (everything injectable sits after the commit), and the write set
+  hits the profile file twice per save.
 
 ## Consequences
 
 - Typing an existing host's address into quick-add connects with the saved
   configuration and changes nothing on disk or in the credential store.
-- A stored password can exist for a destination whose profile save later
-  fails; it is keyed by destination and overwritten or reused by the next
-  successful save for that host.
+- The window-vs-window interleaving cannot produce a mismatched pair
+  anymore: a concurrent quick-add either reuses the freshly saved profile
+  (collision path) or is rejected as lease-busy and retried on a fresh
+  snapshot.
+- A failed library commit can still leave a lease-bypassing writer's
+  profile in place, but never paired with this transaction's password: the
+  credential is restored or removed before the error is reported.
 
 ## Validation
 
@@ -65,9 +86,15 @@ reported by the form after the profile file had already changed.
   byte-for-byte and the injected credential recorder sees no call.
 - `quick_add_password_failure_leaves_the_host_library_untouched`: a failing
   credential store is injected and the profile file is never created.
-- `persist_quick_add_with` takes the credential write as a parameter,
-  mirroring the closure-injected tests of `platform::credentials`, so tests
-  never touch the user keychain.
+- `quick_add_transaction_rejects_a_window_save_in_the_middle`: window B's
+  API save fired from inside the transaction is rejected with the lease-busy
+  error and A's profile and password are the only survivors.
+- `quick_add_commit_failure_rolls_the_password_back`: an out-of-band writer
+  makes the commit fail; with no prior password the typed one is deleted,
+  with a prior one it is restored.
+- `persist_quick_add_with` takes the credential operations as a parameter
+  (`CredentialOp`), mirroring the closure-injected tests of
+  `platform::credentials`, so tests never touch the user keychain.
 
 ## Supersedes
 
