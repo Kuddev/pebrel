@@ -401,7 +401,27 @@ impl TextGrid {
             .is_some_and(|cells| cells.contains(&Some(OBJECT)))
     }
 
+    fn row_leading_non_blank(&self, row: usize, end: usize) -> usize {
+        self.rows
+            .get(row)
+            .and_then(|cells| {
+                cells[..end.min(cells.len())]
+                    .iter()
+                    .position(|cell| cell.is_some_and(|character| character != ' '))
+            })
+            .unwrap_or(0)
+    }
+
     pub(super) fn spans(&self, start: GridPosition, end: GridPosition) -> Vec<RowSpan> {
+        self.spans_for(start, end, true)
+    }
+
+    pub(super) fn spans_for(
+        &self,
+        start: GridPosition,
+        end: GridPosition,
+        display: bool,
+    ) -> Vec<RowSpan> {
         if start.row == end.row {
             return vec![RowSpan { row: start.row as i32, start: start.column, end: end.column }];
         }
@@ -409,9 +429,11 @@ impl TextGrid {
         let mut spans = Vec::with_capacity(end.row - start.row + 1);
         spans.push(RowSpan { row: start.row as i32, start: start.column, end: self.columns });
         for row in start.row + 1..end.row {
-            spans.push(RowSpan { row: row as i32, start: 0, end: self.columns });
+            let row_start = if display { 0 } else { self.row_leading_non_blank(row, self.columns) };
+            spans.push(RowSpan { row: row as i32, start: row_start, end: self.columns });
         }
-        spans.push(RowSpan { row: end.row as i32, start: 0, end: end.column });
+        let end_start = if display { 0 } else { self.row_leading_non_blank(end.row, end.column) };
+        spans.push(RowSpan { row: end.row as i32, start: end_start, end: end.column });
         spans
     }
 }
@@ -540,8 +562,13 @@ pub(super) fn formula_uses_reasoning_style(overlay: &FormulaOverlay) -> bool {
 pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) {
     // Record what the neighbouring rows hold; `prepare_overlays` decides how
     // much of it is actually in the way once it knows the rendered width.
-    let (Some(first), Some(last)) = (overlay.spans.first(), overlay.spans.last()) else {
-        return;
+    let (first, last) = if let Some(span) = overlay.inline_span() {
+        (span, span)
+    } else {
+        let (Some(&first), Some(&last)) = (overlay.spans.first(), overlay.spans.last()) else {
+            return;
+        };
+        (first, last)
     };
     overlay.neighbours_above = neighbour_rows(grid, first.row, -1, overlay.display);
     overlay.neighbours_below = neighbour_rows(grid, last.row, 1, overlay.display);
@@ -572,13 +599,25 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
 pub(super) fn mark_formula_neighbours(overlays: &mut [FormulaOverlay]) {
     let spans: Vec<Vec<(i32, usize, usize)>> = overlays
         .iter()
-        .map(|overlay| overlay.spans.iter().map(|span| (span.row, span.start, span.end)).collect())
+        .map(|overlay| {
+            if let Some(span) = overlay.inline_span() {
+                vec![(span.row, span.start, span.end)]
+            } else {
+                overlay.spans.iter().map(|span| (span.row, span.start, span.end)).collect()
+            }
+        })
         .collect();
     for (index, overlay) in overlays.iter_mut().enumerate() {
-        let Some(first) = overlay.spans.first() else { continue };
-        let Some(last) = overlay.spans.last() else { continue };
-        let source_start = overlay.spans.iter().map(|span| span.start).min().unwrap_or(first.start);
-        let source_end = overlay.spans.iter().map(|span| span.end).max().unwrap_or(last.end);
+        let (first, last, source_start, source_end) = if let Some(span) = overlay.inline_span() {
+            (span, span, span.start, span.end)
+        } else {
+            let Some(&first) = overlay.spans.first() else { continue };
+            let Some(&last) = overlay.spans.last() else { continue };
+            let source_start =
+                overlay.spans.iter().map(|span| span.start).min().unwrap_or(first.start);
+            let source_end = overlay.spans.iter().map(|span| span.end).max().unwrap_or(last.end);
+            (first, last, source_start, source_end)
+        };
 
         for distance in 0..MAX_ABSORBED_BLANK_ROWS {
             let distance = (distance + 1) as i32;
@@ -1460,7 +1499,7 @@ pub(super) fn make_overlay(
         source: Arc::from(source),
         display,
         formula_id,
-        spans: grid.spans(open, after),
+        spans: grid.spans_for(open, after, display),
         foreground: Rgb::default(),
         fallback: Vec::new(),
         neighbours_above: [NEIGHBOUR_UNKNOWN; MAX_ABSORBED_BLANK_ROWS],
