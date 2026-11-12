@@ -4,6 +4,42 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.6 - 2026-11-13
+
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.6-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.6-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.6-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.6-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.6-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.6-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.6-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.6-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.6-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.6-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.6-windows-x64.zip
+```
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Added
+
+- Added Sixel inline images to desktop terminal panes. Programs that emit Sixel can display images in place. Addresses [#214](https://github.com/Kuddev/nebula/issues/214).
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 桌面终端新增 Sixel 行内图片支持。程序输出 Sixel 图像时，图片会直接显示在终端里。对应 [#214](https://github.com/Kuddev/nebula/issues/214)。
+
+### Contributors
+
+- [@JoyElliot](https://github.com/JoyElliot) ([#827](https://github.com/Kuddev/pebrel/pull/827))
+
 ## 2.5.5 - 2026-11-13
 
 ```text
