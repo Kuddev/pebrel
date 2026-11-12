@@ -10,7 +10,7 @@ use crate::Term;
 use crate::event::{Event, EventListener, WindowSize};
 use crate::index::{Column, Line};
 use crate::term::{Config, TermMode, test::TermSize};
-use crate::tty::{self, EventedReadWrite};
+use crate::tty::{self, EventedPty, EventedReadWrite};
 use vte::ansi;
 
 #[derive(Clone, Default)]
@@ -237,16 +237,14 @@ fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales() {
             )
             .expect("create actual Git Bash PTY");
             let replies = Replies::default();
-            // Match the application: OpenConsole's first DA1 was pre-answered
-            // by the PTY bootstrap, so replying again would type into Bash.
-            let config = Config {
-                suppress_bringup_da1: tty::conpty_sideload_enabled(),
-                conpty_resize: true,
-                ..Default::default()
-            };
+            let config = Config { conpty_resize: true, ..Default::default() };
+            let mut term = Term::new(config, &TermSize::new(40, 24), replies.clone());
+            if pty.bringup_da1_primed() {
+                term.suppress_primed_da1();
+            }
             let mut session = BashSession {
                 pty,
-                term: Term::new(config, &TermSize::new(40, 24), replies.clone()),
+                term,
                 parser: ansi::Processor::new(),
                 replies,
                 locale,

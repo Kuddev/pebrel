@@ -136,15 +136,6 @@ pub struct UiConfig {
 impl UiConfig {
     /// Derive [`TermConfig`] from the config.
     pub fn term_options(&self) -> TermConfig {
-        // Side-loaded ConPTY sessions get their bring-up DA1 query answered
-        // by a pre-primed response (see nebula_terminal's conpty); the Term
-        // must swallow its own duplicate answer or the host forwards it to
-        // the shell as typed input.
-        #[cfg(windows)]
-        let suppress_bringup_da1 = nebula_terminal::tty::windows::conpty_sideload_enabled();
-        #[cfg(not(windows))]
-        let suppress_bringup_da1 = false;
-
         // Windows child sessions are presented through ConPTY. It silently
         // re-anchors its primary buffer on resize and keeps repainting with
         // absolute CUP coordinates, so the renderer grid must use the matching
@@ -161,7 +152,6 @@ impl UiConfig {
             default_cursor_style: self.cursor.style(),
             osc52: self.terminal.osc52.0,
             kitty_keyboard: true,
-            suppress_bringup_da1,
             conpty_resize,
         }
     }
