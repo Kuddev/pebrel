@@ -42,11 +42,10 @@ pub use pane_connection::PaneConnection;
 pub use resume::{ResumeTarget, TmuxActivity};
 use route::{ResolvedRoute, RouteTransport};
 
-/// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
+/// Remote terminals do not use the local ConPTY host's row anchoring.
 pub(crate) fn terminal_config(
     mut config: nebula_terminal::term::Config,
 ) -> nebula_terminal::term::Config {
-    config.suppress_bringup_da1 = false;
     config.conpty_resize = false;
     config
 }

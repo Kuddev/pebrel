@@ -11,7 +11,7 @@ impl EventListener for Listener {
         self.0.lock().unwrap().push(event);
     }
 }
-struct Pty(File);
+struct Pty(File, bool);
 impl tty::EventedReadWrite for Pty {
     type Reader = File;
     type Writer = File;
@@ -35,6 +35,10 @@ impl tty::EventedPty for Pty {
     fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
         None
     }
+
+    fn bringup_da1_primed(&self) -> bool {
+        self.1
+    }
 }
 impl OnResize for Pty {
     fn on_resize(&mut self, _: WindowSize) {}
@@ -43,6 +47,9 @@ fn image() -> &'static str {
     "\x1b]1337;File=inline=1;width=1;height=1:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==\x07"
 }
 fn setup() -> (EventLoop<Pty, Listener>, State, Listener, File) {
+    setup_with_primed_da1(false)
+}
+fn setup_with_primed_da1(primed: bool) -> (EventLoop<Pty, Listener>, State, Listener, File) {
     let pair = rustix_openpty::openpty(None, None).unwrap();
     let mut termios = rustix_openpty::rustix::termios::tcgetattr(&pair.user).unwrap();
     termios.make_raw();
@@ -64,9 +71,14 @@ fn setup() -> (EventLoop<Pty, Listener>, State, Listener, File) {
         &TermSize::new(20, 8),
         listener.clone(),
     )));
-    let event_loop =
-        EventLoop::new(terminal, listener.clone(), Pty(File::from(pair.controller)), false, false)
-            .unwrap();
+    let event_loop = EventLoop::new(
+        terminal,
+        listener.clone(),
+        Pty(File::from(pair.controller), primed),
+        false,
+        false,
+    )
+    .unwrap();
     let mut state = State::default();
     state.stream.resize(WindowSize { num_cols: 20, num_lines: 8, cell_width: 10, cell_height: 20 });
     (event_loop, state, listener, File::from(pair.user))
@@ -101,6 +113,27 @@ fn observe(prefix: &str, images: usize, closed: bool) -> usize {
     assert_eq!(wire, bytes.len());
     assert_eq!(placements, if closed { images } else { 0 });
     wakes
+}
+#[test]
+fn only_a_preanswered_host_skips_one_primary_device_attributes_reply() {
+    for (primed, expected_replies) in [(true, 1), (false, 2)] {
+        let (mut loop_, mut state, listener, mut slave) = setup_with_primed_da1(primed);
+        read(&mut loop_, &mut state, &mut slave, b"\x1b[c");
+        assert_eq!(
+            listener.0.lock().unwrap().iter().filter(|e| matches!(e, Event::PtyWrite(_))).count(),
+            expected_replies - 1,
+        );
+        read(&mut loop_, &mut state, &mut slave, b"\x1b[c");
+        let events = listener.0.lock().unwrap();
+        let replies: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::PtyWrite(reply) => Some(reply.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(replies, vec!["\x1b[?6c"; expected_replies]);
+    }
 }
 #[test]
 fn committed_prefix_has_actual_wakeup_before_open_image_batch() {

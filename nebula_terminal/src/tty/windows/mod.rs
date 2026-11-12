@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::io::{self, Result};
 use std::iter::once;
@@ -150,6 +151,10 @@ impl EventedPty for Pty {
     fn child_pid(&self) -> Option<u32> {
         self.child_watcher.pid().map(std::num::NonZeroU32::get)
     }
+
+    fn bringup_da1_primed(&self) -> bool {
+        self.backend.bringup_da1_primed()
+    }
 }
 
 impl OnResize for Pty {
@@ -248,16 +253,6 @@ fn nebula_runtime_settings() -> NebulaRuntimeSettings {
     };
 
     NebulaRuntimeSettings { shell }
-}
-
-/// Whether the side-loaded OpenConsole ConPTY path is enabled
-/// (`openconsole=off` in nebula_settings.txt opts out; default on). Shared
-/// by `ConptyApi::new` and the app layer, which uses it to suppress the
-/// Term's duplicate answer to the host's pre-primed bring-up DA1 query.
-pub fn conpty_sideload_enabled() -> bool {
-    nebula_settings_value("openconsole")
-        .map(|v| !matches!(v.to_ascii_lowercase().as_str(), "0" | "off" | "false" | "no"))
-        .unwrap_or(true)
 }
 
 fn nebula_existing_file(path: PathBuf) -> Option<String> {
@@ -1189,18 +1184,20 @@ fn nebula_default_shell(settings: NebulaRuntimeSettings) -> Shell {
     }
 }
 
-fn cmdline(config: &Options) -> String {
-    let using_default_shell = config.shell.is_none();
-    let default_shell = using_default_shell.then(resolved_default_shell);
-    let refreshed = config.shell.as_ref().and_then(powershell_launch::refresh);
-    let shell = refreshed.as_ref().or(config.shell.as_ref()).or(default_shell.as_ref()).unwrap();
+fn resolve_launch_shell(config: &Options) -> Cow<'_, Shell> {
+    match config.shell.as_ref() {
+        Some(shell) => powershell_launch::refresh(shell).map_or(Cow::Borrowed(shell), Cow::Owned),
+        None => Cow::Owned(resolved_default_shell()),
+    }
+}
 
+fn cmdline(config: &Options, shell: &Shell) -> String {
     let mut cmd = String::new();
     push_escaped_arg(&mut cmd, &shell.program);
 
     for arg in &shell.args {
         cmd.push(' ');
-        if config.escape_args || using_default_shell {
+        if config.escape_args || config.shell.is_none() {
             push_escaped_arg(&mut cmd, arg);
         } else {
             cmd.push_str(arg)
@@ -1980,9 +1977,9 @@ restored=$?
             env_is_complete: false,
             escape_args: false,
         };
-        assert_eq!(cmdline(&options), "echo hello world");
+        assert_eq!(cmdline(&options, &resolve_launch_shell(&options)), "echo hello world");
 
         options.escape_args = true;
-        assert_eq!(cmdline(&options), "echo \"hello world\"");
+        assert_eq!(cmdline(&options, &resolve_launch_shell(&options)), "echo \"hello world\"");
     }
 }

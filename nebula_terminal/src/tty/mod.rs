@@ -147,6 +147,11 @@ pub trait EventedPty: EventedReadWrite {
     fn child_pid(&self) -> Option<u32> {
         None
     }
+
+    /// Whether this host already received a response to its startup DA1 query.
+    fn bringup_da1_primed(&self) -> bool {
+        false
+    }
 }
 
 /// Setup environment variables.

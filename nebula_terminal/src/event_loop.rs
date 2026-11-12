@@ -471,6 +471,9 @@ where
     ) -> io::Result<EventLoop<T, U>> {
         let (tx, rx) = mpsc::channel();
         let poll = Poller::new()?.into();
+        if pty.bringup_da1_primed() {
+            terminal.lock().suppress_primed_da1();
+        }
         Ok(EventLoop {
             poll,
             pty,

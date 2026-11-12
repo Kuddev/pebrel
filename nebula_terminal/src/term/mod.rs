@@ -288,11 +288,6 @@ pub struct Config {
     /// OSC52 support mode.
     pub osc52: Osc52,
 
-    /// Swallow the terminal's answer to the FIRST primary-DA query: set for
-    /// side-loaded ConPTY sessions whose bring-up handshake was pre-primed
-    /// (the host already got its answer before it spawned).
-    pub suppress_bringup_da1: bool,
-
     /// Use ConPTY's primary-screen row anchoring during resize.
     ///
     /// ConPTY keeps painting absolute cursor coordinates after silently
@@ -311,7 +306,6 @@ impl Default for Config {
             vi_mode_cursor_style: Default::default(),
             kitty_keyboard: Default::default(),
             osc52: Default::default(),
-            suppress_bringup_da1: false,
             conpty_resize: false,
         }
     }
@@ -409,7 +403,7 @@ impl<T> Term<T> {
             scroll_region,
             event_proxy,
             damage,
-            bringup_da1_pending: config.suppress_bringup_da1,
+            bringup_da1_pending: false,
             // 默认按暗底起步：Nebula 的默认主题是深色，宿主在首次
             // `set_color_scheme` 前不会有订阅方，值不会被读到。
             color_scheme_dark: true,
@@ -540,6 +534,10 @@ impl<T> Term<T> {
         }
         let value = if self.color_scheme_dark { 1 } else { 2 };
         self.event_proxy.send_event(Event::PtyWrite(format!("\x1b[?997;{value}n")));
+    }
+
+    pub(crate) fn suppress_primed_da1(&mut self) {
+        self.bringup_da1_pending = true;
     }
 
     /// Set new options for the [`Term`].
