@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -65,13 +66,6 @@ class Keyboard:
             if self.user.SendInput(1, ctypes.byref(event), ctypes.sizeof(event)) != 1:
                 raise ConformanceError(f"SendInput rejected scan code {scan:#x}")
             time.sleep(0.04)
-
-    def open_mcp(self):
-        for scan in (0x35, 0x32, 0x2E, 0x19):  # /mcp on the hosted US keyboard
-            self.press(scan)
-        time.sleep(0.3)
-        self.press(0x1C)  # Return
-
 
 def quote_pwsh(path):
     return "'" + str(path).replace("'", "''") + "'"
@@ -138,7 +132,10 @@ def run(args, root, report):
         return "for agents" in text and "Manage MCP servers" not in text and "enter to return" not in text
 
     def menu_open(text):
-        return "Manage MCP servers" in text and "escape-fixture" in text
+        return "Manage MCP servers" in text and any(
+            "escape-fixture" in line and re.search(r"\bconnected\b", line)
+            for line in text.splitlines()
+        )
 
     def trust_prompt(text):
         return "Quick safety check" in text and "Yes, I trust this folder" in text
@@ -176,8 +173,13 @@ def run(args, root, report):
         report["stage"] = "right_reattach"
         keyboard.press(0x4D, extended=True)
         observe("right", main_prompt)
-        report["stage"] = "native_mcp"
-        keyboard.open_mcp()
+        # The menu must be open before Escape can diagnose keyboard delivery.
+        # Enter and Escape still follow the Win32 keyboard path.
+        report["stage"] = "mcp_entry"
+        time.sleep(0.8)
+        ctx.prompt("/mcp", submit=False)
+        observe("mcp-input", lambda text: any(re.fullmatch(r"\s*❯\s*/mcp\s*", line) for line in text.splitlines()))
+        keyboard.press(0x1C)
         observe("mcp-open", menu_open)
 
         report["stage"] = "native_escape"
@@ -202,8 +204,11 @@ def run(args, root, report):
         report["status"] = "passed"
         return 0
     finally:
-        ctx.stop(force=True)
-        app.close()
+        for name, cleanup in (("processes", lambda: ctx.stop(force=True)), ("package", app.close)):
+            try:
+                cleanup()
+            except (ConformanceError, OSError, subprocess.SubprocessError) as error:
+                report.setdefault("cleanup_errors", []).append(f"{name}: {error}")
 
 
 def main():
@@ -217,16 +222,27 @@ def main():
     report = {"status": "blocked", "stage": "setup", "windows": platform.version(),
               "pebrel": "2.5.3", "input": "Win32 SendInput to the verified foreground window",
               "application_hooks": "disabled"}
+    temporary = Path(tempfile.mkdtemp(prefix="pebrel-655-")).resolve()
     try:
-        with tempfile.TemporaryDirectory(prefix="pebrel-655-") as temporary:
-            return run(args, Path(temporary).resolve(), report)
+        code = run(args, temporary, report)
     except (ConformanceError, OSError, subprocess.SubprocessError) as error:
         report["error"] = str(error)
-        return 1
+        code = 1
     finally:
+        for attempt in range(4):
+            try:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+                break
+            except OSError as error:
+                if attempt == 3:
+                    report.setdefault("cleanup_errors", []).append(f"workspace: {error}")
+                else:
+                    time.sleep(0.25)
         encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
         (args.evidence / "result.json").write_text(encoded, encoding="utf-8")
         print(encoded, end="", flush=True)
+    return int(bool(code or report.get("cleanup_errors")))
 
 
 if __name__ == "__main__":
