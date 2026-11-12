@@ -194,7 +194,14 @@ impl SettingsPane {
         );
         let status = (!off).then(|| {
             let failed = self.backup_ui.list_error.is_some();
-            let color = if failed { cx.theme().danger } else { cx.theme().muted_foreground };
+            let theme = cx.theme();
+            let color = if !failed {
+                theme.muted_foreground
+            } else if theme.is_dark() {
+                theme.danger.blend(theme.foreground.opacity(0.30))
+            } else {
+                theme.danger
+            };
             let label = l.text(if self.backup_ui.listing {
                 Message::CloudChecking
             } else if failed {
@@ -225,6 +232,8 @@ impl SettingsPane {
                                 .rounded_full()
                                 .px(px(9.0))
                                 .py(px(3.0))
+                                .border_1()
+                                .border_color(color.opacity(0.30))
                                 .bg(color.opacity(0.12))
                                 .text_color(color)
                                 .text_size(px(11.5))
