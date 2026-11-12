@@ -22,6 +22,11 @@ local thresholds. See [architecture](architecture.md) for module responsibilitie
   size, so an old allowance cannot be reused after the file has shrunk.
 - Remove allowances when a file is deleted or reaches the default limit. A
   reduction above that limit gives a tightening notice. No wildcard allowances.
+- A whole root may be renamed only with a `moved <old-root> <new-root>` record.
+  Against the base, every base source file under the old root must appear at the
+  same relative path under the new root, the old root must be gone, and
+  allowances keep their base value and base size under the new path. A record
+  whose old root is not in the base has no effect and gives a removal notice.
 
 The Python checker runs offline and scans untracked local source additions too.
 It fails on malformed budgets, missing roots, read errors and symlinked source

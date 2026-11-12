@@ -28,7 +28,16 @@ pub(crate) fn parse_formula(
     let style = if display { MathStyle::Display } else { MathStyle::Text };
     let arrows = normalize_ascii_math_arrows(source.as_ref());
     let normalized_source = substitute_unsupported_presentation(arrows.as_ref());
-    parse_normalized_formula(normalized_source.as_ref(), display, style, limits)
+    let source = normalized_source.as_ref();
+    let result = parse_normalized_formula(source, display, style, limits);
+    if !matches!(&result, Err(error) if error.kind == MathErrorKind::Parse) {
+        return result;
+    }
+    let Some(repaired) = repair_collapsed_matrix_rows(source) else {
+        return result;
+    };
+    validate(&repaired, limits)?;
+    parse_normalized_formula(&repaired, display, style, limits).or(result)
 }
 
 pub(crate) fn parse_formula_source(
@@ -132,6 +141,18 @@ fn parse_normalized_formula(
         }
         event_count += 1;
         let event = event.map_err(|_| MathError::new(MathErrorKind::Parse, 0))?;
+        // pulldown-latex 0.7.1 emits a static HTML entity for TeX control
+        // spaces. Literal \text arguments borrow the input, so retain those
+        // verbatim even when the user actually wrote \text{&nbsp;}.
+        let event = match event {
+            Event::Content(Content::Text(text))
+                if text == "&nbsp;"
+                    && !parser_source.as_bytes().as_ptr_range().contains(&text.as_ptr()) =>
+            {
+                Event::Content(Content::Text(" "))
+            },
+            event => event,
+        };
         builder.consume(event)?;
     }
     let (arena, root) = builder.finish()?;
@@ -305,6 +326,75 @@ fn brace_group(source: &str, at: usize) -> Option<std::ops::Range<usize>> {
         }
     }
     None
+}
+
+/// Markdown can collapse `\\1` or `\\y` into invalid TeX. Retry only at
+/// matrix row level, and ask the parser whether a one-letter control word is
+/// supported before treating it as a damaged row separator.
+fn repair_collapsed_matrix_rows(source: &str) -> Option<String> {
+    if !source.contains("matrix") {
+        return None;
+    }
+    let mut environments = Vec::new();
+    let mut group_depth = 0usize;
+    let mut copied = 0;
+    let mut repaired = String::new();
+    let mut offset = 0;
+    while offset < source.len() {
+        let start = offset;
+        let character = source[offset..].chars().next()?;
+        offset += character.len_utf8();
+        match character {
+            '%' => offset += source[offset..].find('\n').unwrap_or(source.len() - offset),
+            '{' => group_depth += 1,
+            '}' => group_depth = group_depth.checked_sub(1)?,
+            '\\' => {
+                let command_len = source[offset..]
+                    .bytes()
+                    .take_while(|byte| byte.is_ascii_alphabetic() || *byte == b'@')
+                    .count();
+                let command = &source[offset..offset + command_len];
+                offset += command_len;
+                let matrix_row = environments.last() == Some(&Some(group_depth));
+                let mut recover = false;
+                if command.is_empty() {
+                    let symbol = source[offset..].chars().next()?;
+                    recover = symbol.is_ascii_digit() && matrix_row;
+                    offset += symbol.len_utf8();
+                } else if command.len() == 1
+                    && command.as_bytes()[0].is_ascii_alphabetic()
+                    && matrix_row
+                {
+                    let storage = Storage::new();
+                    recover =
+                        Parser::new(&source[start..offset], &storage).any(|event| event.is_err());
+                } else if matches!(command, "begin" | "end") {
+                    let name = brace_group(source, offset)?;
+                    offset = name.end + 1;
+                    if command == "begin" {
+                        let matrix = matches!(
+                            &source[name],
+                            "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix"
+                        );
+                        environments.push(matrix.then_some(group_depth));
+                    } else {
+                        environments.pop()?;
+                    }
+                }
+                if recover {
+                    repaired.push_str(&source[copied..start]);
+                    repaired.push('\\');
+                    copied = start;
+                }
+            },
+            _ => {},
+        }
+    }
+    if repaired.is_empty() {
+        return None;
+    }
+    repaired.push_str(&source[copied..]);
+    Some(repaired)
 }
 
 /// Detect `\\` outside `\begin{...}` environments in one linear scan.
@@ -675,9 +765,9 @@ impl Builder {
             PendingKind::Scripts { ty, placement, style_override } => {
                 if matches!(ty, ScriptType::Superscript)
                     && matches!(placement, ScriptPlacement::AboveBelow)
-                    && let Some(accent) = self.single_character(children[1])
+                    && let Some((accent, stretchy)) = self.single_accent(children[1])
                 {
-                    MathNode::Accent { accent, body: children[0], style_override }
+                    MathNode::Accent { accent, stretchy, body: children[0], style_override }
                 } else {
                     let (subscript, superscript) = match ty {
                         ScriptType::Subscript => (Some(children[1]), None),
@@ -697,14 +787,17 @@ impl Builder {
         self.add_node(node)
     }
 
-    fn single_character(&self, node: NodeId) -> Option<char> {
+    fn single_accent(&self, node: NodeId) -> Option<(char, bool)> {
         match self.arena.node(node) {
-            MathNode::Glyph { character, .. } | MathNode::Operator { character, .. } => {
-                Some(*character)
+            MathNode::Glyph { character, stretchy, .. } => {
+                normalize_accent_char(*character).map(|accent| (accent, *stretchy))
+            },
+            MathNode::Operator { character, .. } => {
+                normalize_accent_char(*character).map(|accent| (accent, false))
             },
             MathNode::Row(range) => {
                 let [child] = self.arena.children(*range) else { return None };
-                self.single_character(*child)
+                self.single_accent(*child)
             },
             _ => None,
         }
@@ -1004,6 +1097,28 @@ fn is_limit_operator(name: &str) -> bool {
     )
 }
 
+fn normalize_accent_char(accent: char) -> Option<char> {
+    match accent {
+        '`' | '\u{0300}' => Some('\u{0300}'),
+        '\u{00b4}' | '\u{0301}' => Some('\u{0301}'),
+        '^' | '\u{02c6}' | '\u{0302}' => Some('\u{0302}'),
+        '~' | '\u{02dc}' | '\u{0303}' => Some('\u{0303}'),
+        '\u{00af}' | '\u{0304}' | '\u{203e}' => Some('\u{203e}'),
+        '\u{02d8}' | '\u{0306}' => Some('\u{0306}'),
+        '\u{02d9}' | '\u{0307}' => Some('\u{0307}'),
+        '\u{00a8}' | '\u{0308}' => Some('\u{0308}'),
+        '\u{02da}' | '\u{030a}' => Some('\u{030a}'),
+        '\u{02c7}' | '\u{030c}' => Some('\u{030c}'),
+        '\u{20d6}' | '\u{2190}' => Some('\u{20d6}'),
+        '\u{20d7}' | '\u{2192}' => Some('\u{20d7}'),
+        '\u{20e1}' | '\u{2194}' => Some('\u{20e1}'),
+        '\u{20d0}' | '\u{21bc}' => Some('\u{20d0}'),
+        '\u{20d1}' | '\u{21c0}' => Some('\u{20d1}'),
+        '\u{21d2}' | '\u{23dc}' | '\u{23de}' | '\u{23e0}' => Some(accent),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1159,8 +1274,23 @@ mod tests {
 
     #[test]
     fn accents_and_display_movable_limits_stay_distinct() {
-        let accent = parse(r"\hat{x}");
-        assert!(matches!(accent.arena.node(root_children(&accent)[0]), MathNode::Accent { .. }));
+        let hat = parse(r"\hat{x}");
+        assert!(matches!(
+            hat.arena.node(root_children(&hat)[0]),
+            MathNode::Accent { accent: '\u{0302}', stretchy: false, .. }
+        ));
+
+        let wide_tilde = parse(r"\widetilde{ab}");
+        assert!(matches!(
+            wide_tilde.arena.node(root_children(&wide_tilde)[0]),
+            MathNode::Accent { accent: '\u{0303}', stretchy: true, .. }
+        ));
+
+        let overset = parse(r"\overset{?}{=}");
+        assert!(matches!(
+            overset.arena.node(root_children(&overset)[0]),
+            MathNode::Scripts { placement: ScriptPlacement::AboveBelow, .. }
+        ));
 
         let display = parse_formula(r"\sum_{i=0}^{n}", true, DEFAULT_LIMITS).unwrap();
         let MathNode::Scripts { placement, .. } = display.arena.node(root_children(&display)[0])

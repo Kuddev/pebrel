@@ -428,6 +428,27 @@ if (-not $global:PebrelShellToken) {
         "pwsh:$PID`:$([Guid]::NewGuid().ToString('N'))"))
 }
 
+# A directory change can precede a long-running command on the same input line.
+# The title reports metadata without triggering the OSC 7 prompt fallback.
+& {
+    $locationHooks = $ExecutionContext.SessionState.InvokeCommand
+    if (-not $locationHooks.PSObject.Properties['LocationChangedAction']) { return }
+    if (-not $global:PebrelLocationReporter) {
+        $global:PebrelLocationReporter = [System.EventHandler[System.Management.Automation.LocationChangedEventArgs]] {
+            param($runspace, $change)
+            try {
+                if ($change.NewPath.Provider.Name -eq 'FileSystem') {
+                    [Console]::Write("$([char]27)]2;NEBULA|$($change.NewPath.ProviderPath)|$([char]7)")
+                }
+            } catch {}
+        }
+    }
+    $current = $locationHooks.LocationChangedAction
+    if (-not $current -or $current.GetInvocationList() -notcontains $global:PebrelLocationReporter) {
+        $locationHooks.LocationChangedAction = [Delegate]::Combine($current, $global:PebrelLocationReporter)
+    }
+}
+
 $global:NebulaPromptTemplate = {
     # Same principle as Oh My Posh: prompt rendering may execute external
     # commands, so preserve the previous command status. Errors inside the
@@ -637,12 +658,15 @@ function global:Nebula-List {
         "$meta$mode$e[0m  $muted$size$e[0m  $muted$date$e[0m  $e]8;;$uri$b$col$($i.Name)$e[0m$e]8;;$b"
     }
 }
-Remove-Item Alias:ls  -Force -ErrorAction SilentlyContinue
-Remove-Item Alias:dir -Force -ErrorAction SilentlyContinue
-Remove-Item Alias:ll  -Force -ErrorAction SilentlyContinue
-Set-Alias -Name ls  -Value Nebula-List -Scope Global -Option AllScope -Force
-Set-Alias -Name ll  -Value Nebula-List -Scope Global -Option AllScope -Force
-Set-Alias -Name dir -Value Nebula-List -Scope Global -Option AllScope -Force
+# builtin_ls=0 in the settings file keeps PowerShell's own ls/dir.
+if (Get-NebulaBoolSetting 'builtin_ls' $true) {
+    Remove-Item Alias:ls  -Force -ErrorAction SilentlyContinue
+    Remove-Item Alias:dir -Force -ErrorAction SilentlyContinue
+    Remove-Item Alias:ll  -Force -ErrorAction SilentlyContinue
+    Set-Alias -Name ls  -Value Nebula-List -Scope Global -Option AllScope -Force
+    Set-Alias -Name ll  -Value Nebula-List -Scope Global -Option AllScope -Force
+    Set-Alias -Name dir -Value Nebula-List -Scope Global -Option AllScope -Force
+}
 
 function global:Convert-NebulaBareEnvAssignment {
     param([string]$Line)
@@ -1273,6 +1297,15 @@ mod test {
     }
 
     #[test]
+    fn builtin_ls_aliases_can_be_opted_out() {
+        let gate = NEBULA_PROMPT_PS1
+            .find("if (Get-NebulaBoolSetting 'builtin_ls' $true) {")
+            .expect("builtin_ls gate");
+        let alias = NEBULA_PROMPT_PS1.find("Set-Alias -Name ls ").expect("ls alias");
+        assert!(gate < alias, "the ls/ll/dir aliases must sit behind the builtin_ls gate");
+    }
+
+    #[test]
     fn disabling_powerline_keeps_the_complete_osc_lifecycle() {
         let toggle = NEBULA_PROMPT_PS1
             .find("Get-NebulaBoolSetting 'powerline'")
@@ -1377,6 +1410,10 @@ mod test {
     /// 真跑一遍嵌入的 PowerShell 脚本。提示符归属的判据在 PowerShell 语义里，
     /// 字符串断言证明不了"用户提示符还看得见"，所以这里和 Bash 侧一样起进程。
     fn run_powershell_integration_case(prelude: &str, checks: &str) {
+        run_powershell_case("powershell", prelude, checks);
+    }
+
+    fn run_powershell_case(executable: &str, prelude: &str, checks: &str) {
         static PS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = PS_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let path =
@@ -1386,7 +1423,7 @@ mod test {
         let mut script = vec![0xEF, 0xBB, 0xBF];
         script.extend_from_slice(format!("{prelude}\n{NEBULA_PROMPT_PS1}\n{checks}\n").as_bytes());
         std::fs::write(&path, &script).expect("write the PowerShell integration script");
-        let output = Command::new("powershell")
+        let output = Command::new(executable)
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -1420,6 +1457,42 @@ $env:PEBREL_CONFIG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) 'pebrel-ps-
 $env:NEBULA_CONFIG_DIR = $env:PEBREL_CONFIG_DIR
 function global:Set-PSReadLineOption { }
 "#;
+
+    #[test]
+    fn powershell_reports_cwd_before_the_next_command_on_the_same_line() {
+        let prelude = format!(
+            "{PS_PRELUDE}{}",
+            r#"
+$global:LocationChanges = 0
+$ExecutionContext.SessionState.InvokeCommand.LocationChangedAction = {
+    $global:LocationChanges++
+}
+"#,
+        );
+        run_powershell_case(
+            "pwsh",
+            &prelude,
+            r#"
+$before = (Get-Location).Path
+$target = Join-Path ([IO.Path]::GetTempPath()) "pebrel cwd 测试 $([guid]::NewGuid())"
+$null = [IO.Directory]::CreateDirectory($target)
+$capture = [IO.StringWriter]::new()
+$out = [Console]::Out
+try {
+    [Console]::SetOut($capture)
+    Set-Location -LiteralPath $target; [Console]::Write('command started')
+    $expected = "$([char]27)]2;NEBULA|$((Get-Location).ProviderPath)|$([char]7)command started"
+    if ($capture.ToString() -cne $expected) { throw 'cwd not reported before command start' }
+    if ($global:LocationChanges -ne 1) { throw 'previous location handler did not run once' }
+} finally {
+    try {
+        Set-Location -LiteralPath $before
+        [IO.Directory]::Delete($target)
+    } finally { [Console]::SetOut($out) }
+}
+"#,
+        );
+    }
 
     #[test]
     fn powershell_prompt_uses_only_theme_ansi_slots() {

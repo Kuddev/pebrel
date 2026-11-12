@@ -100,8 +100,10 @@ fn confirmed_reply_and_unavailable_resident_stay_distinct() {
         Outcome::Confirmed
     ));
     server.join().unwrap();
+    // 不重连刚释放的端口：并行测试绑定端口 0 时可能拿到它，连接就会成功。
+    let unavailable = Endpoint { port: 0, token: endpoint.token };
     assert!(matches!(
-        exchange(&endpoint, "tab.new", json!({}), Duration::from_secs(1)),
+        exchange(&unavailable, "tab.new", json!({}), Duration::from_secs(1)),
         Outcome::Unavailable
     ));
 }
