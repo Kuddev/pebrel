@@ -4,6 +4,52 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.5 - 2026-11-13
+
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.5-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.5-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.5-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.5-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.5-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.5-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.5-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.5-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.5-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.5-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.5-windows-x64.zip
+```
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Fixed
+
+- Fixed zsh click positioning after pressing Left, Right, or Option+Left/Right. Addresses [#963](https://github.com/Kuddev/nebula/issues/963).
+- Fixed a crash when a Markdown or terminal formula contains an unsupported Unicode control symbol. The original formula text stays visible. Addresses [#911](https://github.com/Kuddev/nebula/issues/911).
+
+#### Improved
+
+- Improved how quickly agent activity updates on Linux and macOS by waking the listener as soon as a connection arrives.
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 修复
+
+- 修复 zsh 中按左右方向键或 Option+左右方向键后，鼠标点击无法定位光标的问题。对应 [#963](https://github.com/Kuddev/nebula/issues/963)。
+- 修复 Markdown 和终端公式遇到不支持的 Unicode 控制符号时的崩溃，保留公式原文。对应 [#911](https://github.com/Kuddev/nebula/issues/911)。
+
+#### 改进
+
+- 改进 Linux 和 macOS 的 Agent 状态更新速度，连接到达时立即唤醒监听线程。
+
+### Contributors
+
+- [@not-exist](https://github.com/not-exist) ([#915](https://github.com/Kuddev/pebrel/pull/915))
+
 ## 2.5.4 - 2026-11-13
 
 ```text
