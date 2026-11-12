@@ -47,22 +47,25 @@ established macOS ⌘K clear convention had no path to that behavior.
   already round-trips through `parse_action` / `action_storage_name`).
 - Semantics branch on the pane's foreground state after an instant app-side wipe
   of the viewport and scrollback (`ClearMode::All` + `Saved`):
-  - Shell at a prompt (OSC 133 `nebula_prompt_active`): write `\x0c` to that
-    pane's PTY so the shell moves the cursor home and repaints the prompt on the
-    fresh screen, keeping its line state in sync.
-  - Command running: the shell cannot act on `^L` (it would stay queued and
-    clear the screen a second time when the command exits, wiping the output
-    produced in between). Instead the view moves the terminal cursor home
-    app-side (`Handler::goto(0, 0)`); sequential output continues from the top
-    and the next prompt lands after the last output line.
+  - Shell at a prompt (OSC 133 `nebula_prompt_active`) with the native editor
+    channel advertised (`pebrel_editor_ready`): write the integration-owned
+    clear key — `\e[46~` bound to the readline/zle `clear-screen` function, or
+    the PSReadLine `Ctrl+Shift+F11` → `ClearScreen` chord — so the shell's own
+    line editor clears the glass and repaints prompt, buffer and caret, keeping
+    its line state in sync.
+  - Prompt without the advertised channel, or command running: the view moves
+    the terminal cursor home app-side (`Handler::goto(0, 0)`); sequential
+    output continues from the top and the next prompt lands after the last
+    output line. No keyboard byte is ever written at the prompt (see Rejected
+    alternatives).
   - Alternate screen (vim, less, other full-screen programs): the action does
     nothing — `^L` is a redraw there, not a clear.
   Clearing the grid alone leaves the cursor on its original row and the prompt
-  stranded; manual acceptance rejected that. The `^L` byte is a direct PTY write
-  on the focused pane, not a user-input event, so broadcast fan-out stays out of
-  scope. Without shell integration the prompt probe reads false, so clears take
-  the cursor-home branch; the wipe still works and the next Enter restores a
-  prompt.
+  stranded; manual acceptance rejected that. The redraw key is a direct PTY
+  write on the focused pane, not a user-input event, so broadcast fan-out stays
+  out of scope. Without shell integration the prompt probe reads false, so
+  clears take the cursor-home branch; the wipe still works and the next Enter
+  restores a prompt.
 - The row label uses the typed message `common.clear_screen` (Simplified Chinese
   and English catalogs; other languages fall back per the catalog contract).
 
@@ -84,6 +87,14 @@ established macOS ⌘K clear convention had no path to that behavior.
 - Scrollback-only (`ClearMode::Saved` alone, matching the legacy `ClearHistory`
   executor): leaves the screen populated; users asking for clear screen expect a
   blank viewport plus a dropped scrollback.
+- Writing `^L` at the prompt (the first implementation, rejected in review
+  2026-11-12): at an OSC 133 prompt the byte is keyboard input to whatever owns
+  the tty, so it invokes the user's *remapped* Ctrl+L binding, not clear screen.
+  With a fixture Readline binding that inserts a marker, the marker was appended
+  to live input; the dispatch test only verified the byte was sent and could not
+  catch it. The owned redraw key above keeps redraw semantics independent of any
+  user binding; where the channel is not advertised the action degrades to the
+  app-side cursor home instead of falling back to a keyboard byte.
 - Reassigning ⌘K in `MACOS_COMMAND_ALIASES` to `ClearHistory` (the common macOS
   terminal clear convention): changes shipped default behavior for every macOS
   user. This change
@@ -111,9 +122,12 @@ established macOS ⌘K clear convention had no path to that behavior.
   `win+k:ClearHistory`, where the later line wins). Auto-rewriting
   `ReceiveChar` lines into `ClearHistory` would overwrite an explicitly chosen
   "release the key" decision and is rejected.
-- At the prompt the `^L` byte reaches whatever shell owns the normal-screen PTY,
-  exactly as the legacy ⌘K pair behaved. In the running-command branch no PTY
-  write happens; alternate-screen sessions are left untouched entirely.
+- At the prompt the redraw key reaches the advertised shell's line editor as an
+  owned binding installed next to the native editor query; a user-owned `\e[46~`
+  (or PSReadLine `Ctrl+Shift+F11`) withdraws the whole native editor channel,
+  and the action then degrades to the app-side cursor home. In the
+  running-command branch no PTY write happens; alternate-screen sessions are
+  left untouched entirely.
 - The legacy shell already executes `Action::ClearHistory` and is unchanged.
 
 ## Validation
@@ -121,9 +135,14 @@ established macOS ⌘K clear convention had no path to that behavior.
 `cargo fmt --all -- --check`, `cargo check -p nebula --bin pebrel --features
 gpui-shell --tests --locked`, the `display::keymap` and
 `gpui_shell::workspace::keyboard_bindings` test groups (including the new
-adapter, dispatch-probe and label regressions), the settings-pane suite, the
-i18n contract suites, `cargo test -p nebula --test file_line_budget` and
-`python3 scripts/check_architecture.py --base <PR base>` pass. The dispatch
+adapter, dispatch-probe and label regressions), the clear-screen view matrix
+(prompt with and without the advertised channel, running command, alternate
+screen; the remapped-key case asserts no `^L` byte ever leaves the app), the
+settings-pane suite, the i18n contract suites, the
+`scripts/tests/test_completion_editor.py` redraw regressions (installed key
+clears and keeps the buffer through a real bash/zsh PTY; a user-owned key
+withdraws the advertisement), `cargo test -p nebula --test file_line_budget`
+and `python3 scripts/check_architecture.py --base <PR base>` pass. The dispatch
 regression fails without the adapter arm; the label regression fails without the
 catalog entries.
 

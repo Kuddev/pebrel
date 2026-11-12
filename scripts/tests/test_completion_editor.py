@@ -39,7 +39,8 @@ class CompletionEditorTests(unittest.TestCase):
         self.assertTrue(owner.startswith(("bash:", "zsh:", "wsl|")), owner)
         return owner, int(cursor), line
 
-    def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False) -> shell_integration.ShellSession:
+    def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False,
+                        owned_redraw: bool = False) -> shell_integration.ShellSession:
         root = Path(__file__).resolve().parents[2]
         program = shutil.which(shell)
         if not program:
@@ -64,13 +65,23 @@ class CompletionEditorTests(unittest.TestCase):
             rc.write_text(body.group(1) + "\n" + adapter)
             args = ["--noprofile", "--rcfile", str(rc), "-i"] if shell == "bash" else ["-d", "-i"]
             env = {} if shell == "bash" else {"ZDOTDIR": str(directory)}
-        if owned_binding:
+        if owned_binding or owned_redraw:
             if shell == "bash":
                 inputrc = self.fixture.home / ".inputrc"
-                inputrc.write_text('"\\e[45~": beginning-of-line\n')
+                lines = ""
+                if owned_binding:
+                    lines += '"\\e[45~": beginning-of-line\n'
+                if owned_redraw:
+                    lines += '"\\e[46~": beginning-of-line\n'
+                inputrc.write_text(lines)
                 env["INPUTRC"] = str(inputrc)
             else:
-                (self.fixture.home / ".zshrc").write_text("bindkey '\\e[45~' beginning-of-line\n")
+                zshrc = ""
+                if owned_binding:
+                    zshrc += "bindkey '\\e[45~' beginning-of-line\n"
+                if owned_redraw:
+                    zshrc += "bindkey '\\e[46~' beginning-of-line\n"
+                (self.fixture.home / ".zshrc").write_text(zshrc)
         session = shell_integration.ShellSession(program, self.fixture.home, args, env)
         self.addCleanup(session.close)
         session.wait(b"\x1b]133;A\x07")
@@ -133,6 +144,51 @@ class CompletionEditorTests(unittest.TestCase):
 
     def test_ssh_zsh_bootstrap_retains_user_owned_query_binding(self) -> None:
         self.check_bootstrap_binding("zsh", "ssh")
+
+    def check_integration_clear(self, shell: str, route: str) -> None:
+        session = self.start_bootstrap(shell, route)
+        ready = re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output)
+        if shell == "bash":
+            version = subprocess.check_output(
+                [shutil.which(shell), "--noprofile", "--norc", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+                text=True,
+            )
+            if int(version) < 4:
+                # Legacy Bash never installs the channel, so nothing owns the
+                # redraw key either: the byte stays inert for the host to decide.
+                self.assertIsNone(ready, session.output)
+                return
+        self.assertIsNotNone(ready, session.output)
+        # The redraw key drives the line editor's own clear-screen: the editor
+        # wipes the glass and repaints prompt, buffer and caret.
+        os.write(session.master, b"echo kept-line")
+        os.write(session.master, b"\x1b[46~")
+        output = session.wait(b"\x1b[2J")
+        self.assertIn(b"\x1b[2J", output)
+        os.write(session.master, b"\n")
+        output = session.wait(b"kept-line\r\n")
+        self.assertIn(b"kept-line\r\n", output)
+
+    def test_ssh_bash_bootstrap_redraws_through_the_owned_clear_key(self) -> None:
+        self.check_integration_clear("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_redraws_through_the_owned_clear_key(self) -> None:
+        self.check_integration_clear("zsh", "ssh")
+
+    def check_owned_redraw_binding(self, shell: str, route: str) -> None:
+        session = self.start_bootstrap(shell, route, owned_redraw=True)
+        # A user-owned redraw key withdraws the whole native editor channel.
+        self.assertNotIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        os.write(session.master, b"echo tail\x1b[46~printf 'OWNED-REDRAW\\n'; \n")
+        output = session.wait(b"OWNED-REDRAW\r\n")
+        self.assertIn(b"OWNED-REDRAW\r\n", output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
+
+    def test_ssh_bash_bootstrap_retains_user_owned_redraw_binding(self) -> None:
+        self.check_owned_redraw_binding("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_retains_user_owned_redraw_binding(self) -> None:
+        self.check_owned_redraw_binding("zsh", "ssh")
 
     def check_middle_edit(self, shell: str) -> None:
         session = self.start(shell)

@@ -1293,10 +1293,11 @@ impl TerminalView {
 
     /// 清屏（设置页「清屏」动作的落点）。应用侧立刻清掉可见屏与回滚（零
     /// 延迟反馈），随后按前台状态分流：
-    /// - 提示符状态（shell 在等输入，OSC 133 跟踪）：发 ^L 让 shell 光标归
-    ///   顶并重绘提示符，行状态与屏幕保持同步；
-    /// - 命令运行中：shell 读不到 ^L（只会排队到命令结束后再清一次屏，冲
-    ///   掉运行期输出），应用侧直接把光标归顶，顺序输出从顶部继续；
+    /// - 提示符状态（shell 在等输入，OSC 133 跟踪）：发集成自有键让 shell
+    ///   行编辑器自己清屏重绘提示符，行状态与屏幕保持同步；
+    /// - 命令运行中或集成通道未就绪：应用侧直接把光标归顶，顺序输出从顶
+    ///   部继续；绝不发送 ^L 之类的键盘字节——那会执行 shell 里用户对
+    ///   Ctrl+L 的任意重绑定（审查裁定 2026-11-12）；
     /// - 备用屏（vim/less 等全屏程序）：^L 不是清屏，整键不动。
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
         let Some(session) = &self.session else { return };
@@ -1309,7 +1310,14 @@ impl TerminalView {
             term.clear_screen(ClearMode::Saved);
             if term.nebula_prompt_active() {
                 drop(term);
-                self.write_bytes(b"\x0c".to_vec());
+                // editor_clear_bytes reads term_mode(), which re-locks the same
+                // term mutex; the redraw decision must run after the guard is
+                // released, and the fallback re-locks for the cursor home.
+                if let Some(bytes) = self.editor_clear_bytes() {
+                    self.write_bytes(bytes);
+                } else {
+                    session.term.lock().goto(0, 0);
+                }
             } else {
                 term.goto(0, 0);
             }

@@ -232,6 +232,26 @@ impl TerminalView {
             .unwrap_or_else(|| b"\x1b[24;6~".to_vec())
     }
 
+    /// 提示符重绘字节：`pebrel_editor_ready` 声明的 shell 集成自有键
+    /// （completion.sh 的 `\e[46~` → readline/zle 原生 clear-screen，
+    /// completion.ps1 的 Ctrl+Shift+F11 → PSReadLine ClearScreen）。与查询
+    /// 键同批安装、同批声明，用户占用任何一个都使通道整体退出。未就绪
+    /// 返回 None，调用方退回应用侧光标归顶——绝不退回键盘字节（^L 会
+    /// 执行 shell 里用户对 Ctrl+L 的任意重绑定）。
+    pub(super) fn editor_clear_bytes(&self) -> Option<Vec<u8>> {
+        let owner = self.completion_editor.owner.as_deref()?;
+        if !self.suggest.completion_context.owns_current(owner) {
+            return None;
+        }
+        if owner.starts_with("pwsh:") {
+            let key = gpui::Keystroke::parse("ctrl-shift-f11").unwrap();
+            super::super::keymap::encode(&key, &self.term_mode())
+                .or_else(|| Some(b"\x1b[23;6~".to_vec()))
+        } else {
+            Some(b"\x1b[46~".to_vec())
+        }
+    }
+
     pub(super) fn query_completion_editor(&mut self, cx: &mut Context<Self>) -> bool {
         if self.completion_editor.is_querying() {
             return true;

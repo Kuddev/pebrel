@@ -111,10 +111,32 @@ pub(super) fn feed(view: &mut TerminalView, bytes: &[u8]) {
 }
 
 #[gpui::test]
-fn clear_screen_clears_history_and_writes_redraw_only_at_prompt(cx: &mut TestAppContext) {
+fn clear_screen_clears_history_and_redraws_only_through_the_integration_key(
+    cx: &mut TestAppContext,
+) {
     let (view, cx, receiver) = open(cx);
-    for prompt in [false, true] {
+    // (prompt, ready)：命令运行中和未声明集成自有键的提示符都不发任何字
+    // 节（应用侧光标归顶）；只有 `pebrel_editor_ready` 声明的提示符才发
+    // `\e[46~`。任何状态都绝不发 ^L——无论清屏快捷键绑定在哪个键上，^L
+    // 都会执行 shell 里用户对 Ctrl+L 的任意重绑定（审查裁定 2026-11-12）。
+    for (prompt, ready) in [(false, false), (true, false), (true, true)] {
         view.update(cx, |view, cx| {
+            if ready {
+                view.process_event(
+                    TermEvent::UserVar {
+                        name: "pebrel_shell".into(),
+                        value: "bash:clear-fixture".into(),
+                    },
+                    cx,
+                );
+                view.process_event(
+                    TermEvent::UserVar {
+                        name: "pebrel_editor_ready".into(),
+                        value: "bash:clear-fixture".into(),
+                    },
+                    cx,
+                );
+            }
             for _ in 0..40 {
                 feed(view, b"previous output\r\n");
             }
@@ -139,7 +161,7 @@ fn clear_screen_clears_history_and_writes_redraw_only_at_prompt(cx: &mut TestApp
             assert_eq!(term.grid().display_offset(), 0);
             assert!(term.selection.is_none());
             assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
-            if !prompt {
+            if !prompt || !ready {
                 assert_eq!(term.grid().cursor.point, TermPoint::new(Line(0), Column(0)));
             }
         });
@@ -150,8 +172,45 @@ fn clear_screen_clears_history_and_writes_redraw_only_at_prompt(cx: &mut TestApp
                 _ => None,
             })
             .collect();
-        assert_eq!(writes, if prompt { vec![b"\x0c".to_vec()] } else { vec![] });
+        let expected = if prompt && ready { vec![b"\x1b[46~".to_vec()] } else { vec![] };
+        assert_eq!(writes, expected, "prompt={prompt} ready={ready}");
+        assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
     }
+}
+
+#[gpui::test]
+fn clear_screen_sends_the_owned_powershell_chord_for_pwsh(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    view.update(cx, |view, cx| {
+        view.process_event(
+            TermEvent::UserVar { name: "pebrel_shell".into(), value: "pwsh:clear-fixture".into() },
+            cx,
+        );
+        view.process_event(
+            TermEvent::UserVar {
+                name: "pebrel_editor_ready".into(),
+                value: "pwsh:clear-fixture".into(),
+            },
+            cx,
+        );
+        feed(view, b"previous output\r\n");
+        view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+    });
+    let writes: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .collect();
+    let expected = view.read_with(cx, |view, _| {
+        let key = gpui::Keystroke::parse("ctrl-shift-f11").unwrap();
+        vec![keymap::encode(&key, &view.term_mode()).unwrap()]
+    });
+    assert_eq!(writes, expected);
+    assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
 }
 
 #[gpui::test]

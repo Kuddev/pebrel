@@ -28,6 +28,22 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
                     [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor=$payload$([char]7)")
                 }
             } -BriefDescription $global:PebrelEditorHandlerName
+            # The prompt-redraw pairing: an owned chord bound to the native
+            # ClearScreen, so the terminal never sends ^L at the prompt.
+            $clearExisting = if ($query.Parameters.ContainsKey('Chord')) {
+                Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue
+            } else {
+                @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F11','Shift+Ctrl+F11' })
+            }
+            if (-not $clearExisting -or $clearExisting.Function -eq 'Unbound' -or
+                $clearExisting.Function -eq 'ClearScreen') {
+                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function ClearScreen
+            } else {
+                # A user-held F11 leaves the whole native editor unadvertised,
+                # matching the F12 ownership rule: the redraw pairing must not
+                # fall back to a keyboard byte that invokes user rebinding.
+                throw 'Ctrl+Shift+F11 is user-owned'
+            }
             # PSReadLine 2.0 loses surrogate pairs inserted after native editing.
             # Advertise that boundary so completion cannot silently alter a name.
             $owner = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($global:PebrelShellToken))
