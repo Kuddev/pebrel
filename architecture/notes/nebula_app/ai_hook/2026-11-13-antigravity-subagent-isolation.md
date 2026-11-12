@@ -43,13 +43,19 @@ event ordering or pane routing, matching the existing native Codex `agent_id` ga
 - Reject immediately on explicit subagent fields (`parentConversationId`,
   `callerContext == "subagent"`, or `rootConversationId != conversationId`) on both local
   and remote transports so upstream payload fixes work without disk reads.
-- On local pipe/socket envelopes only, validate an absolute, traversal-free
-  `brain/<conversationId>` path matching `conversationId`, bound the step-`0` read to one
-  line (`256 KiB` cap), reject `"source":"SYSTEM"` and check `.system_generated/subagents/`
-  under known conversations in the same `brain` directory for forked children.
-- Cache validated conversation paths in a bounded 64-entry map so subsequent
-  `PreInvocation` and `Stop` hooks perform zero disk I/O. Remote SSH envelopes never read
-  local host files.
+- On local pipe/socket envelopes only, restrict paths lexically to the user's trusted
+  `~/.gemini/{antigravity-cli,antigravity}/brain/<conversationId>` log roots without `..`
+  components, reject symlinks and non-regular files before and on open
+  ([`regular_file.rs`](../../../../nebula_app/src/platform/regular_file.rs):
+  `O_NONBLOCK | O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` and `FILE_TYPE_DISK`
+  on Windows), and execute uncached disk probes on a bounded worker with a `200 ms`
+  listener-thread wait cap.
+- Bound the step-`0` read to one line (`256 KiB` cap), reject `"source":"SYSTEM"`, and
+  check `.system_generated/subagents/<id>.json` across both cached conversations and a
+  bounded `read_dir(brain_root)` scan (`<= 4096` entries within the probe deadline) so
+  forked subagents are rejected even on cold start/reconnect before the parent arrives or
+  after the parent is evicted from the 64-entry conversation cache.
+- Remote SSH envelopes never read local host files.
 
 ## Rejected alternatives
 
@@ -68,12 +74,14 @@ path fall back to accepting the conversation unless explicit subagent markers ar
 
 ## Validation
 
-Unit regressions in [`native_events.rs`](../../../../nebula_app/src/ai_hook/native_events.rs)
-verify un-forked and forked in-process subagents never hijack an active turn or saved
-resume command, subsequent root conversations still switch cleanly, explicit markers are
-rejected on local and remote paths, `agentName` and path-traversal inputs do not misfire,
-and `parse_remote_envelope` never inspects local host files (`151 passed, 1 ignored` in
-the `ai_hook` suite).
+Unit regressions in
+[`native_events/tests.rs`](../../../../nebula_app/src/ai_hook/native_events/tests.rs) verify
+un-forked and forked in-process subagents (including cold-start child-first arrival and
+parent cache eviction) never hijack an active turn or saved resume command, subsequent root
+conversations still switch cleanly, explicit markers are rejected on local and remote paths,
+untrusted roots, symlinks, non-regular files and stalled workers respect the listener wait
+bound, and `parse_remote_envelope` never inspects local host files (`153 passed, 1 ignored`
+in the `ai_hook` suite).
 
 ## Supersedes
 
