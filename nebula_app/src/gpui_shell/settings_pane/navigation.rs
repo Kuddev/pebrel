@@ -149,7 +149,7 @@ pub(super) const SETTINGS_GROUP_TITLE_GAP: f32 = 16.0;
 pub(super) const SETTINGS_ROW_HEIGHT: f32 = 48.0;
 pub(super) const SETTINGS_ROW_GAP: f32 = 8.0;
 /// 标准设置选择器的实际宽度。字体输入与 Select 共用，避免同列控件漂移。
-pub(super) const SETTINGS_SELECT_WIDTH: f32 = 220.0;
+pub(super) const SETTINGS_SELECT_WIDTH: f32 = 180.0;
 
 /// 列表/触发条上的展示名：族名偶尔带着导入文件后缀，界面上剥掉。
 pub(super) fn font_display_name(name: &str) -> String {

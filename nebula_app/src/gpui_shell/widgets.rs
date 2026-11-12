@@ -122,6 +122,11 @@ pub(crate) fn settings_icon_button(button: Button, cx: &App) -> Button {
     settings_button(button, false, cx).w(px(SETTINGS_HIT_SIZE)).px_0()
 }
 
+/// A compact select keeps room for the text when the UI font grows.
+pub(crate) fn settings_select_height(cx: &App) -> gpui::Pixels {
+    (cx.theme().font_size + px(12.0)).max(px(30.0))
+}
+
 /// The select keeps its native popup and keyboard handling; this frame supplies
 /// the transparent resting surface and visible pointer feedback.
 pub(crate) fn settings_select_frame(
@@ -133,8 +138,8 @@ pub(crate) fn settings_select_frame(
     let edge = cx.theme().muted_foreground.opacity(0.65);
     div()
         .id(id)
-        .h(settings_control_height(cx))
-        .rounded(px(6.0))
+        .h(settings_select_height(cx))
+        .rounded(px(8.0))
         .border_1()
         .border_color(cx.theme().border)
         .text_color(cx.theme().foreground)

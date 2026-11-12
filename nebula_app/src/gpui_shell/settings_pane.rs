@@ -721,7 +721,7 @@ impl SettingsPane {
             };
             crate::gpui_shell::widgets::settings_select_frame(
                 SharedString::from(format!("settings-select-{key}")),
-                Select::new(&state).appearance(false).h_full().rounded(px(6.0)),
+                Select::new(&state).appearance(false).h_full().rounded(px(8.0)),
                 cx,
             )
             .debug_selector(move || format!("settings-select-{key}"))
@@ -738,7 +738,7 @@ impl SettingsPane {
             help("shell", language),
             crate::gpui_shell::widgets::settings_select_frame(
                 "settings-shell-select",
-                Select::new(&self.shell_select).appearance(false).h_full().rounded(px(6.0)),
+                Select::new(&self.shell_select).appearance(false).h_full().rounded(px(8.0)),
                 cx,
             )
             .w(px(SETTINGS_SELECT_WIDTH))
