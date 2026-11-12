@@ -1,4 +1,4 @@
-//! 原型的阅读顺序：状态 → 存储 → 时间线；低频操作放在面板下面。
+//! Backup storage, local archives and snapshot history.
 use super::*;
 
 pub(super) fn panel(cx: &App) -> gpui::Div {
@@ -52,20 +52,20 @@ impl SettingsPane {
     ) -> gpui::Div {
         self.initialize_backup(window, cx);
         let l = crate::gpui_shell::config::ui_language(cx);
-        let off = self.backup_remote.protocol == BackupProtocol::Off;
+        let wizard = self.backup_remote.protocol == BackupProtocol::Off && self.backup_ui.step > 0;
         v_flex()
             .w_full()
             .flex_shrink_0()
             .max_w(px(700.0))
-            .gap(px(super::super::design::GROUP_GAP))
-            .text_size(px(14.0))
+            .gap(px(20.0))
+            .text_size(px(13.0))
             .child(
                 v_flex()
                     .gap_2()
                     .mb_1()
                     .child(
                         div()
-                            .text_size(px(22.0))
+                            .text_size(px(18.0))
                             .font_semibold()
                             .child(l.text(Message::BackupFlowTitle)),
                     )
@@ -107,10 +107,12 @@ impl SettingsPane {
                         ),
                 )
             })
-            .child(if off { self.backup_wizard(window, cx) } else { self.backup_dashboard(cx) })
-            .when(!off, |d| d.children(self.backup_status_view(cx)))
-            .when(!off, |d| d.child(self.backup_encryption_row(cx)))
-            .when(!off, |d| d.child(self.backup_file_rows(cx)))
+            .when(wizard, |page| page.child(self.backup_wizard(window, cx)))
+            .when(!wizard, |page| {
+                page.child(self.backup_dashboard(cx))
+                    .children(self.backup_status_view(cx))
+                    .child(self.backup_local_archive(cx))
+            })
     }
 
     pub(super) fn backup_status_view(&self, cx: &App) -> Option<gpui::Div> {
@@ -141,59 +143,8 @@ impl SettingsPane {
 
     fn backup_dashboard(&self, cx: &mut Context<Self>) -> gpui::Div {
         let l = crate::gpui_shell::config::ui_language(cx);
-        let latest = self.backup_ui.snapshots.first();
-        let mut head = v_flex().flex_1().min_w_0().gap_2();
-        if let Some(entry) = latest {
-            head = head
-                .child(caption(l.text(Message::BackupFlowLastBackup), cx))
-                .child(div().text_size(px(28.0)).font_semibold().child(backup_time(&entry.name)))
-                .child(caption(self.snapshot_meta(entry, cx), cx));
-        } else {
-            head = head
-                .child(div().text_size(px(18.0)).font_semibold().child(l.text(
-                    if self.backup_ui.listing {
-                        Message::CloudChecking
-                    } else {
-                        Message::BackupFlowEmpty
-                    },
-                )))
-                .child(caption(l.text(Message::BackupFlowEmptyHint), cx));
-        }
-        let actions = h_flex()
-            .gap_2()
-            .flex_wrap()
-            .when_some(latest, |row, entry| {
-                let name = entry.name.clone();
-                row.child(
-                    Button::new("backup-restore-latest")
-                        .map(|button| crate::gpui_shell::widgets::settings_button(button, true, cx))
-                        .label(l.text(Message::CloudRestore))
-                        .disabled(self.backup_busy)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_backup_restore(
-                                RestoreSource::Remote(name.clone()),
-                                window,
-                                cx,
-                            )
-                        })),
-                )
-            })
-            .child(
-                Button::new("backup-now")
-                    .debug_selector(|| "backup-now".into())
-                    .label(l.text(Message::CloudBackupNow))
-                    .primary()
-                    .small()
-                    .h(px(34.0))
-                    .disabled(
-                        self.backup_busy
-                            || self.backup_ui.listing
-                            || self.backup_ui.list_error.is_some(),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_backup_sheet(BackupSheet::Backup, window, cx)
-                    })),
-            );
+        let off = self.backup_remote.protocol == BackupProtocol::Off;
+        let latest = self.backup_ui.snapshots.first().filter(|_| !off);
         let path = match self.backup_remote.protocol {
             BackupProtocol::Folder => self.backup_remote.folder_path.clone(),
             BackupProtocol::WebDav => self.backup_remote.webdav_url.clone(),
@@ -203,79 +154,118 @@ impl SettingsPane {
             BackupProtocol::Sftp => {
                 format!("{}:{}", self.backup_remote.sftp_destination, self.backup_remote.sftp_path)
             },
-            BackupProtocol::Off => String::new(),
+            BackupProtocol::Off => l.text(Message::BackupFlowStorageOffHint).to_owned(),
         };
-        let store = v_flex()
-            .w_full()
-            .min_w_0()
-            .flex_shrink_0()
-            .px_6()
-            .py_3()
-            .gap_2()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .flex_wrap()
-                    .child(
-                        Icon::default()
-                            .path(super::setup::provider_icon(&self.backup_remote))
-                            .size(px(16.0)),
-                    )
-                    .child(div().font_medium().child(l.text(provider(&self.backup_remote))))
-                    .child(caption(path, cx).flex_1().min_w_0().truncate())
-                    .child(
-                        Button::new("backup-edit-storage")
-                            .label(l.text(Message::BackupFlowChange))
-                            .map(|button| {
-                                crate::gpui_shell::widgets::settings_button(button, false, cx)
-                            })
-                            .disabled(self.backup_busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_backup_sheet(BackupSheet::Storage, window, cx)
-                            })),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(caption(
-                        l.text(if self.backup_ui.listing {
-                            Message::CloudChecking
-                        } else if self.backup_ui.list_error.is_some() {
-                            Message::BackupFlowConnectionFailed
-                        } else {
-                            Message::BackupFlowConnected
-                        }),
-                        cx,
-                    ))
-                    .child(
-                        Button::new("backup-refresh")
-                            .icon(IconName::Redo2)
-                            .map(|button| {
-                                crate::gpui_shell::widgets::settings_icon_button(button, cx)
-                            })
-                            .small()
-                            .tooltip(l.text(Message::CloudTest))
-                            .disabled(self.backup_busy || self.backup_ui.listing)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.refresh_backup_snapshots(cx)),
-                            ),
-                    ),
-            )
-            .children(self.backup_ui.list_error.as_ref().map(|error| {
-                div()
-                    .debug_selector(|| "backup-storage-error".into())
-                    .w_full()
-                    .flex_shrink_0()
-                    .text_sm()
-                    .text_color(cx.theme().danger)
-                    .child(error.clone())
-            }));
+        let hairline = crate::gpui_shell::theme::settings_hairline(cx);
+        let busy = self.backup_busy || self.backup_ui.listing;
+        let storage = backup_row(
+            l.text(if off { Message::BackupFlowStorageOff } else { provider(&self.backup_remote) }),
+            if off {
+                caption(path, cx)
+            } else {
+                caption(path, cx).font_family(cx.theme().mono_font_family.clone()).truncate()
+            },
+            h_flex()
+                .gap(px(8.0))
+                .flex_wrap()
+                .child(
+                    backup_button("backup-configure", l.text(Message::BackupFlowConfigureNode), cx)
+                        .debug_selector(|| "backup-configure".into())
+                        .disabled(busy)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if off {
+                                this.backup_ui.step = 1;
+                                this.backup_status = None;
+                                cx.notify();
+                            } else {
+                                this.open_backup_sheet(BackupSheet::Storage, window, cx);
+                            }
+                        })),
+                )
+                .child(
+                    backup_button("backup-now", l.text(Message::CloudBackupNow), cx)
+                        .debug_selector(|| "backup-now".into())
+                        .disabled(off || busy || self.backup_ui.list_error.is_some())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_backup_sheet(BackupSheet::Backup, window, cx)
+                        })),
+                ),
+            cx,
+        );
+        let status = (!off).then(|| {
+            let failed = self.backup_ui.list_error.is_some();
+            let color = if failed { cx.theme().danger } else { cx.theme().muted_foreground };
+            let label = l.text(if self.backup_ui.listing {
+                Message::CloudChecking
+            } else if failed {
+                Message::BackupFlowConnectionFailed
+            } else {
+                Message::BackupFlowConnected
+            });
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .px(px(14.0))
+                .py(px(10.0))
+                .gap_2()
+                .border_t_1()
+                .border_color(hairline)
+                .bg(cx.theme().foreground.opacity(0.025))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .justify_between()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .gap(px(6.0))
+                                .min_w_0()
+                                .rounded_full()
+                                .px(px(9.0))
+                                .py(px(3.0))
+                                .bg(color.opacity(0.12))
+                                .text_color(color)
+                                .text_size(px(11.5))
+                                .child(div().size(px(6.0)).rounded_full().flex_shrink_0().bg(color))
+                                .child(label),
+                        )
+                        .child(
+                            Button::new("backup-refresh")
+                                .ghost()
+                                .h(px(30.0))
+                                .text_size(px(12.0))
+                                .icon(IconName::Redo2)
+                                .label(l.text(if failed {
+                                    Message::CommonRetry
+                                } else {
+                                    Message::CloudTest
+                                }))
+                                .disabled(busy)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.refresh_backup_snapshots(cx)),
+                                ),
+                        ),
+                )
+                .children(self.backup_ui.list_error.as_ref().map(|error| {
+                    div()
+                        .debug_selector(|| "backup-storage-error".into())
+                        .w_full()
+                        .min_w_0()
+                        .text_size(px(12.0))
+                        .line_height(gpui::relative(1.5))
+                        .text_color(color)
+                        .child(error.clone())
+                }))
+        });
         let mut history =
-            v_flex().w_full().px_6().py_3().border_t_1().border_color(cx.theme().border);
+            v_flex().w_full().px(px(14.0)).py(px(8.0)).border_t_1().border_color(hairline);
+        if let Some(entry) = latest {
+            history = history
+                .child(caption(l.text(Message::BackupFlowLastBackup), cx))
+                .child(caption(self.snapshot_meta(entry, cx), cx));
+        }
         for (index, entry) in self.backup_ui.snapshots.iter().enumerate() {
             let name = entry.name.clone();
             let device = self
@@ -357,122 +347,144 @@ impl SettingsPane {
         }
         history =
             history.child(caption(l.text(Message::BackupFlowRetention), cx).pl(px(26.0)).py_3());
-        panel(cx)
-            .debug_selector(|| "backup-dashboard".into())
+        v_flex()
+            .w_full()
+            .gap(px(8.0))
+            .child(backup_group_heading(l.text(Message::BackupFlowStorageNode), cx))
             .child(
-                h_flex()
-                    .w_full()
-                    .flex_shrink_0()
-                    .p_6()
-                    .gap_4()
-                    .flex_wrap()
-                    .child(head)
-                    .child(actions),
+                panel(cx)
+                    .debug_selector(|| "backup-dashboard".into())
+                    .border_1()
+                    .border_color(hairline)
+                    .rounded(px(8.0))
+                    .child(storage)
+                    .children(status)
+                    .when(latest.is_some(), |card| card.child(history)),
             )
-            .child(store)
-            .when(latest.is_some(), |d| d.child(history))
     }
 
-    fn backup_encryption_row(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn backup_local_archive(&self, cx: &mut Context<Self>) -> gpui::Div {
         let l = crate::gpui_shell::config::ui_language(cx);
         let ready = cx.try_global::<BackupPassword>().is_some_and(|p| p.0.is_some());
-        v_flex().debug_selector(|| "backup-encryption".into()).w_full().flex_shrink_0().child(
-            self.group(l.text(Message::BackupFlowEncryption), cx).child(
-                v_flex()
-                    .w_full()
-                    .flex_shrink_0()
-                    .gap_2()
-                    .px(px(super::super::design::CARD_PAD_X))
-                    .py(px(self.row_padding_y()))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_3()
-                            .justify_between()
-                            .flex_wrap()
-                            .child(div().child(l.text(Message::CloudPassphrase)))
-                            .child(
-                                h_flex()
-                                    .flex_shrink_0()
-                                    .gap_2()
-                                    .child(caption(
-                                        l.text(if ready {
-                                            Message::BackupFlowPasswordReady
+        let hairline = crate::gpui_shell::theme::settings_hairline(cx);
+        let password = backup_row(
+            l.text(Message::CloudPassphrase),
+            caption(l.text(Message::BackupFlowPasswordHint), cx)
+                .debug_selector(|| "backup-password-description".into()),
+            backup_button(
+                "backup-password",
+                l.text(if ready { Message::BackupFlowClear } else { Message::BackupFlowEnter }),
+                cx,
+            )
+            .debug_selector(|| "backup-password".into())
+            .disabled(self.backup_busy)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if ready {
+                    cx.set_global(BackupPassword::default());
+                    this.clear_backup_inputs(window, cx);
+                    cx.notify();
+                } else {
+                    this.open_backup_sheet(BackupSheet::Password, window, cx);
+                }
+            })),
+            cx,
+        );
+        v_flex()
+            .w_full()
+            .gap(px(8.0))
+            .debug_selector(|| "backup-encryption".into())
+            .child(backup_group_heading(l.text(Message::BackupFlowLocalArchive), cx))
+            .child(
+                panel(cx)
+                    .border_1()
+                    .border_color(hairline)
+                    .rounded(px(8.0))
+                    .child(password)
+                    .children(
+                        [
+                            (true, Message::CloudExport, Message::BackupFlowExportHint),
+                            (false, Message::CloudImport, Message::BackupFlowImportHint),
+                        ]
+                        .into_iter()
+                        .map(|(export, title, hint)| {
+                            let id = if export { "backup-export" } else { "backup-import" };
+                            backup_row(
+                                l.text(title),
+                                caption(l.text(hint), cx),
+                                backup_button(
+                                    id,
+                                    l.text(if export {
+                                        Message::CloudExport
+                                    } else {
+                                        Message::BackupFlowChooseFile
+                                    }),
+                                    cx,
+                                )
+                                .debug_selector(move || id.into())
+                                .disabled(self.backup_busy)
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        if export {
+                                            this.open_backup_sheet(BackupSheet::Export, window, cx);
                                         } else {
-                                            Message::BackupFlowPasswordMissing
-                                        }),
-                                        cx,
-                                    ))
-                                    .child(
-                                        Button::new("backup-password")
-                                            .debug_selector(|| "backup-password".into())
-                                            .label(l.text(if ready {
-                                                Message::BackupFlowClear
-                                            } else {
-                                                Message::BackupFlowEnter
-                                            }))
-                                            .map(|button| {
-                                                crate::gpui_shell::widgets::settings_button(
-                                                    button, false, cx,
-                                                )
-                                            })
-                                            .disabled(self.backup_busy)
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                if ready {
-                                                    cx.set_global(BackupPassword::default());
-                                                    this.clear_backup_inputs(window, cx);
-                                                    cx.notify();
-                                                } else {
-                                                    this.open_backup_sheet(
-                                                        BackupSheet::Password,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        caption(l.text(Message::BackupFlowPasswordHint), cx)
-                            .debug_selector(|| "backup-password-description".into())
-                            .w_full()
-                            .flex_shrink_0(),
+                                            this.restore_backup(window, cx);
+                                        }
+                                    },
+                                )),
+                                cx,
+                            )
+                            .border_t_1()
+                            .border_color(hairline)
+                        }),
                     ),
-            ),
-        )
+            )
     }
+}
 
-    fn backup_file_rows(&self, cx: &mut Context<Self>) -> super::super::design::SettingsGroup {
-        let l = crate::gpui_shell::config::ui_language(cx);
-        self.group(l.text(Message::BackupFlowFiles), cx).children(
-            [
-                (true, Message::CloudExport, Message::BackupFlowExportHint),
-                (false, Message::CloudImport, Message::BackupFlowImportHint),
-            ]
-            .into_iter()
-            .map(|(export, title, hint)| {
-                self.row(
-                    l.text(title),
-                    l.text(hint),
-                    Button::new(if export { "backup-export" } else { "backup-import" })
-                        .map(|button| crate::gpui_shell::widgets::settings_button(button, true, cx))
-                        .label(l.text(if export {
-                            Message::CloudExport
-                        } else {
-                            Message::BackupFlowChooseFile
-                        }))
-                        .disabled(self.backup_busy)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if export {
-                                this.open_backup_sheet(BackupSheet::Export, window, cx);
-                            } else {
-                                this.restore_backup(window, cx);
-                            }
-                        })),
-                    cx,
+fn backup_group_heading(text: &'static str, cx: &App) -> gpui::Div {
+    div()
+        .pl(px(2.0))
+        .text_size(px(11.5))
+        .font_semibold()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+}
+
+fn backup_row(
+    title: &'static str,
+    detail: impl IntoElement,
+    action: impl IntoElement,
+    cx: &App,
+) -> gpui::Div {
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .min_h(px(42.0))
+        .items_center()
+        .justify_between()
+        .flex_wrap()
+        .gap(px(8.0))
+        .px(px(14.0))
+        .py(px(10.0))
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w(px(160.0))
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_medium()
+                        .text_color(cx.theme().foreground)
+                        .child(title),
                 )
-            }),
+                .child(detail),
         )
-    }
+        .child(action)
+}
+
+fn backup_button(id: &'static str, label: &'static str, cx: &App) -> Button {
+    crate::gpui_shell::widgets::settings_button(Button::new(id).label(label), true, cx)
+        .h(px(30.0))
+        .text_size(px(12.0))
 }

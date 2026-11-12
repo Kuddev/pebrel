@@ -42,14 +42,6 @@ const CONTENTS: [(BackupCategory, Message, Message); 9] = [
     (BackupCategory::CommandHistory, Message::CloudCommands, Message::BackupFlowCommandsHint),
 ];
 
-pub(super) fn provider_icon(config: &BackupRemoteConfig) -> &'static str {
-    PROVIDERS
-        .iter()
-        .find(|entry| entry.2 == provider(config))
-        .map(|entry| entry.4)
-        .unwrap_or(icons::DRIVE)
-}
-
 impl SettingsPane {
     pub(super) fn backup_wizard(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let l = crate::gpui_shell::config::ui_language(cx);
@@ -292,22 +284,29 @@ impl SettingsPane {
                     .py_4()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .when(step > 1, |foot| {
-                        foot.child(
-                            Button::new("backup-back")
-                                .debug_selector(|| "backup-back".into())
-                                .label(l.text(Message::BackupFlowBack))
-                                .map(|button| {
-                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
-                                })
-                                .disabled(self.backup_busy)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.backup_ui.step -= 1;
-                                    this.backup_status = None;
-                                    cx.notify();
-                                })),
-                        )
-                    })
+                    .child(
+                        Button::new("backup-back")
+                            .debug_selector(|| "backup-back".into())
+                            .label(l.text(if step == 1 {
+                                Message::CommonCancel
+                            } else {
+                                Message::BackupFlowBack
+                            }))
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_button(button, false, cx)
+                            })
+                            .disabled(self.backup_busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.backup_ui.step -= 1;
+                                this.backup_status = None;
+                                if this.backup_ui.step == 0 {
+                                    this.backup_ui.tested = false;
+                                    this.backup_ui.draft_snapshots.clear();
+                                    this.clear_backup_inputs(window, cx);
+                                }
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         div()
                             .flex_1()

@@ -1724,6 +1724,11 @@
     "clear_selection": "清空选择（Esc）"
   },
   "backup_flow": {
+    "storage_node": "备份存储节点",
+    "storage_off": "尚未配置存储",
+    "storage_off_hint": "可以配置服务器或文件夹，也可以直接在下方导出本地备份。",
+    "configure_node": "配置节点",
+    "local_archive": "密钥与本地归档",
     "password_notice": "Pebrel 不把这个密码写到磁盘，只在本次运行期间留在内存里，下次启动后第一次备份时再问。忘了它，已有的备份就解不开了。",
     "connect_provider": "连接{provider}",
     "address_label": "地址",

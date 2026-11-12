@@ -56,7 +56,10 @@ fn backup_errors_and_password_help_keep_their_full_layout(cx: &mut gpui::TestApp
                 "error clipped: {error:?}, {panel:?}"
             );
             assert!(panel.bottom() < encryption.top(), "sections overlap");
-            assert!(password.bottom() <= description.top(), "help must have its own line");
+            assert!(
+                description.right() <= password.left() || password.top() >= description.bottom(),
+                "help and password action must not overlap",
+            );
             assert!(description.bottom() <= encryption.bottom(), "help clipped");
             assert!(description.right() <= panel.right(), "help exceeds the content column");
         }
@@ -81,6 +84,16 @@ fn backup_wizard_requires_connection_and_matching_passwords(cx: &mut gpui::TestA
         gpui_component::Root::new(view, window, cx)
     });
     let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1400.0)));
+    draw(cx);
+    assert!(cx.debug_bounds("backup-wizard").is_none());
+    assert!(cx.debug_bounds("backup-export").is_some());
+    click(cx, "backup-configure");
+    assert!(cx.debug_bounds("backup-wizard").is_some());
+    click(cx, "backup-back");
+    assert!(cx.debug_bounds("backup-wizard").is_none());
+    assert!(cx.debug_bounds("backup-export").is_some());
+    click(cx, "backup-configure");
     for width in [1280.0, 800.0] {
         cx.simulate_resize(gpui::size(px(width), px(1400.0)));
         draw(cx);
@@ -366,6 +379,9 @@ fn backup_provider_rows_contain_titles_and_wrapped_hints(cx: &mut gpui::TestAppC
         gpui_component::Root::new(view, window, cx)
     });
     let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1400.0)));
+    draw(cx);
+    click(cx, "backup-configure");
     for mode in [gpui_component::ThemeMode::Light, gpui_component::ThemeMode::Dark] {
         cx.update(|window, cx| gpui_component::Theme::change(mode, Some(window), cx));
         for language in [crate::display::UiLanguage::EnUs, crate::display::UiLanguage::ZhCn] {

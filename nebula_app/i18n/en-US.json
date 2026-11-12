@@ -1724,6 +1724,11 @@
     "clear_selection": "Clear selection (Esc)"
   },
   "backup_flow": {
+    "storage_node": "Backup storage node",
+    "storage_off": "No storage configured",
+    "storage_off_hint": "Configure a server or folder, or export a local archive below.",
+    "configure_node": "Configure storage",
+    "local_archive": "Password and local archives",
     "password_notice": "Pebrel keeps this password in memory only for the current run and never writes it to disk. You will be asked again for the first backup after restarting. If you forget it, existing backups cannot be unlocked.",
     "connect_provider": "Connect {provider}",
     "address_label": "Address",

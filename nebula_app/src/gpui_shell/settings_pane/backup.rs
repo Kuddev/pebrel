@@ -75,7 +75,6 @@ impl SettingsPane {
             return;
         }
         self.backup_ui.initialized = true;
-        self.backup_ui.step = 1;
         self.backup_ui.confirm = Some(cx.new(|cx| InputState::new(window, cx).masked(true)));
         self.backup_ui.sheet_focus = Some(cx.focus_handle());
         self.backup_ui.draft = self.backup_remote.clone();
@@ -361,6 +360,7 @@ impl SettingsPane {
             },
             move |this, config, window, cx| {
                 this.backup_remote = config;
+                this.backup_ui.step = 0;
                 this.backup_ui.snapshots = std::mem::take(&mut this.backup_ui.draft_snapshots);
                 this.backup_ui.list_error = None;
                 this.close_backup_sheet(window, cx);
