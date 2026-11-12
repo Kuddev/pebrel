@@ -49,6 +49,7 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "spinner-track",
     "waiting-hand",
     "tab-grouping",
+    "sidebar-expanded",
     "phone",
     "puzzle",
     "vcs-changes",
@@ -131,6 +132,7 @@ impl AssetSource for NebulaAssets {
 pub mod nav {
     pub const TERMINAL: &str = "icons/nebula-terminal.svg";
     pub const TAB_GROUPING: &str = "icons/nebula-tab-grouping.svg";
+    pub const SIDEBAR_EXPANDED: &str = "icons/nebula-sidebar-expanded.svg";
     pub const AGENT_CLAUDE: &str = "icons/agent-claude.svg";
     pub const AGENT_KIMI: &str = "icons/agent-kimi.svg";
     pub const AGENT_OMP: &str = "icons/agent-omp.svg";

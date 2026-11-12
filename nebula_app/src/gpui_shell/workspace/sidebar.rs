@@ -850,11 +850,15 @@ impl NebulaWorkspace {
     ) -> gpui::AnyElement {
         // 颜色先取出来：`cx.theme()` 不可变借着 cx，后面每个 `cx.listener`
         // 都要可变借，混在一个表达式里借用检查过不去。
-        let secondary = cx.theme().secondary;
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let reader_focus = self.reader_focus_active(cx);
         let sidebar_visible = !self.sidebar_collapsed && !reader_focus;
+        let sidebar_icon = if sidebar_visible {
+            Icon::new(Icon::empty()).path(crate::gpui_shell::assets::nav::SIDEBAR_EXPANDED)
+        } else {
+            Icon::new(IconName::PanelLeft)
+        };
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
         let broadcast_button = self.render_toolbar_broadcast(cx);
@@ -864,23 +868,18 @@ impl NebulaWorkspace {
             .flex_shrink_0()
             .occlude()
             .child(
-                toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
-                            // 侧栏是开关而非一次性动作：展开期间必须持续显示
-                            // 选中底，和旧壳 `left_sidebar_visible()` 同义。
-                            .selected(sidebar_visible)
-                            // Ghost 的全局 selected 使用 hover_strong，静态底比
-                            // 旧壳亮一档；仅此按钮覆写回旧壳 surface。
-                            .when(sidebar_visible, |button| button.bg(secondary))
-                            .tooltip(language.text(Message::ChromeToggleSidebar))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.reader_focus_active(cx) {
-                                    this.clear_reader_focus(cx);
-                                } else {
-                                    this.sidebar_collapsed = !this.sidebar_collapsed;
-                                }
-                                this.sidebar_fold_armed = !tab_reveal_instant(cx);
-                                cx.notify();
-                            })),
+                toolbar_button("toggle-sidebar", sidebar_icon, settings_active)
+                    .aria_label(language.text(Message::ChromeToggleSidebar))
+                    .tooltip(language.text(Message::ChromeToggleSidebar))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.reader_focus_active(cx) {
+                            this.clear_reader_focus(cx);
+                        } else {
+                            this.sidebar_collapsed = !this.sidebar_collapsed;
+                        }
+                        this.sidebar_fold_armed = !tab_reveal_instant(cx);
+                        cx.notify();
+                    })),
             )
             .child(
                 toolbar_button("open-settings", IconName::Settings, false)
