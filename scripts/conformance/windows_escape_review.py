@@ -140,6 +140,9 @@ def run(args, root, report):
     def menu_open(text):
         return "Manage MCP servers" in text and "escape-fixture" in text
 
+    def trust_prompt(text):
+        return "Quick safety check" in text and "Yes, I trust this folder" in text
+
     try:
         ctx.prepare()
         path = ctx.config_dir / "pebrel_settings.txt"
@@ -154,6 +157,13 @@ def run(args, root, report):
         report["powershell"] = match.group(1)
         report["stage"] = "cli_startup"
         ctx.prompt(f"& {quote_pwsh(args.cli)} --strict-mcp-config --mcp-config {quote_pwsh(mcp)}")
+        observe("cli-initial", lambda text: main_prompt(text) or trust_prompt(text), 30)
+        text = screen_text(ctx)
+        if trust_prompt(text):
+            require(str(work).casefold() in text.casefold(), "the CLI trust prompt is not for the temporary workspace")
+            ctx.send_key("down")
+            observe("fixture-trust-selected", lambda view: "❯ Yes, I trust this folder" in view)
+            ctx.send_key("enter")
         observe("prompt", main_prompt, 30)
         ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
         keyboard = Keyboard(snapshot["process_id"])
@@ -209,7 +219,7 @@ def main():
               "application_hooks": "disabled"}
     try:
         with tempfile.TemporaryDirectory(prefix="pebrel-655-") as temporary:
-            return run(args, Path(temporary), report)
+            return run(args, Path(temporary).resolve(), report)
     except (ConformanceError, OSError, subprocess.SubprocessError) as error:
         report["error"] = str(error)
         return 1
