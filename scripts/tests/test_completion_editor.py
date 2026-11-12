@@ -173,6 +173,11 @@ class CompletionEditorTests(unittest.TestCase):
         os.write(session.master, b"\n")
         output = session.wait(b"kept-line\r\n")
         self.assertIn(b"kept-line\r\n", output)
+        # While the integration still owns the key, every prompt keeps
+        # announcing the redraw capability with the same token.
+        sustained = session.command("printf 'SUSTAINED\\n'", b"SUSTAINED\r\n")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=", sustained)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=\x07", sustained)
 
     def test_ssh_bash_bootstrap_redraws_through_the_owned_clear_key(self) -> None:
         self.check_integration_clear("bash", "ssh")
@@ -205,14 +210,16 @@ class CompletionEditorTests(unittest.TestCase):
         output = session.wait(b"OWNED-REDRAW\r\n")
         self.assertIn(b"OWNED-REDRAW\r\n", output)
         self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
-        # The user's function binding survived; clear-screen never replaced it.
+        # The user's function binding survived; the reserved chord itself was
+        # never replaced by clear-screen (the table still lists the user's
+        # normal Ctrl+L entry, so only the reserved chord may be inspected).
         if shell == "bash":
             bindings = session.command(
                 "bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
                 b"BINDINGS-END\r\n",
             )
             self.assertIn(b'"\\e[46~": beginning-of-line', bindings)
-            self.assertNotIn(b"clear-screen", bindings)
+            self.assertNotIn(b'"\\e[46~": clear-screen', bindings)
 
     def test_ssh_bash_bootstrap_retains_user_owned_redraw_binding(self) -> None:
         self.check_owned_redraw_binding("bash", "ssh")
@@ -229,17 +236,16 @@ class CompletionEditorTests(unittest.TestCase):
         # the macro working, with the query capability unaffected.
         self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
         self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
-        os.write(session.master, b"echo tail\x1b[46~ printf 'AFTER-MACRO\\n'; \n")
-        output = session.wait(b"AFTER-MACRO\r\n")
-        self.assertIn(b"PEBREL-USER-MACRO", output)
-        self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
+        os.write(session.master, b"echo tail\x1b[46~")
+        _, _, line = self.snapshot(session)
+        self.assertEqual(line, "echo tailPEBREL-USER-MACRO")
         if shell == "bash":
             bindings = session.command(
                 "bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
                 b"BINDINGS-END\r\n",
             )
-            self.assertIn(b"PEBREL-USER-MACRO", bindings)
-            self.assertNotIn(b"clear-screen", bindings)
+            self.assertIn(b'PEBREL-USER-MACRO', bindings)
+            self.assertNotIn(b'"\\e[46~": clear-screen', bindings)
 
     def test_ssh_bash_bootstrap_retains_user_owned_redraw_macro(self) -> None:
         self.check_owned_redraw_macro("bash", "ssh")
@@ -254,14 +260,19 @@ class CompletionEditorTests(unittest.TestCase):
         session = self.start_bootstrap(shell, route)
         if self.check_legacy_bash(shell, session):
             return
-        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
-        os.write(session.master, b"echo tail")
+        ready_token = re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output)
+        self.assertIsNotNone(ready_token, session.output)
         # Withdraw only the redraw binding this invocation installed, which is
         # exactly the state a query-only integration advertises.
         session.command(
             "bind -r '\\e[46~' 2>/dev/null; bindkey -r '\\e[46~' 2>/dev/null; printf 'WITHDRAWN\\n'",
             b"WITHDRAWN\r\n",
         )
+        # The next prompt re-verifies ownership and revokes the capability with
+        # an empty value while query readiness keeps its token.
+        output = session.command("printf 'REPROBE\\n'", b"REPROBE\r\n")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        self.assertIn(ready_token.group(0), output)
         if shell == "bash":
             bindings = session.command(
                 "bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
@@ -269,6 +280,42 @@ class CompletionEditorTests(unittest.TestCase):
             )
             self.assertNotIn(b'"\\e[46~"', bindings)
             self.assertIn(b'"\\e[45~"', bindings)
+        else:
+            output = session.command("bindkey '\\e[46~'; printf 'UNBOUND-CHECK\\n'", b"UNBOUND-CHECK\r\n")
+            self.assertIn(b"undefined-key", output)
+
+    def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("zsh", "ssh")
+
+    def check_redraw_rebind(self, shell: str, route: str) -> None:
+        # The advertisement follows the live binding: rebinding the chord in
+        # the same shell — without reconnecting — revokes the capability on the
+        # next prompt, and the user's new binding keeps firing.
+        session = self.start_bootstrap(shell, route)
+        if self.check_legacy_bash(shell, session):
+            return
+        token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
+        self.assertIsNotNone(token, session.output)
+        if shell == "bash":
+            rebind = "bind '\"\\e[46~\": \"PEBREL-REBIND\"'"
+        else:
+            rebind = "bindkey -s '\\e[46~' 'PEBREL-REBIND'"
+        session.command(rebind + "; printf 'REBIND-DONE\\n'", b"REBIND-DONE\r\n")
+        output = session.command("printf 'REBOUND\\n'", b"REBOUND\r\n")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", output)
+        os.write(session.master, b"echo tail\x1b[46~")
+        _, _, line = self.snapshot(session)
+        self.assertEqual(line, "echo tailPEBREL-REBIND")
+
+    def test_ssh_bash_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
+        self.check_redraw_rebind("bash", "ssh")
+
+    def test_ssh_zsh_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
+        self.check_redraw_rebind("zsh", "ssh")
 
     def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
         self.check_query_only_session("bash", "ssh")

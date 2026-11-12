@@ -56,11 +56,12 @@ established macOS ⌘K clear convention had no path to that behavior.
     keeping its line state in sync.
   - Prompt without the advertised redraw capability — no integration at all,
     a pre-redraw (2.5.3) integration whose query-only readiness says nothing
-    about the unbound key, or a user-owned redraw key — or a running command:
-    the view moves the terminal cursor home app-side (`Handler::goto(0, 0)`);
-    sequential output continues from the top and the next prompt lands after
-    the last output line. No keyboard byte is ever written at the prompt (see
-    Rejected alternatives).
+    about the unbound key, a user-owned redraw key, or a same-shell rebind
+    that took the key back after the integration had owned it — or a running
+    command: the view moves the terminal cursor home app-side
+    (`Handler::goto(0, 0)`); sequential output continues from the top and the
+    next prompt lands after the last output line. No keyboard byte is ever
+    written at the prompt (see Rejected alternatives).
   - Alternate screen (vim, less, other full-screen programs): the action does
     nothing — `^L` is a redraw there, not a clear.
   Clearing the grid alone leaves the cursor on its original row and the prompt
@@ -129,12 +130,15 @@ established macOS ⌘K clear convention had no path to that behavior.
   explicitly owns it — query readiness (`pebrel_editor_ready`) and redraw
   ownership (`pebrel_editor_redraw`) are separate capabilities, so an upgraded
   client facing a live pre-redraw integration (query-only, key unbound) degrades
-  to the app-side cursor home instead of writing the key. A user-owned redraw
-  key — including an inert Bash string macro, which `bind -p`/`bind -X` do not
-  list — withdraws only the redraw capability: query, completion and pointer
-  support keep working exactly as in the pre-redraw releases. In the
-  running-command branch no PTY write happens; alternate-screen sessions are
-  left untouched entirely.
+  to the app-side cursor home instead of writing the key. The redraw
+  advertisement is re-verified against the live binding at every prompt and a
+  same-shell rebind revokes it with an empty value, which makes the view forget
+  the ownership; a binding the integration still owns keeps announcing its
+  token. A user-owned redraw key — including an inert Bash string macro, which
+  `bind -p`/`bind -X` do not list — withdraws only the redraw capability: query,
+  completion and pointer support keep working exactly as in the pre-redraw
+  releases. In the running-command branch no PTY write happens; alternate-screen
+  sessions are left untouched entirely.
 - The legacy shell already executes `Action::ClearHistory` and is unchanged.
 
 ## Validation
@@ -151,7 +155,9 @@ settings-pane suite, the i18n contract suites, the
 clears and keeps the buffer through a real bash/zsh PTY; a user-owned function
 binding and a Bash string macro each keep the query capability alive while the
 redraw advertisement stays off and the user binding keeps firing; a query-only
-session leaves the key unbound), `cargo test -p nebula --test file_line_budget`
+session leaves the key unbound; a same-shell rebind revokes the advertisement
+with an empty value while a still-owned binding keeps announcing),
+`cargo test -p nebula --test file_line_budget`
 and `python3 scripts/check_architecture.py --base <PR base>` pass. The dispatch
 regression fails without the adapter arm; the label regression fails without the
 catalog entries.

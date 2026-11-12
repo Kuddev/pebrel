@@ -466,7 +466,7 @@ $global:NebulaPromptTemplate = {
             $clipboardReady = Get-PebrelClipboardCapability
             [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_clipboard_ready=$clipboardReady$([char]7)")
             if ($global:PebrelCompletionInputReady) { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_ready=$global:PebrelEditorReady$([char]7)") }
-            if ($global:PebrelRedrawReady) { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$global:PebrelShellToken$([char]7)") }
+            if ($global:PebrelRedrawReady) { $redrawChord = Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue; if ($redrawChord -and $redrawChord.Function -eq 'ClearScreen') { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$global:PebrelShellToken$([char]7)") } else { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$([char]7)") } }
             $global:NebulaPromptCount = [int]$global:NebulaPromptCount + 1
             $global:NebulaLastCommandSucceeded = $originalDollarQuestion
             $global:NebulaLastCommandExitCode = $originalLastExitCode

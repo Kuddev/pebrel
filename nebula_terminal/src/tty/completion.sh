@@ -1,16 +1,34 @@
 # Private editor query and prompt redraw, advertised as separate capabilities;
 # existing user bindings retain ownership of F24 and the clear-screen redraw key.
+# The redraw advertisement is re-verified against the live binding every prompt:
+# a same-shell rebind revokes it with an empty value, which lets the view forget
+# the ownership, while a binding the integration still owns keeps announcing.
+__pebrel_redraw_owned() {
+    if [ -n "${BASH_VERSION-}" ]; then
+        local tables
+        tables=$(bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null)
+        [[ $tables == *'"\\e[46~": clear-screen'* ]]
+    else
+        [[ $(bindkey '\e[46~') == *clear-screen* ]]
+    fi
+}
+
 __pebrel_editor_ready_report() {
     if [ "${__pebrel_editor_ready:-0}" = 1 ] && [ -n "${__pebrel_shell_token:-}" ]; then
         printf '\033]1337;SetUserVar=pebrel_editor_ready=%s\007' "$__pebrel_shell_token"
         if typeset -f __pebrel_pointer_ready_report >/dev/null; then __pebrel_pointer_ready_report; fi
     fi
-    # Only an integration that actually owns the redraw key reports it. The
-    # query capability alone says nothing about the redraw key: an upgraded
-    # client facing an older integration (query-only) must never send the key
-    # into a live shell where it is simply unbound.
+    # Only an integration that actually owns the redraw key reports it, and it
+    # keeps reporting only while the binding is still ours. The query capability
+    # alone says nothing about the redraw key: an upgraded client facing an older
+    # integration (query-only) must never send the key into a live shell where it
+    # is simply unbound.
     if [ "${__pebrel_editor_redraw:-0}" = 1 ] && [ -n "${__pebrel_shell_token:-}" ]; then
-        printf '\033]1337;SetUserVar=pebrel_editor_redraw=%s\007' "$__pebrel_shell_token"
+        if __pebrel_redraw_owned; then
+            printf '\033]1337;SetUserVar=pebrel_editor_redraw=%s\007' "$__pebrel_shell_token"
+        else
+            printf '\033]1337;SetUserVar=pebrel_editor_redraw=\007'
+        fi
     fi
 }
 

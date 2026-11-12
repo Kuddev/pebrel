@@ -242,6 +242,23 @@ class PowerShellPointerTests(unittest.TestCase):
         session.settle()
         self.assertEqual(self.snapshot(session), (0, "echo probe"))
 
+    def test_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
+        # The advertisement follows the live chord: rebinding it in the same
+        # session revokes the capability with an empty value on the next
+        # prompt, and the user's new binding keeps the chord.
+        session = self.start()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=cHdzaDpmaXh0dXJl\x07", session.output)
+        os.write(
+            session.master,
+            b"Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function BeginningOfLine\r",
+        )
+        output = session.wait(b"PS> ")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11).Function\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"BeginningOfLine", output)
+        self.assertNotIn(b"ClearScreen", output)
+
     def test_production_bootstrap_preserves_native_prompt_and_command_lifecycle(self) -> None:
         session = self.start(before="function prompt { if ($?) { 'native-ok> ' } else { 'native-failed> ' } }")
         self.assertIn(b"native-ok> ", session.output)

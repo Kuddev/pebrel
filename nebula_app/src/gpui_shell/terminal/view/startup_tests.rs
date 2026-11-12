@@ -236,6 +236,53 @@ fn clear_screen_sends_the_owned_powershell_chord_for_pwsh(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn clear_screen_forgets_redraw_ownership_when_revoked(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    view.update(cx, |view, cx| {
+        for (name, value) in [
+            ("pebrel_shell", "bash:rebind-fixture"),
+            ("pebrel_editor_ready", "bash:rebind-fixture"),
+            ("pebrel_editor_redraw", "bash:rebind-fixture"),
+        ] {
+            view.process_event(TermEvent::UserVar { name: name.into(), value: value.into() }, cx);
+        }
+        feed(view, b"previous output\r\n");
+        view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+        assert_eq!(
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![b"\x1b[46~".to_vec()]
+        );
+        // 同一会话内用户重绑了 chord:下一个提示符的撤销上报（空值）让视图
+        // 忘掉所有权,再清屏退回应用侧光标归顶,不向已不属于集成的键发字节。
+        view.process_event(
+            TermEvent::UserVar { name: "pebrel_editor_redraw".into(), value: String::new() },
+            cx,
+        );
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+        let term = view.session.as_ref().unwrap().term.lock();
+        assert_eq!(term.grid().cursor.point, TermPoint::new(Line(0), Column(0)));
+    });
+    let writes: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(writes, Vec::<Vec<u8>>::new());
+    assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
+}
+
+#[gpui::test]
 fn clear_screen_keeps_alternate_screen_and_primary_history(cx: &mut TestAppContext) {
     let (view, cx, receiver) = open(cx);
     view.update(cx, |view, cx| {

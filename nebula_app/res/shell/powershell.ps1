@@ -20,7 +20,14 @@ if (-not $global:PebrelUnixReadLineInstalled) {
             [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_ready=$global:PebrelEditorReady$([char]7)")
         }
         if ($global:PebrelRedrawReady) {
-            [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$global:PebrelShellToken$([char]7)")
+            # Re-verify the live chord each prompt: a same-shell rebind revokes
+            # the capability with an empty value so the view forgets it.
+            $redrawChord = Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue
+            if ($redrawChord -and $redrawChord.Function -eq 'ClearScreen') {
+                [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$global:PebrelShellToken$([char]7)")
+            } else {
+                [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$([char]7)")
+            }
         }
         # OSC 7 is the native location, including paths with spaces or Unicode.
         if ($PWD.Provider.Name -eq 'FileSystem') {
