@@ -35,8 +35,8 @@ use crate::session::LaunchSession;
 use nebula_split::SplitDirection;
 
 use super::{
-    CloseActiveTerminal, MoveTabLeft, MoveTabRight, NebulaWorkspace, RenameActiveTab, SplitDown,
-    SplitRight, WorkspaceTab, tab_menu_surface::TabMenuSurface,
+    CloseActiveTerminal, NebulaWorkspace, RenameActiveTab, SplitDown, SplitRight, WorkspaceTab,
+    tab_menu_surface::TabMenuSurface,
 };
 
 /// 标签右键菜单的宿主。画在 workspace 根上，不进标签行的子孙树——理由见
@@ -107,7 +107,6 @@ impl NebulaWorkspace {
         let language = crate::gpui_shell::config::ui_language(cx);
         let ai_fork = tab_ai_fork_enabled(self, ix, cx);
         let color = self.meta(ix).color;
-        let tab_count = self.tabs.len();
         let retry =
             self.tabs[ix].focused_view().filter(|view| view.read(cx).can_retry_recovery()).cloned();
         let choose_session = self.tabs[ix]
@@ -137,7 +136,7 @@ impl NebulaWorkspace {
             if let Some(copy_cwd) = copy_cwd {
                 menu = menu.item(copy_cwd).separator();
             }
-            Self::tab_popup_menu(menu, workspace, ix, terminal, ai_fork, color, tab_count, language)
+            Self::tab_popup_menu(menu, workspace, ix, terminal, ai_fork, color, language)
         });
         let returning = menu.clone();
         window.defer(cx, move |window, cx| {
@@ -207,7 +206,6 @@ impl NebulaWorkspace {
         terminal: bool,
         ai_fork: bool,
         color: Option<Rgb>,
-        tab_count: usize,
         language: UiLanguage,
     ) -> TabMenuSurface {
         if ai_fork {
@@ -296,39 +294,7 @@ impl NebulaWorkspace {
         }
         let rename = workspace.clone();
         let close = workspace.clone();
-        let move_left = workspace.clone();
-        let move_right = workspace.clone();
         menu = menu
-            .separator()
-            // 位置移动：`action` 只渲键帽，命令仍作用在 `ix` 上（见上面的
-            // 分屏两项）。首/末位灰掉而不是隐藏——菜单条目忽隐忽现比灰掉
-            // 更难认。
-            .item(
-                PopupMenuItem::new(language.text(Message::TabMenuMoveLeft))
-                    .action(Box::new(MoveTabLeft))
-                    .disabled(ix == 0)
-                    .on_click(move |_, window, cx| {
-                        if let Some(workspace) = move_left.upgrade() {
-                            workspace.update(cx, |workspace, cx| {
-                                workspace.activate_tab(ix, window, cx);
-                                workspace.move_active_tab(false, window, cx);
-                            });
-                        }
-                    }),
-            )
-            .item(
-                PopupMenuItem::new(language.text(Message::TabMenuMoveRight))
-                    .action(Box::new(MoveTabRight))
-                    .disabled(ix + 1 >= tab_count)
-                    .on_click(move |_, window, cx| {
-                        if let Some(workspace) = move_right.upgrade() {
-                            workspace.update(cx, |workspace, cx| {
-                                workspace.activate_tab(ix, window, cx);
-                                workspace.move_active_tab(true, window, cx);
-                            });
-                        }
-                    }),
-            )
             .separator()
             .item(
                 PopupMenuItem::new(language.text(Message::CommonRename))
