@@ -1683,7 +1683,8 @@
       "running_window_process": "{process} is still running. Closing the window will stop it."
     },
     "close_window": {
-      "title": "Close window?"
+      "title": "End the session and close?",
+      "force": "Force close"
     },
     "close_pane": {
       "title": "Close this pane?"

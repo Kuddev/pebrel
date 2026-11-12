@@ -1068,7 +1068,8 @@
       "running_window_process": "{process} 仍在執行，關閉視窗會中止它。"
     },
     "close_window": {
-      "title": "關閉視窗？"
+      "title": "終止工作階段並關閉？",
+      "force": "強制關閉"
     },
     "close_pane": {
       "title": "關閉此窗格？"
