@@ -53,7 +53,7 @@ jobs:
           retention-days: 7
 
   validate-backend:
-    if: inputs.runtime_run == 'c817c08ea33e4be6493fa3eba18eb0898d7ce3c0'
+    if: inputs.runtime_run == 'a1388bc7f783a843112f1f8408e74adde207e6e4'
     name: Console host validation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: c817c08ea33e4be6493fa3eba18eb0898d7ce3c0
+          ref: a1388bc7f783a843112f1f8408e74adde207e6e4
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
