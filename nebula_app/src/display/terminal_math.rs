@@ -216,6 +216,14 @@ impl TerminalMathState {
         (term::viewport_to_point_from(viewport_origin, source), source_side)
     }
 
+    pub(crate) fn source_cell(&self, point: Point, viewport_origin: Line) -> Option<Point> {
+        let Some(viewport_point) = term::point_to_viewport_from(viewport_origin, point) else {
+            return Some(point);
+        };
+        let source = self.projection.source_cell(viewport_point)?;
+        Some(term::viewport_to_point_from(viewport_origin, source))
+    }
+
     fn synchronize_grid(&mut self, grid: &TextGrid) {
         let columns_changed = self.columns.is_some_and(|columns| columns != grid.columns);
         let absolute_epoch_changed =
@@ -1100,6 +1108,44 @@ impl LineProjection {
         }
         let source_column = apply_shift(visual_column, shift.saturating_neg());
         (Point::new(point.line, Column(source_column)), side)
+    }
+
+    pub(crate) fn source_cell(&self, point: Point<usize>) -> Option<Point<usize>> {
+        let spans = self.row_spans(point.line);
+        let visual_column = point.column.0;
+        let mut shift = 0isize;
+        let mut active_limit: Option<usize> = None;
+
+        for span in spans {
+            if active_limit
+                .is_some_and(|limit| visual_column >= limit && span.source_start >= limit)
+            {
+                shift = 0;
+                active_limit = None;
+            }
+            let visual_start = apply_shift(span.source_start, span.shift_before);
+            let visual_end = visual_start.saturating_add(span.visual_cells);
+            if visual_column < visual_start {
+                break;
+            }
+            if visual_column < visual_end {
+                return None;
+            }
+            shift = span.shift_after;
+            active_limit = span.reflow_limit;
+        }
+
+        if let Some(limit) = active_limit {
+            if visual_column >= limit {
+                shift = 0;
+            } else {
+                let source_column = apply_shift(visual_column, shift.saturating_neg());
+                return (source_column < limit)
+                    .then(|| Point::new(point.line, Column(source_column)));
+            }
+        }
+        let source_column = apply_shift(visual_column, shift.saturating_neg());
+        Some(Point::new(point.line, Column(source_column)))
     }
 }
 

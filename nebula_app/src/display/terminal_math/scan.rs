@@ -677,9 +677,6 @@ fn is_aligned_column_stop(grid: &TextGrid, row: usize, column: usize) -> bool {
             && column < other_cells.len()
             && other_cells[column].is_some_and(|ch| ch != ' ' && ch != OBJECT)
             && other_cells[column - 1] == Some(' ')
-            && other_cells[..column - 1]
-                .iter()
-                .any(|cell| cell.is_some_and(|ch| ch != ' ' && ch != OBJECT))
     })
 }
 

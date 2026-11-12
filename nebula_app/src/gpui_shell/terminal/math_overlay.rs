@@ -408,10 +408,17 @@ impl MathOverlay {
         }
     }
 
-    /// GPUI 所有 terminal-cell 输入的反投影入口。调用方传入与当前 term 锁
-    /// 同源的 viewport origin，避免滚动或 resize commit 时把视觉行映错。
+    /// GPUI 所有选区/指针端点的反投影入口。调用方传入与当前 term 锁同源的
+    /// viewport origin，避免滚动或 resize commit 时把视觉行映错；固定栏前的
+    /// 压缩空白格吸附到栏前末格右侧，保证拖选端点留在固定栏外。
     pub fn source_point(&self, point: Point, side: Side, viewport_origin: Line) -> (Point, Side) {
         self.state.source_point(point, side, viewport_origin)
+    }
+
+    /// GPUI 单元格/链接命中的反投影入口：仅当视觉格真实承载某个未覆盖的源格
+    /// 时返回 `Some`，公式位图覆盖区与固定栏前的压缩空白格返回 `None`。
+    pub fn source_cell(&self, point: Point, viewport_origin: Line) -> Option<Point> {
+        self.state.source_cell(point, viewport_origin)
     }
 }
 
@@ -1004,14 +1011,15 @@ mod tests {
     #[test]
     fn review_alt_screen_borderless_fixed_columns() {
         let (columns, rows, fixed_col) = (32, 4, 8);
-        for (row0, row1) in [
-            (r"\(x^2\) 123", "plain   456"),
-            (r"\(x^2\) col", "plain   col"),
-            (r"\(x^2\) col", "heading col"),
+        for table in [
+            &[r"\(x^2\) 123", "plain   456"][..],
+            &[r"\(x^2\) col", "plain   col"][..],
+            &[r"\(x^2\) col", "heading col"][..],
+            &[r"\(x^2\) col", "        row-two", "        row-three"][..],
         ] {
             let mut term = term_with(columns, rows, &[]);
             term.swap_alt();
-            for (row, text) in [row0, row1].iter().enumerate() {
+            for (row, text) in table.iter().enumerate() {
                 for (column, glyph) in text.chars().enumerate() {
                     term.grid_mut()[Line(row as i32)][Column(column)].c = glyph;
                 }
@@ -1019,17 +1027,14 @@ mod tests {
             term.grid_mut().cursor.point = Point::new(Line(3), Column(0));
 
             let frame = plan(&mut MathOverlay::default(), &term, columns, rows);
-            assert_eq!(frame.formulas.len(), 1, "{row0} / {row1}");
-            assert_eq!(
-                frame.project_cell(0, fixed_col, columns),
-                Some(fixed_col),
-                "borderless fixed column on formula row must stay at column {fixed_col}: {row0}"
-            );
-            assert_eq!(
-                frame.project_cell(1, fixed_col, columns),
-                Some(fixed_col),
-                "borderless fixed column on plain row must stay at column {fixed_col}: {row1}"
-            );
+            assert_eq!(frame.formulas.len(), 1, "{table:?}");
+            for (row, text) in table.iter().enumerate() {
+                assert_eq!(
+                    frame.project_cell(row, fixed_col, columns),
+                    Some(fixed_col),
+                    "borderless fixed column on row {row} must stay at column {fixed_col}: {text}"
+                );
+            }
         }
     }
 
@@ -1137,9 +1142,14 @@ mod tests {
         let (columns, rows, sidebar_col) = (48, 4, 28);
         let mut term = term_with(columns, rows, &[]);
         term.swap_alt();
-        for (column, glyph) in r"\(x^2\) trailing".chars().enumerate() {
+        for (column, glyph) in r"\(x^2\) trailing prose linkX".chars().enumerate() {
             term.grid_mut()[Line(0)][Column(column)].c = glyph;
         }
+        let hyperlink = nebula_terminal::term::cell::Hyperlink::new(
+            None::<String>,
+            "https://example.com/sidebar-edge".to_owned(),
+        );
+        term.grid_mut()[Line(0)][Column(sidebar_col - 1)].set_hyperlink(Some(hyperlink));
         for column in sidebar_col..36 {
             let cell = &mut term.grid_mut()[Line(0)][Column(column)];
             cell.c = 'S';
@@ -1156,7 +1166,18 @@ mod tests {
         );
         let last_pre_sidebar_visual =
             frame.project_cell(0, sidebar_col - 1, columns).expect("last pre-sidebar cell visible");
-        assert!(last_pre_sidebar_visual < sidebar_col - 1);
+        assert_eq!(last_pre_sidebar_visual, 23);
+        let config = crate::config::UiConfig::default();
+        let mods = gpui::Modifiers::default();
+        let shifted_link_source = overlay
+            .source_cell(Point::new(Line(0), Column(last_pre_sidebar_visual)), Line(0))
+            .expect("shifted link cell maps to its source column");
+        assert_eq!(shifted_link_source, Point::new(Line(0), Column(sidebar_col - 1)));
+        assert!(
+            super::super::osc_links::highlighted_at(&term, &config, shifted_link_source, &mods)
+                .is_some(),
+            "hovering the shifted visual column must hit the OSC 8 link"
+        );
         assert_eq!(
             frame.project_cell(0, sidebar_col, columns),
             Some(sidebar_col),
@@ -1168,13 +1189,26 @@ mod tests {
             assert_eq!(
                 (mapped, mapped_side),
                 (Point::new(Line(0), Column(sidebar_col - 1)), Side::Right),
-                "click in compaction gap column {gap_col} must stay outside the fixed sidebar"
+                "selection endpoint in compaction gap column {gap_col} snaps outside the sidebar"
+            );
+            let link_hit =
+                overlay.source_cell(Point::new(Line(0), Column(gap_col)), Line(0)).and_then(
+                    |point| super::super::osc_links::highlighted_at(&term, &config, point, &mods),
+                );
+            assert!(
+                link_hit.is_none(),
+                "blank compaction gap column {gap_col} must not hit the shifted link"
             );
         }
         assert_eq!(
             overlay.source_point(Point::new(Line(0), Column(sidebar_col)), Side::Left, Line(0)),
             (Point::new(Line(0), Column(sidebar_col)), Side::Left),
             "first cell of the fixed sidebar maps to its own source column"
+        );
+        assert_eq!(
+            overlay.source_cell(Point::new(Line(0), Column(sidebar_col)), Line(0)),
+            Some(Point::new(Line(0), Column(sidebar_col))),
+            "first cell of the fixed sidebar remains addressable for cell hit-testing"
         );
     }
 
