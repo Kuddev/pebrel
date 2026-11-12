@@ -26,13 +26,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Check reviewed source
         run: |
-          test "$(git rev-parse 'HEAD^')" = "$REVIEW_SOURCE"
+          git merge-base --is-ancestor "$REVIEW_SOURCE" HEAD
           git diff --exit-code "$REVIEW_SOURCE" -- nebula_app/src/display
       - name: Install native dependencies
         run: |

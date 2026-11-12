@@ -995,10 +995,10 @@ mod tests {
         assert_eq!(frame.formulas.len(), 1);
         let formula_row = frame.project_cell(0, separator, columns);
         let plain_row = frame.project_cell(1, separator, columns);
-        eprintln!(
-            "table separator: guarded=({separator},{separator}) candidate=({formula_row:?},{plain_row:?})"
+        assert_eq!(
+            formula_row, plain_row,
+            "a formula must not shift a full-screen table column; fixed separator {separator}"
         );
-        assert_eq!(formula_row, plain_row, "a formula must not shift a full-screen table column");
     }
 
     #[test]
