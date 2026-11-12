@@ -26,11 +26,18 @@ fn report(view: &mut TerminalView, name: &str, value: &str, cx: &mut Context<Ter
 }
 
 fn fixture(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext, Receiver<Msg>) {
+    fixture_with_owner(cx, OWNER)
+}
+
+fn fixture_with_owner(
+    cx: &mut TestAppContext,
+    owner: &str,
+) -> (Entity<TerminalView>, VisualTestContext, Receiver<Msg>) {
     let (view, mut window, receiver) = link_fixture(cx, b"");
     view.update(&mut window, |view, cx| {
         view.suggest.suggest_env = crate::display::SuggestEnv::Local;
-        report(view, "pebrel_shell", OWNER, cx);
-        report(view, "pebrel_pointer_ready", OWNER, cx);
+        report(view, "pebrel_shell", owner, cx);
+        report(view, "pebrel_pointer_ready", owner, cx);
         view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
         super::super::super::startup_tests::feed(view, b"$ ");
         view.session.as_ref().unwrap().term.lock().nebula_mark_prompt_input();
@@ -83,6 +90,34 @@ fn shell_pointer_remains_available_after_bracketed_paste_and_native_undo(cx: &mu
     assert_eq!(input(&receiver), b"\x1f");
     gesture(&view, &mut window, 4.1, 4.1);
     assert_eq!(input(&receiver), wire(20001));
+}
+
+#[gpui::test]
+fn zsh_click_moves_the_caret_after_arrow_key_navigation(cx: &mut TestAppContext) {
+    let owner = "zsh:42:arrow-fixture";
+    for (setup, key, encoded, echo, cursor) in [
+        (b"\x1b[?1h".as_slice(), "left", b"\x1bOD".as_slice(), b"\x1b[D".as_slice(), 5),
+        (b"\x1b[?1h\x1b[6D", "right", b"\x1bOC", b"\x1b[C", 1),
+        (b"\x1b[?1l", "alt-left", b"\x1b[1;3D", b"\x1b[6D", 0),
+        (b"\x1b[?1l\x1b[6D", "alt-right", b"\x1b[1;3C", b"\x1b[6C", 6),
+    ] {
+        let (view, mut window, receiver) = fixture_with_owner(cx, owner);
+        view.update(&mut window, |view, _| {
+            super::super::super::startup_tests::feed(view, setup);
+        });
+        window.simulate_keystrokes(key);
+        assert_eq!(input(&receiver), encoded, "{key}");
+        view.update(&mut window, |view, _| {
+            super::super::super::startup_tests::feed(view, echo);
+        });
+
+        gesture(&view, &mut window, 3.1, 3.1);
+        assert_eq!(input(&receiver), wire(20000), "{key}");
+        view.update(&mut window, |view, cx| {
+            report(view, "pebrel_pointer", &format!("{owner}\nutf8:20000\n{cursor}\nabcdef"), cx);
+        });
+        assert_eq!(input(&receiver), wire(2), "{key}");
+    }
 }
 
 #[gpui::test]

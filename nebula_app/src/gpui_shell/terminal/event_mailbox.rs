@@ -77,6 +77,12 @@ pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
             bytes = rest;
             continue;
         }
+        // Application cursor mode sends the same navigation keys as SS3.
+        // Other SS3 sequences (including F1–F4) are not editor navigation.
+        if let [b'O', b'A'..=b'D' | b'F' | b'H', tail @ ..] = rest {
+            bytes = tail;
+            continue;
+        }
         let Some(sequence) = bytes.strip_prefix(b"\x1b[") else { return false };
         let Some(end) = sequence.iter().position(|byte| (0x40..=0x7e).contains(byte)) else {
             return false;
@@ -84,6 +90,9 @@ pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
         let parameters = &sequence[..end];
         match sequence[end] {
             b'A'..=b'D' | b'H' | b'F' if parameters.is_empty() => {},
+            // The xterm horizontal cursor variants include zsh's Option
+            // arrows for word movement. Only admit the modifiers we encode.
+            b'C' | b'D' if matches!(parameters, [b'1', b';', b'2'..=b'8']) => {},
             b'~' if matches!(parameters, b"1" | b"2" | b"3" | b"4" | b"5" | b"6") => {},
             // Ctrl+Shift+F11 is the managed PSReadLine Paste edit. Its legacy
             // VT encoding must preserve the prompt like its Win32 key record.
@@ -193,6 +202,29 @@ impl Stream for EventReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_navigation_preserves_the_prompt_in_both_cursor_modes() {
+        for bytes in [
+            b"\x1b[D\x1b[C".as_slice(),
+            b"\x1bOD\x1bOC",
+            b"\x1bOA\x1bOB\x1bOH\x1bOF",
+            b"\x1b[1;3D\x1b[1;3C",
+            b"text\x1b[1;5D",
+        ] {
+            assert!(preserves_native_prompt(bytes), "{bytes:?}");
+        }
+        for bytes in [
+            b"\x1bOD\r".as_slice(),
+            b"\x1b[1;3C\x03",
+            b"\x1bO",
+            b"\x1bOP",
+            b"\x1b[1;9D",
+            b"\x1b[27u",
+        ] {
+            assert!(!preserves_native_prompt(bytes), "{bytes:?}");
+        }
+    }
 
     #[test]
     fn single_line_bracketed_paste_and_native_undo_preserve_the_prompt() {
