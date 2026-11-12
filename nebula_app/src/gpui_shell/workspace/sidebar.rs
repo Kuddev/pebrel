@@ -1,9 +1,7 @@
+use super::sidebar_groups::SidebarTabRow;
 use super::*;
 use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
-
-/// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
-const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
 
 /// 状态图形与 hover 关闭按钮共用的方形槽，中心不随图形宽度改变。
 const TAB_STATUS_ICON_SIDE: f32 = 24.0;
@@ -15,15 +13,14 @@ pub(super) fn sidebar_new_tab_control(
 ) -> gpui::Stateful<gpui::Div> {
     h_flex()
         .id("sidebar-new-tab")
-        .size(px(SIDEBAR_PLUS_SIZE))
+        .size(px(SIDEBAR_HEADER_ACTION))
         .flex_shrink_0()
         .items_center()
         .justify_center()
         .cursor_pointer()
         .invisible()
         .group_hover(header_group, |button| button.visible())
-        // 标题整行也可点击折叠；必须在按下阶段截断，不能等 Click
-        // 才处理，否则父行已经收到同一次起手。
+        // Header controls own the entire gesture, including mouse-down.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(on_click)
 }
@@ -170,15 +167,18 @@ impl NebulaWorkspace {
     }
 
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let header_group: SharedString = "sidebar-tabs-header-hover".into();
+        let grouping_control = self.sidebar_group_control(header_group.clone(), window, cx);
         let row_height = tab_scroll::tab_row_height(self.density);
         let row_pitch = self.tab_row_pitch();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        // 数量 chip 数字：旧壳独用 ink_faint（比 ink_dim 再暗一档），chip 背
-        // 景 surface 洗色不变——数字不该和标题抢层级。
         let faint = crate::gpui_shell::theme::faint_ink(cx);
-        let active_bg = theme.sidebar_accent;
-        let active_fg = theme.sidebar_accent_foreground;
+        // 选中 tab 与内容板同材质地浮起（浮起底 + 极淡环线与投影），读作
+        // “它就是右边那块”；不再用强调色水洗。
+        let active_bg = crate::gpui_shell::theme::raised_fill(cx);
+        let active_shadow = crate::gpui_shell::theme::raised_shadow(cx);
+        let active_fg = theme.foreground;
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
@@ -190,25 +190,56 @@ impl NebulaWorkspace {
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
-        // 界面字号独立于终端缩放。
-        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
+        // Preserve the prototype's type hierarchy when the UI font size changes.
+        let ui_scale = f32::from(theme.font_size) / 14.0;
+        let label_px = 13.0 * ui_scale;
+        let tag_px = 11.0 * ui_scale;
 
+        let rows = self.sidebar_tab_rows(cx);
+        let language = crate::gpui_shell::config::ui_language(cx);
         // 受约束拖拽的渲染参数：激活后被拖行骑指针位移，落点槽位由位移换算。
         let drag = self
             .tab_drag
             .as_ref()
             .filter(|d| d.active && d.axis == TabDragAxis::Vertical)
-            .map(|d| (d.source, Self::drag_slot(d, self.tabs.len()), d.offset));
+            .and_then(|d| {
+                let target = Self::sidebar_drag_slot(d, &rows);
+                Some((rows.index_of(d.source)?, rows.index_of(target)?, d.offset))
+            });
 
-        // 折叠只裁剪槽位，不改窗口算法：旧壳 `tabs_avail` 与 `tabs_open`
-        // 分开——折起来时行矩形为零，但可用高度仍按面板剩余算。
-        let (tabs_scroll, tabs_show) = self.tabs_visible_window();
+        let (tabs_scroll, tabs_show) = self.tabs_visible_window(rows.len());
         // 行的确定宽度：侧栏宽 − 侧栏 p_2 两边 − 列表右侧滚动条留白。
         // 与下面 `label_avail` 同一份减法口径，两者不能各算一套。
-        let row_w = (self.sidebar_width - 16.0 - tab_scroll::TAB_SCROLL_GUTTER).max(1.0);
-        let items = (0..self.tabs.len())
-            .filter(|&ix| tab_scroll::index_visible(ix, tabs_scroll, tabs_show))
-            .map(|ix| {
+        // 再左右各让 1px：列表容器 overflow_hidden，选中行的浮起环线贴边会被裁掉。
+        let row_w = (self.sidebar_width - 16.0 - tab_scroll::TAB_SCROLL_GUTTER - 2.0).max(1.0);
+        let items = (tabs_scroll..tabs_scroll + tabs_show)
+            .filter_map(|slot| rows.row(slot).map(|item| (slot, item)))
+            .map(|(slot, item)| {
+                let ix = match item {
+                    SidebarTabRow::Tab(ix) => ix,
+                    SidebarTabRow::Group(group) => {
+                        let line = || div().flex_1().min_w(px(12.0)).h(px(1.0)).bg(theme.border);
+                        let mut heading = h_flex()
+                            .id(("sidebar-tab-group", slot))
+                            .w(px(row_w))
+                            .h(px(row_height))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .child(line())
+                            .child(div().max_w(px(row_w * 0.62)).truncate()
+                                .font_family(chrome_family.clone())
+                                .text_size(px(10.5 * ui_scale)).font_weight(FontWeight::SEMIBOLD)
+                                .text_color(muted).child(group.label(language)))
+                            .child(line());
+                        if let Some(path) = group.directory_path() {
+                            heading = heading.tooltip(move |window, cx| {
+                                Tooltip::new(path.clone()).build(window, cx)
+                            });
+                        }
+                        return heading.into_any_element();
+                    },
+                };
                 let active = ix == self.active;
                 let TabPresentation {
                     title,
@@ -230,7 +261,7 @@ impl NebulaWorkspace {
                     window,
                     shell_tag.as_ref(),
                     &metadata_family,
-                    label_px * SIDEBAR_TAG_SCALE,
+                    tag_px,
                     TAB_STATUS_SLOT_W,
                     row_w * 0.45,
                 );
@@ -306,7 +337,7 @@ impl NebulaWorkspace {
                         Self::shell_status_label(
                             tag,
                             metadata_family.clone(),
-                            label_px * SIDEBAR_TAG_SCALE,
+                            tag_px,
                             status_color,
                         )
                         .into_any_element()
@@ -316,11 +347,11 @@ impl NebulaWorkspace {
                 // 源与落点之间的行向反方向让一个槽位，其余不动。存储顺序在
                 // 拖拽期间不变，释放时一次性提交。
                 let (dragged, shift) = match drag {
-                    Some((src, _, _)) if ix == src => (true, 0.0),
-                    Some((src, tgt, _)) if src < tgt && ix > src && ix <= tgt => {
+                    Some((src, _, _)) if slot == src => (true, 0.0),
+                    Some((src, tgt, _)) if src < tgt && slot > src && slot <= tgt => {
                         (false, -row_pitch)
                     },
-                    Some((src, tgt, _)) if src > tgt && ix >= tgt && ix < src => {
+                    Some((src, tgt, _)) if src > tgt && slot >= tgt && slot < src => {
                         (false, row_pitch)
                     },
                     _ => (false, 0.0),
@@ -328,7 +359,7 @@ impl NebulaWorkspace {
                 let row = h_flex()
                 .id(("sidebar-tab", ix))
                 .debug_selector(move || format!("sidebar-tab-{ix}"))
-                .when_some(tooltip, |row, text| row.tooltip(move |window, cx| {
+                .when_some(tooltip.filter(|_| self.tab_menu.is_none()), |row, text| row.tooltip(move |window, cx| {
                     tab_presentation::tooltip(text.clone(), window, cx)
                 }))
                 .group(hover_group.clone())
@@ -342,6 +373,7 @@ impl NebulaWorkspace {
                 // （用户 08-19 报的侧栏 tab 宽度乱跳）。双击重命名"看起来正常"
                 // 只是因为 Input 恰好把容器撑满，不是宽度真的对了。
                 .w(px(row_w))
+                .ml(px(1.0))
                 // 内容再宽也不许把行撑开：截断后的标题若比测量值宽一两像素，
                 // 撑开的行会重新引入上面那个症状。
                 .overflow_hidden()
@@ -356,7 +388,9 @@ impl NebulaWorkspace {
                 // tab chrome 使用终端 Regular face，所有子文本从这里继承常规字重。
                 .font_weight(FontWeight::NORMAL)
                 .cursor_pointer()
-                .when(active, |item| item.bg(active_bg).text_color(active_fg))
+                .when(active, |item| {
+                    item.bg(active_bg).shadow(active_shadow.clone()).text_color(active_fg)
+                })
                 .when(!active && !dragged, |item| {
                     item.text_color(muted).hover(|style| style.bg(hover_bg))
                 })
@@ -636,20 +670,19 @@ impl NebulaWorkspace {
             })
             .collect::<Vec<_>>();
 
-        let header_group: SharedString = "sidebar-tabs-header-hover".into();
         let count: SharedString = self.tabs.len().to_string().into();
 
         let sidebar = v_flex()
+            .debug_selector(|| "workspace-sidebar".into())
             .w(px(self.sidebar_width))
             .h_full()
             .flex_shrink_0()
             // workspace 根保持透明，侧栏自己只铺一层壳色；否则终端卡会
             // 叠到根底色上，把 Acrylic 的目标透明度二次增浓。
             .bg(crate::gpui_shell::theme::tab_bar_background(cx))
-            // 上边距为零：侧栏 / 终端卡 / 右侧抽屉三列顶边一律贴 chrome 下沿
-            // （用户 08-26 裁定「左侧 tab 抬到和文件树顶部一致」）。左右和底部
-            // 仍是旧壳的 8px。
+            // The sidebar surface meets the title bar; its content starts below it.
             .px_2()
+            .pt(px(8.0))
             .pb_2()
             .gap(px(tab_scroll::tab_row_gap(self.density)))
             // 待命阶段（未过阈值）的指针跟踪；激活后由根部罩层独占接管。
@@ -658,73 +691,38 @@ impl NebulaWorkspace {
             }))
             .child(
                 h_flex()
-                    .id("sidebar-tabs-toggle")
-                    .debug_selector(|| "sidebar-tabs-toggle".into())
+                    .id("sidebar-tabs-header")
+                    .debug_selector(|| "sidebar-tabs-header".into())
                     .group(header_group.clone())
                     .w_full()
                     .h(px(row_height))
                     .pb_1()
-                    // 旧壳标题文字从 panel_x + 16px 起；侧栏根已有 8px
-                    // padding，这里再补 8px，箭头不会贴住左边缘。
                     .pl_2()
                     .items_center()
-                    .cursor_pointer()
-                    // `ChromeHit::TabsSection` 命中整条 tabs_header。监听必须
-                    // 挂在标题行根节点，右侧空白区同样可以折叠，而不是只有
-                    // 箭头、标题和数量这一小段能点。
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_tabs_section(cx);
-                    }))
                     .child(
-                        // 箭头、TABS 和计数仍作为一个排版段；折叠命中已经
-                        // 提升到外层整行。右侧 +/⋯ 自己停止冒泡。
                         h_flex()
                             .h_full()
                             .items_center()
+                            .gap(px(6.0))
                             .font_family(chrome_family.clone())
                             .pr_1()
                             .child(
-                                // 折叠三角用组件库线性 Chevron（lucide 细线），
-                                // 不再用 Nerd Font 实心字位——后者在侧栏标题
-                                // 上偏重、和右侧 +/⋯ 的 SVG 不一套语言。
                                 h_flex()
-                                    .w(px(TABS_DISCLOSURE_SLOT_W))
-                                    .h_full()
-                                    .flex_shrink_0()
-                                    .items_center()
-                                    .child(
-                                        Icon::new(if self.tabs_section_collapsed {
-                                            IconName::ChevronRight
-                                        } else {
-                                            IconName::ChevronDown
-                                        })
-                                        .xsmall()
-                                        .text_color(muted),
-                                    ),
+                                    .id("sidebar-tabs-caption")
+                                    .role(gpui::Role::Label)
+                                    .aria_label("TABS")
+                                    .gap(px(0.9 * ui_scale))
+                                    .text_size(px(11.0 * ui_scale))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(muted)
+                                    .children(["T", "A", "B", "S"]),
                             )
                             .child(
                                 div()
-                                    .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
+                                    .font_family(metadata_family.clone())
+                                    .text_size(px(10.0 * ui_scale))
                                     .font_weight(FontWeight::NORMAL)
-                                    .text_color(muted)
-                                    .child("TABS"),
-                            )
-                            .child(
-                                // chip 尺寸贴旧壳公式：h = max(cell_h×0.82×1.18, 11)
-                                // ≈ 18-19px（不是 22），1 位数宽 max(adv+8, h×1.25)。
-                                // 数字 ink_faint。
-                                h_flex()
-                                    .ml_2()
-                                    .h(px((label_px * 1.22 * SIDEBAR_TITLE_SCALE * 1.18).max(11.0)))
-                                    .min_w(px(label_px * 0.62 + 8.0))
-                                    .px_2()
-                                    .justify_center()
-                                    .items_center()
-                                    .rounded_full()
-                                    .bg(theme.muted)
-                                    .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
-                                    .font_weight(FontWeight::NORMAL)
-                                    .text_color(faint)
+                                    .text_color(faint.opacity(0.72))
                                     .child(count),
                             ),
                     )
@@ -744,7 +742,7 @@ impl NebulaWorkspace {
                                         this.add_terminal(window, cx);
                                     }),
                                 )
-                                    .rounded_md()
+                                    .rounded(px(8.0))
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
@@ -755,18 +753,21 @@ impl NebulaWorkspace {
                                         .build(window, cx)
                                     })
                                     .child(
-                                        Icon::new(IconName::Plus).with_size(px(SIDEBAR_HEADER_ICON)),
+                                        div()
+                                            .debug_selector(|| "sidebar-new-tab-icon".into())
+                                            .size(px(SIDEBAR_HEADER_ICON))
+                                            .child(Icon::new(IconName::Plus).with_size(px(SIDEBAR_HEADER_ICON))),
                                     ),
                             )
+                            .child(grouping_control)
                             .child(
                                 h_flex()
                                     .id("sidebar-tabs-menu")
-                                    .w(px(SIDEBAR_MENU_W))
-                                    .h(px(SIDEBAR_PLUS_SIZE))
+                                    .size(px(SIDEBAR_HEADER_ACTION))
                                     .flex_shrink_0()
                                     .items_center()
                                     .justify_center()
-                                    .rounded_md()
+                                    .rounded(px(8.0))
                                     .cursor_pointer()
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
@@ -788,66 +789,30 @@ impl NebulaWorkspace {
                             ),
                     ),
             )
-            .child(self.render_tabs_section(items, cx));
+            .child(self.wrap_tabs_scroll_list(items, rows.len(), cx));
         sidebar
     }
 
-    /// 与旧壳 `nebula_tabs_section_open` 同义：点标题整行折叠/展开。
-    /// 卷帘只裁剪槽位，视口高度在动画期间冻结，避免量到裁剪高后把溢出
-    /// 列表锁成一行滚动区。
-    fn toggle_tabs_section(&mut self, cx: &mut Context<Self>) {
-        self.tabs_section_collapsed = !self.tabs_section_collapsed;
-        // 卷帘一动，菜单锚定的那一行就不在原处了。
-        self.tab_menu = None;
-        self.tabs_fold_armed = true;
-        self.tabs_fold_seq = self.tabs_fold_seq.wrapping_add(1).max(1);
-        let seq = self.tabs_fold_seq;
-        self.tabs_fold_frozen = true;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(250)).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.tabs_fold_seq == seq {
-                    this.tabs_fold_frozen = false;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-        cx.notify();
+    fn sidebar_fold_widths(&self, cx: &App) -> Option<(f32, f32)> {
+        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
+            return None;
+        }
+        let width = self.sidebar_closing_width.unwrap_or(self.sidebar_width);
+        Some(if self.sidebar_collapsed { (width, 0.0) } else { (0.0, width) })
     }
 
-    /// Tab 列表槽位。展开时列表是侧栏 `v_flex` 的 `flex_1` 子项，视口等于
-    /// 面板剩余高度（旧壳 `tabs_avail`）。折叠动画只按**上次量到的剩余
-    /// 高度**卷帘，绝不按全部行高，也不把裁剪高度写回窗口。
-    fn render_tabs_section<I>(&self, items: I, cx: &mut Context<Self>) -> gpui::AnyElement
-    where
-        I: IntoIterator,
-        I::Item: IntoElement,
-    {
-        let collapsed = self.tabs_section_collapsed;
-        let list =
-            self.wrap_tabs_scroll_list(items.into_iter().map(|item| item.into_any_element()), cx);
-        if collapsed && !self.tabs_fold_frozen {
-            return div().into_any_element();
-        }
-        if !self.tabs_fold_armed || !self.tabs_fold_frozen {
-            return if collapsed { div().into_any_element() } else { list };
-        }
-        let slot_h = self.tabs_viewport_h;
-        let (from, to) = if collapsed { (slot_h, 0.0) } else { (0.0, slot_h) };
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_hidden()
-            .child(list)
+    fn animate_sidebar_width(
+        &self,
+        element: gpui::Div,
+        id: &'static str,
+        (from, to): (f32, f32),
+        apply_width: impl Fn(gpui::Div, f32) -> gpui::Div + 'static,
+    ) -> gpui::AnyElement {
+        element
             .with_animation(
-                ("tabs-fold", collapsed as usize),
+                (id, self.sidebar_collapsed as usize),
                 Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
-                move |slot, t| {
-                    let height = from + (to - from) * t;
-                    if !collapsed && t >= 1.0 { slot } else { slot.max_h(px(height)) }
-                },
+                move |element, t| apply_width(element, from + (to - from) * t),
             )
             .into_any_element()
     }
@@ -861,35 +826,26 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let collapsed = self.sidebar_collapsed;
-        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
-            return if collapsed {
+        let Some(widths) = self.sidebar_fold_widths(cx) else {
+            return if self.sidebar_collapsed {
                 div().into_any_element()
             } else {
                 self.render_sidebar(window, cx).into_any_element()
             };
-        }
-        let width = self.sidebar_closing_width.unwrap_or(self.sidebar_width);
-        let (from, to) = if collapsed { (width, 0.0) } else { (0.0, width) };
-        div()
-            .h_full()
-            .flex_shrink_0()
-            .overflow_hidden()
-            .child(self.render_sidebar(window, cx))
-            .with_animation(
-                ("sidebar-fold", collapsed as usize),
-                Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
-                move |slot, t| slot.w(px(from + (to - from) * t)),
-            )
-            .into_any_element()
+        };
+        self.animate_sidebar_width(
+            div().h_full().flex_shrink_0().overflow_hidden().child(self.render_sidebar(window, cx)),
+            "sidebar-fold",
+            widths,
+            |slot, width| slot.w(px(width)),
+        )
     }
 
-    /// 侧栏模式的标题栏：左边侧栏开关 + 齿轮，右边共享详情侧栏，中间在侧栏
-    /// 折叠时顶上活动 tab 的名字。与顶部 tab 模式的 [`Self::render_top_title_bar`]
-    /// 对称——两种布局各自持有自己那条标题带的全部内容。
+    /// 侧栏模式的标题在终端区上方，位于侧栏右缘和右侧工具之间。
     pub(super) fn render_sidebar_title_bar(
         &self,
         settings_active: bool,
+        leading_inset: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         // 颜色先取出来：`cx.theme()` 不可变借着 cx，后面每个 `cx.listener`
@@ -897,22 +853,18 @@ impl NebulaWorkspace {
         let secondary = cx.theme().secondary;
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
-        let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
+        let reader_focus = self.reader_focus_active(cx);
+        let sidebar_visible = !self.sidebar_collapsed && !reader_focus;
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
         let broadcast_button = self.render_toolbar_broadcast(cx);
-        h_flex()
-            .size_full()
-            .items_center()
-            .justify_between()
+        let left_tools = h_flex()
+            .debug_selector(|| "titlebar-left-tools".into())
+            .gap(px(8.0))
+            .flex_shrink_0()
+            .occlude()
             .child(
-                h_flex()
-                    // Keep toolbar gaps independent of the UI font/rem size.
-                    .gap(px(8.0))
-                    .items_center()
-                    .occlude()
-                    .child(
-                        toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
+                toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
                             .selected(sidebar_visible)
@@ -929,19 +881,36 @@ impl NebulaWorkspace {
                                 this.sidebar_fold_armed = !tab_reveal_instant(cx);
                                 cx.notify();
                             })),
-                    )
-                    .child(
-                        toolbar_button("open-settings", IconName::Settings, false)
-                            .selected(settings_active)
-                            .when(settings_active, |button| {
-                                button.bg(settings_active_bg).text_color(settings_active_fg)
-                            })
-                            .tooltip(language.text(Message::ChromeSettingsShortcut))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_settings(window, cx);
-                            })),
-                    ),
             )
+            .child(
+                toolbar_button("open-settings", IconName::Settings, false)
+                    .selected(settings_active)
+                    .when(settings_active, |button| {
+                        button.bg(settings_active_bg).text_color(settings_active_fg)
+                    })
+                    .tooltip(language.text(Message::ChromeSettingsShortcut))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_settings(window, cx);
+                    })),
+            );
+        let left = h_flex().child(left_tools);
+        // Two 32px buttons and their 8px gap still fit when the sidebar is hidden.
+        // A narrow window may shrink the reserved width before crowding the right tools.
+        let fit_sidebar = move |left: gpui::Div, width: f32| {
+            left.w(px((width - leading_inset).max(72.0))).min_w(px(72.0))
+        };
+        let left = if settings_active || reader_focus {
+            left.into_any_element()
+        } else if let Some(widths) = self.sidebar_fold_widths(cx) {
+            self.animate_sidebar_width(left, "sidebar-title-fold", widths, fit_sidebar)
+        } else if sidebar_visible {
+            fit_sidebar(left, self.sidebar_width).into_any_element()
+        } else {
+            left.into_any_element()
+        };
+        h_flex()
+            .size_full()
+            .child(left)
             .child(self.render_active_pane_title(cx))
             .child(
                 window_titlebar::title_bar_right_controls()

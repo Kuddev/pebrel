@@ -690,6 +690,16 @@
       "aiapi_headline": "感谢 AIAPI 对本项目的强力支持！",
       "aiapi_description": "AIAPI 致力于打造全网最稳定的 AI 模型中转站，面向个人开发者、技术团队与企业提供一站式统一接口。我们主打满血 Claude、满血 GPT 等顶尖模型，坚持原汁原味、绝不降智、不掺一滴水。依托动态多路调度保障高可用，性能、响应耗时与账单全程透明；配备顶级售后团队，问题极速响应、全程保驾护航。根据模型与路由策略，调用成本比官方基准价直降 40%–98%。",
       "visit": "立即访问并注册"
+    },
+    "nav": {
+      "workspace": "工作区",
+      "connections": "连接",
+      "system": "系统",
+      "startup": "启动",
+      "alerts": "提醒",
+      "completion": "补全",
+      "mouse_selection": "鼠标与选区",
+      "tabs_windows": "标签与窗口"
     }
   },
   "provider": {
@@ -1620,6 +1630,16 @@
     "tab_color": "标签颜色"
   },
   "chrome": {
+    "tab_grouping": {
+      "label": "标签分组",
+      "section": "分组",
+      "none": "不分组",
+      "project": "按项目目录",
+      "shell": "按 Shell",
+      "agents": "Agents",
+      "terminal": "终端",
+      "files": "文件"
+    },
     "local_administrator": "本机 Pebrel 进程正以 Windows 管理员身份运行",
     "new_terminal_ctrl_shift_t": "新建终端 (Ctrl+Shift+T)",
     "more": "更多",
@@ -1922,14 +1942,17 @@
       "skipped": "有 {count} 个条目无法读取，已隐藏。",
       "retry": "重试",
       "install": "安装",
-      "installing": "正在安装…",
+      "installing": "正在校验并安装…",
+      "downloading": "下载中 {percent}%",
+      "preview_loading": "正在加载预览…",
+      "previewing": "正在预览",
       "installed": "已安装",
       "select": "预览",
       "install_version": "安装 {version}",
       "author": "作者 {author}",
       "download_size": "下载 {size}",
       "no_preview": "暂无预览图",
-      "notice": "来自 pebrel-community/themes 社区目录。下载内容会按目录登记的 SHA-256 校验，只加入主题库，不会自动应用。",
+      "notice": "来自 pebrel-community/themes。安装后可预览，确认使用才会应用。",
       "added": "{name} 已加入主题库。可以在这里预览，满意后点「使用此主题」。",
       "install_failed": "无法安装 {name}：{error}",
       "error": {

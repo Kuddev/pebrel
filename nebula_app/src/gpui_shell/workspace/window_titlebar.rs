@@ -111,6 +111,8 @@ fn title_bar_frame() -> gpui::Div {
 /// 标题栏右侧工具组；右缘留白由平台层决定（见 `RIGHT_CONTROLS_INSET`）。
 pub(super) fn title_bar_right_controls() -> gpui::Div {
     title_bar_panel_controls()
+        .flex_shrink_0()
+        .debug_selector(|| "titlebar-right-controls".into())
         .gap(px(8.0))
         .pr(px(crate::platform::window_chrome::RIGHT_CONTROLS_INSET))
 }
@@ -148,6 +150,10 @@ impl NebulaWorkspace {
         let title_bar_height = effective_title_bar_height(self.density, native_layout);
         let align_with_native_controls =
             native_layout.is_some_and(|layout| layout.native_controls_visible);
+        let left_inset = native_layout.map_or(12.0, |layout| layout.left_inset);
+        // The component adds .pl_3() to the inner drag area in full screen.
+        let fullscreen_inset =
+            if window.is_fullscreen() { f32::from(window.rem_size()) * 0.75 } else { 0.0 };
         let bar = TitleBar::new()
             .on_close_window(cx.listener(|workspace, _, window, cx| {
                 // Linux 的客户端标题栏默认直接销毁窗口；必须复用系统关窗的会话与文档守卫。
@@ -182,7 +188,13 @@ impl NebulaWorkspace {
                     cx,
                 ))
             })
-            .when(!top_tabs, |bar| bar.child(self.render_sidebar_title_bar(settings_active, cx)));
+            .when(!top_tabs, |bar| {
+                bar.pl(px(left_inset)).child(self.render_sidebar_title_bar(
+                    settings_active,
+                    left_inset + fullscreen_inset,
+                    cx,
+                ))
+            });
 
         // AppKit owns both the control group and its geometry. Read the live
         // frames so system layout, resize and full-screen transitions agree.
@@ -246,6 +258,13 @@ mod tests {
             let find = window.debug_bounds("terminal-find").unwrap();
             let commands = window.debug_bounds("command-manager-toggle").unwrap();
             assert!(find.right() < commands.left(), "{position:?}");
+            let controls = window.debug_bounds("titlebar-right-controls").unwrap();
+            let last_button = window.debug_bounds("toggle-right-sidebar").unwrap();
+            assert_eq!(
+                controls.right() - last_button.right(),
+                px(crate::platform::window_chrome::RIGHT_CONTROLS_INSET),
+                "{position:?}: toolbar actions keep their gap before the native controls"
+            );
         }
     }
 

@@ -45,9 +45,10 @@ impl RenderOnce for SettingsSegments {
                     .width
                     + px(24.0)
             })
-            .fold(px(64.0), |width, next| width.max(next));
+            .fold(px(48.0), |width, next| width.max(next));
         let width = slot_width * self.labels.len() as f32;
-        // 已确认的短选项保持胶囊；真实排版宽度交给设置行换行，而非退回下拉框。
+        // 短选项保留胶囊轮廓，空间不足时整组换行。
+        let radius = self.height / 2.0;
         let key = self.key;
         let count = self.buttons.len() as f32;
         let target = self.selected as f32 / count;
@@ -66,15 +67,17 @@ impl RenderOnce for SettingsSegments {
             .bottom_0()
             .left(relative(target))
             .w(relative(1.0 / count))
-            .rounded(self.height / 2.0)
+            .rounded(radius)
             .border_1()
             .border_color(cx.theme().border.opacity(0.7))
             .bg(thumb)
-            .shadow(vec![gpui::BoxShadow {
-                offset: gpui::point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                ..crate::gpui_shell::theme::card_shadow(cx)
-            }]);
+            .when(!cx.theme().is_dark(), |indicator| {
+                indicator.shadow(vec![gpui::BoxShadow {
+                    offset: gpui::point(px(0.0), px(1.0)),
+                    blur_radius: px(3.0),
+                    ..crate::gpui_shell::theme::card_shadow(cx)
+                }])
+            });
         let indicator = animate_segment_indicator(
             format!("settings-indicator-{key}").into(),
             indicator,
@@ -90,7 +93,7 @@ impl RenderOnce for SettingsSegments {
             .border_1()
             .border_color(cx.theme().border)
             .p(px(TRACK_INSET - 1.0))
-            .rounded(self.height / 2.0 + px(TRACK_INSET))
+            .rounded(radius + px(TRACK_INSET))
             .bg(track)
             .child(
                 h_flex().relative().w_full().h(self.height).child(indicator).children(self.buttons),
@@ -126,7 +129,7 @@ impl SettingsPane {
         let selected = state.read(cx).selected_index(cx).map(|index| index.row).unwrap_or(0);
         let labels =
             localized_select_labels(key, values, crate::gpui_shell::config::ui_language(cx));
-        let height = (cx.theme().font_size * 2.0).max(px(28.0));
+        let height = (cx.theme().font_size * 1.5).max(px(28.0));
         Some(
             SettingsSegments {
                 key,

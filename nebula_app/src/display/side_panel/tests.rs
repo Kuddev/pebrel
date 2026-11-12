@@ -578,6 +578,7 @@ mod tests {
             history: Vec::new(),
             repository_root: None,
             repository: None,
+            toplevel: None,
         }));
 
         assert!(!panel.git_row_is_file(0), "未暂存标题");
@@ -1064,4 +1065,26 @@ fn wide_directory_selection_bounds_capacity_and_keeps_late_best_entries() {
     let bytes = kept.capacity() * std::mem::size_of::<(bool, String, PathBuf)>()
         + kept.iter().map(|row| row.1.capacity() + row.2.capacity()).sum::<usize>();
     assert!(bytes <= 512 * 1024);
+
+    #[test]
+    fn file_tree_marks_prefer_worktree_status_and_flag_conflicts() {
+        let top = PathBuf::from("/repo");
+        let info = GitInfo {
+            staged: vec![('A', "src/new.rs".into()), ('M', "src/both.rs".into())],
+            unstaged: vec![
+                ('D', "src/both.rs".into()),
+                ('?', "output/".into()),
+                ('M', "src/merge.rs".into()),
+            ],
+            conflicts: vec![('U', "src/merge.rs".into())],
+            toplevel: Some(top.clone()),
+            ..GitInfo::default()
+        };
+        let marks = git_marks(&info);
+        assert_eq!(marks.get(&top.join("src/new.rs")), Some(&'A'));
+        assert_eq!(marks.get(&top.join("src/both.rs")), Some(&'D'), "工作区改动优先");
+        assert_eq!(marks.get(&top.join("output")), Some(&'U'), "未跟踪目录去掉尾斜杠");
+        assert_eq!(marks.get(&top.join("src/merge.rs")), Some(&'!'), "冲突覆盖一切");
+        assert!(git_marks(&GitInfo { toplevel: None, ..info }).is_empty());
+    }
 }

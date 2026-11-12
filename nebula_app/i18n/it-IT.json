@@ -60,6 +60,16 @@
     "font": {
       "loading": "Caricamento dei caratteri di sistema…",
       "no_matches": "Nessun carattere corrispondente"
+    },
+    "nav": {
+      "workspace": "Area di lavoro",
+      "connections": "Connessioni",
+      "system": "Sistema",
+      "startup": "Avvio",
+      "alerts": "Avvisi",
+      "completion": "Completamento",
+      "mouse_selection": "Mouse e selezione",
+      "tabs_windows": "Schede e finestre"
     }
   },
   "common": {

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::gpui_shell::workspace::TerminalPane;
-use gpui::{AvailableSpace, Focusable as _, point, relative};
+use gpui::{Focusable as _, point, relative};
 use gpui_component::menu::PopupMenuItem;
 
 fn grip_mark(color: Hsla) -> impl IntoElement {
@@ -32,42 +32,18 @@ fn grip_mark(color: Hsla) -> impl IntoElement {
     .size(px(16.0))
 }
 
-/// Center on the window, bounded symmetrically by the actual toolbar slot.
-/// Native window controls and optional toolbar buttons need no duplicated insets.
+/// Center within the space left between the toolbar groups and native controls.
 fn centered_title(title: gpui::AnyElement) -> impl IntoElement {
-    canvas(
-        move |bounds, window, cx| {
-            let center = window.viewport_size().width / 2.0;
-            let half = (center - bounds.left()).min(bounds.right() - center) - px(8.0);
-            if half <= px(0.0) {
-                return None;
-            }
-            let width = half * 2.0;
-            let mut container = h_flex()
-                .w(width)
-                .h(bounds.size.height)
-                .items_center()
-                .justify_center()
-                .min_w_0()
-                .child(title)
-                .into_any_element();
-            container.prepaint_as_root(
-                point(center - half, bounds.top()),
-                size(AvailableSpace::Definite(width), AvailableSpace::Definite(bounds.size.height)),
-                window,
-                cx,
-            );
-            Some(container)
-        },
-        |_, title, window, cx| {
-            if let Some(mut title) = title {
-                title.paint(window, cx);
-            }
-        },
-    )
-    .flex_1()
-    .min_w_0()
-    .h_full()
+    h_flex()
+        .debug_selector(|| "active-pane-title-slot".into())
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .px(px(8.0))
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
+        .child(title)
 }
 
 impl NebulaWorkspace {

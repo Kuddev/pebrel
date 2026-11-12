@@ -60,6 +60,16 @@
     "font": {
       "loading": "Systemschriftarten werden geladen…",
       "no_matches": "Keine passenden Schriftarten"
+    },
+    "nav": {
+      "workspace": "Arbeitsbereich",
+      "connections": "Verbindungen",
+      "system": "System",
+      "startup": "Start",
+      "alerts": "Hinweise",
+      "completion": "Vervollständigung",
+      "mouse_selection": "Maus und Auswahl",
+      "tabs_windows": "Tabs und Fenster"
     }
   },
   "common": {

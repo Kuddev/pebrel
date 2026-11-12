@@ -13,7 +13,9 @@ impl Render for SegmentsHost {
 }
 
 #[gpui::test]
-fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpui::TestAppContext) {
+fn segments_keep_compact_height_full_hit_targets_and_keyboard_selection(
+    cx: &mut gpui::TestAppContext,
+) {
     let _lock = lock_theme_studio();
     let _settings = SettingsBytesGuard::capture();
     nebula_settings::persist_keys(&[("tab_reveal", "slide".into()), ("language", "en-US".into())])
@@ -21,6 +23,7 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_reduce_motion(true);
+        gpui_component::Theme::global_mut(cx).font_size = px(16.0);
         cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
     });
     let mut pane = None;
@@ -35,7 +38,7 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
     });
     let pane = pane.unwrap();
     window.simulate_resize(gpui::size(px(500.0), px(200.0)));
-    // Short and long labels keep the same capsule interaction.
+    // Short and long labels share the same full segment hit area.
     for (value, selector) in [
         ("slide", "settings-choice-tab_reveal-slide"),
         ("instant", "settings-choice-tab_reveal-instant"),
@@ -55,6 +58,7 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
             let _ = window.draw(cx);
         });
         let track = window.debug_bounds("settings-choices-tab_reveal").unwrap();
+        assert_eq!(track.size.height, px(32.0));
         let thumb = window.debug_bounds("settings-indicator-tab_reveal").unwrap();
         // 点击后行内撤销控件可能出现，浮块与按钮必须用同一帧的布局比较。
         let slot = window.debug_bounds(selector).unwrap();
@@ -87,7 +91,7 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
 }
 
 #[gpui::test]
-fn completion_capsules_keep_all_chinese_choices_at_large_font_size(cx: &mut gpui::TestAppContext) {
+fn completion_segments_keep_all_chinese_choices_at_large_font_size(cx: &mut gpui::TestAppContext) {
     let _lock = lock_theme_studio();
     let _settings = SettingsBytesGuard::capture();
     nebula_settings::persist_keys(&[

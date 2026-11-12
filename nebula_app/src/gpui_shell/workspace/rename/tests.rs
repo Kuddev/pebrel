@@ -344,6 +344,40 @@ fn custom_pane_names_survive_snapshot_json_and_workspace_restore(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn sidebar_header_icons_follow_hover_without_dismissing_the_group_menu(cx: &mut TestAppContext) {
+    let (_fixture, mut window) = RenameFixture::open(cx);
+    let header = window.debug_bounds("sidebar-tabs-header").unwrap();
+    let outside = gpui::point(header.right() + px(12.0), header.center().y);
+    let icons = ["sidebar-new-tab-icon", "sidebar-tab-grouping-icon"];
+
+    window.simulate_mouse_move(outside, None, Modifiers::default());
+    settle(&mut window);
+    for icon in icons {
+        assert!(window.debug_bounds(icon).is_none(), "{icon} visible at rest");
+    }
+
+    window.simulate_mouse_move(header.center(), None, Modifiers::default());
+    settle(&mut window);
+    for icon in icons {
+        assert!(window.debug_bounds(icon).is_some(), "{icon} hidden over the header");
+    }
+
+    let grouping = window.debug_bounds("sidebar-tab-grouping").unwrap().center();
+    window.simulate_mouse_move(grouping, None, Modifiers::default());
+    settle(&mut window);
+    window.simulate_click(grouping, Modifiers::default());
+    settle(&mut window);
+    window.simulate_mouse_move(outside, None, Modifiers::default());
+    settle(&mut window);
+    for icon in icons {
+        assert!(window.debug_bounds(icon).is_none(), "{icon} visible outside the header");
+    }
+    window.update(|window, _| {
+        assert!(window.context_stack().iter().any(|context| context.contains("PebrelTabMenu")));
+    });
+}
+
+#[gpui::test]
 fn sidebar_panes_keep_their_full_surface_and_center_the_title(cx: &mut TestAppContext) {
     let (fixture, mut window) = RenameFixture::open(cx);
     window.simulate_resize(gpui::size(px(1100.0), px(720.0)));
@@ -378,8 +412,17 @@ fn sidebar_panes_keep_their_full_surface_and_center_the_title(cx: &mut TestAppCo
             });
             settle(&mut window);
             let title = window.debug_bounds("active-pane-title").unwrap();
+            let slot = window.debug_bounds("active-pane-title-slot").unwrap();
             let broadcast = window.debug_bounds("toolbar-broadcast").unwrap();
-            assert!((f32::from(title.center().x) - width / 2.0).abs() < 1.0);
+            let left_edge = if collapsed {
+                window.debug_bounds("titlebar-left-tools").unwrap().right()
+            } else {
+                window.debug_bounds("workspace-sidebar").unwrap().right()
+            };
+            assert_eq!(slot.left(), left_edge, "align to the visible sidebar edge");
+            assert_eq!(slot.right(), broadcast.left(), "stop before the first right tool");
+            assert!((f32::from(title.center().x - slot.center().x)).abs() < 1.0);
+            assert!(title.left() >= slot.left() + px(8.0));
             assert!(title.right() <= broadcast.left());
         }
     }

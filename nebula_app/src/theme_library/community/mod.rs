@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 #[cfg(test)]
 pub(crate) use transfer::install_file;
-pub(crate) use transfer::{Error, fetch_catalog, fetch_preview, install};
+pub(crate) use transfer::{Error, fetch_catalog, fetch_preview, install, install_with_progress};
 
 /// Provenance name written into install receipts.
 pub(crate) const CATALOG: &str = "pebrel-community/themes";

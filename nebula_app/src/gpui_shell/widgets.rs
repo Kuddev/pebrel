@@ -90,8 +90,10 @@ pub(crate) fn terminal_glyph(glyph: impl Into<SharedString>, size: f32) -> gpui:
 }
 
 /// Desktop form controls keep their padding even with a small UI font.
+pub(crate) const SETTINGS_HIT_SIZE: f32 = 44.0;
+
 pub(crate) fn settings_control_height(cx: &App) -> gpui::Pixels {
-    px(f32::from(cx.theme().font_size).max(16.0) * 2.0)
+    (cx.theme().font_size * 2.0).max(px(SETTINGS_HIT_SIZE))
 }
 
 /// Transparent settings action with a restrained, neutral interaction wash.
@@ -117,7 +119,7 @@ pub(crate) fn settings_button(button: Button, outlined: bool, cx: &App) -> Butto
 
 /// Icon-only actions keep a square hit area without text-button side padding.
 pub(crate) fn settings_icon_button(button: Button, cx: &App) -> Button {
-    settings_button(button, false, cx).w(px(32.0)).h(px(32.0)).px_0()
+    settings_button(button, false, cx).w(px(SETTINGS_HIT_SIZE)).px_0()
 }
 
 /// The select keeps its native popup and keyboard handling; this frame supplies

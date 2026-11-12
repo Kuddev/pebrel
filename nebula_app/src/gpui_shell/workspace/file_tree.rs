@@ -271,12 +271,34 @@ impl NebulaWorkspace {
             })
             .flatten();
 
+        let git_mark = (!is_parent).then(|| self.side_panel.git_mark(&row.path)).flatten();
+        let mark_color = match git_mark {
+            Some('M' | 'R' | 'C' | 'T') => theme.warning,
+            Some('A') => theme.success,
+            Some('D' | '!') => theme.danger,
+            _ => crate::gpui_shell::theme::faint_ink(cx),
+        };
+        let depth = row.depth;
+        let guide = crate::gpui_shell::theme::settings_hairline(cx);
+
         // 外层只占行距（34px），内层那张 30px 的水洗由它垂直居中——旧壳
         // 就是这么分的：行距决定密度，水洗决定"被点中的那块"有多大。
         h_flex()
             .h(px(ROW_PITCH))
             .w_full()
+            .relative()
             .px(px(ROW_WASH_INSET))
+            // 缩进引导线：每一层祖先一条 1px 竖线，对齐该层折叠箭头的中心。
+            // 画满整个行距，相邻行首尾相接成连续的线；画在水洗下面，不挡选中底。
+            .children((0..depth).map(|level| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(ROW_WASH_INSET + 1.0 + 8.0 + level as f32 * 16.0 + 5.5))
+                    .w(px(1.0))
+                    .bg(guide)
+            }))
             .child(
                 h_flex()
                 .id(SharedString::from(format!("file-tree-row-{visible_ix}-{sticky}")))
@@ -342,6 +364,19 @@ impl NebulaWorkspace {
                         .when(row.ignored, |label| label.italic())
                         .child(row.name),
                 )
+                .when_some(git_mark, |item, mark| {
+                    item.child(
+                        div()
+                            .w(px(14.0))
+                            .flex_shrink_0()
+                            .text_center()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(theme.font_size - px(2.5))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(mark_color)
+                            .child(SharedString::from(mark.to_string())),
+                    )
+                })
                 .when_some(path_hint.filter(|hint| !hint.is_empty()), |item, hint| {
                     item.child(
                         div()

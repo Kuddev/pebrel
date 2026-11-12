@@ -43,8 +43,8 @@ pub(super) const SECTION_SEARCH_TERMS: [crate::i18n::Message; 13] = [
     crate::i18n::Message::SettingsSearchTermsPlugins,
 ];
 
-/// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
-/// 下标，不复制设置状态或路由。
+/// 导航的视觉分组与顺序；组名由 [`nav_group_label`] 渲染。数组里保存稳定的
+/// [`SECTION_IDS`] 下标，不复制设置状态或路由。
 pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] = [
     ("workspace", &[0, 1, 2, 10, PLUGINS_SECTION, 6, 7]),
     ("connections", &[3, 4, 5, MOBILE_SECTION]),
@@ -70,6 +70,61 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
     }
 }
 
+pub(super) fn nav_group_label(key: &str, language: crate::display::UiLanguage) -> &'static str {
+    use crate::i18n::Message;
+    match key {
+        "workspace" => language.text(Message::SettingsNavWorkspace),
+        "connections" => language.text(Message::SettingsNavConnections),
+        _ => language.text(Message::SettingsNavSystem),
+    }
+}
+
+/// 大类在导航里原地展开的子项。子项同时是该页分组的标题与筛选键：
+/// 分组用 [`SettingsPane::nav_group`] 声明自己属于哪一项，标题从这里取，
+/// 不另存一份文字，导航与正文不会各说各的。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum NavChild {
+    Theme,
+    TerminalLook,
+    Cursor,
+    Interface,
+    Background,
+    Startup,
+    Alerts,
+    Completion,
+    Mouse,
+    Tabs,
+}
+
+impl NavChild {
+    pub(super) fn label(self, language: crate::display::UiLanguage) -> &'static str {
+        use crate::i18n::Message;
+        language.text(match self {
+            Self::Theme => Message::CommonTheme,
+            Self::TerminalLook => Message::SettingsAppearanceTerminalAppearance,
+            Self::Cursor => Message::CommonCursor,
+            Self::Interface => Message::ThemeEditorPreviewInterface,
+            Self::Background => Message::SettingsAppearanceCustomBackground,
+            Self::Startup => Message::SettingsNavStartup,
+            Self::Alerts => Message::SettingsNavAlerts,
+            Self::Completion => Message::SettingsNavCompletion,
+            Self::Mouse => Message::SettingsNavMouseSelection,
+            Self::Tabs => Message::SettingsNavTabsWindows,
+        })
+    }
+}
+
+/// 子项顺序与页面内分组的上下顺序一致。只有分组足够多的大类才展开。
+pub(super) fn nav_children(section: usize) -> &'static [NavChild] {
+    use NavChild::*;
+    match SECTION_IDS.get(section).copied() {
+        Some("appearance") => &[Theme, TerminalLook, Cursor, Interface, Background],
+        Some("profiles") => &[Startup, Completion, Alerts],
+        Some("interaction") => &[Mouse, Tabs],
+        _ => &[],
+    }
+}
+
 pub(super) fn is_nav_section_visible(index: usize) -> bool {
     index < SECTION_IDS.len() && index != 3
 }
@@ -83,7 +138,8 @@ pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
 
 // 导航使用组件的小字号，与搜索菜单一致；尺寸是逻辑像素，由窗口统一处理 DPI。
 pub(super) const SETTINGS_NAV_WIDTH: f32 = 248.0;
-pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 34.0;
+pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 32.0;
+pub(super) const SETTINGS_NAV_CHILD_HEIGHT: f32 = 28.0;
 pub(super) const SETTINGS_NAV_ICON_SIZE: f32 = 16.0;
 
 // 正文分组与表单继续沿用现有几何节奏。

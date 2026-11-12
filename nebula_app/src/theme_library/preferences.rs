@@ -17,7 +17,8 @@ const MAX_PREFERENCE_BYTES: usize = 1024 * 1024;
 /// Prepare one explicit application of a stored custom theme. Both the
 /// picker and editor use these updates, so existing personal overrides cannot
 /// accidentally mask a value the user has just confirmed in the preview.
-/// Absent optional theme values keep the corresponding personal preference.
+/// Absent optional values inherit personal preferences, except that applying a
+/// community theme replaces the active wallpaper with the one in the package.
 /// Preparing these values performs no I/O and does not apply the theme.
 pub(crate) fn custom_theme_updates(
     document: &ThemeDocument,
@@ -59,9 +60,9 @@ pub(crate) fn custom_theme_updates(
         updates.push(("background_media_kind", kind.settings_value().to_owned()));
     }
     if let Some(path) = definition.effects.background_image {
-        // An explicit empty path removes the wallpaper; None preserves the
-        // personal preference, including when applying a colors-only theme.
         updates.push(("background_image", path));
+    } else if has_community_origin(document) {
+        updates.push(("background_image", String::new()));
     }
     if let Some(opacity) = definition.effects.background_image_opacity {
         updates.push(("background_image_opacity", opacity.to_string()));
@@ -76,6 +77,31 @@ pub(crate) fn custom_theme_updates(
         updates.push(("background_image_cover_chrome", if cover { "1" } else { "0" }.to_owned()));
     }
     Ok(updates)
+}
+
+fn has_community_origin(document: &ThemeDocument) -> bool {
+    super::package::Origin::of(document)
+        .is_some_and(|origin| origin.catalog == super::community::CATALOG)
+}
+
+/// When the next theme inherits wallpaper, release the previous community
+/// package's image if it is still active. A manually chosen replacement and
+/// an explicit wallpaper from the next theme both take precedence.
+pub(crate) fn release_community_wallpaper(
+    previous: &ThemeDocument,
+    active_image: Option<&str>,
+    updates: &mut Vec<(&'static str, String)>,
+) {
+    let Some(active_image) = active_image else { return };
+    if updates.iter().any(|(key, _)| *key == "background_image") || !has_community_origin(previous)
+    {
+        return;
+    }
+    if previous.definition().ok().and_then(|theme| theme.effects.background_image).as_deref()
+        == Some(active_image)
+    {
+        updates.push(("background_image", String::new()));
+    }
 }
 
 /// Exact bytes last observed by the dialog, including an absent-file revision.
@@ -219,6 +245,33 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn leaving_a_community_theme_releases_only_its_own_wallpaper() {
+        let mut definition =
+            nebula_settings::ThemeDefinition::from_builtin(nebula_settings::ThemeName::Nord);
+        definition.effects.background_image = Some("package/wallpaper.png".to_owned());
+        let local = super::super::from_definition(&definition).unwrap();
+        let mut value = local.to_value();
+        value["metadata"]["package"]["origin"] = serde_json::json!({
+            "catalog": super::super::community::CATALOG,
+            "id": "author/theme",
+            "version": "1.0.0",
+            "sha256": "digest",
+        });
+        let previous = ThemeDocument::from_value(value).unwrap();
+
+        let mut updates = Vec::new();
+        release_community_wallpaper(&previous, Some("personal.png"), &mut updates);
+        release_community_wallpaper(&local, Some("package/wallpaper.png"), &mut updates);
+        assert!(updates.is_empty());
+        release_community_wallpaper(&previous, Some("package/wallpaper.png"), &mut updates);
+        assert_eq!(updates, [("background_image", String::new())]);
+
+        let mut explicit = vec![("background_image", "next-theme.png".to_owned())];
+        release_community_wallpaper(&previous, Some("package/wallpaper.png"), &mut explicit);
+        assert_eq!(explicit, [("background_image", "next-theme.png".to_owned())]);
+    }
 
     #[test]
     fn confirmed_theme_options_replace_old_active_overrides_together() {

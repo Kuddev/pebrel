@@ -60,6 +60,16 @@
     "font": {
       "loading": "시스템 글꼴을 불러오는 중…",
       "no_matches": "일치하는 글꼴이 없습니다"
+    },
+    "nav": {
+      "workspace": "작업 공간",
+      "connections": "연결",
+      "system": "시스템",
+      "startup": "시작",
+      "alerts": "알림",
+      "completion": "자동 완성",
+      "mouse_selection": "마우스 및 선택",
+      "tabs_windows": "탭 및 창"
     }
   },
   "common": {

@@ -388,7 +388,7 @@ impl NebulaWorkspace {
             },
         );
         self.active = at;
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         self.focus_active(window, cx);
         cx.notify();
     }

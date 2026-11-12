@@ -7,11 +7,15 @@ use super::appearance_picker::AppearanceSelection;
 use super::*;
 use crate::i18n::Message;
 use crate::theme_library::community::{self, Entry, Installed, Listing};
+use futures::StreamExt as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 pub(super) const COMMUNITY_FILTER: usize = 4;
+const PREVIEW_CONCURRENCY: usize = 3;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -20,6 +24,7 @@ pub(super) type Installer = fn(
     &Entry,
     &crate::theme_library::ThemeLibraryStore,
     &AtomicBool,
+    &mut dyn FnMut(u64),
 ) -> Result<crate::theme_library::ThemeDocument, community::Error>;
 
 pub(super) enum CatalogLoad {
@@ -35,7 +40,7 @@ pub(super) enum Preview {
 }
 
 pub(super) enum InstallState {
-    Running,
+    Running(Arc<AtomicU64>),
     Failed(String),
 }
 
@@ -100,8 +105,9 @@ impl SettingsPane {
         if picker.community.is_some() && !retry {
             return;
         }
-        let community = Community::new(CatalogLoad::Loading, community::install);
+        let community = Community::new(CatalogLoad::Loading, community::install_with_progress);
         let generation = community.generation;
+        let cancel = community.cancel.clone();
         picker.community = Some(community);
         let language = crate::gpui_shell::config::ui_language(cx);
         let executor = cx.background_executor().clone();
@@ -140,18 +146,27 @@ impl SettingsPane {
                 .ok()
                 .flatten()
                 .unwrap_or_default();
-            // One preview at a time keeps the page's network and decode cost bounded.
-            for (id, url) in previews {
-                let image = executor
-                    .spawn(async move {
-                        let mut pixels = community::fetch_preview(&url).ok()?;
-                        // RenderImage uploads BGRA.
-                        for pixel in pixels.pixels_mut() {
-                            pixel.0.swap(0, 2);
-                        }
-                        Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])))
-                    })
-                    .await;
+            // A slow image does not hold up the rest of the first row.
+            let previews = futures::stream::iter(previews)
+                .map(|(id, url)| {
+                    let executor = executor.clone();
+                    let cancel = cancel.clone();
+                    async move {
+                        let image = executor
+                            .spawn(async move {
+                                let mut pixels = community::fetch_preview(&url, &cancel).ok()?;
+                                for pixel in pixels.pixels_mut() {
+                                    pixel.0.swap(0, 2); // RenderImage takes BGRA.
+                                }
+                                Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])))
+                            })
+                            .await;
+                        (id, image)
+                    }
+                })
+                .buffer_unordered(PREVIEW_CONCURRENCY);
+            futures::pin_mut!(previews);
+            while let Some((id, image)) = previews.next().await {
                 let current = this
                     .update(cx, |this, cx| {
                         let Some(community) = this.community_mut(generation) else { return false };
@@ -188,23 +203,54 @@ impl SettingsPane {
             return;
         }
         let Some(community) = picker.community.as_mut() else { return };
-        if matches!(community.installs.get(&id), Some(InstallState::Running)) {
+        if matches!(community.installs.get(&id), Some(InstallState::Running(_))) {
             return;
         }
         let Some(entry) = community.entry(&id).cloned() else { return };
-        community.installs.insert(id.clone(), InstallState::Running);
+        let progress = Arc::new(AtomicU64::new(0));
+        community.installs.insert(id.clone(), InstallState::Running(progress.clone()));
         community.notice = None;
+        let previous_draft = (picker.draft, picker.foreground_override);
         let generation = community.generation;
         let cancel = community.cancel.clone();
         let installer = community.installer;
         let language = crate::gpui_shell::config::ui_language(cx);
         let executor = cx.background_executor().clone();
+        let timer = executor.clone();
+        let watched = progress.clone();
+        let progress_id = id.clone();
+        cx.spawn(async move |this, cx| {
+            let mut shown = 0;
+            loop {
+                timer.timer(PROGRESS_INTERVAL).await;
+                let bytes = watched.load(Ordering::Relaxed);
+                let running = this
+                    .update(cx, |this, cx| {
+                        let running = this.community_mut(generation).is_some_and(|community| {
+                            matches!(community.installs.get(&progress_id),
+                            Some(InstallState::Running(current)) if Arc::ptr_eq(current, &watched))
+                        });
+                        if running && bytes != shown {
+                            cx.notify();
+                        }
+                        running
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+                shown = bytes;
+            }
+        })
+        .detach();
         cx.spawn_in(window, async move |this, cx| {
             let result = executor
                 .spawn(async move {
                     let store = crate::theme_library::ThemeLibraryStore::default();
-                    let document = installer(&entry, &store, &cancel)
-                        .map_err(|error| error.describe(language))?;
+                    let document = installer(&entry, &store, &cancel, &mut |bytes| {
+                        progress.store(bytes, Ordering::Relaxed);
+                    })
+                    .map_err(|error| error.describe(language))?;
                     let definition = document.definition().map_err(|error| error.to_string())?;
                     Ok::<_, String>((document, definition))
                 })
@@ -223,11 +269,15 @@ impl SettingsPane {
                         community.installs.remove(&id);
                         community.notice =
                             Some(language.format(Message::ThemeCommunityAdded, &[("name", &name)]));
-                        this.choose_appearance_draft(
-                            AppearanceSelection::Custom(index),
-                            window,
-                            cx,
-                        );
+                        if picker.filter == COMMUNITY_FILTER
+                            && (picker.draft, picker.foreground_override) == previous_draft
+                        {
+                            this.choose_appearance_draft(
+                                AppearanceSelection::Custom(index),
+                                window,
+                                cx,
+                            );
+                        }
                     },
                     Err(error) => {
                         let community = this.community_mut(generation).unwrap();
@@ -251,16 +301,13 @@ impl SettingsPane {
     /// Select an already installed catalog theme so the preview column shows it.
     pub(super) fn preview_community_theme(
         &mut self,
-        theme_id: &str,
+        choice: AppearanceSelection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.appearance_picker.as_ref().and_then(|picker| {
-            picker.custom_themes.iter().position(|document| document.id() == Some(theme_id))
-        }) else {
-            return;
-        };
-        self.choose_appearance_draft(AppearanceSelection::Custom(index), window, cx);
+        if self.appearance_picker.as_ref().is_some_and(|picker| picker.draft != choice) {
+            self.choose_appearance_draft(choice, window, cx);
+        }
     }
 }
 

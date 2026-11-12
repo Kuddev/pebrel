@@ -64,7 +64,24 @@ impl SettingsPane {
 
     /// 一组设置：标题在卡外，行在卡内。返回的构建器照常 `.child(row)`。
     pub(crate) fn group(&self, title: &'static str, cx: &Context<Self>) -> SettingsGroup {
-        SettingsGroup { title, rows: Vec::new(), base_px: self.font_size_px(cx) }
+        SettingsGroup { title, rows: Vec::new(), base_px: self.font_size_px(cx), hidden: false }
+    }
+
+    /// 属于导航子项的分组：标题取自子项本身；选中别的子项时整组不参与布局。
+    /// 搜索时不按子项筛选，命中项必须都看得到。
+    pub(super) fn nav_group(&self, child: NavChild, cx: &Context<Self>) -> SettingsGroup {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let mut group = self.group(child.label(language), cx);
+        group.hidden = self.visible_nav_child(cx).is_some_and(|active| active != child);
+        group
+    }
+
+    /// 当前生效的子项筛选；子项不属于当前大类（例如从别处跳转进来）时不筛选。
+    pub(super) fn visible_nav_child(&self, cx: &App) -> Option<NavChild> {
+        if !self.settings_search_input.read(cx).value().trim().is_empty() {
+            return None;
+        }
+        self.active_nav_child.filter(|child| nav_children(self.active_section).contains(child))
     }
 
     /// 组与组之间的间隔。
@@ -326,6 +343,7 @@ pub(crate) struct SettingsGroup {
     title: &'static str,
     rows: Vec<gpui::AnyElement>,
     base_px: f32,
+    hidden: bool,
 }
 
 impl gpui::ParentElement for SettingsGroup {
@@ -336,6 +354,9 @@ impl gpui::ParentElement for SettingsGroup {
 
 impl gpui::RenderOnce for SettingsGroup {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.hidden {
+            return div().hidden();
+        }
         let divider = crate::gpui_shell::theme::settings_hairline(cx);
         let title = self.title;
         let mut card =

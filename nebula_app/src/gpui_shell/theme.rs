@@ -5,7 +5,7 @@ use gpui::{App, Bounds, Hsla, Pixels, Rgba as GpuiRgba, Window, fill, hsla, poin
 use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
 
 use crate::display::color::Rgb;
-use crate::display::ui::theme::NebulaTheme;
+use crate::display::ui::theme::{NebulaTheme, Skin};
 use crate::renderer::ui::Rgba;
 use nebula_settings::ThemeName;
 
@@ -570,6 +570,129 @@ pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
     let (hover_alpha, strong_alpha) = if sk.is_light { (10, 18) } else { (30, 46) };
     let alpha = if strong { strong_alpha } else { hover_alpha };
     wash(Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, alpha))
+}
+
+// ── 表面层级 ────────────────────────────────────────────────────────────
+//
+// 选中行与设置分组卡各有自己的表面层；设置导航与正文共用底色。
+// 深色只用明度阶梯区分表面；浅色的选中行、分组卡和浮层使用轻阴影。
+
+/// 浮起面，用于选中项等小面积表面。
+pub fn raised_fill(cx: &App) -> Hsla {
+    raised_fill_for_skin(resolved_skin(cx))
+}
+
+fn raised_fill_for_skin(sk: Skin) -> Hsla {
+    let base = solid(sk.panel);
+    base.blend(hsla(0.0, 0.0, 1.0, if sk.is_light { 0.86 } else { 0.065 }))
+}
+
+pub(super) fn settings_card_fill(cx: &App) -> Hsla {
+    settings_card_fill_for_theme(&resolved_theme(cx))
+}
+
+fn settings_card_fill_for_theme(theme: &ResolvedTheme) -> Hsla {
+    let sk = theme.skin();
+    if sk.is_light {
+        return raised_fill_for_skin(sk);
+    }
+
+    let panel = sk.panel;
+    let card = sk.card;
+    // The built-in opaque picker fills are the next step in each neutral ramp.
+    if !theme.is_custom()
+        && card.a == 255
+        && luma(card.r, card.g, card.b) > luma(panel.r, panel.g, panel.b)
+    {
+        return solid(crate::display::ui::surface::over(Rgba { a: 128, ..card }, panel));
+    }
+
+    // Custom cards describe the shell; translucent picker fills describe selection.
+    // Lift the panel in its own hue when there is no suitable raised swatch.
+    let base = solid(panel);
+    Hsla { l: (base.l + 7.0 / 255.0).min(1.0), ..base }
+}
+
+fn ring_and_drop(cx: &App, drop_alpha: f32, drop_y: f32, drop_blur: f32) -> Vec<gpui::BoxShadow> {
+    let light = resolved_skin(cx).is_light;
+    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32, inset: bool| gpui::BoxShadow {
+        color,
+        offset: point(px(0.0), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset,
+    };
+    if light {
+        vec![
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.06), 0.0, 0.0, 1.0, false),
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, drop_alpha), drop_y, drop_blur, 0.0, false),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+/// 选中行浮起：与内容板同材质，读作“它就是右边那块”。
+pub fn raised_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    ring_and_drop(cx, 0.07, 1.0, 2.0)
+}
+
+/// 设置分组卡。比选中行多一层柔和的远投影。
+pub fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    ring_and_drop(cx, 0.08, 4.0, 12.0)
+}
+
+/// 浮层（弹窗、菜单）：环线 + 近处投影 + 远处大投影，比分组卡再高一级。
+pub fn float_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    let light = resolved_skin(cx).is_light;
+    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32| gpui::BoxShadow {
+        color,
+        offset: point(px(0.0), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+    };
+    if light {
+        vec![
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.08), 0.0, 0.0, 1.0),
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.06), 2.0, 6.0, 0.0),
+            shadow(hsla(220.0 / 360.0, 0.4, 0.14, 0.16), 18.0, 40.0, -8.0),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+/// 浅色主题的选中卡片外圈；深色保留卡片本身的描边。选中时内容不位移。
+pub fn selected_halo(cx: &App) -> Vec<gpui::BoxShadow> {
+    if !resolved_skin(cx).is_light {
+        return Vec::new();
+    }
+    vec![gpui::BoxShadow {
+        color: cx.theme().primary.opacity(0.20),
+        offset: point(px(0.0), px(0.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(3.0),
+        inset: false,
+    }]
+}
+
+/// 设置导航铺在内容板上的压暗层：导航读作窗框，正文读作板。
+pub fn settings_nav_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.045)
+    } else {
+        hsla(0.0, 0.0, 0.0, 0.18)
+    }
+}
+
+/// 设置正文的下沉层：浅色微微压暗，让白卡浮起；深色保持板色，卡片自己提亮。
+pub fn settings_canvas_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
+    } else {
+        hsla(0.0, 0.0, 0.0, 0.0)
+    }
 }
 
 /// 按运行时主题重建窗口 chrome：先切组件库深浅模式垫底（未映射的长尾

@@ -25,9 +25,9 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas, div, img, px,
-    size,
+    KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, PathBuilder, Pixels,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas,
+    div, img, px, size,
 };
 use nebula_split::{SplitDirection, SplitTree};
 
@@ -126,38 +126,85 @@ pub(super) fn split_glyph(size_px: f32, color: Hsla) -> impl IntoElement {
 pub(super) fn split_layout_icon(tab: &WorkspaceTab, label_px: f32, ink: Hsla) -> impl IntoElement {
     let width = (label_px * 1.2).max(16.0);
     let height = width * 0.8;
-    let rectangles = match tab {
-        WorkspaceTab::Terminal { tree, .. } => split_icon_rects(tree, width, height),
-        _ => Vec::new(),
+    let (rectangles, focus) = match tab {
+        WorkspaceTab::Terminal { tree, focused, .. } => {
+            (split_icon_rects(tree, width, height), Some(*focused))
+        },
+        _ => (Vec::new(), None),
     };
-    div().relative().flex_shrink_0().w(px(width)).h(px(height)).children(
-        rectangles.into_iter().map(|rect| {
-            div()
-                .absolute()
-                .left(px(rect.x))
-                .top(px(rect.y))
-                .w(px(rect.w))
-                .h(px(rect.h))
-                .rounded(px(1.5))
-                .border(px(1.0))
-                .border_color(ink)
-        }),
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let scale = window.scale_factor();
+            let stroke = px(scale.round().max(1.0) / scale);
+            let mut outlined = (PathBuilder::stroke(stroke), false);
+            let mut filled = (PathBuilder::fill(), false);
+            for (id, rect) in &rectangles {
+                let selected = Some(*id) == focus;
+                let start =
+                    window.pixel_snap_point(bounds.origin + gpui::point(px(rect.x), px(rect.y)));
+                let end = window.pixel_snap_point(
+                    bounds.origin + gpui::point(px(rect.x + rect.w), px(rect.y + rect.h)),
+                );
+                // Snap the outer edges; the outline is centered half a stroke inside.
+                let inset = if selected { px(0.0) } else { stroke / 2.0 };
+                let target = if selected { &mut filled } else { &mut outlined };
+                target.1 |= trace_pane(
+                    &mut target.0,
+                    start.x + inset,
+                    start.y + inset,
+                    end.x - inset,
+                    end.y - inset,
+                );
+            }
+            for (path, populated) in [outlined, filled] {
+                if populated && let Ok(path) = path.build() {
+                    window.paint_path(path, ink);
+                }
+            }
+        },
     )
+    .flex_shrink_0()
+    .w(px(width))
+    .h(px(height))
 }
 
-fn split_icon_rects(tree: &SplitTree<u64>, width: f32, height: f32) -> Vec<nebula_split::Rect> {
+fn trace_pane(path: &mut PathBuilder, l: Pixels, t: Pixels, r: Pixels, b: Pixels) -> bool {
+    if l >= r || t >= b {
+        return false;
+    }
+    let radius = px(1.5).min((r - l).min(b - t) / 2.0);
+    use gpui::point;
+    path.move_to(point(l + radius, t));
+    path.line_to(point(r - radius, t));
+    path.curve_to(point(r, t + radius), point(r, t));
+    path.line_to(point(r, b - radius));
+    path.curve_to(point(r - radius, b), point(r, b));
+    path.line_to(point(l + radius, b));
+    path.curve_to(point(l, b - radius), point(l, b));
+    path.line_to(point(l, t + radius));
+    path.curve_to(point(l + radius, t), point(l, t));
+    path.close();
+    true
+}
+
+fn split_icon_rects(
+    tree: &SplitTree<u64>,
+    width: f32,
+    height: f32,
+) -> Vec<(u64, nebula_split::Rect)> {
     // Lay out in a large logical viewport before scaling: a thumbnail must not
     // impose the terminal's minimum cell size or change persisted proportions.
     tree.layout(nebula_split::Rect::new(0.0, 0.0, 1000.0, 800.0), 1.0, 1.0, 0.0, false)
         .panes
         .into_iter()
-        .map(|(_, rect)| {
+        .map(|(id, rect)| {
             let x = rect.x * width / 1000.0;
             let y = rect.y * height / 800.0;
             let w = rect.w * width / 1000.0;
             let h = rect.h * height / 800.0;
             let gap = 2.0_f32.min(w * 0.3).min(h * 0.3);
-            nebula_split::Rect::new(x + gap * 0.5, y + gap * 0.5, w - gap, h - gap)
+            (id, nebula_split::Rect::new(x + gap * 0.5, y + gap * 0.5, w - gap, h - gap))
         })
         .collect()
 }
@@ -759,7 +806,7 @@ impl NebulaWorkspace {
         self.active = at;
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         cx.notify();
     }
 
@@ -881,11 +928,12 @@ mod tests {
         for (width, height) in [(16.0, 12.8), (18.0, 14.4), (24.0, 19.2)] {
             let rects = split_icon_rects(&tree, width, height);
             assert_eq!(rects.len(), 3);
-            assert!(rects[0].x < rects[1].x);
-            assert_eq!(rects[1].x, rects[2].x);
-            assert!(rects[1].y < rects[2].y);
-            assert!(rects[0].h > rects[1].h);
-            for rect in rects {
+            assert_eq!([rects[0].0, rects[1].0, rects[2].0], [1, 2, 3]);
+            assert!(rects[0].1.x < rects[1].1.x);
+            assert_eq!(rects[1].1.x, rects[2].1.x);
+            assert!(rects[1].1.y < rects[2].1.y);
+            assert!(rects[0].1.h > rects[1].1.h);
+            for (_, rect) in rects {
                 assert!(rect.x >= 0.0 && rect.y >= 0.0 && rect.w > 0.0 && rect.h > 0.0);
                 assert!(rect.x + rect.w <= width && rect.y + rect.h <= height);
             }

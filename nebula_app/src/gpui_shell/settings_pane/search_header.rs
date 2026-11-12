@@ -56,6 +56,7 @@ impl SettingsPane {
         sections
     }
     pub(super) fn update_settings_search(&mut self, cx: &mut Context<Self>) {
+        self.nav_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
         let searching = !self.settings_search_input.read(cx).value().trim().is_empty();
         if searching {
             let origin = *self.search_origin_section.get_or_insert(self.active_section);
@@ -86,6 +87,7 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         div()
             .relative()
+            .flex_shrink_0()
             .mx_1()
             .mb(px(12.0))
             .pb(px(1.0))

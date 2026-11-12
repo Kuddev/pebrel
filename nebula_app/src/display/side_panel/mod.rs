@@ -149,6 +149,10 @@ pub struct GitInfo {
     /// 体积、顶层布局、最后一条提交）。这些事实全躺在 `db/` 下的纯文本文件
     /// 里，读它们不需要 svn 客户端，也不需要 spawn 任何进程。
     pub repository: Option<crate::svn_status::RepositorySummary>,
+    /// Git 工作树顶层（宿主路径）。porcelain 路径相对它，文件树据此把状态
+    /// 字母挂到绝对路径上。由快照工人在后台线程里沿祖先目录找 `.git` 得出；
+    /// WSL 与 SVN 不填，文件树就不显示字母。
+    pub toplevel: Option<PathBuf>,
 }
 
 impl GitInfo {
@@ -409,6 +413,8 @@ pub struct SidePanel {
     expanded: HashSet<PathBuf>,
     /// Git snapshot, `None` when the root isn't inside a work tree.
     git: Option<std::sync::Arc<GitInfo>>,
+    /// 文件树行尾的状态字母，键是绝对路径；随 Git 快照整体替换。
+    git_marks: HashMap<PathBuf, char>,
     /// Scroll offset in rows.
     pub scroll: usize,
     /// Files-view filter query; non-empty switches the tree to a flat list of
@@ -512,6 +518,7 @@ impl SidePanel {
             tree_rows: Vec::new(),
             expanded: HashSet::new(),
             git: None,
+            git_marks: HashMap::new(),
             scroll: 0,
             search: String::new(),
             search_focus: false,
@@ -716,6 +723,7 @@ impl SidePanel {
         }
         self.enumeration_failed = !snapshot.enumeration_ok;
         if let Some(git) = snapshot.git {
+            self.git_marks = git.as_ref().map(git_marks).unwrap_or_default();
             self.git = git.map(std::sync::Arc::new);
         }
         true
@@ -934,6 +942,7 @@ impl SidePanel {
             self.tree_rows = Vec::new();
             self.search_memory = None;
             self.git = None;
+            self.git_marks.clear();
             self.sync_file_index();
             return;
         };
@@ -1007,6 +1016,12 @@ impl SidePanel {
                     },
                 },
             };
+            let git = git.map(|mut info| {
+                if wsl.is_none() && info.vcs == VcsKind::Git {
+                    info.toplevel = git_toplevel(&git_root);
+                }
+                info
+            });
             if let Ok(mut slot) = slot.lock() {
                 *slot =
                     Some(PanelSnapshot { root, files_wsl, rows, enumeration_ok, git: Some(git) });
@@ -1485,6 +1500,11 @@ impl SidePanel {
         self.git.as_deref()
     }
 
+    /// 文件树行尾的 Git 状态字母（`M`/`A`/`D`/`R`/`U` 未跟踪/`!` 冲突）。
+    pub fn git_mark(&self, path: &Path) -> Option<char> {
+        self.git_marks.get(path).copied()
+    }
+
     pub fn git_snapshot(&self) -> Option<std::sync::Arc<GitInfo>> {
         self.git.clone()
     }
@@ -1665,4 +1685,27 @@ pub fn panel_interactive_hit(
         }
     }
     panel_hit(layout, x, y)
+}
+
+/// 沿祖先目录找 Git 顶层：`.git` 是目录（普通仓库）或文件（worktree、子模块）。
+/// 只在快照工人线程调用，不进渲染路径。
+fn git_toplevel(start: &Path) -> Option<PathBuf> {
+    start.ancestors().find(|dir| dir.join(".git").exists()).map(Path::to_path_buf)
+}
+
+/// 工作区改动优先于暂存区：同一文件既暂存又有新修改时，显示还没暂存的那份。
+/// 冲突覆盖一切。未跟踪的 `?` 显示为 `U`（与常见编辑器一致），冲突用 `!`，
+/// 避免与 Git 自己的 `U`（unmerged）混读。
+fn git_marks(info: &GitInfo) -> HashMap<PathBuf, char> {
+    let Some(top) = info.toplevel.as_deref() else { return Default::default() };
+    let mut marks = HashMap::new();
+    let key = |rel: &str| top.join(rel.trim_end_matches('/'));
+    for (status, rel) in info.staged.iter().chain(&info.unstaged) {
+        let mark = if *status == '?' { 'U' } else { *status };
+        marks.insert(key(rel), mark);
+    }
+    for (_, rel) in &info.conflicts {
+        marks.insert(key(rel), '!');
+    }
+    marks
 }

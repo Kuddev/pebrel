@@ -21,6 +21,7 @@
 //! 丢弃——它描述的是一个已经不存在的意图。
 
 mod drag;
+mod drop_overlay;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod follow_tests;
 mod interaction;
@@ -590,7 +591,6 @@ impl NebulaWorkspace {
             });
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let drop_highlight = theme.accent.opacity(0.18);
         let location_background = theme.background.darken(0.035);
         let rows = self.remote_rows();
         let path = if self.remote_browser.path.is_empty() {
@@ -608,14 +608,11 @@ impl NebulaWorkspace {
             .min_w_0()
             .overflow_hidden()
             .occlude()
-            .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_highlight))
+            .relative()
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 cx.stop_propagation();
                 this.drop_upload_paths(paths.paths().to_owned(), None, window, cx);
             }))
-            .drag_over::<crate::gpui_shell::file_drop::FileTreeDrag>(move |style, _, _, _| {
-                style.bg(drop_highlight)
-            })
             .on_drop(cx.listener(
                 |this, file: &crate::gpui_shell::file_drop::FileTreeDrag, window, cx| {
                     cx.stop_propagation();
@@ -794,6 +791,8 @@ impl NebulaWorkspace {
                     ),
             )
             .child(transfer_status)
+            // 覆盖层不阻挡下层命中区，目录行仍可接收投放。
+            .child(self.render_remote_drop_overlay(cx))
             .into_any_element()
     }
 
@@ -960,8 +959,10 @@ impl NebulaWorkspace {
                 .as_ref()
                 .is_some_and(|f| f.contains_focused(window, cx));
         let (icon, ink) = match row.kind {
+            // `theme.accent` 是组件库的悬停底色而不是强调色，拿来画图标
+            // 几乎透明。目录与本地文件树一样用实色前景。
             SftpEntryKind::Directory => {
-                (crate::display::side_panel::folder_icon(false), theme.accent)
+                (crate::display::side_panel::folder_icon(false), theme.foreground)
             },
             SftpEntryKind::Symlink => ("\u{ea71}", theme.muted_foreground),
             SftpEntryKind::File => {
@@ -992,7 +993,7 @@ impl NebulaWorkspace {
         let weak = cx.entity().downgrade();
         let directory = (row.kind == SftpEntryKind::Directory).then(|| row.path.clone());
         let upload_directory = directory.clone();
-        let highlight = theme.accent.opacity(0.18);
+        let highlight = theme.primary.opacity(0.16);
         let language = crate::gpui_shell::config::ui_language(cx);
 
         h_flex()

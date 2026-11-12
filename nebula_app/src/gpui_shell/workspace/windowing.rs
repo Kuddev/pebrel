@@ -1201,7 +1201,7 @@ pub(crate) fn focus_notification(pane_id: Option<u64>, cx: &mut App) {
             if let Some(meta) = workspace.tab_meta.get_mut(tab_ix) {
                 meta.has_bell = false;
             }
-            workspace.reveal_active_tab();
+            workspace.reveal_active_tab(cx);
             workspace.focus_active(window, cx);
             workspace.sync_side_panel_to_active(true, cx);
             cx.notify();
@@ -1528,7 +1528,7 @@ impl NebulaWorkspace {
                     if source.tabs.is_empty() && source.settings_tab_open {
                         source.open_settings(source_window, cx);
                     }
-                    source.reveal_active_tab();
+                    source.reveal_active_tab(cx);
                     source.focus_active(source_window, cx);
                     source.sync_side_panel_to_active(true, cx);
                     cx.notify();
@@ -1618,7 +1618,7 @@ impl NebulaWorkspace {
             self.active = at;
         }
         self.cross_window_dock = None;
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);
         cx.notify();

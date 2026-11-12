@@ -417,7 +417,7 @@ impl SettingsPane {
         else {
             return;
         };
-        let updates = match draft {
+        let mut updates = match draft {
             AppearanceSelection::Custom(index) => {
                 let Some(document) = self
                     .appearance_picker
@@ -455,6 +455,18 @@ impl SettingsPane {
             },
             AppearanceSelection::Icon(icon) => AppearanceSelection::Icon(icon).updates(),
         };
+        if draft.is_theme()
+            && let Some(active_id) = self.runtime.custom_theme.as_deref()
+            && let Some(previous) = self.appearance_picker.as_ref().and_then(|picker| {
+                picker.custom_themes.iter().find(|document| document.id() == Some(active_id))
+            })
+        {
+            crate::theme_library::preferences::release_community_wallpaper(
+                previous,
+                self.runtime.background_image.as_deref(),
+                &mut updates,
+            );
+        }
         let session_seq = self
             .appearance_picker
             .as_ref()
@@ -630,20 +642,29 @@ impl SettingsPane {
             .aria_toggled(if selected { Toggled::True } else { Toggled::False })
             .w(px(width))
             .flex_shrink_0()
-            .rounded(px(if theme_card { 6.0 } else { 8.0 }))
+            .rounded(px(if theme_card { 10.0 } else { 8.0 }))
             .border_1()
             .border_color(if selected || focused {
                 colors.primary
             } else {
                 gpui::transparent_black()
             })
-            .when(selected, |option| option.bg(colors.subtle))
+            // 主题卡是浮在下沉网格上的卡片；选中加一圈同色晕。图标格保持原样。
+            .when(theme_card, |option| {
+                option
+                    .bg(crate::gpui_shell::theme::raised_fill(cx))
+                    .shadow(if selected {
+                        crate::gpui_shell::theme::selected_halo(cx)
+                    } else {
+                        crate::gpui_shell::theme::raised_shadow(cx)
+                    })
+            })
+            .when(selected && !theme_card, |option| option.bg(colors.subtle))
             .hover(move |option| {
-                let option = option.bg(colors.subtle);
-                if theme_card && !selected && !focused {
-                    option.border_color(colors.control)
+                if theme_card {
+                    if selected || focused { option } else { option.border_color(colors.control) }
                 } else {
-                    option
+                    option.bg(colors.subtle)
                 }
             })
             .when(theme_card, |option| option.active(move |style| style.bg(colors.selected)))
@@ -685,10 +706,8 @@ impl SettingsPane {
         };
         h_flex()
             .mx(px(if compact { 19.0 } else { 27.0 }))
-            .pb(px(15.0))
+            .pb(px(14.0))
             .gap(px(4.0))
-            .border_b_1()
-            .border_color(colors.line)
             .flex_shrink_0()
             .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
                 if picker.draft.is_theme() {
@@ -706,9 +725,9 @@ impl SettingsPane {
                             .toggled(selected)
                             .label(language.text(*message))
                             .ghost()
-                            .h(px(27.0))
+                            .h(settings_control_height(cx))
                             .px(px(if compact { 7.0 } else { 10.0 }))
-                            .text_size(px(11.0))
+                            .text_size(px(11.5))
                             .rounded_full()
                             .text_color(if selected { colors.ink } else { colors.secondary })
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -761,8 +780,16 @@ impl SettingsPane {
         let compact = f32::from(viewport.width) <= 720.0;
         let fixed_preview = draft.is_theme() && !compact;
         let padding = if compact { 19.0 } else { 27.0 };
-        let width = (f32::from(viewport.width) - if compact { 24.0 } else { 40.0 }).min(770.0);
-        let height = f32::from(viewport.height) - 48.0;
+        let width = (f32::from(viewport.width) - if compact { 24.0 } else { 64.0 }).min(860.0);
+        // 上下各留出一口气，弹窗不再顶到窗口边缘。
+        let vertical_margin = if compact {
+            32.0
+        } else if f32::from(viewport.height) < 740.0 {
+            64.0
+        } else {
+            96.0
+        };
+        let height = (f32::from(viewport.height) - vertical_margin).min(720.0);
         let title = if draft.is_theme() {
             language.text(Message::ThemePickerTitle)
         } else {
@@ -795,11 +822,9 @@ impl SettingsPane {
             .when(fixed_preview, |dialog| dialog.h(px(height.max(1.0))))
             .flex_shrink_0()
             .rounded(px(14.0))
-            .border_1()
-            .border_color(colors.control)
-            .bg(colors.surface)
+            .bg(crate::gpui_shell::theme::raised_fill(cx))
             .text_color(colors.ink)
-            .shadow_2xl()
+            .shadow(crate::gpui_shell::theme::float_shadow(cx))
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(|_, _, cx| cx.stop_propagation())
@@ -829,7 +854,7 @@ impl SettingsPane {
                             .debug_selector(|| "close-appearance-picker".to_owned())
                             .icon(IconName::Close)
                             .ghost()
-                            .size(px(28.0))
+                            .size(px(crate::gpui_shell::widgets::SETTINGS_HIT_SIZE))
                             .text_color(colors.secondary)
                             .tooltip(language.text(Message::ThemeTransferClose))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -845,6 +870,8 @@ impl SettingsPane {
                     .flex_shrink(1.0)
                     .when(fixed_preview, |body| body.flex_1().h_full().overflow_hidden())
                     .when(!fixed_preview, |body| body.overflow_y_scroll())
+                    // 网格区下沉一档，主题卡浮在上面；页头与页脚留在弹窗本色。
+                    .bg(crate::gpui_shell::theme::settings_nav_tint(cx))
                     .px(px(padding))
                     .pt(px(21.0))
                     .pb(px(24.0))
@@ -863,7 +890,7 @@ impl SettingsPane {
             .child(
                 h_flex()
                     .px(px(padding))
-                    .py(px(17.0))
+                    .py(px(14.0))
                     .gap(px(9.0))
                     .justify_between()
                     .flex_shrink_0()
@@ -876,7 +903,7 @@ impl SettingsPane {
                             .label(language.text(Message::ThemePickerCustomize))
                             .disabled(picker.apply_busy || picker.custom_loading)
                             .ghost()
-                            .h(px(31.0))
+                            .h(settings_control_height(cx))
                             .px(px(if compact { 8.0 } else { 10.0 }))
                             .text_size(px(if compact { 10.0 } else { 11.0 }))
                             .rounded_full()
@@ -906,7 +933,7 @@ impl SettingsPane {
                                 Button::new("cancel-appearance-picker")
                                     .debug_selector(|| "cancel-appearance-picker".to_owned())
                                     .label(language.text(Message::ThemePickerCancel))
-                                    .h(px(33.0))
+                                    .h(settings_control_height(cx))
                                     .px(px(if compact { 11.0 } else { 16.0 }))
                                     .text_size(px(12.0))
                                     .rounded(px(6.0))
@@ -921,7 +948,7 @@ impl SettingsPane {
                                 Button::new("apply-appearance-picker")
                                     .debug_selector(|| "apply-appearance-picker".to_owned())
                                     .label(apply_label)
-                                    .h(px(33.0))
+                                    .h(settings_control_height(cx))
                                     .px(px(if compact { 11.0 } else { 16.0 }))
                                     .text_size(px(12.0))
                                     .rounded(px(6.0))

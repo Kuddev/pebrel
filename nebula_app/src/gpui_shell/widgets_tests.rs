@@ -115,7 +115,7 @@ fn switch_padding_keyboard_and_disabled_state_share_button_activation(cx: &mut T
         let _ = window.draw(cx);
     });
     let bounds = window.debug_bounds("nebula-switch-probe").unwrap();
-    assert_eq!(bounds.size, gpui::size(px(44.0), px(32.0)));
+    assert_eq!(bounds.size, gpui::size(px(44.0), px(44.0)));
     // Hit padding outside the 22px track, then use the same control from the keyboard.
     window.simulate_click(
         point(bounds.left() + px(1.0), bounds.top() + px(1.0)),

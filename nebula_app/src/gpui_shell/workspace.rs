@@ -86,11 +86,13 @@ mod terminal_activity;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
 mod sidebar;
+mod sidebar_groups;
 mod ssh_dialog;
 mod ssh_reconnect;
 mod tab_drag;
 mod tab_duplication;
 mod tab_menu;
+mod tab_menu_surface;
 mod tab_presentation;
 use tab_presentation::TabMeta;
 use tab_presentation::TabPresentation;
@@ -183,6 +185,7 @@ fn title_bar_panel_controls() -> gpui::Div {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     keyboard_bindings::init(cx);
+    tab_menu_surface::bind_keys(cx);
 }
 
 /// 一个终端 pane：视图实体 + 宿主订阅。id 即 `TerminalView::pane_id`
@@ -378,21 +381,9 @@ fn dock_tree(target: SplitTree<u64>, source: SplitTree<u64>, nav: SplitNav) -> S
 /// "删除按钮偏移了"）。
 const TAB_CLOSE_SIZE: f32 = 20.0;
 
-/// TABS 标题行右侧 `+` / `⋯`：命中区对照旧壳 `chrome.rs` 的 `plus_sz = 20`，
-/// 中间 `s(2)`。旧壳三点只占 15 宽，是因为它画的是瘦 chevron；竖三点要
-/// 方格才不被裁。Lucide viewBox 有内边距，图标铺满 20px 命中区，笔画才
-/// 接近旧壳 `push_add` 的 6px 臂 / `push_more` 的 2.8px 点；`Button::xsmall()`
-/// 里图标只有 12px，看起来会小一圈。
-const SIDEBAR_PLUS_SIZE: f32 = 20.0;
-const SIDEBAR_MENU_W: f32 = 20.0;
-const SIDEBAR_HEADER_ICON: f32 = 18.0;
-
-/// 侧栏文字的字号档位，**乘在终端字号上**（旧壳 chrome 同源）：标签行走
-/// BODY(1.0)——旧壳 `draw_ui_text_tracked(.., 1.0, ..)`，分组标题与右侧
-/// shell 短标各压一档。硬编码 `text_sm`(14px) 时侧栏比旧壳整体小一号，
-/// 且用户调大字号也不跟——那是用户报的"按钮比旧版小太多"。
-const SIDEBAR_TITLE_SCALE: f32 = 0.82;
-const SIDEBAR_TAG_SCALE: f32 = 0.80;
+/// Match the compact Tabs header in the prototype, with a larger hit area than the glyph.
+const SIDEBAR_HEADER_ACTION: f32 = 28.0;
+const SIDEBAR_HEADER_ICON: f32 = 15.0;
 
 /// 侧栏 tab 标签的水平预算（逻辑 px）：外层 `p_2`、行内 `px_2`、行内
 /// `gap_2` 与右侧状态槽都从侧栏宽里扣掉，剩下的除以实测 cell 宽就是可用
@@ -630,8 +621,7 @@ pub struct NebulaWorkspace {
     settings_restore_sidebar_collapsed: Option<bool>,
     settings_restore_side_panel_open: bool,
     sidebar_collapsed: bool,
-    /// 只折叠 TABS 分区，不影响整个左栏；与旧壳分区标题的 chevron 同义。
-    tabs_section_collapsed: bool,
+    sidebar_grouping: sidebar_groups::SidebarGrouping,
     /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进标题栏。
     tabs_position: nebula_settings::TabsPositionName,
     density: nebula_settings::DensityName,
@@ -640,12 +630,6 @@ pub struct NebulaWorkspace {
     /// 首次手动切换后才启用折叠动画：启动帧保持静止落位（旧壳同感，
     /// spring 构造时直接初始化在端点上）。
     sidebar_fold_armed: bool,
-    /// 同理，tab 列表的折叠动画也只在首次手动切换后启用。
-    tabs_fold_armed: bool,
-    /// 折叠/展开动画期间冻结视口高度：旧壳 `tabs_avail` 来自面板剩余高度，
-    /// 绝不把卷帘裁剪量回去再算窗口，否则溢出列表会被锁成一行滚动区。
-    tabs_fold_frozen: bool,
-    tabs_fold_seq: u64,
     /// 旧壳 `nebula_tabs_scroll`：TABS 溢出时的整行窗口起点。
     tabs_scroll: usize,
     /// 列表视口（逻辑 px），由 canvas 回写；0 表示尚未量到。
@@ -789,12 +773,12 @@ pub struct NebulaWorkspace {
 
 impl NebulaWorkspace {
     /// 所有新建标签共用同一个插入口，避免本地/SSH/设置各自解释配置。
-    fn insert_new_tab(&mut self, tab: WorkspaceTab) {
+    fn insert_new_tab(&mut self, tab: WorkspaceTab, cx: &App) {
         let position = nebula_settings::RuntimeSettings::load().new_tab_position;
         let at = new_tab_insert_index(position, self.active, self.tabs.len());
         self.insert_tab_at(at, tab, TabMeta::default());
         self.active = at;
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
     }
 
     /// `tabs` + `tab_meta` 的唯一插入口（见 [`TabMeta`] 的同下标合同）。
@@ -802,7 +786,6 @@ impl NebulaWorkspace {
         let at = at.min(self.tabs.len());
         self.tabs.insert(at, tab);
         self.tab_meta.insert(at, meta);
-        self.clamp_tabs_scroll();
     }
 
     /// `tabs` + `tab_meta` 的唯一移除口；返回被摘的 tab 供调用方回收会话。
@@ -818,7 +801,6 @@ impl NebulaWorkspace {
         // 长度不齐时（理论上不会）宁可给默认元数据，也不要 panic。
         let meta =
             if ix < self.tab_meta.len() { self.tab_meta.remove(ix) } else { TabMeta::default() };
-        self.clamp_tabs_scroll();
         Some((tab, meta))
     }
 
@@ -924,14 +906,11 @@ impl NebulaWorkspace {
             settings_restore_sidebar_collapsed: None,
             settings_restore_side_panel_open: false,
             sidebar_collapsed: false,
-            tabs_section_collapsed: false,
+            sidebar_grouping: sidebar_groups::SidebarGrouping::None,
             tabs_position: runtime.tabs_position,
             density: runtime.density,
             sidebar_width,
             sidebar_fold_armed: false,
-            tabs_fold_armed: false,
-            tabs_fold_frozen: false,
-            tabs_fold_seq: 0,
             tabs_scroll: 0,
             tabs_viewport_h: 0.0,
             tabs_list_width: 0.0,
@@ -1142,7 +1121,7 @@ impl NebulaWorkspace {
         self.sidebar_width = runtime.sidebar_width;
         self.tabs_position = runtime.tabs_position;
         self.density = runtime.density;
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         self.sync_settings_layout(tab_reveal_instant(cx));
         self.sidebar_resizing = None;
         self.reveal_if_tray_disabled(cx);
@@ -1253,7 +1232,7 @@ impl NebulaWorkspace {
             TabMeta { shell_tag, launch: Some(launch_session), ..TabMeta::default() },
         );
         self.active = at;
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);
         cx.notify();
@@ -1602,7 +1581,7 @@ impl NebulaWorkspace {
         ) {
             log::warn!("Could not save closed tabs: {error}");
         }
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);
         cx.notify();

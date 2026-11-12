@@ -1,0 +1,99 @@
+name: Windows UI tone test package
+
+# Test package for the settings / tab / file tree visual pass. Lives only on
+# its build branch; regression tests run separately, not here.
+on:
+  push:
+    branches: [build/windows-ui-tone-20261109]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ui-tone-test-package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONUTF8: "1"
+
+jobs:
+  package:
+    name: Windows x64 test package
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: release
+          target: target/release
+          legacy-key: windows
+          save-if: "false"
+      - name: Prepare pinned Windows console runtime
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+      - name: Build GPUI product
+        shell: pwsh
+        run: ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
+      - name: Package ZIP and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (python scripts/preview_release.py --print-package-version nebula_app/Cargo.toml).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read the package version.' }
+          "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+          ./scripts/package-release.ps1 -Version $version -PackageBrand Pebrel -OutputDirectory dist -TargetDirectory target -Force
+          ./scripts/build-installer.ps1 -Version $version -PackageBrand Pebrel -OutputDirectory dist -TargetDirectory target -Force
+      - name: Smoke-check the built product
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          scratch = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pebrel-config'
+          scratch.mkdir(exist_ok=True)
+          env = dict(os.environ, PEBREL_CONFIG_DIR=str(scratch))
+          exe = root / 'target/release/pebrel.exe'
+          config = scratch / 'pebrel.luau'
+          for args in (['config', 'init', '--language', 'zh-CN', '--config-file', config],
+                       ['config', 'check', '--config-file', config]):
+              result = subprocess.run([str(exe), *map(str, args)], env=env, capture_output=True,
+                                      text=True, encoding='utf-8', errors='replace', timeout=30)
+              print(args, result.returncode, result.stdout.strip()[:200])
+              if result.returncode != 0:
+                  raise SystemExit(result.stderr)
+      - name: Name the test assets and record checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $short = $env:GITHUB_SHA.Substring(0, 8)
+          $assets = foreach ($kind in @('zip', 'setup.exe')) {
+            $source = if ($kind -eq 'zip') { "dist/Pebrel-v$env:PACKAGE_VERSION-windows-x64.zip" } else { "dist/Pebrel-v$env:PACKAGE_VERSION-windows-x64-setup.exe" }
+            $name = if ($kind -eq 'zip') { "Pebrel-v$env:PACKAGE_VERSION-ui-test-$short-windows-x64.zip" } else { "Pebrel-v$env:PACKAGE_VERSION-ui-test-$short-windows-x64-setup.exe" }
+            $item = Get-Item -LiteralPath $source
+            if ($item.Length -le 0) { throw "Empty package: $source" }
+            New-Item -ItemType Directory -Path out -Force | Out-Null
+            Copy-Item -LiteralPath $source -Destination "out/$name"
+            $hash = (Get-FileHash -LiteralPath "out/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            [ordered]@{ name = $name; bytes = $item.Length; sha256 = $hash }
+          }
+          $assets | ForEach-Object { "$($_.sha256)  $($_.name)" } | Set-Content out/SHA256SUMS -Encoding utf8
+          [ordered]@{
+            commit = $env:GITHUB_SHA; version = $env:PACKAGE_VERSION; architecture = 'x64'
+            product = 'gpui'; regression_tests = 'run separately'; native_ui_acceptance = 'not run'
+            assets = @($assets)
+          } | ConvertTo-Json -Depth 5 | Set-Content out/build-metadata.json -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-ui-tone-test-x64
+          path: out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

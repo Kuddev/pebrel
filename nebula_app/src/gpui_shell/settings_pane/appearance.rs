@@ -130,14 +130,14 @@ impl SettingsPane {
         let (key, min, max) =
             if ui { ("ui_font_size", 10.0, 24.0) } else { ("font_size", 4.0, 96.0) };
         let stepper = h_flex()
-            .w(px(142.0))
-            .h(px(36.0))
+            .w(settings_control_height(cx) * 2.0 + px(88.0))
+            .h(settings_control_height(cx))
             .items_center()
             .child(
                 Button::new(SharedString::from(format!("{key}-smaller")))
                     .icon(IconName::Minus)
                     .ghost()
-                    .size(px(34.0))
+                    .size(settings_control_height(cx))
                     .disabled(size <= min)
                     .tooltip(language.text(crate::i18n::Message::CommonDecreaseFont))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -152,8 +152,8 @@ impl SettingsPane {
                     .appearance(false)
                     .focus_bordered(false)
                     .cleanable(false)
-                    .w(px(74.0))
-                    .h(px(34.0))
+                    .w(px(88.0))
+                    .h(settings_control_height(cx))
                     .aria_label(language.text(if ui {
                         crate::i18n::Message::SettingsFontUiSize
                     } else {
@@ -164,8 +164,8 @@ impl SettingsPane {
                 Button::new(SharedString::from(format!("{key}-edit")))
                     .debug_selector(move || format!("{key}-edit"))
                     .ghost()
-                    .w(px(74.0))
-                    .h(px(34.0))
+                    .w(px(88.0))
+                    .h(settings_control_height(cx))
                     .label(format!("{size} px"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.font_size_editing = Some(ui);
@@ -183,7 +183,7 @@ impl SettingsPane {
                 Button::new(SharedString::from(format!("{key}-larger")))
                     .icon(IconName::Plus)
                     .ghost()
-                    .size(px(34.0))
+                    .size(settings_control_height(cx))
                     .disabled(size >= max)
                     .tooltip(language.text(crate::i18n::Message::CommonIncreaseFont))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -220,7 +220,7 @@ impl SettingsPane {
         let icon = self.appearance_trigger(false, window, cx);
         // 与开关、字体等设置共用行原语，字号、字重和说明缩放只维护一份。
         let selectors = self
-            .group(language.text(crate::i18n::Message::CommonTheme), cx)
+            .nav_group(NavChild::Theme, cx)
             .child(self.row(
                 language.text(crate::i18n::Message::CommonTheme),
                 language.text(crate::i18n::Message::SettingsAppearanceOnePaletteForTheTerminal),

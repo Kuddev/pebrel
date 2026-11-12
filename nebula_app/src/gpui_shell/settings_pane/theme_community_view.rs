@@ -5,7 +5,12 @@ use super::theme_community::{CatalogLoad, InstallState, Preview};
 use super::*;
 use crate::i18n::Message;
 use crate::theme_library::community::Installed;
-use gpui::{ObjectFit, StyledImage as _};
+use gpui::{ObjectFit, Role, StyledImage as _, accesskit::Toggled};
+use gpui_component::{Sizable as _, progress::Progress};
+use std::sync::atomic::Ordering;
+
+const CARD_RADIUS: f32 = 8.0;
+const CARD_BORDER: f32 = 1.0;
 
 fn download_size(bytes: u64) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
@@ -99,157 +104,238 @@ impl SettingsPane {
         let cards = listing.entries.iter().enumerate().map(|(index, entry)| {
             let installed = self.community_installed(entry);
             let install = community.installs.get(&entry.id);
-            let previewing = matches!(
-                (&installed, picker.draft),
-                (Installed::Current(id), AppearanceSelection::Custom(selected))
-                    if picker.custom_themes.get(selected).and_then(|document| document.id())
-                        == Some(id.as_str())
-            );
+            let installed_choice = match &installed {
+                Installed::Current(theme_id) => picker
+                    .custom_themes
+                    .iter()
+                    .position(|document| document.id() == Some(theme_id.as_str()))
+                    .map(AppearanceSelection::Custom),
+                _ => None,
+            };
+            let previewing = installed_choice == Some(picker.draft);
+            let inner_radius = px(CARD_RADIUS - CARD_BORDER);
             let preview = match community.previews.get(&entry.id) {
-                Some(Preview::Ready(image)) => {
-                    img(image.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element()
-                },
-                Some(Preview::Loading) => div().into_any_element(),
-                _ => div()
+                Some(Preview::Ready(image)) => img(image.clone())
+                    .size_full()
+                    .rounded_t(inner_radius)
+                    .object_fit(ObjectFit::Cover)
+                    .into_any_element(),
+                state => div()
                     .size_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(10.5))
-                    .text_color(colors.muted)
-                    .child(language.text(Message::ThemeCommunityNoPreview))
-                    .into_any_element(),
-            };
-            let id = entry.id.clone();
-            let action = Button::new(("community-action", index))
-                .debug_selector(move || format!("community-action-{index}"))
-                .h(px(27.0))
-                .px(px(11.0))
-                .text_size(px(11.0))
-                .rounded_full();
-            let action = match (install, &installed) {
-                (Some(InstallState::Running), _) => action
-                    .label(language.text(Message::ThemeCommunityInstalling))
-                    .loading(true)
-                    .disabled(true)
-                    .ghost()
-                    .text_color(colors.secondary),
-                (_, Installed::Current(_)) if previewing => action
-                    .icon(IconName::Check)
-                    .label(language.text(Message::ThemeCommunityInstalled))
-                    .disabled(true)
-                    .ghost()
-                    .text_color(colors.secondary),
-                (_, Installed::Current(theme_id)) => {
-                    let theme_id = theme_id.clone();
-                    action
-                        .label(language.text(Message::ThemeCommunitySelect))
-                        .ghost()
-                        .disabled(busy)
-                        .text_color(colors.primary)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.preview_community_theme(&theme_id, window, cx)
-                        }))
-                },
-                (_, other) => action
-                    .label(if *other == Installed::Other {
-                        language.format(
-                            Message::ThemeCommunityInstallVersion,
-                            &[("version", &entry.version)],
-                        )
+                    .text_size(px(11.5))
+                    .text_color(colors.secondary)
+                    .child(language.text(if matches!(state, Some(Preview::Loading)) {
+                        Message::ThemeCommunityPreviewLoading
                     } else {
-                        language.text(Message::ThemeCommunityInstall).to_owned()
-                    })
-                    .disabled(busy)
-                    .bg(colors.primary)
-                    .border_color(colors.primary)
-                    .text_color(colors.on_primary)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.install_community_theme(id.clone(), window, cx)
-                    })),
+                        Message::ThemeCommunityNoPreview
+                    }))
+                    .into_any_element(),
             };
             let failure = match install {
                 Some(InstallState::Failed(error)) => Some(error.clone()),
                 _ => None,
+            };
+            let footer = match install {
+                Some(InstallState::Running(progress)) => {
+                    let downloaded = progress.load(Ordering::Relaxed);
+                    let downloading = downloaded < entry.archive.bytes;
+                    let percent = (downloaded * 100 / entry.archive.bytes).min(100);
+                    v_flex()
+                        .debug_selector(move || format!("community-progress-{index}"))
+                        .gap(px(5.0))
+                        .child(note(if downloading {
+                            language.format(
+                                Message::ThemeCommunityDownloading,
+                                &[("percent", &percent.to_string())],
+                            )
+                        } else {
+                            language.text(Message::ThemeCommunityInstalling).to_owned()
+                        }))
+                        .when(downloading, |status| {
+                            status.child(
+                                Progress::new(("community-download", index))
+                                    .with_size(px(3.0))
+                                    .color(colors.primary)
+                                    .value(percent as f32),
+                            )
+                        })
+                        .into_any_element()
+                },
+                _ if installed_choice.is_some() => h_flex()
+                    .gap(px(6.0))
+                    .justify_between()
+                    .text_size(px(11.5))
+                    .text_color(colors.secondary)
+                    .child(language.text(if previewing {
+                        Message::ThemeCommunityPreviewing
+                    } else {
+                        Message::ThemeCommunityInstalled
+                    }))
+                    .child(if previewing {
+                        Icon::new(IconName::Check)
+                            .size(px(14.0))
+                            .text_color(colors.primary)
+                            .into_any_element()
+                    } else {
+                        h_flex()
+                            .gap(px(4.0))
+                            .text_color(colors.ink)
+                            .child(language.text(Message::ThemeCommunitySelect))
+                            .child(Icon::new(IconName::ChevronRight).size(px(12.0)))
+                            .into_any_element()
+                    })
+                    .into_any_element(),
+                _ => {
+                    let id = entry.id.clone();
+                    h_flex()
+                        .justify_end()
+                        .child(
+                            Button::new(("community-action", index))
+                                .debug_selector(move || format!("community-action-{index}"))
+                                .h(px(30.0))
+                                .px(px(11.0))
+                                .text_size(px(12.0))
+                                .rounded(px(6.0))
+                                .label(if failure.is_some() {
+                                    language.text(Message::ThemeCommunityRetry).to_owned()
+                                } else if installed == Installed::Other {
+                                    language.format(
+                                        Message::ThemeCommunityInstallVersion,
+                                        &[("version", &entry.version)],
+                                    )
+                                } else {
+                                    language.text(Message::ThemeCommunityInstall).to_owned()
+                                })
+                                .disabled(busy)
+                                .bg(colors.primary)
+                                .border_color(colors.primary)
+                                .text_color(colors.on_primary)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.install_community_theme(id.clone(), window, cx)
+                                })),
+                        )
+                        .into_any_element()
+                },
             };
             v_flex()
                 .id(("community-theme", index))
                 .debug_selector(move || format!("community-theme-{index}"))
                 .w(px(card_width))
                 .flex_shrink_0()
-                .rounded(px(8.0))
+                .rounded(px(CARD_RADIUS))
                 .border_1()
                 .border_color(if previewing { colors.primary } else { colors.line })
-                .overflow_hidden()
+                .when_some(installed_choice.filter(|_| !busy), |card, choice| {
+                    let focus = picker
+                        .options
+                        .iter()
+                        .find(|(option, _)| *option == choice)
+                        .map(|(_, focus)| focus.clone().tab_stop(true));
+                    card.when_some(focus, |card, focus| card.track_focus(&focus))
+                        .role(Role::RadioButton)
+                        .aria_label(entry.name.clone())
+                        .aria_toggled(if previewing { Toggled::True } else { Toggled::False })
+                        .cursor_pointer()
+                        .when(!previewing, |card| {
+                            card.hover(move |style| style.border_color(colors.control))
+                        })
+                        .active(move |style| style.bg(colors.selected))
+                        .focus_visible(move |style| style.border_color(colors.primary))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.preview_community_theme(choice, window, cx);
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                            if matches!(event.keystroke.key.as_str(), "space" | "enter") {
+                                cx.stop_propagation();
+                                this.preview_community_theme(choice, window, cx);
+                            }
+                        }))
+                })
                 .child(
                     div()
                         .w_full()
                         .h(px((card_width * 0.5).round()))
+                        .rounded_t(inner_radius)
                         .bg(colors.subtle)
                         .overflow_hidden()
                         .child(preview),
                 )
                 .child(
                     v_flex()
+                        .flex_1()
+                        .justify_between()
                         .p(px(10.0))
-                        .gap(px(4.0))
+                        .gap(px(8.0))
                         .child(
-                            h_flex()
-                                .gap(px(6.0))
-                                .justify_between()
+                            v_flex()
+                                .gap(px(4.0))
                                 .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(px(12.0))
-                                        .font_semibold()
-                                        .child(entry.name.clone()),
+                                    h_flex()
+                                        .gap(px(6.0))
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(13.0))
+                                                .font_semibold()
+                                                .child(entry.name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(10.5))
+                                                .text_color(colors.secondary)
+                                                .child(entry.version.clone()),
+                                        ),
                                 )
                                 .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_size(px(10.0))
+                                    h_flex()
+                                        .gap(px(8.0))
+                                        .justify_between()
+                                        .text_size(px(11.5))
                                         .text_color(colors.secondary)
-                                        .child(entry.version.clone()),
-                                ),
+                                        .child(div().min_w_0().truncate().child(language.format(
+                                            Message::ThemeCommunityAuthor,
+                                            &[("author", &entry.author.name)],
+                                        )))
+                                        .when(installed_choice.is_none(), |metadata| {
+                                            metadata.child(div().flex_shrink_0().child(
+                                                language.format(
+                                                    Message::ThemeCommunityDownloadSize,
+                                                    &[(
+                                                        "size",
+                                                        &download_size(entry.archive.bytes),
+                                                    )],
+                                                ),
+                                            ))
+                                        }),
+                                )
+                                .when_some(entry.description.clone(), |content, description| {
+                                    content.child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .line_height(gpui::relative(1.5))
+                                            .text_color(colors.ink)
+                                            .child(description),
+                                    )
+                                })
+                                .when_some(failure, |content, error| {
+                                    content.child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .text_color(cx.theme().danger)
+                                            .child(error),
+                                    )
+                                }),
                         )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(10.5))
-                                .text_color(colors.secondary)
-                                .child(format!(
-                                    "{} · {}",
-                                    language.format(
-                                        Message::ThemeCommunityAuthor,
-                                        &[("author", &entry.author.name)],
-                                    ),
-                                    language.format(
-                                        Message::ThemeCommunityDownloadSize,
-                                        &[("size", &download_size(entry.archive.bytes))],
-                                    ),
-                                )),
-                        )
-                        .when_some(entry.description.clone(), |card, description| {
-                            card.child(
-                                div()
-                                    .text_size(px(10.5))
-                                    .line_height(gpui::relative(1.5))
-                                    .text_color(colors.ink)
-                                    .child(description),
-                            )
-                        })
-                        .when_some(failure, |card, error| {
-                            card.child(
-                                div()
-                                    .text_size(px(10.5))
-                                    .text_color(cx.theme().danger)
-                                    .child(error),
-                            )
-                        })
-                        .child(h_flex().pt(px(4.0)).justify_end().child(action)),
+                        .child(footer),
                 )
         });
-        column.child(h_flex().w(px(width)).flex_wrap().items_start().gap(px(gap)).children(cards))
+        column.child(h_flex().w(px(width)).flex_wrap().items_stretch().gap(px(gap)).children(cards))
     }
 }

@@ -11,17 +11,45 @@ use nebula_settings::ThemeName;
 
 use super::{ResolvedTheme, apply_skin_tokens};
 
+#[gpui::test]
+fn dark_surfaces_keep_selection_without_shadows(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        for name in ThemeName::BUILTIN {
+            let mut runtime = nebula_settings::RuntimeSettings::from_raw(
+                &nebula_settings::RawSettings::from_text(""),
+            );
+            runtime.theme = name;
+            runtime.follow_system_theme = false;
+            cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(name, runtime));
+            let light = super::resolved_skin(cx).is_light;
+            for shadows in [
+                super::raised_shadow(cx),
+                super::settings_card_shadow(cx),
+                super::float_shadow(cx),
+                super::selected_halo(cx),
+            ] {
+                assert_eq!(shadows.is_empty(), !light, "{name:?}");
+            }
+            assert_ne!(super::raised_fill(cx), super::settings_nav_tint(cx), "{name:?}");
+        }
+    });
+}
+
 #[test]
 fn settings_cards_keep_readable_text_and_distinct_dark_layers() {
     for name in ThemeName::BUILTIN {
         let theme = ResolvedTheme::builtin(name, None);
         let skin = theme.skin();
         let card = super::settings_card_fill_for_theme(&theme);
+        let selected = super::raised_fill_for_skin(skin);
         assert_eq!(card.a, 1.0, "{name:?}");
         if skin.is_light {
+            assert_eq!(card, selected, "{name:?}");
             continue;
         }
         assert!(card.l > super::solid(skin.panel).l, "{name:?}");
+        assert_ne!(card, selected, "{name:?}");
         assert!(contrast(card, super::ink(skin.ink_dim)) >= 4.5, "{name:?}: description");
         assert!(contrast(card, super::ink(skin.accent)) >= 3.0, "{name:?}: focus");
         if name == ThemeName::Nord {

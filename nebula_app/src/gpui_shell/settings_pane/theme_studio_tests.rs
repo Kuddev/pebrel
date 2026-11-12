@@ -17,6 +17,8 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 mod background_tests;
 #[path = "theme_community_tests.rs"]
 mod community_tests;
+#[path = "settings_layout_tests.rs"]
+mod layout_tests;
 #[path = "theme_package_tests.rs"]
 mod package_tests;
 #[cfg(feature = "shader-background")]
@@ -39,66 +41,6 @@ struct PaletteSnapshot(Vec<u32>);
 
 fn test_runtime() -> RuntimeSettings {
     RuntimeSettings::from_raw(&RawSettings::from_text(TEST_SETTINGS))
-}
-
-#[gpui::test]
-fn settings_cards_fit_the_window_and_keep_wrapped_controls_inside(cx: &mut TestAppContext) {
-    let _fixture_guard = lock_theme_studio();
-    let (_, mut window) = open_settings(cx);
-    click("settings-nav-1", &mut window);
-    let title = window.read(|cx| {
-        let language = crate::gpui_shell::config::ui_language(cx);
-        language.text(crate::i18n::Message::CommonTheme)
-    });
-    let card_selector = format!("settings-group-card-{title}");
-    let row_selector = format!("settings-row-{title}");
-    for (width, wraps) in [(1400.0, false), (620.0, true)] {
-        window.simulate_resize(size(px(width), px(1000.0)));
-        draw(&mut window);
-        let area = window.debug_bounds("settings-content-area").unwrap();
-        let column = window.debug_bounds("settings-content-column").unwrap();
-        let card =
-            window.update(|window, _| window.debug_bounds_for_selector(&card_selector)).unwrap();
-        let theme_picker = window.debug_bounds("open-theme-picker").unwrap();
-        let toggle = window.debug_bounds("nebula-switch-follow_system_theme").unwrap();
-        assert_eq!(column.size.width, area.size.width.min(px(design::CONTENT_MAX_WIDTH)));
-        assert!((f32::from(column.center().x - area.center().x)).abs() < 1.0);
-        assert_eq!(card.left() - column.left(), px(design::CONTENT_PAD_X));
-        assert_eq!(column.right() - card.right(), px(design::CONTENT_PAD_X));
-        for control in [theme_picker, toggle] {
-            assert!(control.left() >= card.left() && control.right() <= card.right());
-            assert!(control.top() >= card.top() && control.bottom() <= card.bottom());
-        }
-        let theme_row =
-            window.update(|window, _| window.debug_bounds_for_selector(&row_selector)).unwrap();
-        assert_eq!(theme_picker.center().y - theme_row.center().y > px(12.0), wraps);
-    }
-}
-
-#[gpui::test]
-fn modified_setting_reset_works_away_from_hover(cx: &mut TestAppContext) {
-    let _fixture_guard = lock_theme_studio();
-    let _settings_guard = SettingsBytesGuard::capture();
-    let (pane, mut window) = open_settings(cx);
-    click("settings-nav-6", &mut window);
-    let default = SettingsPane::factory_defaults().copy_on_select;
-    window.update(|window, cx| {
-        pane.update(cx, |pane, cx| pane.toggle("copy_on_select", !default, window, cx));
-    });
-    window.simulate_mouse_move(gpui::point(px(2.0), px(2.0)), None, Modifiers::default());
-    draw(&mut window);
-    let selector = window.read(|cx| {
-        let language = crate::gpui_shell::config::ui_language(cx);
-        format!("setting-reset-{}", language.pick("选中即复制", "Copy on select"))
-    });
-    let reset = window
-        .update(|window, _| window.debug_bounds_for_selector(&selector))
-        .expect("modified setting has a reset button outside row hover");
-    assert_eq!(reset.size, size(px(32.0), px(32.0)));
-    click_point(gpui::point(reset.center().x, reset.top() + px(1.0)), &mut window);
-    assert_eq!(pane.read_with(&window, |pane, _| pane.runtime.copy_on_select), default);
-    assert_eq!(RuntimeSettings::load().copy_on_select, default);
-    assert!(window.update(|window, _| window.debug_bounds_for_selector(&selector)).is_none());
 }
 
 #[gpui::test]
@@ -1258,13 +1200,26 @@ fn native_theme_picker_visual_review() {
     let config = PathBuf::from(std::env::var_os("PEBREL_CONFIG_DIR").expect("isolated config"));
     let output = PathBuf::from(std::env::var_os("PEBREL_THEME_QA_DIR").expect("QA output"));
     let mode = std::env::var("PEBREL_THEME_QA_MODE").unwrap_or_else(|_| "cards".into());
+    let theme = if std::env::var("PEBREL_THEME_QA_LIGHT").as_deref() == Ok("1") {
+        "NordLight"
+    } else {
+        "Nord"
+    };
+    let width = std::env::var("PEBREL_THEME_QA_WIDTH")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1100.0);
+    let height = std::env::var("PEBREL_THEME_QA_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(690.0);
     assert!(config.is_absolute() && output.is_absolute());
     assert!(!config.join("pebrel_settings.txt").exists(), "use a fresh isolated config");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(
         config.join("pebrel_settings.txt"),
-        "theme=Nord\nfollow_system_theme=0\nlanguage=zh-CN\nfont_size=14\n",
+        format!("theme={theme}\nfollow_system_theme=0\nlanguage=zh-CN\nfont_size=14\n"),
     )
     .unwrap();
     gpui_platform::application().with_assets(crate::gpui_shell::NebulaAssets).run(move |cx| {
@@ -1275,7 +1230,7 @@ fn native_theme_picker_visual_review() {
                 gpui::WindowOptions {
                     window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
                         gpui::point(px(30.0), px(20.0)),
-                        size(px(1100.0), px(690.0)),
+                        size(px(width), px(height)),
                     ))),
                     focus: false,
                     show: true,
@@ -1285,7 +1240,23 @@ fn native_theme_picker_visual_review() {
                     let settings = cx.new(|cx| SettingsPane::new(window, cx));
                     settings.update(cx, |settings, cx| {
                         settings.active_section = 1;
-                        if mode != "appearance" {
+                        if mode == "settings" {
+                            settings.active_section = 6;
+                            settings.active_nav_child = Some(NavChild::Mouse);
+                            settings.toggle(
+                                "copy_on_select",
+                                !SettingsPane::factory_defaults().copy_on_select,
+                                window,
+                                cx,
+                            );
+                        } else if mode == "appearance" {
+                            settings.active_nav_child = Some(NavChild::TerminalLook);
+                        } else if mode == "theme" {
+                            settings.active_nav_child = Some(NavChild::Theme);
+                            // Show the undo action without letting the host theme pick the palette.
+                            settings.runtime.follow_system_theme =
+                                !SettingsPane::factory_defaults().follow_system_theme;
+                        } else {
                             settings.open_appearance_picker(true, window, cx);
                         }
                     });
@@ -1308,10 +1279,45 @@ fn native_theme_picker_visual_review() {
             })
             .unwrap();
             cx.background_executor().timer(Duration::from_millis(800)).await;
+            let bounds = cx
+                .update_window(handle.into(), |_, window, cx| {
+                    let language = crate::gpui_shell::config::ui_language(cx);
+                    let theme_card =
+                        format!("settings-group-card-{}", NavChild::Theme.label(language));
+                    [
+                        "settings-content-column",
+                        theme_card.as_str(),
+                        "settings-nav-scroll",
+                        "settings-nav-divider",
+                        "settings-nav-0",
+                        "settings-nav-child-1-0",
+                        "setting-reset-选中即复制",
+                        "setting-reset-跟随系统",
+                        "setting-reset-face-跟随系统",
+                        "nebula-switch-copy_on_select",
+                        "settings-choices-cell_width_mode",
+                        "settings-choice-cell_width_mode-compact",
+                        "settings-choice-cell_width_mode-relaxed",
+                    ]
+                    .into_iter()
+                    .filter_map(|selector| {
+                        let b = window.debug_bounds_for_selector(selector)?;
+                        Some((
+                            selector.to_owned(),
+                            serde_json::json!({"x": f32::from(b.left()),
+                            "y": f32::from(b.top()), "width": f32::from(b.size.width),
+                            "height": f32::from(b.size.height)}),
+                        ))
+                    })
+                    .collect::<serde_json::Map<_, _>>()
+                })
+                .unwrap();
             std::fs::write(
                 output.join("ready.json"),
                 serde_json::to_vec(&serde_json::json!({
-                    "pid": std::process::id(), "mode": mode,
+                    "pid": std::process::id(), "mode": mode, "theme": theme,
+                    "width": width, "height": height,
+                    "bounds": bounds,
                 }))
                 .unwrap(),
             )

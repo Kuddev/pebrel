@@ -479,6 +479,16 @@
       "defaults_restored_hosts_and_credentials_v2": "既定の設定に戻しました。ホストと資格情報は変更されていません。",
       "search_all_settings": "すべての設定を検索",
       "import_terminal_directory": "ターミナルのディレクトリをインポート…"
+    },
+    "nav": {
+      "workspace": "ワークスペース",
+      "connections": "接続",
+      "system": "システム",
+      "startup": "起動",
+      "alerts": "通知",
+      "completion": "補完",
+      "mouse_selection": "マウスと選択",
+      "tabs_windows": "タブとウィンドウ"
     }
   },
   "provider": {

@@ -104,7 +104,7 @@ impl NebulaWorkspace {
         }
         self.settings_tab_open = false;
         self.leave_settings(window, cx);
-        self.reveal_active_tab();
+        self.reveal_active_tab(cx);
         cx.notify();
         if self.tabs.is_empty() {
             self.close_empty_workspace(window, cx);

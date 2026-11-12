@@ -123,18 +123,31 @@ fn downloads_must_match_the_pinned_size_and_digest() {
     let sha = digest(body);
     let never = AtomicBool::new(false);
     let mut output = Vec::new();
-    copy_verified(&mut &body[..], &mut output, body.len() as u64, &sha, &never).unwrap();
+    let mut progress = Vec::new();
+    copy_verified(&mut &body[..], &mut output, body.len() as u64, &sha, &never, &mut |bytes| {
+        progress.push(bytes)
+    })
+    .unwrap();
+    assert_eq!(progress, [body.len() as u64]);
     assert_eq!(output, body);
     for (bytes, expected) in [
         (&body[..body.len() - 1], body.len() as u64),
         (&body[..], body.len() as u64 - 1),
         (&b"pinned archive BYTES"[..], body.len() as u64),
     ] {
-        let error = copy_verified(&mut &bytes[..], &mut Vec::new(), expected, &sha, &never);
+        let error =
+            copy_verified(&mut &bytes[..], &mut Vec::new(), expected, &sha, &never, &mut |_| {});
         assert!(matches!(error, Err(Error::Integrity)), "{error:?}");
     }
     let cancelled = AtomicBool::new(true);
-    let error = copy_verified(&mut &body[..], &mut Vec::new(), body.len() as u64, &sha, &cancelled);
+    let error = copy_verified(
+        &mut &body[..],
+        &mut Vec::new(),
+        body.len() as u64,
+        &sha,
+        &cancelled,
+        &mut |_| {},
+    );
     assert!(matches!(error, Err(Error::Cancelled)));
 }
 
@@ -198,6 +211,11 @@ fn previews_decode_to_bounded_thumbnails_and_reject_other_formats() {
         .unwrap();
     let thumbnail = decode_preview(png).unwrap();
     assert_eq!(thumbnail.dimensions(), (480, 300));
+    let mut portrait = Vec::new();
+    image::RgbaImage::from_pixel(100, 1000, image::Rgba([1, 2, 3, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut portrait), image::ImageFormat::Png)
+        .unwrap();
+    assert_eq!(decode_preview(portrait).unwrap().dimensions(), (48, 480));
     let mut gif = Vec::new();
     image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255]))
         .write_to(&mut std::io::Cursor::new(&mut gif), image::ImageFormat::Gif)

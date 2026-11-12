@@ -347,8 +347,8 @@ mod tests {
         assert_eq!(spinner_tick(cx), 0, "hidden badges must leave no frame demand");
     }
 
-    fn click_tabs_toggle(cx: &mut VisualTestContext) {
-        let position = cx.debug_bounds("sidebar-tabs-toggle").unwrap().center();
+    fn click_tabs_header(cx: &mut VisualTestContext) {
+        let position = cx.debug_bounds("sidebar-tabs-header").unwrap().center();
         cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
         draw(cx);
@@ -390,11 +390,8 @@ mod tests {
         draw(&mut window);
         assert_spinner_running(&workspace, &mut window);
 
-        click_tabs_toggle(&mut window);
-        assert!(workspace.read_with(&window, |workspace, _| workspace.tabs_section_collapsed));
-        assert_spinner_stopped(&workspace, &mut window);
-        click_tabs_toggle(&mut window);
-        assert!(!workspace.read_with(&window, |workspace, _| workspace.tabs_section_collapsed));
+        click_tabs_header(&mut window);
+        assert!(window.debug_bounds("sidebar-tab-0").is_some());
         assert_spinner_running(&workspace, &mut window);
 
         window.dispatch_action(ToggleSidebar);
