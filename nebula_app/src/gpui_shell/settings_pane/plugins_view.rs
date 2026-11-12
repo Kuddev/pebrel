@@ -24,53 +24,55 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let muted = cx.theme().muted_foreground;
         let idle = !self.plugins.loading && self.plugins.busy.is_none();
+        let empty = self.plugins.listing.as_ref().is_some_and(|listing| {
+            listing
+                .as_ref()
+                .is_ok_and(|listing| listing.plugins.is_empty() && listing.broken.is_empty())
+        });
         let header = h_flex()
+            .items_start()
             .justify_between()
-            .gap_3()
+            .flex_wrap()
+            .gap(px(14.0))
             .child(
-                div()
-                    .text_size(px(20.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(language.text(Message::SettingsPluginsTitle)),
+                v_flex()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(18.0))
+                            .font_semibold()
+                            .child(language.text(Message::SettingsPluginsTitle)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .line_height(gpui::relative(1.5))
+                            .text_color(muted)
+                            .child(language.text(Message::SettingsPluginsDescription)),
+                    ),
             )
             .child(
                 h_flex()
                     .gap_2()
+                    .when(!empty, |row| row.child(self.plugin_install_button(false, cx)))
                     .child(
-                        Button::new("plugins-install")
-                            .debug_selector(|| "plugins-install".to_owned())
-                            .small()
-                            .icon(IconName::FolderOpen)
-                            .label(language.text(match self.plugins.busy {
-                                Some(Busy::Installing) => Message::SettingsPluginsInstalling,
-                                _ => Message::SettingsPluginsInstall,
-                            }))
-                            .loading(matches!(
-                                self.plugins.busy,
-                                Some(Busy::Picking | Busy::Installing)
-                            ))
-                            .disabled(!idle || self.plugins.pending.is_some())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.pick_plugin_folder(window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("plugins-refresh")
-                            .debug_selector(|| "plugins-refresh".to_owned())
-                            .ghost()
-                            .small()
-                            .icon(IconName::Redo)
-                            .label(language.text(Message::SettingsPluginsRefresh))
-                            .disabled(!idle)
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_plugins(cx))),
+                        crate::gpui_shell::widgets::settings_button(
+                            Button::new("plugins-refresh")
+                                .debug_selector(|| "plugins-refresh".to_owned())
+                                .icon(IconName::Redo)
+                                .label(language.text(Message::SettingsPluginsRefresh))
+                                .disabled(!idle)
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh_plugins(cx))),
+                            true,
+                            cx,
+                        )
+                        .h(px(30.0))
+                        .text_size(px(12.0)),
                     ),
             );
-        let mut page = v_flex().w_full().max_w(px(720.0)).gap_4().child(header).child(
-            div()
-                .text_sm()
-                .text_color(muted)
-                .child(language.text(Message::SettingsPluginsDescription)),
-        );
+        let mut page = v_flex().w_full().max_w(px(720.0)).gap(px(20.0)).child(header);
         if let Some(pending) = self.plugins.pending.clone() {
             page = page.child(self.plugin_grant_card(&pending, window, cx));
         }
@@ -93,14 +95,53 @@ impl SettingsPane {
                         language.format(Message::SettingsPluginsFailed, &[("error", error)]),
                     ));
             },
-            Some(Ok(listing)) if listing.plugins.is_empty() && listing.broken.is_empty() => {
+            Some(Ok(_)) if empty => {
                 page = page.child(
-                    div()
+                    v_flex()
                         .id("plugins-empty")
                         .debug_selector(|| "plugins-empty".into())
-                        .text_sm()
-                        .text_color(muted)
-                        .child(language.text(Message::SettingsPluginsEmpty)),
+                        .w_full()
+                        .min_w_0()
+                        .items_center()
+                        .text_center()
+                        .px(px(24.0))
+                        .py(px(44.0))
+                        .gap(px(12.0))
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(border)
+                        .bg(cx.theme().foreground.opacity(0.015))
+                        .child(
+                            div()
+                                .size(px(36.0))
+                                .rounded(px(8.0))
+                                .bg(cx.theme().secondary)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::default()
+                                        .path(crate::gpui_shell::assets::nav::PUZZLE)
+                                        .size(px(18.0))
+                                        .text_color(muted),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.5))
+                                .font_medium()
+                                .child(language.text(Message::SettingsPluginsEmpty)),
+                        )
+                        .child(
+                            div()
+                                .max_w(px(360.0))
+                                .text_size(px(12.0))
+                                .line_height(gpui::relative(1.5))
+                                .text_color(muted)
+                                .child(language.text(Message::SettingsPluginsEmptyHint)),
+                        )
+                        .child(self.plugin_install_button(true, cx).mt(px(6.0))),
                 );
             },
             Some(Ok(listing)) => {
@@ -122,6 +163,27 @@ impl SettingsPane {
                 .text_color(muted)
                 .child(language.text(Message::SettingsPluginsThemesKept)),
         )
+    }
+
+    fn plugin_install_button(&self, primary: bool, cx: &mut Context<Self>) -> Button {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let idle = !self.plugins.loading && self.plugins.busy.is_none();
+        let button = Button::new("plugins-install")
+            .debug_selector(|| "plugins-install".into())
+            .label(language.text(if self.plugins.busy == Some(Busy::Installing) {
+                Message::SettingsPluginsInstalling
+            } else {
+                Message::SettingsPluginsInstall
+            }))
+            .loading(matches!(self.plugins.busy, Some(Busy::Picking | Busy::Installing)))
+            .disabled(!idle || self.plugins.pending.is_some())
+            .on_click(cx.listener(|this, _, window, cx| this.pick_plugin_folder(window, cx)));
+        let button = if primary {
+            button.primary().px(px(12.0)).rounded(px(6.0))
+        } else {
+            crate::gpui_shell::widgets::settings_button(button, true, cx)
+        };
+        button.h(px(30.0)).text_size(px(12.0))
     }
 
     fn plugin_grant_card(
