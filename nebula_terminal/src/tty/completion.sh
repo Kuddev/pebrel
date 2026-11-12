@@ -1,9 +1,16 @@
-# Private editor query and prompt redraw; existing user bindings retain
-# ownership of F24 and the clear-screen redraw key.
+# Private editor query and prompt redraw, advertised as separate capabilities;
+# existing user bindings retain ownership of F24 and the clear-screen redraw key.
 __pebrel_editor_ready_report() {
     if [ "${__pebrel_editor_ready:-0}" = 1 ] && [ -n "${__pebrel_shell_token:-}" ]; then
         printf '\033]1337;SetUserVar=pebrel_editor_ready=%s\007' "$__pebrel_shell_token"
         if typeset -f __pebrel_pointer_ready_report >/dev/null; then __pebrel_pointer_ready_report; fi
+    fi
+    # Only an integration that actually owns the redraw key reports it. The
+    # query capability alone says nothing about the redraw key: an upgraded
+    # client facing an older integration (query-only) must never send the key
+    # into a live shell where it is simply unbound.
+    if [ "${__pebrel_editor_redraw:-0}" = 1 ] && [ -n "${__pebrel_shell_token:-}" ]; then
+        printf '\033]1337;SetUserVar=pebrel_editor_redraw=%s\007' "$__pebrel_shell_token"
     fi
 }
 
@@ -34,31 +41,36 @@ __pebrel_editor_report() {
 if [ -n "${BASH_VERSION-}" ] && (( BASH_VERSINFO[0] >= 4 )) && [[ $- == *i* ]]; then
     __pebrel_editor_bound=0
     __pebrel_clear_bound=0
+    # bind -p and bind -X do not list string macros; bind -s does. A user macro
+    # on a private key must keep the key user-owned instead of being replaced.
     while IFS= read -r __pebrel_binding; do
         [[ $__pebrel_binding == '"\e[45~":'* ]] && __pebrel_editor_bound=1
         [[ $__pebrel_binding == '"\e[46~":'* ]] && __pebrel_clear_bound=1
-    done < <(bind -p 2>/dev/null; bind -X 2>/dev/null)
-    # The redraw key is a readline function binding, not a shell command: the
-    # editor clears the screen and repaints prompt, buffer and caret itself.
-    # Both keys are probed before either binding is installed, so an occupied
-    # redraw key never leaves half of the private channel behind. The rollback
-    # runs only for the query binding this invocation just installed, and
-    # bind -r takes the bare key sequence.
-    if [[ $__pebrel_editor_bound == 0 && $__pebrel_clear_bound == 0 ]]; then
+    done < <(bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null)
+    # Query and redraw are independent capabilities, each probed before its own
+    # binding is installed: a user-owned redraw key leaves query, completion and
+    # pointer support working exactly as in integrations that shipped no redraw.
+    if [[ $__pebrel_editor_bound == 0 ]]; then
         if bind -x '"\e[45~":__pebrel_editor_report' 2>/dev/null; then
-            if bind '"\e[46~": clear-screen' 2>/dev/null; then
-                __pebrel_editor_ready=1
-            else
-                bind -r '\e[45~' 2>/dev/null
-            fi
+            __pebrel_editor_ready=1
+        fi
+    fi
+    if [[ $__pebrel_clear_bound == 0 ]]; then
+        if bind '"\e[46~": clear-screen' 2>/dev/null; then
+            __pebrel_editor_redraw=1
         fi
     fi
     unset __pebrel_editor_bound __pebrel_clear_bound __pebrel_binding
 elif [ -n "${ZSH_VERSION-}" ]; then
-    if [[ $(bindkey '\e[45~') == *undefined-key ]] && [[ $(bindkey '\e[46~') == *undefined-key ]]; then
+    if [[ $(bindkey '\e[45~') == *undefined-key ]]; then
         zle -N __pebrel_editor_report
         bindkey '\e[45~' __pebrel_editor_report
-        bindkey '\e[46~' clear-screen
         __pebrel_editor_ready=1
+    fi
+    # A bindkey -s string macro also reports a non-widget body, so the
+    # undefined-key probe treats it as user-owned and leaves it in place.
+    if [[ $(bindkey '\e[46~') == *undefined-key ]]; then
+        bindkey '\e[46~' clear-screen
+        __pebrel_editor_redraw=1
     fi
 fi

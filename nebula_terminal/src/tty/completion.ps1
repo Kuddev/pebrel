@@ -10,19 +10,8 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             # Windows PowerShell's bundled PSReadLine lacks -Chord.
             Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F12','Shift+Ctrl+F12' }
         }
-        # The prompt-redraw chord joins the same ownership boundary as the
-        # query: both are probed before either is installed, so a user-held
-        # F11 never leaves a half-installed channel behind, and the pairing
-        # never falls back to a keyboard byte that invokes user rebinding.
-        $clearExisting = if ($query.Parameters.ContainsKey('Chord')) {
-            Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue
-        } else {
-            @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F11','Shift+Ctrl+F11' })
-        }
-        if ((-not $existing -or $existing.Function -eq 'Unbound' -or
-                ($global:PebrelEditorHandlerName -and $existing.Function -eq $global:PebrelEditorHandlerName)) -and
-            (-not $clearExisting -or $clearExisting.Function -eq 'Unbound' -or
-                $clearExisting.Function -eq 'ClearScreen')) {
+        if (-not $existing -or $existing.Function -eq 'Unbound' -or
+            ($global:PebrelEditorHandlerName -and $existing.Function -eq $global:PebrelEditorHandlerName)) {
             $global:PebrelEditorHandlerName = 'PebrelNativeEditor:' + $global:PebrelShellToken
             Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F12 -ScriptBlock {
                 param($key, $arg)
@@ -39,7 +28,21 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
                     [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor=$payload$([char]7)")
                 }
             } -BriefDescription $global:PebrelEditorHandlerName
-            Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function ClearScreen
+            # The prompt-redraw pairing: an owned chord bound to the native
+            # ClearScreen, probed separately so a user-held F11 leaves query,
+            # completion and pointer support untouched — the redraw capability
+            # is simply not advertised, and the terminal never falls back to a
+            # keyboard byte that invokes user rebinding.
+            $clearExisting = if ($query.Parameters.ContainsKey('Chord')) {
+                Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -ErrorAction SilentlyContinue
+            } else {
+                @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F11','Shift+Ctrl+F11' })
+            }
+            if (-not $clearExisting -or $clearExisting.Function -eq 'Unbound' -or
+                $clearExisting.Function -eq 'ClearScreen') {
+                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function ClearScreen
+                $global:PebrelRedrawReady = $true
+            }
             # PSReadLine 2.0 loses surrogate pairs inserted after native editing.
             # Advertise that boundary so completion cannot silently alter a name.
             $owner = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($global:PebrelShellToken))

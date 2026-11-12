@@ -530,6 +530,10 @@ pub struct TerminalView {
     suggestion_task: Option<suggest::Pending>,
     completion_session: crate::completion::Session,
     completion_editor: editor::Editor,
+    /// 拥有 redraw 键的 shell token（`pebrel_editor_redraw` 上报）。与查询
+    /// 能力（`completion_editor`）分开声明：旧集成只报 query、不装 redraw
+    /// 键，二者混用会让升级后的客户端把键发进未绑定它的活动 shell。
+    editor_redraw_owner: Option<String>,
     editor_query_task: Option<gpui::Task<()>>,
     ghost_enabled: bool,
     completion_style: crate::display::CompletionStyle,

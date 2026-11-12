@@ -40,7 +40,7 @@ class CompletionEditorTests(unittest.TestCase):
         return owner, int(cursor), line
 
     def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False,
-                        owned_redraw: bool = False) -> shell_integration.ShellSession:
+                        owned_redraw: bool = False, owned_macro: bool = False) -> shell_integration.ShellSession:
         root = Path(__file__).resolve().parents[2]
         program = shutil.which(shell)
         if not program:
@@ -65,7 +65,7 @@ class CompletionEditorTests(unittest.TestCase):
             rc.write_text(body.group(1) + "\n" + adapter)
             args = ["--noprofile", "--rcfile", str(rc), "-i"] if shell == "bash" else ["-d", "-i"]
             env = {} if shell == "bash" else {"ZDOTDIR": str(directory)}
-        if owned_binding or owned_redraw:
+        if owned_binding or owned_redraw or owned_macro:
             if shell == "bash":
                 inputrc = self.fixture.home / ".inputrc"
                 lines = ""
@@ -73,6 +73,9 @@ class CompletionEditorTests(unittest.TestCase):
                     lines += '"\\e[45~": beginning-of-line\n'
                 if owned_redraw:
                     lines += '"\\e[46~": beginning-of-line\n'
+                if owned_macro:
+                    # A string macro, which bind -p and bind -X do not list.
+                    lines += '"\\e[46~": "PEBREL-USER-MACRO"\n'
                 inputrc.write_text(lines)
                 env["INPUTRC"] = str(inputrc)
             else:
@@ -81,6 +84,8 @@ class CompletionEditorTests(unittest.TestCase):
                     zshrc += "bindkey '\\e[45~' beginning-of-line\n"
                 if owned_redraw:
                     zshrc += "bindkey '\\e[46~' beginning-of-line\n"
+                if owned_macro:
+                    zshrc += "bindkey -s '\\e[46~' 'PEBREL-USER-MACRO'\n"
                 (self.fixture.home / ".zshrc").write_text(zshrc)
         session = shell_integration.ShellSession(program, self.fixture.home, args, env)
         self.addCleanup(session.close)
@@ -175,27 +180,101 @@ class CompletionEditorTests(unittest.TestCase):
     def test_ssh_zsh_bootstrap_redraws_through_the_owned_clear_key(self) -> None:
         self.check_integration_clear("zsh", "ssh")
 
+    def check_legacy_bash(self, shell: str, session: shell_integration.ShellSession) -> bool:
+        if shell == "bash":
+            version = subprocess.check_output(
+                [shutil.which(shell), "--noprofile", "--norc", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+                text=True,
+            )
+            if int(version) < 4:
+                # Legacy Bash installs neither capability and binds no key.
+                self.assertNotIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+                self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+                return True
+        return False
+
     def check_owned_redraw_binding(self, shell: str, route: str) -> None:
         session = self.start_bootstrap(shell, route, owned_redraw=True)
-        # A user-owned redraw key withdraws the whole native editor channel.
-        self.assertNotIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        if self.check_legacy_bash(shell, session):
+            return
+        # A user-owned redraw key only withdraws the redraw capability: the
+        # query capability keeps reporting, matching the pre-redraw releases.
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
         os.write(session.master, b"echo tail\x1b[46~printf 'OWNED-REDRAW\\n'; \n")
         output = session.wait(b"OWNED-REDRAW\r\n")
         self.assertIn(b"OWNED-REDRAW\r\n", output)
         self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
-        # The withdrawal must also remove the query binding this invocation
-        # installed: no half of the private channel may survive the collision.
-        bindings = session.command(
-            "bind -p 2>/dev/null; bind -X 2>/dev/null; printf 'BINDINGS-END\\n'",
-            b"BINDINGS-END\r\n",
-        )
-        self.assertNotIn(b'"\\e[45~"', bindings)
+        # The user's function binding survived; clear-screen never replaced it.
+        if shell == "bash":
+            bindings = session.command(
+                "bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
+                b"BINDINGS-END\r\n",
+            )
+            self.assertIn(b'"\\e[46~": beginning-of-line', bindings)
+            self.assertNotIn(b"clear-screen", bindings)
 
     def test_ssh_bash_bootstrap_retains_user_owned_redraw_binding(self) -> None:
         self.check_owned_redraw_binding("bash", "ssh")
 
     def test_ssh_zsh_bootstrap_retains_user_owned_redraw_binding(self) -> None:
         self.check_owned_redraw_binding("zsh", "ssh")
+
+    def check_owned_redraw_macro(self, shell: str, route: str) -> None:
+        session = self.start_bootstrap(shell, route, owned_macro=True)
+        if self.check_legacy_bash(shell, session):
+            return
+        # A string macro on the redraw key is invisible to bind -p and bind -X
+        # in Bash; the probe must still treat the key as user-owned and leave
+        # the macro working, with the query capability unaffected.
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"echo tail\x1b[46~ printf 'AFTER-MACRO\\n'; \n")
+        output = session.wait(b"AFTER-MACRO\r\n")
+        self.assertIn(b"PEBREL-USER-MACRO", output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
+        if shell == "bash":
+            bindings = session.command(
+                "bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
+                b"BINDINGS-END\r\n",
+            )
+            self.assertIn(b"PEBREL-USER-MACRO", bindings)
+            self.assertNotIn(b"clear-screen", bindings)
+
+    def test_ssh_bash_bootstrap_retains_user_owned_redraw_macro(self) -> None:
+        self.check_owned_redraw_macro("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_retains_user_owned_redraw_macro(self) -> None:
+        self.check_owned_redraw_macro("zsh", "ssh")
+
+    def check_query_only_session(self, shell: str, route: str) -> None:
+        # The pre-redraw integrations advertised query readiness only and left
+        # the redraw key unbound: the current installation must not touch the
+        # key at all in such a session.
+        session = self.start_bootstrap(shell, route)
+        if self.check_legacy_bash(shell, session):
+            return
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        os.write(session.master, b"echo tail")
+        # Withdraw only the redraw binding this invocation installed, which is
+        # exactly the state a query-only integration advertises.
+        session.command(
+            "bind -r '\\e[46~' 2>/dev/null; bindkey -r '\\e[46~' 2>/dev/null; printf 'WITHDRAWN\\n'",
+            b"WITHDRAWN\r\n",
+        )
+        if shell == "bash":
+            bindings = session.command(
+                "bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
+                b"BINDINGS-END\r\n",
+            )
+            self.assertNotIn(b'"\\e[46~"', bindings)
+            self.assertIn(b'"\\e[45~"', bindings)
+
+    def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("zsh", "ssh")
 
     def check_middle_edit(self, shell: str) -> None:
         session = self.start(shell)

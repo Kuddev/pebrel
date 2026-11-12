@@ -115,13 +115,17 @@ fn clear_screen_clears_history_and_redraws_only_through_the_integration_key(
     cx: &mut TestAppContext,
 ) {
     let (view, cx, receiver) = open(cx);
-    // (prompt, ready)：命令运行中和未声明集成自有键的提示符都不发任何字
-    // 节（应用侧光标归顶）；只有 `pebrel_editor_ready` 声明的提示符才发
-    // `\e[46~`。任何状态都绝不发 ^L——无论清屏快捷键绑定在哪个键上，^L
-    // 都会执行 shell 里用户对 Ctrl+L 的任意重绑定（审查裁定 2026-11-12）。
-    for (prompt, ready) in [(false, false), (true, false), (true, true)] {
+    // (prompt, ready, redraw)：redraw 是独立于 query 的显式能力。命令运行
+    // 中、无任何声明、以及 2.5.3 旧集成的 query-only 会话（ready 有、
+    // redraw 缺席——键在旧 shell 里未绑定）都不发任何字节（应用侧光标归
+    // 顶）；只有 `pebrel_editor_redraw` 声明的提示符才发 `\e[46~`。任何状
+    // 态都绝不发 ^L——无论清屏快捷键绑定在哪个键上，^L 都会执行 shell 里
+    // 用户对 Ctrl+L 的任意重绑定（审查裁定 2026-11-12）。
+    for (prompt, ready, redraw) in
+        [(false, false, false), (true, false, false), (true, true, false), (true, true, true)]
+    {
         view.update(cx, |view, cx| {
-            if ready {
+            if ready || redraw {
                 view.process_event(
                     TermEvent::UserVar {
                         name: "pebrel_shell".into(),
@@ -129,9 +133,20 @@ fn clear_screen_clears_history_and_redraws_only_through_the_integration_key(
                     },
                     cx,
                 );
+            }
+            if ready {
                 view.process_event(
                     TermEvent::UserVar {
                         name: "pebrel_editor_ready".into(),
+                        value: "bash:clear-fixture".into(),
+                    },
+                    cx,
+                );
+            }
+            if redraw {
+                view.process_event(
+                    TermEvent::UserVar {
+                        name: "pebrel_editor_redraw".into(),
                         value: "bash:clear-fixture".into(),
                     },
                     cx,
@@ -161,7 +176,7 @@ fn clear_screen_clears_history_and_redraws_only_through_the_integration_key(
             assert_eq!(term.grid().display_offset(), 0);
             assert!(term.selection.is_none());
             assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
-            if !prompt || !ready {
+            if !prompt || !redraw {
                 assert_eq!(term.grid().cursor.point, TermPoint::new(Line(0), Column(0)));
             }
         });
@@ -172,8 +187,8 @@ fn clear_screen_clears_history_and_redraws_only_through_the_integration_key(
                 _ => None,
             })
             .collect();
-        let expected = if prompt && ready { vec![b"\x1b[46~".to_vec()] } else { vec![] };
-        assert_eq!(writes, expected, "prompt={prompt} ready={ready}");
+        let expected = if prompt && redraw { vec![b"\x1b[46~".to_vec()] } else { vec![] };
+        assert_eq!(writes, expected, "prompt={prompt} ready={ready} redraw={redraw}");
         assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
     }
 }
@@ -189,6 +204,13 @@ fn clear_screen_sends_the_owned_powershell_chord_for_pwsh(cx: &mut TestAppContex
         view.process_event(
             TermEvent::UserVar {
                 name: "pebrel_editor_ready".into(),
+                value: "pwsh:clear-fixture".into(),
+            },
+            cx,
+        );
+        view.process_event(
+            TermEvent::UserVar {
+                name: "pebrel_editor_redraw".into(),
                 value: "pwsh:clear-fixture".into(),
             },
             cx,

@@ -19,6 +19,9 @@ if (-not $global:PebrelUnixReadLineInstalled) {
         if ($global:PebrelCompletionInputReady) {
             [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_ready=$global:PebrelEditorReady$([char]7)")
         }
+        if ($global:PebrelRedrawReady) {
+            [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_redraw=$global:PebrelShellToken$([char]7)")
+        }
         # OSC 7 is the native location, including paths with spaces or Unicode.
         if ($PWD.Provider.Name -eq 'FileSystem') {
             $uri = [Uri]::new($PWD.Path).AbsoluteUri

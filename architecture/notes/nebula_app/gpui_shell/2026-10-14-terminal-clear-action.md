@@ -47,17 +47,20 @@ established macOS ⌘K clear convention had no path to that behavior.
   already round-trips through `parse_action` / `action_storage_name`).
 - Semantics branch on the pane's foreground state after an instant app-side wipe
   of the viewport and scrollback (`ClearMode::All` + `Saved`):
-  - Shell at a prompt (OSC 133 `nebula_prompt_active`) with the native editor
-    channel advertised (`pebrel_editor_ready`): write the integration-owned
-    clear key — `\e[46~` bound to the readline/zle `clear-screen` function, or
-    the PSReadLine `Ctrl+Shift+F11` → `ClearScreen` chord — so the shell's own
-    line editor clears the glass and repaints prompt, buffer and caret, keeping
-    its line state in sync.
-  - Prompt without the advertised channel, or command running: the view moves
-    the terminal cursor home app-side (`Handler::goto(0, 0)`); sequential
-    output continues from the top and the next prompt lands after the last
-    output line. No keyboard byte is ever written at the prompt (see Rejected
-    alternatives).
+  - Shell at a prompt (OSC 133 `nebula_prompt_active`) with the explicit
+    redraw capability advertised (`pebrel_editor_redraw`, independent of the
+    query readiness `pebrel_editor_ready`): write the integration-owned clear
+    key — `\e[46~` bound to the readline/zle `clear-screen` function, or the
+    PSReadLine `Ctrl+Shift+F11` → `ClearScreen` chord — so the shell's own
+    line editor clears the glass and repaints prompt, buffer and caret,
+    keeping its line state in sync.
+  - Prompt without the advertised redraw capability — no integration at all,
+    a pre-redraw (2.5.3) integration whose query-only readiness says nothing
+    about the unbound key, or a user-owned redraw key — or a running command:
+    the view moves the terminal cursor home app-side (`Handler::goto(0, 0)`);
+    sequential output continues from the top and the next prompt lands after
+    the last output line. No keyboard byte is ever written at the prompt (see
+    Rejected alternatives).
   - Alternate screen (vim, less, other full-screen programs): the action does
     nothing — `^L` is a redraw there, not a clear.
   Clearing the grid alone leaves the cursor on its original row and the prompt
@@ -122,10 +125,14 @@ established macOS ⌘K clear convention had no path to that behavior.
   `win+k:ClearHistory`, where the later line wins). Auto-rewriting
   `ReceiveChar` lines into `ClearHistory` would overwrite an explicitly chosen
   "release the key" decision and is rejected.
-- At the prompt the redraw key reaches the advertised shell's line editor as an
-  owned binding installed next to the native editor query; a user-owned `\e[46~`
-  (or PSReadLine `Ctrl+Shift+F11`) withdraws the whole native editor channel,
-  and the action then degrades to the app-side cursor home. In the
+- At the prompt the redraw key reaches the shell only when the integration
+  explicitly owns it — query readiness (`pebrel_editor_ready`) and redraw
+  ownership (`pebrel_editor_redraw`) are separate capabilities, so an upgraded
+  client facing a live pre-redraw integration (query-only, key unbound) degrades
+  to the app-side cursor home instead of writing the key. A user-owned redraw
+  key — including an inert Bash string macro, which `bind -p`/`bind -X` do not
+  list — withdraws only the redraw capability: query, completion and pointer
+  support keep working exactly as in the pre-redraw releases. In the
   running-command branch no PTY write happens; alternate-screen sessions are
   left untouched entirely.
 - The legacy shell already executes `Action::ClearHistory` and is unchanged.
@@ -136,12 +143,15 @@ established macOS ⌘K clear convention had no path to that behavior.
 gpui-shell --tests --locked`, the `display::keymap` and
 `gpui_shell::workspace::keyboard_bindings` test groups (including the new
 adapter, dispatch-probe and label regressions), the clear-screen view matrix
-(prompt with and without the advertised channel, running command, alternate
-screen; the remapped-key case asserts no `^L` byte ever leaves the app), the
+(prompt with query-only readiness — the 2.5.3 regression — with the explicit
+redraw capability, with no advertisement, running command, and alternate screen;
+the remapped-key case asserts no `^L` byte ever leaves the app), the
 settings-pane suite, the i18n contract suites, the
 `scripts/tests/test_completion_editor.py` redraw regressions (installed key
-clears and keeps the buffer through a real bash/zsh PTY; a user-owned key
-withdraws the advertisement), `cargo test -p nebula --test file_line_budget`
+clears and keeps the buffer through a real bash/zsh PTY; a user-owned function
+binding and a Bash string macro each keep the query capability alive while the
+redraw advertisement stays off and the user binding keeps firing; a query-only
+session leaves the key unbound), `cargo test -p nebula --test file_line_budget`
 and `python3 scripts/check_architecture.py --base <PR base>` pass. The dispatch
 regression fails without the adapter arm; the label regression fails without the
 catalog entries.

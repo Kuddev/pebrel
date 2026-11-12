@@ -229,14 +229,18 @@ class PowerShellPointerTests(unittest.TestCase):
 
     def test_user_owned_redraw_chord_withdraws_the_editor_channel(self) -> None:
         # Ctrl+Shift+F11 is the owned prompt-redraw chord: a user binding on it
-        # withdraws the whole native editor stack, and nothing is half-installed
-        # — the query chord answers nothing either.
+        # withdraws only the redraw capability. Query, completion and pointer
+        # support keep working exactly as in the pre-redraw releases.
         session = self.start(before="Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function BeginningOfLine")
-        self.assertNotIn(b"SetUserVar=pebrel_editor_ready=", session.output)
-        self.assertNotIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
         os.write(session.master, b"echo probe\x1b[24;6~")
+        self.assertEqual(self.value(session, "pebrel_editor")[3], "echo probe")
+        os.write(session.master, b"\x1b[23;6~")
+        # The user's BeginningOfLine still owns the chord, not ClearScreen.
         session.settle()
-        self.assertNotIn(b"SetUserVar=pebrel_editor=", session.output)
+        self.assertEqual(self.snapshot(session), (0, "echo probe"))
 
     def test_production_bootstrap_preserves_native_prompt_and_command_lifecycle(self) -> None:
         session = self.start(before="function prompt { if ($?) { 'native-ok> ' } else { 'native-failed> ' } }")
