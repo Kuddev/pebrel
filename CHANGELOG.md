@@ -28,6 +28,10 @@ macOS, Linux, and Android downloads are Preview builds.
 
 - Added Sixel inline images to desktop terminal panes. Programs that emit Sixel can display images in place. Addresses [#214](https://github.com/Kuddev/nebula/issues/214).
 
+#### Fixed
+
+- Fixed terminal cell size queries at startup so graphics tools can receive a reply without writing more output.
+
 ### 中文
 
 macOS、Linux 和 Android 下载为预览版。
@@ -35,6 +39,10 @@ macOS、Linux 和 Android 下载为预览版。
 #### 新增
 
 - 桌面终端新增 Sixel 行内图片支持。程序输出 Sixel 图像时，图片会直接显示在终端里。对应 [#214](https://github.com/Kuddev/nebula/issues/214)。
+
+#### 修复
+
+- 修复终端启动时单元格尺寸查询的回复延后问题。图形工具无需继续输出就能收到尺寸。
 
 ### Contributors
 
