@@ -12,10 +12,13 @@ connects once per AI turn and waits for the acknowledgement byte before exiting,
 so the sleep added an expected ~10 ms (observed ~20 ms) to every turn's ack even
 when the worker had been idle for a long time.
 
-The same wait bounds how often `stopping` is observed and therefore how long
-`Drop` can spend joining the worker. A replacement must keep that stop
-granularity, must not introduce a blocking `accept`, and must not need a
-synthetic wake-up connection during shutdown.
+The same wait bounds how often `stopping` is observed while the listener is
+idle, and therefore how long `Drop` can spend joining an idle worker. A
+connected peer that sends nothing already keeps `read_message` waiting for up to
+one second, before and after this change, so that read is the bound for a
+connected worker. A replacement must keep the idle stop granularity, must not
+introduce a blocking `accept`, and must not need a synthetic wake-up connection
+during shutdown.
 
 ## Evidence
 
@@ -38,8 +41,10 @@ synthetic wake-up connection during shutdown.
 In the `WouldBlock` branch, wait for `POLLIN` on the listener descriptor with
 `libc::poll` for the same 20 ms budget, then return to the top of the loop and
 let the existing nonblocking `accept` classify the readiness. `accept` stays
-nonblocking; `stopping` is still checked once per loop iteration, so the stop
-granularity and `Drop` join bound remain one 20 ms timeout.
+nonblocking; `stopping` is still checked once per loop iteration, so for an idle
+listener the stop granularity and `Drop` join bound remain one 20 ms timeout. A
+connected peer that sends nothing can still hold the worker in `read_message`
+for up to one second, as before; this decision does not change that read.
 
 The deadline is tracked with `Instant`. `EINTR` retries the poll against the
 same deadline, so repeated signals cannot extend the stop granularity. Any other
@@ -65,8 +70,10 @@ following `accept` so existing accept error behaviour is unchanged.
 
 - Ack latency no longer pays the sleep alignment; p50 is dominated by accept,
   peer verification, read, parse, ancestry lookup, enqueue, and ack write.
-- Idle wake-up rate, stop-check granularity, and the `Drop` join bound are
-  unchanged: one bounded 20 ms wait per idle iteration.
+- Idle wake-up rate, idle stop-check granularity, and the `Drop` join bound for
+  an idle listener are unchanged: one bounded 20 ms wait per idle iteration. A
+  connected-but-silent peer can still hold `Drop`'s join for up to about one
+  second through the existing `read_message` deadline, exactly as before.
 - Poll failures other than `EINTR` stop the worker with a log line and no retry
   loop, matching the fail-closed accept path.
 - The cold first-event process snapshot (~22 ms) remains; it is unrelated to the
@@ -92,7 +99,7 @@ only the accept-wait mechanism and its rejected alternatives.
 
 ## Revisit when
 
-- Shutdown must become faster than the 20 ms stop granularity, or idle wake-ups
-  must be eliminated entirely.
+- Shutdown must become faster than the 20 ms idle stop granularity, or idle
+  wake-ups must be eliminated entirely.
 - A portable cross-Unix readiness API replaces `libc::poll`.
 - The cold first-event snapshot becomes the dominant ack latency.

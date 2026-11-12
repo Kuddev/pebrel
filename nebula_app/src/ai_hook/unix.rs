@@ -177,8 +177,8 @@ fn start(
                 },
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     // poll 只等待可读，accept 仍是非阻塞的。20ms 超时与原先的
-                    // sleep 相同：stopping 仍按约 20ms 粒度检查，Drop 不需要
-                    // 额外的唤醒连接，也不会比之前更久地挂起 join。
+                    // sleep 相同：空闲时 stopping 仍按约 20ms 粒度检查，Drop
+                    // 不需要额外的唤醒连接，也不会比之前更久地挂起 join。
                     if let Err(error) = wait_until_readable(&listener, Duration::from_millis(20)) {
                         log::warn!("ai_hook: socket accept wait failed: {error}");
                         break;
@@ -205,8 +205,9 @@ fn start(
 
 /// 在 `accept` 返回 `WouldBlock` 后等待监听 fd 可读；accept 本身仍是非阻塞的。
 ///
-/// 超时行为与原先的 sleep 相同，`stopping` 的检查粒度和 Drop 的 join 上限
-/// 不变。EINTR 按剩余时间重试，其他错误交给调用方记录并停止 worker。
+/// 超时行为与原先的 sleep 相同：空闲时 `stopping` 的检查粒度和 Drop 的 join
+/// 上限不变；已连接但不发数据的 peer 仍受 `read_message` 的 1 秒上限约束。
+/// EINTR 按剩余时间重试，其他错误交给调用方记录并停止 worker。
 fn wait_until_readable(listener: &UnixListener, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
