@@ -153,6 +153,27 @@ pub(crate) fn probe_codex_session(
     }
 }
 
+/// A local hook can use the usual process lookup unless its platform requires
+/// affirmative terminal ownership. An error means the event must not route.
+#[cfg(unix)]
+pub(crate) fn local_hook_agent_pid(_source: &str, client_pid: u32) -> Result<Option<u32>, ()> {
+    #[cfg(target_os = "linux")]
+    if _source == "codex" {
+        // The helper may have its own session. Stop at the closest Codex
+        // ancestor, even if it is a daemon with no controlling terminal.
+        let owner = crate::process_tree::nearest_ancestor(client_pid, |pid| {
+            let process = super::process_snapshot::linux_process(pid)?;
+            let matched = process.name.as_deref().is_some_and(is_codex_process_name);
+            Some((process.parent, matched.then_some((pid, process.terminal))))
+        });
+        return owner
+            .filter(|(_, terminal)| terminal.is_attached())
+            .map(|(pid, _)| Some(pid))
+            .ok_or(());
+    }
+    Ok(crate::process_tree::nearest_agent_ancestor(client_pid).map(|(pid, _)| pid))
+}
+
 fn parse_probe_context(output: &str) -> Option<CodexSession> {
     let mut candidate = None;
     for record in output.lines().filter_map(parse_probe_record) {

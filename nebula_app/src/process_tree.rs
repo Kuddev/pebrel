@@ -443,20 +443,20 @@ pub fn nearest_agent_ancestor(pid: u32) -> Option<(u32, String)> {
     with_cached_snapshot(|processes| resolve_agent_ancestor(processes, pid)).flatten()
 }
 
-/// Read live parentage while the hook helper waits for acknowledgement. Its
-/// shell can have its own process session; the closest Codex ancestor must
-/// still have a controlling terminal to own a pane event.
-#[cfg(target_os = "linux")]
-pub(crate) fn attached_codex_ancestor(mut pid: u32) -> Option<u32> {
+/// Find the closest matching process using either a snapshot or live records.
+pub(crate) fn nearest_ancestor<T>(
+    mut pid: u32,
+    mut inspect: impl FnMut(u32) -> Option<(u32, Option<T>)>,
+) -> Option<T> {
     for _ in 0..MAX_ANCESTRY_DEPTH {
-        let process = process_snapshot::linux_process(pid)?;
-        if process.name.as_deref().is_some_and(process_snapshot::is_codex_process_name) {
-            return process.terminal.is_attached().then_some(pid);
+        let (parent, matched) = inspect(pid)?;
+        if matched.is_some() {
+            return matched;
         }
-        if process.parent == 0 || process.parent == pid {
+        if parent == 0 || parent == pid {
             return None;
         }
-        pid = process.parent;
+        pid = parent;
     }
     None
 }
@@ -466,18 +466,12 @@ fn resolve_agent_ancestor(
     processes: &std::collections::HashMap<u32, (u32, String)>,
     pid: u32,
 ) -> Option<(u32, String)> {
-    let mut current = pid;
-    for _ in 0..MAX_ANCESTRY_DEPTH {
-        let (parent, executable) = processes.get(&current)?;
-        if let Some(kind) = crate::ai_agents::AgentKind::parse(&display_name(executable)) {
-            return Some((current, kind.slug().to_owned()));
-        }
-        if *parent == 0 || *parent == current {
-            return None;
-        }
-        current = *parent;
-    }
-    None
+    nearest_ancestor(pid, |pid| {
+        let (parent, executable) = processes.get(&pid)?;
+        let matched = crate::ai_agents::AgentKind::parse(&display_name(executable))
+            .map(|kind| (pid, kind.slug().to_owned()));
+        Some((*parent, matched))
+    })
 }
 
 #[cfg(test)]
