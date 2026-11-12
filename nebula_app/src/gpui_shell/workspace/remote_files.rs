@@ -358,21 +358,6 @@ impl RemoteBrowser {
         let Some(matcher) = &self.search_matcher else { return Vec::new() };
         self.entries.iter().filter(|entry| matcher.matches(&entry.name)).cloned().collect()
     }
-
-    fn visible_count(&self) -> usize {
-        if !self.search_active() {
-            return self.entries.len();
-        }
-        self.search_matcher.as_ref().map_or(0, |matcher| {
-            self.entries.iter().filter(|entry| matcher.matches(&entry.name)).count()
-        })
-    }
-
-    /// A non-empty directory where the query matched nothing. A failed query
-    /// is reported through `search_error` instead.
-    fn search_matches_none(&self) -> bool {
-        self.search_active() && !self.entries.is_empty() && self.visible_count() == 0
-    }
 }
 
 impl NebulaWorkspace {
@@ -502,12 +487,11 @@ impl NebulaWorkspace {
     pub(super) fn navigate_remote(&mut self, path: String, cx: &mut Context<'_, Self>) {
         self.remote_browser.last_outcome = None;
         self.remote_browser.following_cwd = false;
-        // Entering another directory starts from its full listing; a filter
-        // kept across navigation would make a valid target look missing. A
-        // refresh of the directory on screen keeps the query.
-        if path != self.remote_browser.path {
-            self.remote_browser.clear_search();
-        }
+        // The query belongs to the listing on screen. It is cleared only once a
+        // different directory has actually been listed: until the response
+        // arrives the old entries stay visible, and a failed request leaves
+        // them (with their filter) in place. A refresh of the current directory
+        // keeps the query.
         let Some(pane) = self.remote_browser.pane else { return };
         let Some(session) = self.remote_browser.browse_sessions.get(&pane).cloned() else {
             self.remote_browser.loading = false;
@@ -549,6 +533,7 @@ impl NebulaWorkspace {
                             let paths: Vec<_> = rows.iter().map(|row| row.path.as_str()).collect();
                             workspace.remote_browser.selection.retain(&paths);
                         } else {
+                            workspace.remote_browser.clear_search();
                             workspace.remote_browser.selection.clear();
                             workspace
                                 .remote_files_scroll
@@ -768,7 +753,12 @@ impl NebulaWorkspace {
     ) -> gpui::AnyElement {
         let search_input = self.ensure_remote_search_input(window, cx);
         self.sync_remote_search_input(&search_input, window, cx);
-        let transfer_status = self.render_remote_transfer_status(cx);
+        let rows = self.remote_rows();
+        // The list, the status count and the empty state all describe the same
+        // listing. Derive every count from these rows so one render matches
+        // each name once instead of re-running the matcher per consumer.
+        let visible_count = rows.iter().filter(|row| !row.is_parent).count();
+        let transfer_status = self.render_remote_transfer_status(visible_count, cx);
         let focus = self
             .remote_browser
             .focus_handle
@@ -825,16 +815,14 @@ impl NebulaWorkspace {
         let hover_ink = hover_text_color(cx);
         let drop_highlight = theme.accent.opacity(0.18);
         let location_background = theme.background.darken(0.035);
-        let rows = self.remote_rows();
         let search_active = self.remote_browser.search_active();
         let search_options = self.remote_browser.search_options;
         let search_error = self.remote_browser.search_error.clone();
-        let search_count = rows.iter().filter(|row| !row.is_parent).count();
         let search_status = search_active.then(|| {
             if search_error.is_some() {
                 language.text(Message::FilesSearchFailed).to_owned()
             } else {
-                language.format(Message::FilesSearchCount, &[("count", &search_count.to_string())])
+                language.format(Message::FilesSearchCount, &[("count", &visible_count.to_string())])
             }
         });
         let path = if self.remote_browser.path.is_empty() {
@@ -1147,7 +1135,11 @@ impl NebulaWorkspace {
     }
 
     /// Idle occupies one visible status line; only a running transfer expands the dock.
-    fn render_remote_transfer_status(&mut self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
+    fn render_remote_transfer_status(
+        &mut self,
+        visible_count: usize,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
         let snapshot = self.remote_transfer_snapshot().filter(|snapshot| {
             snapshot.destination == self.remote_browser.destination
                 && matches!(snapshot.phase, SftpPhase::Working | SftpPhase::Error)
@@ -1165,7 +1157,7 @@ impl NebulaWorkspace {
                     .map(|p| p.label.clone())
                     .unwrap_or_else(|| language.text(Message::RemotePreparing).to_owned())
             }
-        } else if let Some(notice) = self.remote_notice(language) {
+        } else if let Some(notice) = self.remote_notice(visible_count, language) {
             notice
         } else if !selected.is_empty() {
             let mut label = language
@@ -1177,10 +1169,7 @@ impl NebulaWorkspace {
             }
             label
         } else {
-            language.format(
-                Message::RemoteItems,
-                &[("count", &self.remote_browser.visible_count().to_string())],
-            )
+            language.format(Message::RemoteItems, &[("count", &visible_count.to_string())])
         };
         let detail = snapshot.as_ref().and_then(|snapshot| snapshot.error.clone()).or_else(|| {
             progress.map(|p| {
@@ -1552,7 +1541,11 @@ impl NebulaWorkspace {
     ///
     /// 三种情况必须分开说。"读不到"和"是空的"混为一谈，用户就不知道该重试
     /// 还是该换目录——这是空态里最常见也最误导人的一处偷懒。
-    fn remote_notice(&self, language: crate::display::UiLanguage) -> Option<String> {
+    fn remote_notice(
+        &self,
+        visible_count: usize,
+        language: crate::display::UiLanguage,
+    ) -> Option<String> {
         if let Some(error) = self.remote_browser.error.as_deref() {
             return Some(language.format(Message::RemoteErrorRetry, &[("error", error)]));
         }
@@ -1579,7 +1572,12 @@ impl NebulaWorkspace {
         if self.remote_browser.search_error.is_some() {
             return Some(language.text(Message::FilesSearchFailed).to_owned());
         }
-        if self.remote_browser.search_matches_none() {
+        // `visible_count` comes from the rows already filtered for this
+        // render; no name is matched a second time here.
+        if self.remote_browser.search_active()
+            && !self.remote_browser.entries.is_empty()
+            && visible_count == 0
+        {
             return Some(language.text(Message::FilesSearchEmpty).to_owned());
         }
         self.remote_browser
@@ -1806,7 +1804,6 @@ mod tests {
 
         assert!(browser.set_search_query("readme"));
         assert_eq!(names(&browser), ["Readme Assets", "README.md"]);
-        assert_eq!(browser.visible_count(), 2);
         assert!(browser.search_error.is_none());
 
         assert!(browser.set_search_query(""));
@@ -1822,7 +1819,7 @@ mod tests {
             directory("README"),
         ];
         assert!(browser.set_search_query("read"));
-        assert_eq!(browser.visible_count(), 3);
+        assert_eq!(names(&browser), ["read", "Reader.md", "README"]);
 
         assert!(browser.set_search_options(FileSearchOptions {
             match_case: true,
@@ -1867,11 +1864,10 @@ mod tests {
         assert!(browser.set_search_query("("));
         assert!(browser.search_error.is_some());
         assert!(browser.visible_entries().is_empty());
-        assert!(browser.search_matches_none());
 
         assert!(browser.set_search_query("notes"));
         assert!(browser.search_error.is_none());
-        assert_eq!(browser.visible_count(), 1);
+        assert_eq!(names(&browser), ["notes.txt"]);
     }
 
     #[test]
@@ -1879,13 +1875,13 @@ mod tests {
         let mut browser = RemoteBrowser::default();
         browser.entries = vec![entry("notes.txt", "/srv/notes.txt")];
         assert!(browser.set_search_query("missing"));
-        assert!(browser.search_matches_none());
+        assert!(browser.visible_entries().is_empty());
 
         browser.clear_search();
         assert!(!browser.search_active());
         assert!(browser.search_matcher.is_none());
         assert!(browser.search_error.is_none());
         assert!(browser.sync_search_input);
-        assert_eq!(browser.visible_count(), 1);
+        assert_eq!(names(&browser), ["notes.txt"]);
     }
 }

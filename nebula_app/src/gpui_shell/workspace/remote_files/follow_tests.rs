@@ -467,6 +467,19 @@ fn mirrored_query(fixture: &Fixture) -> Option<String> {
     })
 }
 
+/// Type through the real input entity so the `Change` subscription, not a
+/// direct state assignment, is what updates the filter.
+fn type_query(fixture: &mut Fixture, query: &str) {
+    let input = fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        workspace.remote_browser.search_input.clone().expect("filter input")
+    });
+    fixture.window.update(|window, cx| {
+        // `set_value` suppresses `InputEvent::Change`; the user path does not.
+        input.update(cx, |input, cx| input.replace_all(query, window, cx));
+    });
+    fixture.window.run_until_parked();
+}
+
 #[gpui::test]
 fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mut TestAppContext) {
     let mut fixture = open(cx);
@@ -484,7 +497,6 @@ fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mu
             rows.iter().filter(|row| !row.is_parent).map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["notes.md"], "matching must ignore case by default");
         assert!(workspace.remote_browser.selection.contains("/srv/Alpha 中/notes.md"));
-        assert!(!workspace.remote_browser.search_matches_none());
     });
 
     fixture.workspace.update(&mut fixture.window, |workspace, cx| {
@@ -492,8 +504,8 @@ fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mu
     });
     fixture.window.run_until_parked();
     fixture.workspace.read_with(&fixture.window, |workspace, _| {
-        assert_eq!(workspace.remote_browser.visible_count(), 0);
-        assert!(workspace.remote_browser.search_matches_none());
+        let visible = workspace.remote_rows().iter().filter(|row| !row.is_parent).count();
+        assert_eq!(visible, 0);
         assert_eq!(workspace.remote_browser.selection.focus(), None);
     });
 
@@ -506,7 +518,13 @@ fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mu
     listed(&mut fixture, "/srv/Alpha 中");
     fixture.workspace.read_with(&fixture.window, |workspace, _| {
         assert!(workspace.remote_browser.search_active());
-        assert_eq!(workspace.remote_browser.visible_count(), 1);
+        let names: Vec<_> = workspace
+            .remote_rows()
+            .into_iter()
+            .filter(|row| !row.is_parent)
+            .map(|row| row.name)
+            .collect();
+        assert_eq!(names, ["notes.md"]);
     });
 
     // Escape in the list reveals every row again and leaves the selection
@@ -532,7 +550,8 @@ fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mu
     wait(&mut fixture, |fixture| mirrored_query(fixture).as_deref() == Some(""));
     fixture.workspace.read_with(&fixture.window, |workspace, _| {
         assert!(!workspace.remote_browser.search_active());
-        assert_eq!(workspace.remote_browser.visible_count(), 3);
+        let visible = workspace.remote_rows().iter().filter(|row| !row.is_parent).count();
+        assert_eq!(visible, 3);
         assert!(workspace.remote_browser.selection.contains("/srv/Alpha 中/notes.md"));
     });
 
@@ -544,6 +563,83 @@ fn name_filter_narrows_the_listing_and_resets_when_the_directory_changes(cx: &mu
     wait(&mut fixture, |fixture| mirrored_query(fixture).as_deref() == Some(""));
     fixture.workspace.read_with(&fixture.window, |workspace, _| {
         assert!(!workspace.remote_browser.search_active());
-        assert_eq!(workspace.remote_browser.visible_count(), 3);
+        let visible = workspace.remote_rows().iter().filter(|row| !row.is_parent).count();
+        assert_eq!(visible, 3);
+    });
+}
+
+#[gpui::test]
+fn name_filter_stays_on_the_old_listing_while_the_next_directory_is_pending(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = open(cx);
+    listed(&mut fixture, "/srv/Alpha 中");
+
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    fixture.stores[0].lock().unwrap().gates.insert("/srv/slow".into(), gate.clone());
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.navigate_remote("/srv/slow".into(), cx);
+    });
+    wait(&mut fixture, |fixture| {
+        fixture.stores[0].lock().unwrap().requested.contains(&"/srv/slow".into())
+    });
+
+    // Typing while the request is pending filters the listing still on screen,
+    // because that is the only listing the user can see.
+    type_query(&mut fixture, "notes");
+    assert_eq!(mirrored_query(&fixture).as_deref(), Some("notes"));
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert!(workspace.remote_browser.loading);
+        assert_eq!(workspace.remote_browser.path, "/srv/Alpha 中");
+        assert!(workspace.remote_browser.search_active());
+        let names: Vec<_> = workspace
+            .remote_rows()
+            .into_iter()
+            .filter(|row| !row.is_parent)
+            .map(|row| row.name)
+            .collect();
+        assert_eq!(names, ["notes.md"]);
+    });
+
+    gate.add_permits(1);
+    listed(&mut fixture, "/srv/slow");
+    // The new listing arrives with files. Text typed for the old directory
+    // must not follow it and make a non-empty directory look empty.
+    wait(&mut fixture, |fixture| mirrored_query(fixture).as_deref() == Some(""));
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert!(!workspace.remote_browser.search_active());
+        let visible = workspace.remote_rows().iter().filter(|row| !row.is_parent).count();
+        assert_eq!(visible, 3);
+    });
+}
+
+#[gpui::test]
+fn failed_navigation_keeps_the_filter_on_the_listing_on_screen(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    listed(&mut fixture, "/srv/Alpha 中");
+    type_query(&mut fixture, "notes");
+    fixture.stores[0].lock().unwrap().denied_once.insert("/denied".into());
+    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
+        workspace.navigate_remote("/denied".into(), cx);
+    });
+    wait(&mut fixture, |fixture| {
+        fixture.workspace.read_with(&fixture.window, |workspace, _| {
+            !workspace.remote_browser.loading && workspace.remote_browser.error.is_some()
+        })
+    });
+
+    // Nothing replaced the listing, so the query still belongs to it.
+    assert_eq!(mirrored_query(&fixture).as_deref(), Some("notes"));
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert_eq!(workspace.remote_browser.path, "/srv/Alpha 中");
+        assert_eq!(workspace.remote_browser.retry_path.as_deref(), Some("/denied"));
+        assert!(workspace.remote_browser.search_active());
+        let names: Vec<_> = workspace
+            .remote_rows()
+            .into_iter()
+            .filter(|row| !row.is_parent)
+            .map(|row| row.name)
+            .collect();
+        assert_eq!(names, ["notes.md"]);
     });
 }
