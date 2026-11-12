@@ -295,7 +295,7 @@ fn is_tex_dimension(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{compile_formula, compile_formula_source, normalize_formula_source};
-    use crate::math::DEFAULT_LIMITS;
+    use crate::math::{DEFAULT_LIMITS, MathErrorKind};
 
     const QUADRATIC: &str = r"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}";
     const CASES: &str = r"f(x)=\begin{cases}x^2,&x\geq 0\\-x,&x<0\end{cases}";
@@ -546,6 +546,18 @@ mod tests {
 
         let nested = normalize_formula_source(r"\frac{\frac12}{3}", DEFAULT_LIMITS).unwrap();
         assert_eq!(nested, r"\frac{\frac{1}{2}}{3}");
+    }
+
+    #[test]
+    fn unicode_control_symbols_return_a_parse_error_and_literal_text_still_renders() {
+        for compile in [compile_formula, compile_formula_source] {
+            let error = compile(r"x+\正", false, 18.0, 1.0, DEFAULT_LIMITS).unwrap_err();
+            assert_eq!(error.kind, MathErrorKind::Parse);
+
+            let layout = compile(r"\text{正文\正}", false, 18.0, 1.0, DEFAULT_LIMITS).unwrap();
+            let text = layout.text.iter().map(|op| op.character).collect::<String>();
+            assert_eq!(text, "正文正");
+        }
     }
 
     /// 光学补偿必须真正到达 metrics：Latin Modern 的 x-height 是 0.431 em，
