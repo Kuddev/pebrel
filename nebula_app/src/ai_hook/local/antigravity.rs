@@ -15,8 +15,8 @@ const GROUP: &str = "pebrel";
 const EVENTS: &[(&str, &str)] =
     &[("SessionStart", "session-start"), ("PreInvocation", "tool-complete"), ("Stop", "done")];
 
-pub(super) fn directory() -> Option<PathBuf> {
-    Some(crate::platform::dirs::home_dir()?.join(".gemini/antigravity-cli"))
+pub(in crate::ai_hook) fn directory() -> Option<PathBuf> {
+    Some(crate::platform::dirs::home_dir()?.join(".gemini").join("antigravity-cli"))
 }
 
 pub(super) fn path() -> Option<PathBuf> {

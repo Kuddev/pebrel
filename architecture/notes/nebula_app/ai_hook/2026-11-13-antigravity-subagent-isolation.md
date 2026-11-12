@@ -23,65 +23,71 @@ and turn state while dropping subsequent hooks from the real foreground conversa
   leaving external payloads with only the child `conversationId`, `transcriptPath` and
   `artifactDirectoryPath`.
 - `SessionStart` runs as a `PreInvocationHook` after step `0` is synchronously flushed to
-  `<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl` and
-  `transcript_full.jsonl` under mutex.
+  `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript.jsonl`
+  and `transcript_full.jsonl` under mutex.
 - Root interactive conversations record step `0` with `"source":"USER_EXPLICIT"` (later
   steps in a root conversation may use `"source":"SYSTEM"` on background task wakeups, so
   only step `0` is invariant). Un-forked subagents start with step `0` `"source":"SYSTEM"`.
 - Forked subagents (`swarm` `fork`) copy the parent's step `0`, and `ProtoStoreSubagentHub`
   synchronously writes `<brain>/<parentId>/.system_generated/subagents/<childId>.json`
-  before starting the child. The parent's own `PreInvocation` hook fires immediately before
-  the tool call that spawns the fork.
+  before starting the child.
 
 ## Decision
 
-Filter Antigravity subagent envelopes in
-[`protocol.rs`](../../../../nebula_app/src/ai_hook/protocol.rs) via
-[`is_antigravity_subagent`](../../../../nebula_app/src/ai_hook/native_events.rs) before
-event ordering or pane routing, matching the existing native Codex `agent_id` gate:
+Gate Antigravity envelopes in
+[`protocol.rs`](../../../../nebula_app/src/ai_hook/protocol.rs) via tri-state
+[`classify_antigravity_envelope`](../../../../nebula_app/src/ai_hook/native_events.rs)
+(`Primary`, `Subagent`, `Unverified`) before event ordering or pane routing, accepting only
+`AntigravityVerdict::Primary`:
 
-- Reject immediately on explicit subagent fields (`parentConversationId`,
+- Reject immediately as `Subagent` on explicit subagent fields (`parentConversationId`,
   `callerContext == "subagent"`, or `rootConversationId != conversationId`) on both local
   and remote transports so upstream payload fixes work without disk reads.
-- On local pipe/socket envelopes only, restrict paths lexically to the user's trusted
-  `~/.gemini/{antigravity-cli,antigravity}/brain/<conversationId>` log roots without `..`
-  components, reject symlinks and non-regular files before and on open
-  ([`regular_file.rs`](../../../../nebula_app/src/platform/regular_file.rs):
-  `O_NONBLOCK | O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` and `FILE_TYPE_DISK`
-  on Windows), and execute uncached disk probes on a bounded worker with a `200 ms`
-  listener-thread wait cap.
-- Bound the step-`0` read to one line (`256 KiB` cap), reject `"source":"SYSTEM"`, and
-  check `.system_generated/subagents/<id>.json` across both cached conversations and a
-  bounded `read_dir(brain_root)` scan (`<= 4096` entries within the probe deadline) so
-  forked subagents are rejected even on cold start/reconnect before the parent arrives or
-  after the parent is evicted from the 64-entry conversation cache.
-- Remote SSH envelopes never read local host files.
+- Remote SSH envelopes (`parse_remote_envelope`) never inspect local host files; local
+  envelopes that omit both `artifactDirectoryPath` and `transcriptPath` remain `Primary`.
+- On local envelopes carrying path metadata, restrict paths lexically to the CLI's single
+  trusted root `<home>/.gemini/antigravity-cli/brain/<conversationId>` (shared with
+  [`local::antigravity::directory`](../../../../nebula_app/src/ai_hook/local/antigravity.rs))
+  without `.` or `..` components.
+- Enforce no-symlink / no-reparse-point policy across the trusted `brain` directory itself,
+  all of its ancestors, every relative subdirectory, and the leaf file
+  ([`regular_file.rs`](../../../../nebula_app/src/platform/regular_file.rs): ancestor
+  `symlink_metadata` check plus Unix `O_DIRECTORY | O_NOFOLLOW` `openat` + `fstatat` +
+  `O_NONBLOCK | O_NOFOLLOW`, and Windows segment `symlink_metadata` +
+  `FILE_FLAG_OPEN_REPARSE_POINT` + `FILE_TYPE_DISK`).
+- Execute disk probes on a bounded worker (`sync_channel(8)`, `200 ms` listener wait cap).
+  Timeouts, full queues, unreadable/symlinked files, `read_dir` / metadata errors, or scans
+  exceeding `4096` entries / deadline yield `Unverified` and are dropped instead of being
+  treated as `Primary`.
+- Cache positive `Subagent` verdicts permanently (64-entry ring); for non-`SYSTEM` step-`0`
+  conversations, cache only the immutable step-`0` check while re-verifying parent subagent
+  records on subsequent hooks so delayed or previously unreadable parent records still
+  upgrade the conversation to `Subagent`.
 
 ## Rejected alternatives
 
 - Filtering in `nebula_hook`: violates the helper's zero-JSON, zero-dependency contract.
+- Falling back `unwrap_or(false)` on probe timeout or caching negative subagent results:
+  allows busy workers or late-visible parent records to leak child hooks into the foreground
+  pane.
 - Treating `agentName` or empty `lastUserInput` as subagent markers: `agy --agent <name>`
-  sets `agentName` on foreground root sessions, and image-only initial prompts leave
-  `lastUserInput` empty.
-- Blocking all same-PID `SessionStart` transitions for Antigravity: breaks legitimate
-  foreground conversation switches inside one CLI process.
+  sets `agentName` on foreground root sessions, and image-only prompts leave `lastUserInput`
+  empty.
 
 ## Consequences
 
 No new dependencies, persisted schema changes or GPUI-thread file I/O (`parse_envelope`
-runs on the background pipe/socket listener thread). Payloads without a valid local `brain`
-path fall back to accepting the conversation unless explicit subagent markers are present.
+runs on the background pipe/socket listener thread). Unverified local path-bearing envelopes
+fail closed rather than overwriting foreground session ownership.
 
 ## Validation
 
 Unit regressions in
-[`native_events/tests.rs`](../../../../nebula_app/src/ai_hook/native_events/tests.rs) verify
-un-forked and forked in-process subagents (including cold-start child-first arrival and
-parent cache eviction) never hijack an active turn or saved resume command, subsequent root
-conversations still switch cleanly, explicit markers are rejected on local and remote paths,
-untrusted roots, symlinks, non-regular files and stalled workers respect the listener wait
-bound, and `parse_remote_envelope` never inspects local host files (`153 passed, 1 ignored`
-in the `ai_hook` suite).
+[`native_events/subagent_tests.rs`](../../../../nebula_app/src/ai_hook/native_events/subagent_tests.rs) verify
+un-forked and forked subagents (cold-start, parent cache eviction, delayed parent record
+visibility), full `parse_envelope` + `AgentActivity` preservation under probe timeout, full
+worker queue and anomalous directory metadata, trusted-root and ancestor symlink rejection,
+FIFO non-blocking behavior, and remote envelope isolation.
 
 ## Supersedes
 
@@ -90,4 +96,4 @@ None.
 ## Revisit when
 
 Antigravity preserves `parentConversationId` or `callerContext` in external hook JSON across
-supported CLI versions, or changes its local `brain/<conversationId>` transcript layout.
+supported CLI versions, or changes its local `~/.gemini/antigravity-cli/brain` layout.

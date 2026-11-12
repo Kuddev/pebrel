@@ -106,11 +106,11 @@ fn parse_envelope_with_transport(bytes: &[u8], local_transport: bool) -> Option<
         reported_session_id
     };
     if source == "antigravity"
-        && super::native_events::is_antigravity_subagent(
+        && super::native_events::classify_antigravity_envelope(
             &payload,
             session_id.as_deref(),
             local_transport,
-        )
+        ) != super::native_events::AntigravityVerdict::Primary
     {
         return None;
     }
