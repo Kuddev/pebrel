@@ -40,13 +40,18 @@ if [ -n "${BASH_VERSION-}" ] && (( BASH_VERSINFO[0] >= 4 )) && [[ $- == *i* ]]; 
     done < <(bind -p 2>/dev/null; bind -X 2>/dev/null)
     # The redraw key is a readline function binding, not a shell command: the
     # editor clears the screen and repaints prompt, buffer and caret itself.
-    if [[ $__pebrel_editor_bound == 0 ]] && bind -x '"\e[45~":__pebrel_editor_report' 2>/dev/null &&
-        [[ $__pebrel_clear_bound == 0 ]] && bind '"\e[46~": clear-screen' 2>/dev/null; then
-        __pebrel_editor_ready=1
-    else
-        # The channel is advertised as one unit; an unusable redraw key also
-        # withdraws the query binding instead of half-installing.
-        bind -r '"\e[45~"' 2>/dev/null
+    # Both keys are probed before either binding is installed, so an occupied
+    # redraw key never leaves half of the private channel behind. The rollback
+    # runs only for the query binding this invocation just installed, and
+    # bind -r takes the bare key sequence.
+    if [[ $__pebrel_editor_bound == 0 && $__pebrel_clear_bound == 0 ]]; then
+        if bind -x '"\e[45~":__pebrel_editor_report' 2>/dev/null; then
+            if bind '"\e[46~": clear-screen' 2>/dev/null; then
+                __pebrel_editor_ready=1
+            else
+                bind -r '\e[45~' 2>/dev/null
+            fi
+        fi
     fi
     unset __pebrel_editor_bound __pebrel_clear_bound __pebrel_binding
 elif [ -n "${ZSH_VERSION-}" ]; then

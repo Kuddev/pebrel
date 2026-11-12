@@ -183,6 +183,13 @@ class CompletionEditorTests(unittest.TestCase):
         output = session.wait(b"OWNED-REDRAW\r\n")
         self.assertIn(b"OWNED-REDRAW\r\n", output)
         self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
+        # The withdrawal must also remove the query binding this invocation
+        # installed: no half of the private channel may survive the collision.
+        bindings = session.command(
+            "bind -p 2>/dev/null; bind -X 2>/dev/null; printf 'BINDINGS-END\\n'",
+            b"BINDINGS-END\r\n",
+        )
+        self.assertNotIn(b'"\\e[45~"', bindings)
 
     def test_ssh_bash_bootstrap_retains_user_owned_redraw_binding(self) -> None:
         self.check_owned_redraw_binding("bash", "ssh")
