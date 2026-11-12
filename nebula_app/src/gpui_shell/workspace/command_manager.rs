@@ -42,10 +42,6 @@ fn custom_icon(path: &'static str) -> Icon {
     Icon::new(Icon::empty()).path(path)
 }
 
-fn command_run_icon(builtin: bool, append_enter: bool) -> IconName {
-    if builtin || append_enter { IconName::Play } else { IconName::SquareTerminal }
-}
-
 fn command_editor_input(state: &Entity<InputState>, cx: &App) -> Input {
     Input::new(state)
         .w_full()
@@ -775,18 +771,6 @@ impl NebulaWorkspace {
             )
             .children(self.render_command_group_menu())
             .into_any_element()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builtin_commands_keep_the_play_icon_without_changing_insert_behavior() {
-        assert!(matches!(command_run_icon(true, false), IconName::Play));
-        assert!(matches!(command_run_icon(false, true), IconName::Play));
-        assert!(matches!(command_run_icon(false, false), IconName::SquareTerminal));
     }
 }
 

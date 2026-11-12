@@ -46,7 +46,6 @@ impl NebulaWorkspace {
         } else {
             language.pick("插入到当前终端", "Insert into current terminal")
         };
-        let run_icon = command_run_icon(builtin, command.append_enter);
         let drag = CommandDrag::new(&command);
         let menu_id = command.id.clone();
         let run_command = command.clone();
@@ -110,7 +109,7 @@ impl NebulaWorkspace {
             } else {
                 Button::new(SharedString::from(format!("saved-command-run-{index}")))
                     .debug_selector(move || format!("saved-command-run-{index}"))
-                    .icon(Icon::new(run_icon).size(px(ROW_ICON_SIZE)))
+                    .icon(Icon::new(IconName::SquareTerminal).size(px(ROW_ICON_SIZE)))
                     .ghost()
                     .xsmall()
                     .size(px(ROW_ICON_SLOT))
