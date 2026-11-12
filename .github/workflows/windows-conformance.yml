@@ -1,61 +1,58 @@
-name: Windows startup snapshot regression (WIP)
+name: Windows packaged startup snapshot regression (WIP)
 
 on:
   workflow_call:
     inputs:
       runtime_run:
-        description: Released Windows 2.5.3 baseline run
+        description: Windows 2.5.4 test package run
         required: true
         type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   diagnose:
+    if: inputs.runtime_run == '43169196644'
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 15
     env:
       PYTHONUTF8: "1"
-      CARGO_TERM_COLOR: always
-      PEBREL_CANDIDATE: 2887ac8ebb5cda0f944cc992e0debe24e0026076
+      PEBREL_CANDIDATE: 99f27ee464319e1e1a75930b450097a32fecfe0c
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.PEBREL_CANDIDATE }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
         with:
-          toolchain: "1.97.1"
-      - uses: ./.github/actions/rust-cache
-        with:
-          key: release
-          target: target/release
-          legacy-key: windows
-          save-if: "false"
-      - name: Build the exact GPUI candidate
+          name: windows-ui-tone-test-x64
+          path: ${{ runner.temp }}/candidate
+          run-id: ${{ inputs.runtime_run }}
+          github-token: ${{ github.token }}
+      - name: Verify the exact packaged GPUI candidate
         shell: pwsh
         run: |
-          if ((git rev-parse HEAD).Trim() -ne $env:PEBREL_CANDIDATE) {
-            throw 'Candidate checkout does not match the reviewed commit.'
+          $directory = Join-Path $env:RUNNER_TEMP 'candidate'
+          $meta = Get-Content (Join-Path $directory 'build-metadata.json') -Raw | ConvertFrom-Json
+          if ($meta.commit -ne $env:PEBREL_CANDIDATE -or $meta.version -ne '2.5.4' -or
+              $meta.product -ne 'gpui' -or $meta.architecture -ne 'x64') {
+            throw 'Candidate artifact does not match the 2.5.4 test build.'
           }
-          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
-          ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: diagnostics
-          sparse-checkout: scripts/conformance
-          persist-credentials: false
+          $filename = 'Pebrel-v2.5.4-ui-test-99f27ee4-windows-x64.zip'
+          $asset = @($meta.assets | Where-Object { $_.name -eq $filename })
+          $archive = Get-Item -LiteralPath (Join-Path $directory $filename)
+          if ($asset.Count -ne 1 -or $archive.Length -ne $asset[0].bytes -or
+              (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash -ne $asset[0].sha256) {
+            throw 'Candidate archive failed manifest verification.'
+          }
+          "PEBREL_CANDIDATE_ZIP=$($archive.FullName)" >> $env:GITHUB_ENV
       - name: Verify the published x64 baseline
         shell: pwsh
-        env:
-          PEBREL_RELEASE_RUN: ${{ inputs.runtime_run }}
         run: |
-          if ($env:PEBREL_RELEASE_RUN -ne '43108083569') { throw 'Expected the v2.5.3 release run.' }
           $file = 'Pebrel-v2.5.3-windows-x64.zip'
           $path = Join-Path $env:RUNNER_TEMP $file
           Invoke-WebRequest -Uri "https://github.com/Kuddev/pebrel/releases/download/v2.5.3/$file" -OutFile $path
@@ -63,13 +60,11 @@ jobs:
             throw "$file does not match SHA256SUMS"
           }
       - name: Require a first session on the candidate without querying it
-        working-directory: diagnostics
         shell: pwsh
         run: |
           $old = Join-Path $env:RUNNER_TEMP 'Pebrel-v2.5.3-windows-x64.zip'
-          $new = Join-Path $env:GITHUB_WORKSPACE 'target/release/pebrel.exe'
           $output = Join-Path $env:RUNNER_TEMP 'mobile-runtime-evidence/report.json'
-          python scripts/conformance/windows_standard_user.py -m scripts.conformance.windows_runtime_subscription_probe --old $old --old-version 2.5.3 --new $new --new-version 2.5.0 --new-commit $env:PEBREL_CANDIDATE --require-new-cold --output $output
+          python scripts/conformance/windows_standard_user.py -m scripts.conformance.windows_runtime_subscription_probe --old $old --old-version 2.5.3 --new $env:PEBREL_CANDIDATE_ZIP --new-version 2.5.4 --new-commit $env:PEBREL_CANDIDATE --require-new-cold --output $output
       - uses: actions/upload-artifact@v4
         if: always()
         with:
