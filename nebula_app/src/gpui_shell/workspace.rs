@@ -560,7 +560,7 @@ pub struct NebulaWorkspace {
     settings_restore_sidebar_collapsed: Option<bool>,
     settings_restore_side_panel_open: bool,
     sidebar_collapsed: bool,
-    sidebar_grouping: sidebar_groups::SidebarGrouping,
+    sidebar_tab_layout: sidebar_groups::SidebarTabLayout,
     /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进标题栏。
     tabs_position: nebula_settings::TabsPositionName,
     density: nebula_settings::DensityName,
@@ -721,7 +721,8 @@ impl NebulaWorkspace {
     }
 
     /// `tabs` + `tab_meta` 的唯一插入口（见 [`TabMeta`] 的同下标合同）。
-    fn insert_tab_at(&mut self, at: usize, tab: WorkspaceTab, meta: TabMeta) {
+    fn insert_tab_at(&mut self, at: usize, tab: WorkspaceTab, mut meta: TabMeta) {
+        meta.sidebar_created.get_or_insert_with(std::time::Instant::now);
         let at = at.min(self.tabs.len());
         self.tabs.insert(at, tab);
         self.tab_meta.insert(at, meta);
@@ -847,7 +848,7 @@ impl NebulaWorkspace {
             settings_restore_sidebar_collapsed: None,
             settings_restore_side_panel_open: false,
             sidebar_collapsed: false,
-            sidebar_grouping: sidebar_groups::SidebarGrouping::None,
+            sidebar_tab_layout: sidebar_groups::SidebarTabLayout::default(),
             tabs_position: runtime.tabs_position,
             density: runtime.density,
             sidebar_width,

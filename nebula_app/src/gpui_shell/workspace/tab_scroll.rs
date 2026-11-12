@@ -147,9 +147,10 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn reveal_active_tab(&mut self, cx: &gpui::App) {
+        self.mark_sidebar_tab_selected();
         let rows = self.sidebar_tab_rows(cx);
         let window = self.tabs_window(rows.len());
-        let slot = rows.index_of(self.active).unwrap_or(0);
+        let slot = rows.reveal_index_of(self.active).unwrap_or(0);
         let next = reveal_index(slot, window.scroll, window.show);
         self.tabs_scroll = clamp_scroll(next, window.max);
         self.top_tabs_scroll.scroll_to_item(if self.settings_open {

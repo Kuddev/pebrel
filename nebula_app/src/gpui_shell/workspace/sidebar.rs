@@ -191,7 +191,7 @@ impl NebulaWorkspace {
 
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header_group: SharedString = "sidebar-tabs-header-hover".into();
-        let grouping_control = self.sidebar_group_control(header_group.clone(), window, cx);
+        let grouping_control = self.sidebar_group_control(header_group.clone(), cx);
         let row_height = tab_scroll::tab_row_height(self.density);
         let row_pitch = self.tab_row_pitch();
         let theme = cx.theme();
@@ -224,7 +224,9 @@ impl NebulaWorkspace {
         let drag = self
             .tab_drag
             .as_ref()
-            .filter(|d| d.active && d.axis == TabDragAxis::Vertical)
+            .filter(|d| {
+                d.active && d.axis == TabDragAxis::Vertical && self.sidebar_drag_can_reorder()
+            })
             .and_then(|d| {
                 let target = Self::sidebar_drag_slot(d, &rows);
                 Some((rows.index_of(d.source)?, rows.index_of(target)?, d.offset))
@@ -240,27 +242,53 @@ impl NebulaWorkspace {
             .map(|(slot, item)| {
                 let ix = match item {
                     SidebarTabRow::Tab(ix) => ix,
-                    SidebarTabRow::Group(group) => {
-                        let line = || div().flex_1().min_w(px(12.0)).h(px(1.0)).bg(theme.border);
-                        let mut heading = h_flex()
-                            .id(("sidebar-tab-group", slot))
+                    SidebarTabRow::Group { group, count, collapsed } => {
+                        let label = group.label(language);
+                        let title = group.directory_path().unwrap_or_else(|| label.clone());
+                        let group_hover: SharedString = format!("sidebar-group-hover-{slot}").into();
+                        let line = || div().flex_1().min_w(px(12.0)).h(px(1.0)).bg(theme.border)
+                            .group_hover(group_hover.clone(), |line| line.bg(muted));
+                        return Button::new(("sidebar-tab-group", slot))
+                            .debug_selector(move || format!("sidebar-tab-group-{slot}"))
+                            .group(group_hover.clone())
+                            .ghost()
                             .w(px(row_w))
                             .h(px(row_height))
-                            .px_2()
-                            .gap_2()
-                            .items_center()
-                            .child(line())
-                            .child(div().max_w(px(row_w * 0.62)).truncate()
-                                .font_family(chrome_family.clone())
+                            .px_0()
+                            .cursor_pointer()
+                            .aria_label(label.clone())
+                            .tooltip(title)
+                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                                this.toggle_sidebar_tab_group(group.clone(), event.modifiers().alt, cx);
+                            }))
+                            .child(h_flex().w_full().px_2().gap_2().items_center()
+                                .child(line())
+                                .child(h_flex().min_w_0().gap(px(6.0))
+                                    .text_color(muted)
+                                    .group_hover(group_hover.clone(), |label| label.text_color(active_fg))
+                                    .child(Icon::new(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown })
+                                        .size(px(10.0)).flex_shrink_0())
+                                    .child(div().max_w(px(row_w * 0.50)).truncate()
+                                        .font_family(chrome_family.clone())
+                                        .text_size(px(10.5 * ui_scale)).font_weight(FontWeight::SEMIBOLD)
+                                        .child(label))
+                                    .child(div().font_family(metadata_family.clone())
+                                        .text_size(px(10.5 * ui_scale)).text_color(faint)
+                                        .child(count.to_string())))
+                                .child(line()))
+                            .into_any_element();
+                    },
+                    SidebarTabRow::Divider => {
+                        return h_flex()
+                            .id(("sidebar-tab-divider", slot))
+                            .debug_selector(move || format!("sidebar-tab-divider-{slot}"))
+                            .w(px(row_w)).h(px(row_height)).px_2().gap_2().items_center()
+                            .child(div().flex_1().h(px(1.0)).bg(theme.border))
+                            .child(div().font_family(chrome_family.clone())
                                 .text_size(px(10.5 * ui_scale)).font_weight(FontWeight::SEMIBOLD)
-                                .text_color(muted).child(group.label(language)))
-                            .child(line());
-                        if let Some(path) = group.directory_path() {
-                            heading = heading.tooltip(move |window, cx| {
-                                Tooltip::new(path.clone()).build(window, cx)
-                            });
-                        }
-                        return heading.into_any_element();
+                                .text_color(faint).child(language.text(Message::ChromeTabGroupingDividerLabel)))
+                            .child(div().flex_1().h(px(1.0)).bg(theme.border))
+                            .into_any_element();
                     },
                 };
                 let active = ix == self.active;
@@ -976,7 +1004,10 @@ mod tests {
                             <= px(1.0)
                     );
                     if label == "sh" {
-                        assert!(text.size.width < slot.size.width, "short labels stay intrinsic");
+                        assert!(
+                            text.size.width < px(TAB_STATUS_SLOT_W),
+                            "short labels stay intrinsic"
+                        );
                     }
                     let clip = recorded.borrow().expect("status paint mask");
                     assert!(clip.right() > slot.right(), "glyph overhang must retain row padding");

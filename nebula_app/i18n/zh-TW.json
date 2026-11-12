@@ -1022,13 +1022,26 @@
   "chrome": {
     "tab_grouping": {
       "label": "分頁群組",
-      "section": "群組",
+      "section": "分組",
       "none": "不分組",
       "project": "按專案目錄",
       "shell": "按 Shell",
       "agents": "Agents",
       "terminal": "終端機",
-      "files": "檔案"
+      "files": "檔案",
+      "order_section": "排序",
+      "order_created": "依建立順序",
+      "order_recent": "最近使用",
+      "order_manual": "手動排序",
+      "order_default": "預設",
+      "divider_insert": "插入分隔線",
+      "divider_remove": "移除分隔線",
+      "divider_below": "目前分頁下方",
+      "divider_ungrouped": "僅限不分組",
+      "divider_label": "分隔線",
+      "group_modifier": "Alt + 點按",
+      "collapse_all": "摺疊所有分組",
+      "expand_all": "展開所有分組"
     },
     "new_terminal_ctrl_shift_t": "新增終端機（Ctrl+Shift+T）",
     "more": "更多",

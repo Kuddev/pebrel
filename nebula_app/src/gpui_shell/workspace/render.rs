@@ -18,6 +18,7 @@ impl Render for NebulaWorkspace {
         let card_style = crate::gpui_shell::theme::PaneCardStyle::current(cx);
         let titlebar_background = self.titlebar_background.clone();
         let draw_file_divider = self.side_panel.open;
+        self.dismiss_hidden_sidebar_group_menu(window, cx);
         self.cancel_hidden_split_drag(cx);
         let sidebar_logo_target_px =
             (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
@@ -442,6 +443,7 @@ impl Render for NebulaWorkspace {
                 root.child(menu)
             })
             .when_some(self.render_tab_context_menu(), |root, menu| root.child(menu))
+            .children(self.render_sidebar_group_menu(cx))
             .when_some(self.render_launcher_context_menu(), |root, menu| root.child(menu))
             .when_some(self.render_selection_context_menu(), |root, menu| {
                 root.child(menu)

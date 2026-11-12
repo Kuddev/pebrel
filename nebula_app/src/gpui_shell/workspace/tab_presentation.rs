@@ -24,6 +24,9 @@ pub(super) struct TabMeta {
     pub(super) launch: Option<crate::session::LaunchSession>,
     /// 后台 tab 响过 BEL（旧壳 `has_bell`）。激活即清。
     pub(super) has_bell: bool,
+    pub(super) sidebar_created: Option<std::time::Instant>,
+    pub(super) sidebar_selected: Option<std::time::Instant>,
+    pub(super) sidebar_divider: bool,
 }
 
 /// 两种 tab 布局共用的只读展示数据。状态与动作仍由 `NebulaWorkspace`

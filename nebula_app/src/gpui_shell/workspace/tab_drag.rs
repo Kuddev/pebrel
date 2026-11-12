@@ -215,9 +215,15 @@ impl NebulaWorkspace {
         }
         let Some((slot, span)) = rows.group_span(drag.source) else { return drag.source };
         let target = drag_slot_at(slot - span.start, span.len(), drag.offset, drag.pitch);
-        match rows.row(span.start + target) {
-            Some(SidebarTabRow::Tab(tab)) => tab,
-            _ => drag.source,
+        let target = span.start + target;
+        let find_tab = |slot| match rows.row(slot) {
+            Some(SidebarTabRow::Tab(tab)) => Some(tab),
+            _ => None,
+        };
+        if target >= slot {
+            (target..span.end).find_map(find_tab).unwrap_or(drag.source)
+        } else {
+            (span.start..=target).rev().find_map(find_tab).unwrap_or(drag.source)
         }
     }
 
@@ -359,9 +365,15 @@ impl NebulaWorkspace {
                 self.dock_tab_into_active(drag.source, nav, window, cx);
             } else {
                 let target = match drag.axis {
-                    TabDragAxis::Vertical => {
-                        Self::sidebar_drag_slot(&drag, &self.sidebar_tab_rows(cx))
+                    TabDragAxis::Vertical if self.sidebar_drag_can_reorder() => {
+                        let target = Self::sidebar_drag_slot(&drag, &self.sidebar_tab_rows(cx));
+                        if target != drag.source {
+                            self.sidebar_tab_layout.order =
+                                super::sidebar_groups::SidebarTabOrder::Manual;
+                        }
+                        target
                     },
+                    TabDragAxis::Vertical => drag.source,
                     TabDragAxis::Horizontal => Self::drag_slot(&drag, self.tabs.len()),
                 };
                 self.move_tab(drag.source, target, window, cx);

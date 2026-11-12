@@ -121,6 +121,9 @@ impl NebulaWorkspace {
         }
         let Some(to) = move_target(self.active, self.tabs.len(), right) else { return };
         let from = self.active;
+        if self.tabs_position == nebula_settings::TabsPositionName::Sidebar {
+            self.sidebar_tab_layout.order = super::sidebar_groups::SidebarTabOrder::Manual;
+        }
         self.move_tab(from, to, window, cx);
         // 顶栏模式下标签可能刚被挪出可视窗口；侧栏模式同样按整行窗口对齐。
         self.reveal_active_tab(cx);
