@@ -13,9 +13,7 @@ impl Render for SegmentsHost {
 }
 
 #[gpui::test]
-fn segments_keep_compact_height_full_hit_targets_and_keyboard_selection(
-    cx: &mut gpui::TestAppContext,
-) {
+fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpui::TestAppContext) {
     let _lock = lock_theme_studio();
     let _settings = SettingsBytesGuard::capture();
     nebula_settings::persist_keys(&[("tab_reveal", "slide".into()), ("language", "en-US".into())])
@@ -91,7 +89,7 @@ fn segments_keep_compact_height_full_hit_targets_and_keyboard_selection(
 }
 
 #[gpui::test]
-fn completion_segments_keep_all_chinese_choices_at_large_font_size(cx: &mut gpui::TestAppContext) {
+fn completion_capsules_keep_all_chinese_choices_at_large_font_size(cx: &mut gpui::TestAppContext) {
     let _lock = lock_theme_studio();
     let _settings = SettingsBytesGuard::capture();
     nebula_settings::persist_keys(&[
