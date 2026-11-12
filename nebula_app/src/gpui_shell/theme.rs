@@ -508,57 +508,6 @@ fn sync_component_focus_ring_for_input(last_input_was_keyboard: bool, cx: &mut A
     Theme::global_mut(cx).ring = ring;
 }
 
-/// 设置卡片借用当前主题的中性色阶，独立于选中与焦点色。
-pub(super) fn settings_card_fill(cx: &App) -> Hsla {
-    settings_card_fill_for_theme(&resolved_theme(cx))
-}
-
-fn settings_card_fill_for_theme(theme: &ResolvedTheme) -> Hsla {
-    let sk = theme.skin();
-    if sk.is_light {
-        return solid(sk.panel).blend(hsla(0.0, 0.0, 1.0, 0.86));
-    }
-
-    let panel = sk.panel;
-    let card = sk.card;
-    // The built-in opaque picker fills are the next step in each neutral ramp.
-    if !theme.is_custom()
-        && card.a == 255
-        && luma(card.r, card.g, card.b) > luma(panel.r, panel.g, panel.b)
-    {
-        return solid(crate::display::ui::surface::over(Rgba { a: 128, ..card }, panel));
-    }
-
-    // Custom cards describe the shell; translucent picker fills describe selection.
-    // Lift the panel in its own hue when there is no suitable raised swatch.
-    let base = solid(panel);
-    Hsla { l: (base.l + 7.0 / 255.0).min(1.0), ..base }
-}
-
-pub(super) fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
-    if !resolved_skin(cx).is_light {
-        return Vec::new();
-    }
-    [(0.06, 0.0, 0.0, 1.0), (0.08, 4.0, 12.0, 0.0)]
-        .into_iter()
-        .map(|(alpha, y, blur, spread)| gpui::BoxShadow {
-            color: hsla(220.0 / 360.0, 0.4, 0.14, alpha),
-            offset: point(px(0.0), px(y)),
-            blur_radius: px(blur),
-            spread_radius: px(spread),
-            inset: false,
-        })
-        .collect()
-}
-
-pub(super) fn settings_canvas_tint(cx: &App) -> Hsla {
-    if resolved_skin(cx).is_light {
-        hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
-    } else {
-        gpui::transparent_black()
-    }
-}
-
 /// 中性悬停色用于次要操作，强调色留给选中、开启和焦点。
 pub(super) fn neutral_hover(cx: &App) -> Hsla {
     ink(resolved_skin(cx).ink).opacity(0.05)
@@ -587,6 +536,7 @@ fn raised_fill_for_skin(sk: Skin) -> Hsla {
     base.blend(hsla(0.0, 0.0, 1.0, if sk.is_light { 0.86 } else { 0.065 }))
 }
 
+/// 设置卡片借用当前主题的中性色阶，独立于选中与焦点色。
 pub(super) fn settings_card_fill(cx: &App) -> Hsla {
     settings_card_fill_for_theme(&resolved_theme(cx))
 }
@@ -638,7 +588,7 @@ pub fn raised_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
 }
 
 /// 设置分组卡。比选中行多一层柔和的远投影。
-pub fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+pub(super) fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
     ring_and_drop(cx, 0.08, 4.0, 12.0)
 }
 
@@ -687,7 +637,7 @@ pub fn settings_nav_tint(cx: &App) -> Hsla {
 }
 
 /// 设置正文的下沉层：浅色微微压暗，让白卡浮起；深色保持板色，卡片自己提亮。
-pub fn settings_canvas_tint(cx: &App) -> Hsla {
+pub(super) fn settings_canvas_tint(cx: &App) -> Hsla {
     if resolved_skin(cx).is_light {
         hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
     } else {
