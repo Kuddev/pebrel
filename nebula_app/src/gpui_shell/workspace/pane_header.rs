@@ -37,6 +37,8 @@ use crate::i18n::Message;
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
+mod drag_motion;
+use drag_motion::PaneDragMotion;
 mod layout;
 mod sidebar;
 
@@ -614,6 +616,7 @@ impl NebulaWorkspace {
             active: false,
             detach: false,
             target: None,
+            motion: PaneDragMotion::default(),
         });
         cx.notify();
     }
@@ -624,18 +627,17 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let Some(pane) = self.pane_drag.as_ref().map(|drag| drag.pane) else { return };
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.pane_drag = None;
-            cx.notify();
-            return;
-        }
+        // Window capture supplies the real release; Windows non-client moves
+        // can omit the button while the grip remains held.
         let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
         if self.tab_of_pane(pane) != Some(self.active) {
             self.cancel_pane_drag(cx);
             return;
         }
         let outside = self.active_terminal_area().is_some_and(|area| !area.contains(x, y));
-        let target = self.pane_at(x, y).filter(|id| *id != pane);
+        let target = (!outside).then(|| self.pane_at(x, y)).flatten().filter(|id| *id != pane);
+        let now = cx.background_executor().now();
+        let instant = cx.reduce_motion() || crate::gpui_shell::config::tab_reveal_instant(cx);
         let Some(drag) = self.pane_drag.as_mut() else { return };
         drag.x = x;
         drag.y = y;
@@ -644,7 +646,13 @@ impl NebulaWorkspace {
         }
         if drag.active {
             drag.detach = outside;
-            drag.target = target;
+            if drag.target != target {
+                let bounds = self.pane_bounds.borrow();
+                let next = target
+                    .and_then(|id| Some((id, bounds.get(&pane)?.origin - bounds.get(&id)?.origin)));
+                drag.motion.change_target(drag.target, next, now, instant);
+                drag.target = target;
+            }
         }
         cx.notify();
     }
@@ -813,7 +821,7 @@ impl NebulaWorkspace {
     /// 拖拽激活期间的全窗罩层（同 tab 拖拽的指针捕获模式）+ 跟着指针走的
     /// 意图提示。提示必须有：这个手势在界面上没有静态痕迹，不告诉用户「现在
     /// 松手会怎样」，拖出去就是一次赌博。
-    pub(super) fn pane_drag_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    pub(super) fn pane_drag_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::Deferred> {
         let drag = self
             .pane_drag
             .as_ref()
@@ -828,12 +836,8 @@ impl NebulaWorkspace {
             theme.muted_foreground
         };
         Some(
-            div()
-                .absolute()
-                .inset_0()
-                .occlude()
-                .cursor_grab()
-                .child(
+            gpui::deferred(
+                div().absolute().inset_0().occlude().cursor_grab().child(
                     div()
                         .absolute()
                         .left(px(x + 12.0))
@@ -851,8 +855,9 @@ impl NebulaWorkspace {
                         } else {
                             language.text(Message::WorkspacePaneExtractDragHint)
                         }),
-                )
-                .into_any_element(),
+                ),
+            )
+            .with_priority(3),
         )
     }
 }
@@ -862,13 +867,14 @@ pub(super) struct PaneDrag {
     pane: u64,
     press_x: f32,
     press_y: f32,
-    /// 当前指针位置：激活后的提示气泡跟着它走。
+    /// Current pointer position for the carried pane and its drop hint.
     x: f32,
     y: f32,
     active: bool,
     /// 此刻松手会不会摘出（提示气泡与提交共用同一份判定）。
     detach: bool,
     target: Option<u64>,
+    motion: PaneDragMotion,
 }
 
 /// 越过这个位移才算拖拽，之前都当点击（与 tab 拖拽同一个阈值）。

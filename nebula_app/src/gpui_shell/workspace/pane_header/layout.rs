@@ -77,23 +77,13 @@ impl NebulaWorkspace {
                         .child(self.render_pane_grip(pane, group, cx)),
                 );
         }
-        v_flex()
+        let pane_box = v_flex()
             .id(("terminal-pane", id as usize))
+            .debug_selector(move || format!("pane-preview-{id}"))
             .size_full()
             .relative()
             .min_w_0()
             .min_h_0()
-            // Navigation, docking and pane dragging all measure the same full leaf.
-            .child(
-                canvas(
-                    move |bounds, _, _| {
-                        store.borrow_mut().insert(id, bounds);
-                    },
-                    |_, _, _, _| (),
-                )
-                .absolute()
-                .inset_0(),
-            )
             .when(multiple && !sidebar, |pane_box| {
                 pane_box.child(self.render_pane_header(
                     tab_ix,
@@ -108,7 +98,39 @@ impl NebulaWorkspace {
                     cx,
                 ))
             })
-            .child(body)
+            .child(body);
+        let preview = self.pane_drag_preview(id, cx);
+        let ink = cx.theme().primary;
+        div()
+            .size_full()
+            .relative()
+            // Hit testing, navigation and docking keep using the unshifted slot.
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        store.borrow_mut().insert(id, bounds);
+                    },
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(if let Some(preview) = preview {
+                gpui::deferred(
+                    pane_box
+                        .left(preview.offset.x)
+                        .top(preview.offset.y)
+                        .when(preview.priority == 2, |pane| pane.child(
+                            div().absolute().inset_0().border_1().border_color(ink.opacity(0.65)),
+                        ))
+                        .when(preview.running, |pane| pane.child(
+                            canvas(|_, _, _| (), |_, _, window, _| window.request_animation_frame())
+                                .absolute().inset_0(),
+                        )),
+                ).with_priority(preview.priority).into_any_element()
+            } else {
+                pane_box.into_any_element()
+            })
             .into_any_element()
     }
 }

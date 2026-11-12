@@ -781,6 +781,7 @@ impl NebulaWorkspace {
                     workspace.cancel_details_panel_resize(cx);
                     workspace.cancel_left_sidebar_resize(cx);
                     workspace.cancel_split_drag(cx);
+                    workspace.cancel_pane_drag(cx);
                 }
                 if workspace.spinner_window_active != active {
                     workspace.spinner_window_active = active;
