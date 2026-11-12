@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -66,7 +67,9 @@ def run(app, version, root, logs, *, prepare):
         ctx.start()
         snapshot = ctx.snapshot()
         ctx.refresh_targets(snapshot)
-        require(ctx.description["app_version"] == version, "runtime version does not match the ZIP")
+        reported_version = ctx.description["app_version"]
+        expected = re.fullmatch(r"(\d+\.\d+\.\d+)(?: \([0-9a-f]{7,40}\))?", reported_version)
+        require(expected and expected[1] == version, f"unexpected runtime version: {reported_version}")
         (ack, _, ack_ms), (event, event_bytes, snapshot_ms) = first_frames(ctx)
         require(ack.get("ok") is True and ack["result"]["subscription_id"] > 0, "subscription was rejected")
         require(event.get("event") == "runtime.snapshot", "first event was not a session snapshot")
@@ -75,7 +78,7 @@ def run(app, version, root, logs, *, prepare):
         require(data["revision"] >= ack["result"]["current_revision"], "snapshot revision predates the acknowledgement")
         panes = [p["id"] for w in data["windows"] for t in w["tabs"] for p in t.get("panes", [])]
         require(ctx.pane_id in panes, "first snapshot omitted the active terminal pane")
-        return {"status": "captured", "version": version, "ack_ms": ack_ms,
+        return {"status": "captured", "version": reported_version, "ack_ms": ack_ms,
                 "first_snapshot_ms": snapshot_ms, "first_snapshot_bytes": event_bytes,
                 "panes": len(panes)}
     finally:
