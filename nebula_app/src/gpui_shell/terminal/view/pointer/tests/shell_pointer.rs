@@ -102,9 +102,14 @@ fn zsh_click_moves_the_caret_after_arrow_key_navigation(cx: &mut TestAppContext)
         (b"\x1b[?1l\x1b[6D", "alt-right", b"\x1b[1;3C", b"\x1b[6C", 6),
     ] {
         let (view, mut window, receiver) = fixture_with_owner(cx, owner);
+        window.update(|window, cx| {
+            // The pointer fixture initially focuses the input above the terminal.
+            view.read(cx).focus_handle.focus(window, cx);
+        });
         view.update(&mut window, |view, _| {
             super::super::super::startup_tests::feed(view, setup);
         });
+        draw(&mut window);
         window.simulate_keystrokes(key);
         assert_eq!(input(&receiver), encoded, "{key}");
         view.update(&mut window, |view, _| {
