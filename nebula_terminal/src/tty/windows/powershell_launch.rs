@@ -229,7 +229,8 @@ mod tests {
         let shell = prepared("powershell.exe", old.parent().unwrap());
         let mut options = crate::tty::Options::default();
         options.shell = Some(shell.clone());
-        let command = super::super::cmdline(&options);
+        let command =
+            super::super::cmdline(&options, &super::super::resolve_launch_shell(&options));
         let current = super::super::nebula_prompt_script_path().unwrap();
         assert!(command.contains(SCRIPT_DIRECTORY));
         assert!(command.contains(env!("CARGO_PKG_VERSION")));

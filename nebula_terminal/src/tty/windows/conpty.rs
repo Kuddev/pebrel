@@ -6,8 +6,10 @@ use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::{mem, ptr};
 
+use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
 use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, FreeLibrary, HANDLE, HMODULE, S_OK,
 };
@@ -18,6 +20,7 @@ use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::core::{HRESULT, PWSTR};
 use windows_sys::s;
 
@@ -29,10 +32,10 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::event::{OnResize, WindowSize};
-use crate::tty::Options;
 use crate::tty::windows::blocking::{UnblockedReader, UnblockedWriter};
 use crate::tty::windows::child::ChildExitWatcher;
-use crate::tty::windows::{Pty, cmdline, win32_string};
+use crate::tty::windows::{Pty, cmdline, resolve_launch_shell, win32_string};
+use crate::tty::{Options, Shell};
 
 const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
 
@@ -43,8 +46,7 @@ const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
 /// supports loading OpenConsole.exe, which offers many improvements and
 /// bugfixes compared to the standard conpty that ships with Windows.
 ///
-/// The conpty.dll and OpenConsole.exe files will be searched in PATH and in
-/// the directory where Nebula's executable is located.
+/// Only a complete pair next to the executable or under its runtime directory is used.
 type CreatePseudoConsoleFn =
     unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> HRESULT;
 type ResizePseudoConsoleFn = unsafe extern "system" fn(HPCON, COORD) -> HRESULT;
@@ -72,14 +74,9 @@ impl Drop for ConptyLibrary {
 }
 
 impl ConptyApi {
-    fn new() -> Self {
-        // Side-by-side conpty.dll + OpenConsole.exe is the DEFAULT: the
-        // bundled host avoids in-box ConPTY's resize viewport re-emit quirks,
-        // which is a stability/correctness call. `openconsole=off` in
-        // nebula_settings.txt opts out for faster pane spawn (the unsigned
-        // exe pays Defender's real-time scan) at the cost of relying purely
-        // on Nebula's own resize coalescing to keep TUIs clean.
-        let sideload = super::conpty_sideload_enabled();
+    fn new(shell: &Shell) -> Self {
+        let setting = super::nebula_settings_value("openconsole");
+        let sideload = use_bundled_console(setting.as_deref(), windows_build(), shell.program());
 
         match sideload.then(Self::load_conpty).flatten() {
             Some(conpty) => {
@@ -137,6 +134,33 @@ impl ConptyApi {
     }
 }
 
+fn windows_build() -> u32 {
+    static BUILD: OnceLock<u32> = OnceLock::new();
+    *BUILD.get_or_init(|| {
+        // Unlike GetVersionExW, the result does not depend on the process manifest.
+        let mut version: OSVERSIONINFOW = unsafe { mem::zeroed() };
+        version.dwOSVersionInfoSize = mem::size_of_val(&version) as u32;
+        let status = unsafe { RtlGetVersion(&mut version) };
+        if status == 0 { version.dwBuildNumber } else { 0 }
+    })
+}
+
+fn use_bundled_console(setting: Option<&str>, build: u32, program: &str) -> bool {
+    match setting.map(str::to_ascii_lowercase).as_deref() {
+        Some("0" | "off" | "false" | "no") => return false,
+        Some("1" | "on" | "true" | "yes") => return true,
+        _ => {},
+    }
+
+    let windows_powershell =
+        Path::new(program).file_name().and_then(OsStr::to_str).is_some_and(|name| {
+            name.eq_ignore_ascii_case("powershell") || name.eq_ignore_ascii_case("powershell.exe")
+        });
+    // On Windows 10 22H2, Windows PowerShell leaves colored erase cells with
+    // the bundled host; the system host clears them correctly (#958).
+    !(build == 19045 && windows_powershell)
+}
+
 fn bundled_conpty_dir(exe_dir: &Path) -> Option<PathBuf> {
     [exe_dir.join("runtime"), exe_dir.to_path_buf()]
         .into_iter()
@@ -147,6 +171,12 @@ fn bundled_conpty_dir(exe_dir: &Path) -> Option<PathBuf> {
 pub struct Conpty {
     pub handle: HPCON,
     api: ConptyApi,
+}
+
+impl Conpty {
+    pub(super) fn bringup_da1_primed(&self) -> bool {
+        self.api.sideloaded
+    }
 }
 
 impl Drop for Conpty {
@@ -168,7 +198,8 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     // ordinary character input still remains on the normal UTF-8 path.
     const PSEUDOCONSOLE_WIN32_INPUT_MODE: u32 = 0x4;
 
-    let api = ConptyApi::new();
+    let shell = resolve_launch_shell(config);
+    let api = ConptyApi::new(&shell);
     crate::pty_trace(if api.sideloaded {
         "conpty api ready (sideloaded OpenConsole)"
     } else {
@@ -193,7 +224,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     // `ESC[?61c` into the shell as typed input.
     if api.sideloaded {
         use std::io::Write;
-        let _ = conin.write_all(b"\x1b[?61c");
+        conin.write_all(b"\x1b[?61c")?;
         crate::pty_trace("DA1 response primed");
     }
 
@@ -247,7 +278,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     // Declared after conout so every error closes the host while its reader
     // still exists. Spawn failures need the same drain-before-close order as Pty.
     let conpty = Conpty { handle: pty_handle, api };
-    let child_watcher = match spawn_shell(config, &conpty) {
+    let child_watcher = match spawn_shell(config, &shell, &conpty) {
         Ok(watcher) => watcher,
         Err(error) => {
             conout.drain_detached();
@@ -259,7 +290,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     Ok(Pty::new(conpty, conout, conin, child_watcher))
 }
 
-fn spawn_shell(config: &Options, conpty: &Conpty) -> Result<ChildExitWatcher> {
+fn spawn_shell(config: &Options, shell: &Shell, conpty: &Conpty) -> Result<ChildExitWatcher> {
     let mut attributes = ProcThreadAttributes::new()?;
     let mut startup_info_ex: STARTUPINFOEXW = unsafe { mem::zeroed() };
     startup_info_ex.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -285,7 +316,7 @@ fn spawn_shell(config: &Options, conpty: &Conpty) -> Result<ChildExitWatcher> {
     }
 
     // Prepare child process creation arguments.
-    let mut cmdline = win32_string(&cmdline(config));
+    let mut cmdline = win32_string(&cmdline(config, shell));
     let cwd = config.working_directory.as_ref().map(win32_string);
     let mut creation_flags = EXTENDED_STARTUPINFO_PRESENT;
     let child_config = super::cmd_prompt::prepare(config);
@@ -493,7 +524,7 @@ impl From<WindowSize> for COORD {
 
 #[cfg(test)]
 mod runtime_asset_tests {
-    use super::{bundled_conpty_dir, convert_custom_env};
+    use super::{bundled_conpty_dir, convert_custom_env, use_bundled_console};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -526,6 +557,29 @@ mod runtime_asset_tests {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("conpty.dll"), b"dll").unwrap();
         std::fs::write(dir.join("OpenConsole.exe"), b"host").unwrap();
+    }
+
+    #[test]
+    fn windows_10_22h2_uses_system_conpty_for_windows_powershell_only() {
+        for shell in [
+            "powershell",
+            "POWERSHELL.EXE",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ] {
+            assert!(!use_bundled_console(None, 19045, shell));
+            assert!(use_bundled_console(None, 20348, shell));
+            assert!(use_bundled_console(None, 26100, shell));
+        }
+        for shell in ["pwsh.exe", "cmd.exe", "wsl.exe", "bash.exe"] {
+            assert!(use_bundled_console(None, 19045, shell));
+        }
+    }
+
+    #[test]
+    fn explicit_console_settings_override_shell_compatibility() {
+        assert!(use_bundled_console(Some("On"), 19045, "powershell.exe"));
+        assert!(!use_bundled_console(Some("off"), 26100, "pwsh.exe"));
+        assert!(!use_bundled_console(Some("auto"), 19045, "powershell.exe"));
     }
 
     #[test]

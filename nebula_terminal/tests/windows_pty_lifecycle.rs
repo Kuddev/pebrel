@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use std::{env, fs, process::Command};
 
 use nebula_terminal::event::WindowSize;
-use nebula_terminal::tty::{self, Options, Shell};
+use nebula_terminal::tty::{self, EventedPty, Options, Shell};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
 
 const SIZE: WindowSize = WindowSize { num_lines: 24, num_cols: 80, cell_width: 8, cell_height: 16 };
@@ -27,6 +27,7 @@ fn options(program: &str, args: &[&str]) -> Options {
 
 fn close_pty(options: &Options) {
     let pty = tty::new(options, SIZE, 0).expect("create native ConPTY");
+    assert!(pty.bringup_da1_primed(), "resource regression requires the bundled host");
     // Let the host and shell start, including the busy shell used below. Do not
     // consume its output: closing must drain a backed-up pipe by itself.
     thread::sleep(Duration::from_millis(300));

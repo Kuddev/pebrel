@@ -503,7 +503,6 @@ fn ssh_first_capability_query_receives_reply_and_input_keeps_flowing() {
         let (sender, mut input) = mpsc::unbounded_channel();
         let events = Events { replies: Some(sender.clone()), ..Events::default() };
         let options = super::super::terminal_config(nebula_terminal::term::Config {
-            suppress_bringup_da1: true,
             conpty_resize: true,
             kitty_keyboard: true,
             ..Default::default()
@@ -542,7 +541,6 @@ fn ssh_terminal_options_preserve_preferences_but_disable_conpty_only_behavior() 
     use nebula_terminal::vte::ansi::{CursorShape, CursorStyle};
 
     let local = Config {
-        suppress_bringup_da1: true,
         conpty_resize: true,
         kitty_keyboard: true,
         scrolling_history: 42,
@@ -552,23 +550,12 @@ fn ssh_terminal_options_preserve_preferences_but_disable_conpty_only_behavior() 
         ..Default::default()
     };
     let remote = super::super::terminal_config(local.clone());
-    assert!(!remote.suppress_bringup_da1);
     assert!(!remote.conpty_resize);
     assert_eq!(remote.kitty_keyboard, local.kitty_keyboard);
     assert_eq!(remote.scrolling_history, local.scrolling_history);
     assert_eq!(remote.semantic_escape_chars, local.semantic_escape_chars);
     assert_eq!(remote.osc52, local.osc52);
     assert_eq!(remote.default_cursor_style, local.default_cursor_style);
-
-    let (sender, mut input) = mpsc::unbounded_channel();
-    let events = Events { replies: Some(sender), ..Default::default() };
-    let mut terminal = Term::new(local, &size(), events);
-    let mut parser: nebula_terminal::vte::ansi::Processor =
-        nebula_terminal::vte::ansi::Processor::new();
-    parser.advance(&mut terminal, b"\x1b[c");
-    assert!(input.try_recv().is_err(), "the pre-primed local handshake is still suppressed");
-    parser.advance(&mut terminal, b"\x1b[c");
-    assert!(matches!(input.try_recv(), Ok(Msg::Input(reply)) if reply.as_ref() == b"\x1b[?6c"));
 }
 
 #[test]

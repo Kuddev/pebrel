@@ -334,16 +334,10 @@ impl Settings {
             config.default_cursor_style.shape = shape;
         }
         config.default_cursor_style.blinking = effective_cursor_blink(self.cursor_blink);
-        // 与旧壳 `UiConfig::term_options` 对齐的关键位（ui_config.rs）——
-        // 裸默认在 ConPTY 下会出两类肉眼可见的错：
-        // - 起桥 DA1 由 conpty 预应答过，Term 必须吞掉自己的重复应答，
-        //   否则它作为击键进入 shell（首行提示符上的 `[?6c` 回显，光标
-        //   随之后移）。
-        // - resize 后 ConPTY 静默重锚主屏并按绝对坐标重绘，网格必须用
-        //   同一行语义，否则光标漂移。
+        // ConPTY silently re-anchors the primary screen on resize, then
+        // repaints using absolute cursor positions.
         #[cfg(windows)]
         {
-            config.suppress_bringup_da1 = nebula_terminal::tty::windows::conpty_sideload_enabled();
             config.conpty_resize = true;
         }
         config.kitty_keyboard = true;
