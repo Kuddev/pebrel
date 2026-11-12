@@ -21,16 +21,55 @@ pub(super) const RESUMABLE_AGENTS: [AgentKind; 12] = [
     AgentKind::Amp,
 ];
 
+enum RuleFeedback {
+    Invalid,
+    SaveFailed(String),
+    Saved(AgentKind),
+}
+
 pub(super) struct AgentResumeSettingsUi {
     pub(super) selected_agent: AgentKind,
     pub(super) args_input: Entity<InputState>,
-    pub(super) error: Option<Message>,
-    pub(super) save_error: Option<String>,
-    pub(super) saved_agent: Option<AgentKind>,
+    feedback: Option<RuleFeedback>,
     _subscription: Subscription,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusTone {
+    Muted,
+    Warning,
+    Danger,
+}
+
+fn labeled_field(label: &str, muted: Hsla, child: impl IntoElement) -> gpui::Div {
+    v_flex().gap_1().child(div().text_xs().text_color(muted).child(label.to_owned())).child(child)
+}
+
+fn stop_row_click(child: impl IntoElement) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(child)
+}
+
 impl SettingsPane {
+    fn persist_resume_updates(
+        &mut self,
+        updates: &[(&str, String)],
+        saved: Option<AgentKind>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let result = self.try_persist(updates, cx);
+        if let Some(ui) = self.agents.resume_ui.as_mut() {
+            ui.feedback = match &result {
+                Ok(()) => saved.map(RuleFeedback::Saved),
+                Err(err) => Some(RuleFeedback::SaveFailed(err.to_string())),
+            };
+        }
+        cx.notify();
+        result.is_ok()
+    }
+
     pub(super) fn prepare_agent_resume_settings(
         &mut self,
         window: &mut Window,
@@ -64,24 +103,18 @@ impl SettingsPane {
             |this: &mut Self, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
                     if let Some(ui) = this.agents.resume_ui.as_mut() {
-                        ui.error = None;
-                        ui.save_error = None;
-                        ui.saved_agent = None;
+                        ui.feedback = None;
                     }
                     cx.notify();
                 },
-                InputEvent::PressEnter { .. } => {
-                    this.save_agent_resume_rule(window, cx);
-                },
+                InputEvent::PressEnter { .. } => this.save_agent_resume_rule(window, cx),
                 _ => {},
             },
         );
         self.agents.resume_ui = Some(AgentResumeSettingsUi {
             selected_agent: initial_agent,
             args_input,
-            error: None,
-            save_error: None,
-            saved_agent: None,
+            feedback: None,
             _subscription: subscription,
         });
     }
@@ -100,12 +133,8 @@ impl SettingsPane {
             .unwrap_or_default();
         if let Some(ui) = self.agents.resume_ui.as_mut() {
             ui.selected_agent = agent;
-            ui.args_input.update(cx, |input, cx| {
-                input.set_value(existing, window, cx);
-            });
-            ui.error = None;
-            ui.save_error = None;
-            ui.saved_agent = None;
+            ui.args_input.update(cx, |input, cx| input.set_value(existing, window, cx));
+            ui.feedback = None;
         }
         cx.notify();
     }
@@ -116,9 +145,7 @@ impl SettingsPane {
         let draft = ui.args_input.read(cx).value().trim().to_owned();
         if draft.is_empty() || crate::agent_resume::parse(&draft).is_none() {
             if let Some(ui) = self.agents.resume_ui.as_mut() {
-                ui.error = Some(Message::SettingsAgentsResumeArgsInvalid);
-                ui.save_error = None;
-                ui.saved_agent = None;
+                ui.feedback = Some(RuleFeedback::Invalid);
             }
             cx.notify();
             return;
@@ -129,16 +156,9 @@ impl SettingsPane {
             .rule(agent.slug())
             .map(|rule| rule.enabled)
             .unwrap_or(true);
-        let Some(updates) = AgentResumeArgs::upsert_updates(agent.slug(), enabled, draft) else {
-            return;
-        };
-        let result = self.try_persist(&updates, cx);
-        if let Some(ui) = self.agents.resume_ui.as_mut() {
-            ui.error = None;
-            ui.save_error = result.as_ref().err().map(ToString::to_string);
-            ui.saved_agent = result.is_ok().then_some(agent);
+        if let Some(updates) = AgentResumeArgs::upsert_updates(agent.slug(), enabled, draft) {
+            self.persist_resume_updates(&updates, Some(agent), cx);
         }
-        cx.notify();
     }
 
     pub(super) fn toggle_agent_resume_rule(
@@ -148,16 +168,9 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) {
         let Some(rule) = self.runtime.agent_resume_args.rule(agent.slug()) else { return };
-        let Some(updates) = AgentResumeArgs::upsert_updates(rule.source, enabled, rule.args) else {
-            return;
-        };
-        let result = self.try_persist(&updates, cx);
-        if let Some(ui) = self.agents.resume_ui.as_mut() {
-            ui.error = None;
-            ui.save_error = result.as_ref().err().map(ToString::to_string);
-            ui.saved_agent = None;
+        if let Some(updates) = AgentResumeArgs::upsert_updates(rule.source, enabled, rule.args) {
+            self.persist_resume_updates(&updates, None, cx);
         }
-        cx.notify();
     }
 
     pub(super) fn remove_agent_resume_rule(
@@ -167,18 +180,12 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) {
         let Some(updates) = AgentResumeArgs::remove_updates(agent.slug()) else { return };
-        let result = self.try_persist(&updates, cx);
-        if let Some(ui) = self.agents.resume_ui.as_mut() {
-            ui.error = None;
-            ui.save_error = result.as_ref().err().map(ToString::to_string);
-            ui.saved_agent = None;
-            if result.is_ok() && ui.selected_agent == agent {
-                ui.args_input.update(cx, |input, cx| {
-                    input.set_value("", window, cx);
-                });
-            }
+        if self.persist_resume_updates(&updates, None, cx)
+            && let Some(ui) = self.agents.resume_ui.as_ref()
+            && ui.selected_agent == agent
+        {
+            ui.args_input.update(cx, |input, cx| input.set_value("", window, cx));
         }
-        cx.notify();
     }
 
     pub(super) fn agent_resume_settings(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -220,23 +227,34 @@ impl SettingsPane {
             .unwrap_or_default();
         let dirty = trimmed != current_saved;
         let draft_valid = !trimmed.is_empty() && crate::agent_resume::parse(trimmed).is_some();
+        let cmd_incompatible = draft_valid && crate::agent_resume::incompatible_with_cmd(trimmed);
 
-        let status = if let Some(error) = &ui.save_error {
-            Some((language.format(Message::SettingsSaveFailed, &[("error", error)]), true))
-        } else if let Some(error) = ui.error {
-            Some((language.text(error).to_owned(), true))
-        } else if !trimmed.is_empty() && !draft_valid {
-            Some((language.text(Message::SettingsAgentsResumeArgsInvalid).to_owned(), true))
-        } else if let Some(agent) = ui.saved_agent.filter(|_| !dirty) {
-            Some((
-                language.format(
-                    Message::SettingsAgentsResumeArgsSaved,
-                    &[("agent", agent.display_name())],
-                ),
-                false,
-            ))
-        } else {
-            None
+        let status = match &ui.feedback {
+            Some(RuleFeedback::SaveFailed(err)) => Some((
+                language.format(Message::SettingsSaveFailed, &[("error", err)]),
+                StatusTone::Danger,
+            )),
+            Some(RuleFeedback::Invalid) => Some((
+                language.text(Message::SettingsAgentsResumeArgsInvalid).to_owned(),
+                StatusTone::Danger,
+            )),
+            _ if !trimmed.is_empty() && !draft_valid => Some((
+                language.text(Message::SettingsAgentsResumeArgsInvalid).to_owned(),
+                StatusTone::Danger,
+            )),
+            Some(RuleFeedback::Saved(agent)) if !dirty => {
+                let (msg, tone) = if cmd_incompatible {
+                    (Message::SettingsAgentsResumeArgsSavedCmdNote, StatusTone::Warning)
+                } else {
+                    (Message::SettingsAgentsResumeArgsSaved, StatusTone::Muted)
+                };
+                Some((language.format(msg, &[("agent", agent.display_name())]), tone))
+            },
+            _ if cmd_incompatible => Some((
+                language.text(Message::SettingsAgentsResumeArgsCmdNote).to_owned(),
+                StatusTone::Warning,
+            )),
+            _ => None,
         };
 
         let rules = self.runtime.agent_resume_args.rules();
@@ -262,6 +280,13 @@ impl SettingsPane {
             }
             list.into_any_element()
         };
+
+        let suffix_input = div()
+            .id("agent-resume-input")
+            .debug_selector(|| "agent-resume-input".to_owned())
+            .w_full()
+            .font_family(cx.theme().mono_font_family.clone())
+            .child(Input::new(&ui.args_input).h(px(34.0)));
 
         v_flex()
             .w_full()
@@ -290,36 +315,21 @@ impl SettingsPane {
                     .flex_wrap()
                     .items_end()
                     .child(
-                        v_flex()
-                            .w(px(190.0))
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(language.text(Message::SettingsAgentsResumeArgsAgent)),
-                            )
-                            .child(picker),
+                        labeled_field(
+                            language.text(Message::SettingsAgentsResumeArgsAgent),
+                            muted,
+                            picker,
+                        )
+                        .w(px(190.0)),
                     )
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w(px(240.0))
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(language.text(Message::SettingsAgentsResumeArgsSuffix)),
-                            )
-                            .child(
-                                div()
-                                    .id("agent-resume-input")
-                                    .debug_selector(|| "agent-resume-input".to_owned())
-                                    .w_full()
-                                    .font_family(cx.theme().mono_font_family.clone())
-                                    .child(Input::new(&ui.args_input).h(px(34.0))),
-                            ),
+                        labeled_field(
+                            language.text(Message::SettingsAgentsResumeArgsSuffix),
+                            muted,
+                            suffix_input,
+                        )
+                        .flex_1()
+                        .min_w(px(240.0)),
                     )
                     .child(
                         Button::new("agent-resume-save")
@@ -332,13 +342,22 @@ impl SettingsPane {
                             })),
                     ),
             )
-            .when_some(status, |view, (text, is_error)| {
+            .when_some(status, |view, (text, tone)| {
+                let selector = if tone == StatusTone::Warning {
+                    "agent-resume-cmd-warning"
+                } else {
+                    "agent-resume-status"
+                };
                 view.child(
                     div()
-                        .id("agent-resume-status")
-                        .debug_selector(|| "agent-resume-status".to_owned())
+                        .id(selector)
+                        .debug_selector(move || selector.to_owned())
                         .text_xs()
-                        .text_color(if is_error { cx.theme().danger } else { muted })
+                        .text_color(match tone {
+                            StatusTone::Danger => cx.theme().danger,
+                            StatusTone::Warning => cx.theme().warning,
+                            StatusTone::Muted => muted,
+                        })
                         .child(text),
                 )
             })
@@ -355,12 +374,27 @@ impl SettingsPane {
         let agent = AgentKind::parse(rule.source).unwrap_or(AgentKind::Codex);
         let slug = rule.source;
         let enabled = rule.enabled;
-        let args = rule.args.clone();
         let border = crate::gpui_shell::theme::settings_hairline(cx);
         let hover = crate::gpui_shell::theme::settings_hover_bg(cx, false);
         let muted = cx.theme().muted_foreground;
         let icon = self.agent_brand_icon(agent, cx);
         let language = crate::gpui_shell::config::ui_language(cx);
+        let switch =
+            crate::gpui_shell::widgets::NebulaSwitch::new(format!("agent-resume-enabled-{slug}"))
+                .checked(enabled)
+                .on_click(cx.listener(move |this, next: &bool, _, cx| {
+                    this.toggle_agent_resume_rule(agent, *next, cx);
+                }));
+        let remove = crate::gpui_shell::widgets::settings_icon_button(
+            Button::new(format!("agent-resume-delete-{slug}"))
+                .debug_selector(move || format!("agent-resume-delete-{slug}"))
+                .icon(IconName::Close)
+                .tooltip(language.text(Message::CommonRemove)),
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.remove_agent_resume_rule(agent, window, cx);
+        }));
 
         h_flex()
             .id(("agent-resume-rule", index))
@@ -410,42 +444,9 @@ impl SettingsPane {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_xs()
                     .text_color(if enabled { cx.theme().foreground } else { muted })
-                    .child(args),
+                    .child(rule.args.clone()),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        crate::gpui_shell::widgets::NebulaSwitch::new(format!(
-                            "agent-resume-enabled-{slug}"
-                        ))
-                        .checked(enabled)
-                        .on_click(cx.listener(
-                            move |this, next: &bool, _, cx| {
-                                this.toggle_agent_resume_rule(agent, *next, cx);
-                            },
-                        )),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        crate::gpui_shell::widgets::settings_icon_button(
-                            Button::new(format!("agent-resume-delete-{slug}"))
-                                .debug_selector(move || format!("agent-resume-delete-{slug}"))
-                                .icon(IconName::Close)
-                                .tooltip(language.text(Message::CommonRemove)),
-                            cx,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.remove_agent_resume_rule(agent, window, cx);
-                            },
-                        )),
-                    ),
-            )
+            .child(stop_row_click(switch))
+            .child(stop_row_click(remove))
     }
 }

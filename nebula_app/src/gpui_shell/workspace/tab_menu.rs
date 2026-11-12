@@ -110,10 +110,16 @@ impl NebulaWorkspace {
         let tab_count = self.tabs.len();
         let retry =
             self.tabs[ix].focused_view().filter(|view| view.read(cx).can_retry_recovery()).cloned();
+        let retry_without_rule = self.tabs[ix]
+            .focused_view()
+            .filter(|view| view.read(cx).can_retry_without_rule())
+            .cloned();
         let choose_session = self.tabs[ix]
             .focused_view()
             .filter(|view| view.read(cx).can_choose_recovery_session())
             .cloned();
+        let has_recovery =
+            choose_session.is_some() || retry.is_some() || retry_without_rule.is_some();
         let copy_cwd =
             self.tabs[ix].focused_view().map(|view| copy_working_directory_item(view, cx));
         let workspace = cx.entity().downgrade();
@@ -128,11 +134,20 @@ impl NebulaWorkspace {
                 );
             }
             if let Some(view) = retry {
-                menu = menu
-                    .item(PopupMenuItem::new(language.text(Message::SessionRetry)).on_click(
+                menu =
+                    menu.item(PopupMenuItem::new(language.text(Message::SessionRetry)).on_click(
                         move |_, _, cx| view.update(cx, |view, cx| view.retry_recovery(cx)),
-                    ))
-                    .separator();
+                    ));
+            }
+            if let Some(view) = retry_without_rule {
+                menu = menu.item(
+                    PopupMenuItem::new(language.text(Message::SessionRetryWithoutRule)).on_click(
+                        move |_, _, cx| view.update(cx, |view, cx| view.retry_without_rule(cx)),
+                    ),
+                );
+            }
+            if has_recovery {
+                menu = menu.separator();
             }
             if let Some(copy_cwd) = copy_cwd {
                 menu = menu.item(copy_cwd).separator();

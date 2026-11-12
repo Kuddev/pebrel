@@ -55,7 +55,9 @@ impl TerminalView {
             .to_ascii_lowercase();
         if matches!(program.as_str(), "pwsh" | "pwsh.exe" | "powershell" | "powershell.exe") {
             PathQuote::PowerShell
-        } else if cfg!(windows) && matches!(program.as_str(), "" | "cmd" | "cmd.exe") {
+        } else if matches!(program.as_str(), "cmd" | "cmd.exe")
+            || (cfg!(windows) && program.is_empty())
+        {
             PathQuote::CommandPrompt
         } else {
             PathQuote::Posix

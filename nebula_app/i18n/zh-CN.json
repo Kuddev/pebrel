@@ -549,7 +549,9 @@
       "resume_args_add": "保存规则",
       "resume_args_empty": "暂未配置附加参数规则。在上方选择智能体并输入命令后缀即可添加。",
       "resume_args_invalid": "请输入合法的命令行参数后缀（不含未加引号的 Shell 运算符）或 JSON 字符串数组。",
-      "resume_args_saved": "已保存 {agent} 的附加参数规则。"
+      "resume_args_saved": "已保存 {agent} 的附加参数规则。",
+      "resume_args_cmd_note": "包含 \"、% 或 !：可在 POSIX Shell 与 PowerShell 中使用，但在 cmd.exe 下会被拒绝。",
+      "resume_args_saved_cmd_note": "已保存 {agent} 的附加参数规则。该规则含 \"、% 或 !，可在 POSIX Shell 与 PowerShell 中使用，但在 cmd.exe 下会被拒绝。"
     },
     "plugins": {
       "title": "插件",
@@ -1539,7 +1541,10 @@
     "restore_failed": "此 AI 对话未能恢复，原恢复记录已保留。可在标签菜单中重试恢复，或到历史会话中定位。",
     "restore_choose_codex": "保存的 Codex 对话已不可用。请在 Codex 的会话列表中选择要继续的对话。",
     "restore_ambiguous": "有多个原生会话文件匹配此对话，原恢复记录已保留。请在历史会话中选择准确的对话。",
-    "retry": "重试会话恢复"
+    "restore_rule_incompatible": "{agent} 的附加参数规则（{rule}）与当前终端 Shell（{shell}）不兼容。请在「设置 → 智能体」中停用该规则，或选择「本次不应用规则」继续。",
+    "restore_rule_invalid": "{agent} 的附加参数规则（{rule}）语法无效。请在「设置 → 智能体」中修正或停用该规则，或选择「本次不应用规则」继续。",
+    "retry": "重试会话恢复",
+    "retry_without_rule": "本次不应用规则"
   },
   "ssh.agent.unavailable": "未能在探测时限内访问系统 SSH Agent。",
   "ssh.agent.empty": "SSH Agent 没有返回任何身份。",

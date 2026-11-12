@@ -361,7 +361,7 @@ impl NebulaWorkspace {
         let grid = self.inherited_grid(cx);
         let launch = Self::terminal_launch_from_session(&launch_session, cwd);
         let pane = self.new_pane(grid, launch, None, window, cx);
-        pane.view.update(cx, |view, cx| view.run_agent_session_command(command, cx));
+        let pane_view = pane.view.clone();
         let focused = pane.id;
         let tab = WorkspaceTab::Terminal {
             tree: SplitTree::leaf(pane.id),
@@ -389,6 +389,7 @@ impl NebulaWorkspace {
             },
         );
         self.active = at;
+        pane_view.update(cx, |view, cx| view.run_agent_session_command(command, cx));
         self.reveal_active_tab();
         self.focus_active(window, cx);
         cx.notify();

@@ -549,7 +549,9 @@
       "resume_args_add": "Save rule",
       "resume_args_empty": "No argument rules configured yet. Choose an agent above and enter a command suffix to add one.",
       "resume_args_invalid": "Enter valid CLI flags (without unquoted shell operators) or a JSON string array.",
-      "resume_args_saved": "Saved argument rule for {agent}."
+      "resume_args_saved": "Saved argument rule for {agent}.",
+      "resume_args_cmd_note": "Contains \", %, or ! — supported in POSIX shells and PowerShell, but rejected in cmd.exe.",
+      "resume_args_saved_cmd_note": "Saved argument rule for {agent}. Contains \", %, or ! — supported in POSIX shells and PowerShell, but rejected in cmd.exe."
     },
     "plugins": {
       "title": "Plugins",
@@ -1539,7 +1541,10 @@
     "restore_failed": "This AI conversation could not be restored. Its saved target is preserved. Use Retry recovery in the tab menu, or locate it in session history.",
     "restore_choose_codex": "The saved Codex conversation is unavailable. Choose a conversation in Codex to continue.",
     "restore_ambiguous": "More than one native session file matches this conversation. The saved target is preserved; choose the exact conversation from session history.",
-    "retry": "Retry session recovery"
+    "restore_rule_incompatible": "{agent} resume rule ({rule}) cannot be passed safely in {shell}. Disable it in Settings → Agents, or continue once without applying the rule.",
+    "restore_rule_invalid": "{agent} resume rule ({rule}) has invalid syntax. Fix or disable it in Settings → Agents, or continue once without applying the rule.",
+    "retry": "Retry session recovery",
+    "retry_without_rule": "Continue without rule"
   },
   "ssh.agent.unavailable": "No system SSH agent was available within the discovery timeout.",
   "ssh.agent.empty": "The SSH agent returned no identities.",

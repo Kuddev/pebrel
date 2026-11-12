@@ -2,6 +2,34 @@
 
 use super::*;
 
+pub(super) struct BlockedResumeRule {
+    base_command: String,
+    source: String,
+    rule: String,
+    error: crate::agent_resume::AppendError,
+    shell_name: String,
+    choosing_session: bool,
+}
+
+impl BlockedResumeRule {
+    pub(super) fn message(&self, lang: crate::display::UiLanguage) -> String {
+        let agent = match crate::ai_agents::AgentKind::parse(&self.source) {
+            Some(kind) => kind.display_name(),
+            None => self.source.as_str(),
+        };
+        match self.error {
+            crate::agent_resume::AppendError::IncompatibleShell(_) => lang.format(
+                crate::i18n::Message::SessionRestoreRuleIncompatible,
+                &[("agent", agent), ("rule", &self.rule), ("shell", &self.shell_name)],
+            ),
+            crate::agent_resume::AppendError::InvalidSyntax => lang.format(
+                crate::i18n::Message::SessionRestoreRuleInvalid,
+                &[("agent", agent), ("rule", &self.rule)],
+            ),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct SessionRecovery {
     pub(super) target: Option<crate::session::AgentSession>,
@@ -10,6 +38,7 @@ pub(super) struct SessionRecovery {
     submitted: bool,
     pub(super) failed: bool,
     choosing_session: bool,
+    pub(super) blocked_rule: Option<BlockedResumeRule>,
 }
 
 impl SessionRecovery {
@@ -54,6 +83,7 @@ impl SessionRecovery {
         self.awaiting_confirmation = false;
         self.failed = false;
         self.choosing_session = false;
+        self.blocked_rule = None;
         true
     }
 
@@ -101,22 +131,14 @@ impl TerminalView {
         self.recovery.submitted = false;
         self.recovery.failed = false;
         self.last_command_failed = false;
-        let Some(command) = self.configured_recovery_command("codex resume".into(), "codex", cx)
-        else {
-            self.recovery.choosing_session = false;
-            self.recovery.failed = true;
+        if self.submit_with_resume_rule("codex resume".into(), "codex", true, cx) {
             cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
-                body: ui_language().text(crate::i18n::Message::SessionRestoreFailed).to_owned(),
+                body: ui_language()
+                    .text(crate::i18n::Message::SessionRestoreChooseCodex)
+                    .to_owned(),
                 program: Some("codex".into()),
             }));
-            cx.notify();
-            return;
-        };
-        self.run_command(command, cx);
-        cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
-            body: ui_language().text(crate::i18n::Message::SessionRestoreChooseCodex).to_owned(),
-            program: Some("codex".into()),
-        }));
+        }
     }
 
     pub(crate) fn can_choose_recovery_session(&self) -> bool {
@@ -164,6 +186,7 @@ impl TerminalView {
         if text.is_empty() || self.exited.is_some() {
             return;
         }
+        self.recovery.blocked_rule = None;
         self.pending_shell_command = Some(PendingShellCommand { text });
         self.flush_pending_shell_command(cx);
     }
@@ -173,34 +196,65 @@ impl TerminalView {
             self.run_command(command, cx);
             return;
         };
-        let Some(decorated) = self.configured_recovery_command(command, kind.slug(), cx) else {
-            self.recovery.failed = true;
-            cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
-                body: ui_language().text(crate::i18n::Message::SessionRestoreFailed).to_owned(),
-                program: Some(kind.slug().to_owned()),
-            }));
-            cx.notify();
-            return;
-        };
-        self.run_command(decorated, cx);
+        let _ = self.submit_with_resume_rule(command, kind.slug(), false, cx);
     }
 
-    pub(crate) fn configured_recovery_command(
-        &self,
-        command: String,
-        source: &str,
-        cx: &App,
-    ) -> Option<String> {
-        let value = cx
-            .try_global::<Settings>()
-            .map(|settings| settings.agent_resume_args.get(source))
-            .unwrap_or_default();
-        let program = match &self.session_launch {
+    fn shell_program_for_rule(&self) -> Option<&str> {
+        match &self.session_launch {
             crate::session::LaunchSession::Shell { program, .. } => Some(program.as_str()),
             crate::session::LaunchSession::Profile { command, .. } => Some(command.as_str()),
             _ => self.exec_context.as_ref().and_then(|context| context.shell_program()),
-        };
-        crate::agent_resume::append(command, value, self.path_quote(), program)
+        }
+    }
+
+    fn emit_recovery_text(body: String, source: &str, cx: &mut Context<Self>) {
+        cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
+            body,
+            program: Some(source.to_owned()),
+        }));
+    }
+
+    fn submit_with_resume_rule(
+        &mut self,
+        base_command: String,
+        source: &str,
+        choosing_session: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let rule = cx
+            .try_global::<Settings>()
+            .map(|settings| settings.agent_resume_args.get(source).to_owned())
+            .unwrap_or_default();
+        let program = self.shell_program_for_rule();
+        match crate::agent_resume::append(base_command.clone(), &rule, self.path_quote(), program) {
+            Ok(decorated) => {
+                self.run_command(decorated, cx);
+                true
+            },
+            Err(error) => {
+                let shell_name = match error {
+                    crate::agent_resume::AppendError::IncompatibleShell(shell) => {
+                        crate::agent_resume::shell_label(shell, program)
+                    },
+                    crate::agent_resume::AppendError::InvalidSyntax => String::new(),
+                };
+                let blocked = BlockedResumeRule {
+                    base_command,
+                    source: source.to_owned(),
+                    rule,
+                    error,
+                    shell_name,
+                    choosing_session,
+                };
+                let body = blocked.message(ui_language());
+                self.recovery.choosing_session = false;
+                self.recovery.failed = true;
+                self.recovery.blocked_rule = Some(blocked);
+                Self::emit_recovery_text(body, source, cx);
+                cx.notify();
+                false
+            },
+        }
     }
 
     fn prediction_startup_command(&self, text: &str, cx: &Context<Self>) -> Option<String> {
@@ -258,11 +312,8 @@ impl TerminalView {
             ..SessionRecovery::default()
         };
         if agent.source != "pi" || self.ssh_destination.is_some() {
-            if let Some(command) = agent
-                .resume_command()
-                .and_then(|command| self.configured_recovery_command(command, &agent.source, cx))
-            {
-                self.run_command(command, cx);
+            if let Some(command) = agent.resume_command() {
+                let _ = self.submit_with_resume_rule(command, &agent.source, false, cx);
             } else {
                 self.recovery.failed = true;
                 cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
@@ -297,24 +348,26 @@ impl TerminalView {
                 view.recovery.resolving = false;
                 match result {
                     Ok(target) => {
-                        let command = target
-                            .session_file
-                            .as_ref()
-                            .and_then(|file| {
-                                crate::display::side_panel::drop_text_for_paths(
-                                    std::slice::from_ref(file),
-                                    view.path_quote(),
-                                )
-                                .map(|quoted| format!("pi --session {}", quoted.trim_end()))
-                            })
-                            .and_then(|command| {
-                                view.configured_recovery_command(command, "pi", cx)
-                            });
+                        let base_command = target.session_file.as_ref().and_then(|file| {
+                            crate::display::side_panel::drop_text_for_paths(
+                                std::slice::from_ref(file),
+                                view.path_quote(),
+                            )
+                            .map(|quoted| format!("pi --session {}", quoted.trim_end()))
+                        });
                         view.recovery.target = Some(target);
-                        if let Some(command) = command {
-                            view.run_command(command, cx);
+                        if let Some(command) = base_command {
+                            let _ = view.submit_with_resume_rule(command, "pi", false, cx);
                         } else {
                             view.recovery.failed = true;
+                            cx.emit(TerminalViewEvent::Notification(
+                                crate::notify::Notification::Text {
+                                    body: ui_language()
+                                        .text(crate::i18n::Message::SessionRestoreFailed)
+                                        .to_owned(),
+                                    program: Some("pi".into()),
+                                },
+                            ));
                         }
                     },
                     Err(error) => {
@@ -378,6 +431,42 @@ impl TerminalView {
             && let Some(target) = self.recovery.target.clone()
         {
             self.restore_agent(target, cx);
+        }
+    }
+
+    pub(crate) fn can_retry_without_rule(&self) -> bool {
+        self.recovery.blocked_rule.is_some()
+            && !self.recovery.resolving
+            && self.running_program.is_none()
+            && self.pending_shell_command.is_none()
+    }
+
+    pub(crate) fn retry_without_rule(&mut self, cx: &mut Context<Self>) {
+        if !self.can_retry_without_rule() {
+            return;
+        }
+        let Some(blocked) = self.recovery.blocked_rule.take() else { return };
+        self.recovery.failed = false;
+        self.last_command_failed = false;
+        if blocked.choosing_session {
+            self.recovery.choosing_session = true;
+            self.recovery.submitted = false;
+        }
+        self.run_command(blocked.base_command, cx);
+        if blocked.choosing_session {
+            cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
+                body: ui_language()
+                    .text(crate::i18n::Message::SessionRestoreChooseCodex)
+                    .to_owned(),
+                program: Some(blocked.source),
+            }));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn dismiss_blocked_rule(&mut self, cx: &mut Context<Self>) {
+        if self.recovery.blocked_rule.take().is_some() {
+            cx.notify();
         }
     }
 

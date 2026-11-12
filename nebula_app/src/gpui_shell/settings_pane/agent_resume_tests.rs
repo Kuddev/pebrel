@@ -76,10 +76,31 @@ fn agent_resume_rules_persist_toggle_and_remove_through_settings_ui(cx: &mut Tes
 
     assert!(window.debug_bounds("agent-resume-rule-codex").is_some());
     assert!(window.debug_bounds("agent-resume-rule-antigravity").is_some());
+    assert!(window.debug_bounds("agent-resume-cmd-warning").is_none());
     assert_eq!(nebula_settings::RuntimeSettings::load().agent_resume_args.get("codex"), "--yolo");
     assert_eq!(
         nebula_settings::RuntimeSettings::load().agent_resume_args.get("antigravity"),
         "--dangerously-skip-permissions"
+    );
+
+    // Saving a valid rule containing `"`, `%`, or `!` persists for POSIX/PowerShell and warns
+    // explicitly that `cmd.exe` will reject it.
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.select_agent_resume_rule(AgentKind::Codex, window, cx);
+            let input = pane.agents.resume_ui.as_ref().unwrap().args_input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value(r#"["--config","model_provider=\"custom\""]"#, window, cx);
+            });
+            pane.save_agent_resume_rule(window, cx);
+        });
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(window.debug_bounds("agent-resume-cmd-warning").is_some());
+    assert_eq!(
+        nebula_settings::RuntimeSettings::load().agent_resume_args.get("codex"),
+        r#"["--config","model_provider=\"custom\""]"#
     );
 
     // Toggle Codex rule off -> remains in rules list, but `get` returns empty.

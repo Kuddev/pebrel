@@ -66,8 +66,10 @@ pub(crate) fn quote_args(
 
 #[cfg(all(test, windows))]
 mod native_tests {
+    use std::os::windows::process::CommandExt as _;
+
     use super::*;
-    use crate::agent_resume::append;
+    use crate::agent_resume::{AppendError, append, incompatible_with_cmd};
 
     #[test]
     fn windows_powershell_and_pwsh_deliver_the_exact_native_argument_array() {
@@ -123,6 +125,51 @@ mod native_tests {
             .unwrap();
             let actual = String::from_utf8(output).unwrap();
             assert_eq!(actual.trim(), format!("{args:?}"), "{shell}: {line}");
+        }
+
+        // Native `cmd.exe` probe: deliverable space/backslash/operator arguments arrive intact,
+        // while undeliverable `"`, `%`, and `!` arguments fail closed with `IncompatibleShell`.
+        let cmd_exe_quoted = drop_text_for_paths(
+            &[executable.to_string_lossy().into_owned()],
+            PathQuote::CommandPrompt,
+        )
+        .unwrap();
+        let cmd_args = ["", "--profile", "two words", "a b\\", "literal & echo nope | rem", ""];
+        let cmd_value = serde_json::to_string(&cmd_args).unwrap();
+        let cmd_line = append(
+            cmd_exe_quoted.trim_end().to_owned(),
+            &cmd_value,
+            PathQuote::CommandPrompt,
+            Some("cmd.exe"),
+        )
+        .unwrap();
+        let mut cmd = std::process::Command::new("cmd.exe");
+        cmd.raw_arg(format!("/d /s /c \"{cmd_line}\""));
+        let cmd_out = crate::platform::process_output::read_cancellable(
+            cmd,
+            std::time::Duration::from_secs(15),
+            8192,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(cmd_out).unwrap().trim(),
+            format!("{cmd_args:?}"),
+            "cmd.exe: {cmd_line}"
+        );
+
+        for undeliverable in [&value, r#"["%COMSPEC%"]"#, r#"["!VAR!"]"#] {
+            assert!(incompatible_with_cmd(undeliverable), "{undeliverable}");
+            assert_eq!(
+                append(
+                    cmd_exe_quoted.trim_end().to_owned(),
+                    undeliverable,
+                    PathQuote::CommandPrompt,
+                    Some("cmd.exe"),
+                ),
+                Err(AppendError::IncompatibleShell(PathQuote::CommandPrompt)),
+                "{undeliverable}"
+            );
         }
     }
 }

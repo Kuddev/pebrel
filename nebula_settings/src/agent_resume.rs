@@ -72,14 +72,6 @@ impl AgentResumeArgs {
             .collect()
     }
 
-    pub fn settings_key(source: &str) -> Option<&'static str> {
-        Self::settings_entry(source).map(|(_, args_key, _)| args_key)
-    }
-
-    pub fn enabled_key(source: &str) -> Option<&'static str> {
-        Self::settings_entry(source).map(|(_, _, enabled_key)| enabled_key)
-    }
-
     pub fn upsert_updates(
         source: &str,
         enabled: bool,

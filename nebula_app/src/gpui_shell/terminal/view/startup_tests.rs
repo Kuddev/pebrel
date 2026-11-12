@@ -1752,5 +1752,85 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
         view.run_agent_session_command("claude --resume 'session-5' --fork-session".into(), cx);
         assert!(view.pending_shell_command.is_none());
         assert!(view.recovery.failed);
+        assert!(view.can_retry_without_rule());
+        view.retry_without_rule(cx);
+        assert_eq!(
+            view.pending_shell_command.as_ref().map(|pending| pending.text.as_str()),
+            Some("claude --resume 'session-5' --fork-session")
+        );
+    });
+
+    // Incompatible `cmd.exe` rule points out the offending rule + shell and lets the user
+    // explicitly retry once without the rule while keeping persisted settings intact.
+    let notices = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let notices_sink = notices.clone();
+    cx.update(crate::gpui_shell::scientific_render::init);
+    let (_, painted_window) = cx.add_window_view(|window, cx| {
+        cx.subscribe(&view, move |_, _, event, _| {
+            if let TerminalViewEvent::Notification(crate::notify::Notification::Text {
+                body, ..
+            }) = event
+            {
+                notices_sink.borrow_mut().push(body.clone());
+            }
+        })
+        .detach();
+        Root::new(view.clone(), window, cx)
+    });
+    let raw_rule = r#"["--config","model_provider=\"custom\""]"#;
+    view.update(painted_window, |view, cx| {
+        view.pending_shell_command = None;
+        view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+            &nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new("cmd.exe".into(), vec![])),
+                ..Default::default()
+            },
+        ));
+        view.session_launch = crate::session::LaunchSession::Shell {
+            name: "cmd".into(),
+            program: "cmd.exe".into(),
+            args: Vec::new(),
+        };
+        cx.global_mut::<Settings>().agent_resume_args =
+            nebula_settings::AgentResumeArgs::from_raw(&nebula_settings::RawSettings::from_text(
+                &format!("agent_resume_args_codex={raw_rule}\nagent_resume_enabled_codex=1\n"),
+            ));
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "codex".into(),
+                session_id: Some("session-cmd".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        assert!(view.pending_shell_command.is_none());
+        assert!(view.recovery.failed);
+        assert!(view.can_retry_without_rule());
+    });
+    let last_notice = notices.borrow().last().cloned().unwrap_or_default();
+    assert!(
+        last_notice.contains("Codex")
+            && last_notice.contains(raw_rule)
+            && last_notice.contains("cmd.exe"),
+        "unexpected notice: {last_notice}"
+    );
+    painted_window.simulate_resize(size(px(800.0), px(600.0)));
+    painted_window.run_until_parked();
+    painted_window.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(painted_window.debug_bounds("blocked-resume-rule").is_some());
+    let retry_btn = painted_window.debug_bounds("session-retry-without-rule").unwrap().center();
+    painted_window.simulate_click(retry_btn, gpui::Modifiers::default());
+    painted_window.run_until_parked();
+    view.read_with(painted_window, |view, cx| {
+        assert!(!view.recovery.failed);
+        assert!(!view.can_retry_without_rule());
+        assert_eq!(
+            view.pending_shell_command.as_ref().map(|pending| pending.text.as_str()),
+            Some("codex resume session-cmd")
+        );
+        assert_eq!(cx.global::<Settings>().agent_resume_args.get("codex"), raw_rule);
     });
 }
