@@ -966,6 +966,42 @@ mod tests {
     }
 
     #[test]
+    fn review_alt_screen_table_columns() {
+        let (columns, rows, separator) = (48, 4, 17);
+        let formula = format!("| {:<14} | value |", r"\(x^2\)");
+        let plain = format!("| {:<14} | value |", "plain");
+        let mut term = term_with(columns, rows, &[]);
+        term.swap_alt();
+        for (row, text) in [formula, plain].iter().enumerate() {
+            for (column, glyph) in text.chars().enumerate() {
+                term.grid_mut()[Line(row as i32)][Column(column)].c = glyph;
+            }
+            assert_eq!(term.grid()[Line(row as i32)][Column(separator)].c, '|');
+        }
+        term.grid_mut().cursor.point = Point::new(Line(3), Column(0));
+
+        let size = grid_size_info(columns, rows, 8.0, 16.0);
+        let mut guarded = MathOverlay::default();
+        let mut pending =
+            guarded.plan_frame(&term, &size, Rgb::new(0xd6, 0xda, 0xea), 16.0, 1.0, |_| true);
+        // Reproduce the existing full-screen guard without changing the fixture grid.
+        pending.reflow_inline = false;
+        let guarded = guarded.finalize_frame_with(pending, |_, _| true);
+        assert_eq!(guarded.formulas.len(), 1);
+        assert_eq!(guarded.project_cell(0, separator, columns), Some(separator));
+        assert_eq!(guarded.project_cell(1, separator, columns), Some(separator));
+
+        let frame = plan(&mut MathOverlay::default(), &term, columns, rows);
+        assert_eq!(frame.formulas.len(), 1);
+        let formula_row = frame.project_cell(0, separator, columns);
+        let plain_row = frame.project_cell(1, separator, columns);
+        eprintln!(
+            "table separator: guarded=({separator},{separator}) candidate=({formula_row:?},{plain_row:?})"
+        );
+        assert_eq!(formula_row, plain_row, "a formula must not shift a full-screen table column");
+    }
+
+    #[test]
     fn alt_screen_renders_agent_math() {
         let mut overlay = MathOverlay::default();
         let mut term = term_with(
