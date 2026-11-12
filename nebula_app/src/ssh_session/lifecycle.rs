@@ -173,15 +173,22 @@ pub(super) async fn run<H: SshEventHost>(
         super::report_stage(Some(&event_proxy), SshStage::Resolve);
         let raw = destination.clone();
         let profiles_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
-        let (resolved, profile) = network(
+        let resolution_path = profiles_path.clone();
+        let (resolved, profile, icon) = network(
             "address resolution",
             tokio::task::spawn_blocking(move || {
                 let resolved = SshDestination::resolve(&raw)?;
-                let profiles = crate::ssh_profiles::SshProfiles::load(&profiles_path)?;
-                Ok::<_, io::Error>((resolved, profiles.for_destination(&raw)))
+                let profiles = crate::ssh_profiles::SshProfiles::load(&resolution_path)?;
+                let profile = profiles.for_destination(&raw);
+                let icon = profile
+                    .chosen_icon()
+                    .or_else(|| profiles.detected_icon(&raw))
+                    .map(str::to_owned);
+                Ok::<_, io::Error>((resolved, profile, icon))
             }),
         )
         .await??;
+        event_proxy.ssh_host_icon(icon);
         let mut acquired =
             super::authenticated_session_at(&resolved, &profile, Some(&event_proxy), 0).await?;
         let (mut channel, hook_token) = match open_shell(
@@ -221,6 +228,7 @@ pub(super) async fn run<H: SshEventHost>(
             biased;
             result = pump(&mut channel, hook_token.clone(), initial_size, &terminal, &event_proxy, &mut input) => result,
             never = resume::monitor(&acquired.session, identity, resume_target.as_ref(), tmux_helper.as_deref(), &hook_token, &event_proxy) => match never {},
+            never = super::remote_os::learn_while_connected(&profiles_path, &destination, &acquired.session, profile.chosen_icon().is_none(), &event_proxy) => match never {},
         };
         if result.is_err() || acquired.session.is_closed() {
             super::evict_pooled_session(&acquired.key, &acquired.session).await;

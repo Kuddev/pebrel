@@ -49,6 +49,7 @@ impl NebulaWorkspace {
                 }
                 cx.notify();
             },
+            TerminalViewEvent::HostIconChanged => cx.notify(),
             TerminalViewEvent::Exited => {
                 if let Some((tab_ix, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.runtime_hub.record_pane_exited(self.runtime_window_id, pane_id);
@@ -370,6 +371,28 @@ mod tests {
         });
         cx.simulate_mouse_move(point(px(1200.0), px(850.0)), None, Modifiers::default());
         draw(cx);
+    }
+
+    #[gpui::test]
+    fn remote_host_icon_changes_the_existing_tab_presentation(cx: &mut TestAppContext) {
+        let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
+        terminals[0].update(&mut window, |view, cx| {
+            view.ssh_destination = Some("fixture-host".into());
+            view.running_program = None;
+            view.apply_ssh_host_icon(None, cx);
+        });
+        let glyph = |window: &VisualTestContext| {
+            workspace.read_with(window, |workspace, cx| {
+                workspace.tab_presentation(0, cx, false).program_glyph.unwrap().to_string()
+            })
+        };
+        assert_eq!(glyph(&window), crate::display::ui::os_icons::resolve(None).glyph.to_string());
+        terminals[0].update(&mut window, |view, cx| view.apply_ssh_host_icon(Some("ubuntu"), cx));
+        draw(&mut window);
+        assert_eq!(
+            glyph(&window),
+            crate::display::ui::os_icons::resolve(Some("ubuntu")).glyph.to_string()
+        );
     }
 
     #[gpui::test]

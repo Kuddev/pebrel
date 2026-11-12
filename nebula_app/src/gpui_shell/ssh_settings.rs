@@ -209,6 +209,20 @@ pub(super) struct SshDeleteUndo {
 }
 
 impl SettingsPane {
+    pub(crate) fn refresh_detected_ssh_icons(&mut self, cx: &mut Context<Self>) {
+        let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+        let load = cx
+            .background_executor()
+            .spawn(async move { crate::ssh_profiles::detected_os::load(&path) });
+        self.ssh_icon_refresh = Some(cx.spawn(async move |this, cx| {
+            let icons = load.await;
+            let _ = this.update(cx, |pane, cx| {
+                pane.ssh_hosts.profiles.replace_detected_icons(icons);
+                cx.notify();
+            });
+        }));
+    }
+
     /// SSH 非破坏性列表操作的统一收尾：写盘、报状态、清确认态。
     /// Profile/凭据的最终删除走 [`Self::delete_ssh_host`]，不能混进置顶/恢复。
     pub(super) fn ssh_apply(

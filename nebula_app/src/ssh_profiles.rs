@@ -5,6 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 #[path = "ssh_profiles/connection.rs"]
 mod connection;
+#[path = "ssh_profiles/detected_os.rs"]
+pub(crate) mod detected_os;
 pub(crate) mod duplication;
 #[path = "ssh_profiles/exchange.rs"]
 pub(crate) mod exchange;
@@ -65,6 +67,12 @@ pub struct SshProfileAuth {
     pub connection: SshConnectionOptions,
 }
 
+impl SshProfileAuth {
+    pub(crate) fn chosen_icon(&self) -> Option<&str> {
+        self.icon.as_deref().map(str::trim).filter(|icon| !icon.is_empty() && *icon != "auto")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshProfiles {
     #[serde(default = "profile_version")]
@@ -82,6 +90,9 @@ pub struct SshProfiles {
     targets: std::collections::BTreeMap<String, String>,
     #[serde(skip)]
     source_bytes: Option<Vec<u8>>,
+    /// Systems reported by servers after connecting; see [`detected_os`].
+    #[serde(skip)]
+    detected: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for SshProfiles {
@@ -93,6 +104,7 @@ impl Default for SshProfiles {
             organization: Default::default(),
             targets: Default::default(),
             source_bytes: None,
+            detected: Default::default(),
         }
     }
 }
@@ -101,7 +113,9 @@ impl SshProfiles {
     pub fn load(path: &Path) -> io::Result<Self> {
         let data = match std::fs::read(path) {
             Ok(data) => data,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Ok(Self { detected: detected_os::load(path), ..Self::default() });
+            },
             Err(err) => return Err(err),
         };
         let mut profiles: Self = serde_json::from_slice(&data)
@@ -118,6 +132,7 @@ impl SshProfiles {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         profiles.version = PROFILE_VERSION;
         profiles.source_bytes = Some(data);
+        profiles.detected = detected_os::load(path);
         Ok(profiles)
     }
 
@@ -176,16 +191,27 @@ impl SshProfiles {
             .collect()
     }
 
-    /// 地址 → 图标 id。与 [`Self::labels`] 同一缓存策略：侧栏每帧要画，调
-    /// 用方缓存住，编辑器保存后刷新。
+    /// Explicit icon choices take priority over the last system learned for a host.
     pub fn icons(&self) -> std::collections::HashMap<String, String> {
-        self.profiles
-            .iter()
-            .filter_map(|profile| {
-                let icon = profile.icon.as_deref()?.trim();
-                (!icon.is_empty()).then(|| (profile.destination.clone(), icon.to_owned()))
-            })
-            .collect()
+        let mut icons: std::collections::HashMap<_, _> =
+            self.detected.iter().map(|(host, icon)| (host.clone(), icon.clone())).collect();
+        for profile in &self.profiles {
+            if let Some(icon) = profile.chosen_icon() {
+                icons.insert(profile.destination.clone(), icon.to_owned());
+            }
+        }
+        icons
+    }
+
+    pub(crate) fn detected_icon(&self, destination: &str) -> Option<&str> {
+        self.detected.get(destination).map(String::as_str)
+    }
+
+    pub(crate) fn replace_detected_icons(
+        &mut self,
+        icons: std::collections::BTreeMap<String, String>,
+    ) {
+        self.detected = icons;
     }
 
     /// 可编辑用户名下拉的候选。显式历史保持 MRU 次序；旧版本没有历史字段，

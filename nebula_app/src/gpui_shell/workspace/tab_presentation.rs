@@ -35,7 +35,7 @@ pub(super) struct TabPresentation {
     pub(super) activity: SidebarActivity,
     pub(super) logo_image: Option<Arc<RenderImage>>,
     pub(super) logo_pending: bool,
-    pub(super) program_glyph: Option<&'static str>,
+    pub(super) program_glyph: Option<SharedString>,
     pub(super) shell_tag: Option<SharedString>,
     pub(super) color: Option<Rgb>,
     pub(super) renaming: Option<Entity<InputState>>,
@@ -88,18 +88,17 @@ impl NebulaWorkspace {
             WorkspaceTab::Terminal { panes, .. } => panes.len(),
             _ => 0,
         };
-        let (program, activity) = self.tabs[ix]
+        let (program, activity, ssh_glyph) = self.tabs[ix]
             .focused_view()
             .map(|entity| {
                 let view = entity.read(cx);
                 let program = view
                     .running_program
                     .clone()
-                    .or_else(|| view.ai_session.as_ref().map(|identity| identity.source.clone()))
-                    .or_else(|| view.ssh_destination.as_ref().map(|_| "ssh".to_owned()));
-                (program, view.sidebar_activity())
+                    .or_else(|| view.ai_session.as_ref().map(|identity| identity.source.clone()));
+                (program, view.sidebar_activity(), view.ssh_host_glyph())
             })
-            .unwrap_or((None, SidebarActivity::Idle));
+            .unwrap_or((None, SidebarActivity::Idle, None));
         // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），规则与
         // 理由见 [`sidebar::resting_activity`]。
         let activity = sidebar::resting_activity(activity, active, self.meta(ix).has_bell);
@@ -107,17 +106,21 @@ impl NebulaWorkspace {
         let logo_image =
             brand_logo.and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
         let logo_pending = brand_logo.is_some() && logo_image.is_none();
-        let program_glyph = program
-            .as_deref()
-            .filter(|_| logo_image.is_none())
-            .map(crate::display::program_icon)
+        let program_glyph = ssh_glyph
+            .filter(|_| brand_logo.is_none())
+            .or_else(|| {
+                program
+                    .as_deref()
+                    .filter(|_| logo_image.is_none())
+                    .map(|name| SharedString::from(crate::display::program_icon(name)))
+            })
             .or_else(|| match &self.tabs[ix] {
-                WorkspaceTab::Document { .. } => Some("\u{eb1d}"),
+                WorkspaceTab::Document { .. } => Some("\u{eb1d}".into()),
                 WorkspaceTab::Code { view, .. } => {
-                    Some(crate::display::side_panel::file_type_icon(&view.read(cx).title))
+                    Some(crate::display::side_panel::file_type_icon(&view.read(cx).title).into())
                 },
                 WorkspaceTab::Image { view } => {
-                    Some(crate::display::side_panel::file_type_icon(&view.read(cx).title))
+                    Some(crate::display::side_panel::file_type_icon(&view.read(cx).title).into())
                 },
                 _ => None,
             });

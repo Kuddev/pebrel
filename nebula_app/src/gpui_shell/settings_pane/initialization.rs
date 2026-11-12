@@ -733,6 +733,7 @@ impl SettingsPane {
             provider_codex_confirm: None,
             ssh_library,
             ssh_hosts: crate::gpui_shell::ssh_hosts::SshHostLists::load(),
+            ssh_icon_refresh: None,
             ssh_username_input,
             ssh_destination_input,
             ssh_port_input,

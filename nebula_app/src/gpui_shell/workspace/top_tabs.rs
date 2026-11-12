@@ -398,7 +398,7 @@ impl NebulaWorkspace {
                                 .object_fit(ObjectFit::Contain),
                         )
                     })
-                    .when_some(program_glyph, |row, glyph| {
+                    .when_some(program_glyph.clone(), |row, glyph| {
                         row.child(
                             div()
                                 .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))

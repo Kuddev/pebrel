@@ -91,7 +91,10 @@ impl NebulaWorkspace {
         }
 
         if let Some((view, _)) = self.settings_surface.as_ref() {
-            view.update(cx, |view, cx| view.refresh_provider_installations(cx));
+            view.update(cx, |view, cx| {
+                view.refresh_provider_installations(cx);
+                view.refresh_detected_ssh_icons(cx);
+            });
             let focus = view.read(cx).focus_handle(cx);
             window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }

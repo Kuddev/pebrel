@@ -1,6 +1,6 @@
 //! GPUI 终端对 Runtime API 暴露的读取、输入与任务状态边界。
 
-use gpui::{Context, EventEmitter as _, Window, px};
+use gpui::{Context, EventEmitter as _, SharedString, Window, px};
 use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::{Column, Line, Point as TermPoint};
 use nebula_terminal::term::TermMode;
@@ -100,6 +100,26 @@ impl TerminalView {
         self.ai_session_probe_epoch = self.ai_session_probe_epoch.wrapping_add(1);
         self.ai_session_probe_pending = false;
         self.last_ai_session_probe = None;
+    }
+
+    pub(in crate::gpui_shell) fn ssh_host_glyph(&self) -> Option<SharedString> {
+        self.ssh_host_glyph.clone()
+    }
+
+    pub(in crate::gpui_shell) fn apply_ssh_host_icon(
+        &mut self,
+        icon: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ssh_destination.is_none() {
+            return;
+        }
+        let glyph: SharedString =
+            crate::display::ui::os_icons::resolve(icon).glyph.to_string().into();
+        if self.ssh_host_glyph.as_ref() != Some(&glyph) {
+            self.ssh_host_glyph = Some(glyph);
+            cx.emit(TerminalViewEvent::HostIconChanged);
+        }
     }
 
     pub(in crate::gpui_shell::terminal) fn apply_ssh_stage(

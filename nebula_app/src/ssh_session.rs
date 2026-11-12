@@ -33,6 +33,7 @@ mod forward;
 mod integration;
 mod lifecycle;
 mod pane_connection;
+mod remote_os;
 mod resume;
 mod route;
 mod sftp;
@@ -78,6 +79,8 @@ pub trait SshEventHost:
 {
     /// Access is scoped to this pane's live authenticated transport.
     fn ssh_pane_connection(&self, _connection: Option<PaneConnection>) {}
+
+    fn ssh_host_icon(&self, _icon: Option<String>) {}
 
     /// Last positively identified target survives transport loss; only a confirmed shell clears it.
     fn ssh_resume_target(&self, _target: Option<ResumeTarget>) {}

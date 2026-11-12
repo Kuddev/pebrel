@@ -194,6 +194,7 @@ pub struct SettingsPane {
     /// SSH 区的行为实现拆在 `ssh_settings.rs`（同类型第二个 impl 块）。
     pub(super) ssh_library: super::ssh_settings::library::HostLibraryState,
     pub(super) ssh_hosts: crate::gpui_shell::ssh_hosts::SshHostLists,
+    pub(super) ssh_icon_refresh: Option<gpui::Task<()>>,
     /// SSH 编辑器的文本字段常驻，以便所有文本改动都能使进行中的测试失效。
     pub(super) ssh_username_input: Entity<InputState>,
     pub(super) ssh_destination_input: Entity<InputState>,

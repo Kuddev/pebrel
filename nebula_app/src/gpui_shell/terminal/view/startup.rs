@@ -360,6 +360,9 @@ impl TerminalView {
             native_clipboard: native_clipboard::NativeClipboard::default(),
             shell_pointer: shell_pointer::Pointer::default(),
             path_drop: path_drop::PathDropState::default(),
+            ssh_host_glyph: ssh_destination
+                .as_ref()
+                .map(|_| crate::display::ui::os_icons::resolve(None).glyph.to_string().into()),
             ssh_destination,
             port_forwards: Vec::new(),
             port_forward_task: None,
