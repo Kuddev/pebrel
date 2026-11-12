@@ -6,27 +6,43 @@ Every release entry is provided in English and Simplified Chinese.
 
 ## 2.5.4 - 2026-11-12
 
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.4-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.4-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.4-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.4-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.4-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.4-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.4-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.4-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.4-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.4-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.4-windows-x64.zip
+```
+
 ### English
 
-Windows x64 test build.
+macOS, Linux, and Android downloads are Preview builds.
 
 #### Added
 
 - Added expandable settings subgroups for Appearance, Terminal, and Interaction.
 - Added sidebar tab grouping by project or shell. Hover over the Tabs header to see the filter icon and the new tab button.
 - Added indentation guides and Git status badges to the file tree.
-- Added a drop preview that shows the destination while dragging files into the SFTP panel.
 - Added automatic SSH host icons. The tab updates when the system is identified, and the last recognized icon is reused on reconnect.
 
 #### Fixed
 
 - Fixed the terminal title in sidebar mode to center between the sidebar and the right toolbar.
 - Fixed SFTP folder icons that were hard to see in some themes.
+- Fixed the SFTP drop preview disappearing while files are dragged over a destination folder.
 - Fixed the font picker so the list leaves its search field visible.
 - Fixed tab status badges and shell labels to share the same center, with consistent sizes for the status symbols.
 - Fixed split indicators to highlight the focused pane in both tab layouts.
 - Fixed community theme switching so a color-only theme clears the old wallpaper and a theme with a wallpaper applies its own.
 - Fixed the first desktop session staying unavailable to the phone until a manual snapshot request. Addresses [#960](https://github.com/Kuddev/nebula/issues/960).
+- Fixed the sidebar getting stuck partway through collapse when reduced motion is enabled.
+- Fixed Option+Left/Right word movement in zsh's Emacs keymap on macOS while preserving custom bindings. Addresses [#963](https://github.com/Kuddev/nebula/issues/963).
 
 #### Improved
 
@@ -34,32 +50,34 @@ Windows x64 test build.
 - Improved tab menus with consistent spacing and clear keyboard selection.
 - Improved community theme previews so an installed theme can be previewed by clicking its card.
 - Improved the fit of short segmented choices in settings with more compact controls.
-- Improved tab text contrast to match the prototype's title and shell label hierarchy.
+- Improved tab text contrast so titles and shell labels are easier to distinguish.
 - Improved saved command actions by using the terminal icon for both run and insert.
 - Improved the left sidebar toggle with a filled icon when open and an outline when closed.
-- Improved Windows PowerShell 5.1 compatibility on Windows 10 22H2 by selecting the system console host automatically. Addresses [#958](https://github.com/Kuddev/nebula/issues/958).
+- Improved Windows 10 22H2 compatibility by using the system console host when opening Windows PowerShell 5.1 directly in automatic mode. Addresses [#958](https://github.com/Kuddev/nebula/issues/958).
 
 ### 中文
 
-Windows x64 测试包。
+macOS、Linux 和 Android 下载为预览版。
 
 #### 新增
 
 - 新增外观、终端和交互设置的可展开子分组。
 - 新增侧栏标签按项目或 Shell 分组。悬停在标签区标题上可看到过滤图标和新建标签按钮。
 - 新增文件树缩进引导线和 Git 状态标记。
-- 新增 SFTP 拖放预览，拖入文件时显示目标位置。
 - 新增 SSH 主机自动图标。识别成功后刷新当前标签，下次连接先用上次识别到的图标。
 
 #### 修复
 
 - 修复侧栏模式下终端标题的位置，使其在侧栏和右侧工具栏之间居中。
 - 修复部分主题下 SFTP 文件夹图标难以看清的问题。
+- 修复将文件拖到 SFTP 目标文件夹上时，拖放预览消失的问题。
 - 修复字体选择器打开后列表遮挡搜索框的问题。
 - 修复状态图标与 Shell 短标的对齐，统一状态图标的视觉尺寸。
 - 修复两种标签布局的分屏图标，使其突出显示当前聚焦的分屏。
 - 修复切换社区主题时的壁纸处理：纯配色主题清除旧壁纸，自带壁纸的主题应用自己的壁纸。
 - 修复手机连接后要等桌面手动请求快照才能看到首个会话的问题。对应 [#960](https://github.com/Kuddev/nebula/issues/960)。
+- 修复开启减少动态效果时，侧栏收起到一半卡住的问题。
+- 修复 macOS 上 zsh 的 Emacs 键位，使 Option+左右方向键按词移动，保留自定义绑定。对应 [#963](https://github.com/Kuddev/nebula/issues/963)。
 
 #### 改进
 
@@ -67,10 +85,10 @@ Windows x64 测试包。
 - 改进标签菜单的间距和键盘选择提示。
 - 改进社区主题预览，点击已安装主题的卡片即可预览。
 - 改进设置里的短选项，使用更紧凑的分段控件。
-- 改进标签文字的明暗度，按原型区分标题和 Shell 短标。
+- 改进标签文字对比度，使标题和 Shell 短标更易区分。
 - 改进保存命令的图标，运行与插入都使用方框终端图标。
 - 改进左侧栏开关：展开实心，收起空心。
-- 改进 Windows 10 22H2 上 Windows PowerShell 5.1 的兼容性，自动选择系统控制台宿主。对应 [#958](https://github.com/Kuddev/nebula/issues/958)。
+- 改进 Windows 10 22H2 的兼容性：自动模式下直接打开 Windows PowerShell 5.1 时使用系统控制台宿主。对应 [#958](https://github.com/Kuddev/nebula/issues/958)。
 
 ## 2.5.3 - 2026-11-12
 
