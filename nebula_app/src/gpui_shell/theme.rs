@@ -636,6 +636,19 @@ pub fn settings_nav_tint(cx: &App) -> Hsla {
     }
 }
 
+/// Title, inactive title and metadata use the prototype's three ink strengths.
+pub(super) fn tab_text_colors(cx: &App) -> (Hsla, Hsla, Hsla) {
+    let skin = resolved_skin(cx);
+    let foreground = ink(skin.ink);
+    let background = solid(skin.panel);
+    let (inactive, metadata) = if skin.is_light { (0.80, 0.36) } else { (0.82, 0.33) };
+    (
+        foreground,
+        background.blend(foreground.opacity(inactive)),
+        background.blend(foreground.opacity(metadata)),
+    )
+}
+
 /// 设置正文的下沉层：浅色微微压暗，让白卡浮起；深色保持板色，卡片自己提亮。
 pub(super) fn settings_canvas_tint(cx: &App) -> Hsla {
     if resolved_skin(cx).is_light {

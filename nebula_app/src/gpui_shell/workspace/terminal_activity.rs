@@ -288,7 +288,7 @@ mod tests {
         window.executor().advance_clock(Duration::from_secs(1));
         window.run_until_parked();
         draw(&mut window);
-        draw(&mut window);
+        settle_sidebar_group_anchor(&mut window);
         for terminal in terminals.iter().take(pane_counts[0]) {
             assert!(painted(terminal, &mut window).text.contains("cache-output"));
         }
@@ -315,6 +315,13 @@ mod tests {
         assert_ne!(workspace.read_with(cx, |workspace, _| workspace.spinner_phase), phase);
         let after: Vec<_> = terminals.iter().map(|terminal| painted(terminal, cx).count).collect();
         assert_eq!(after, before, "spinner frames must reuse actual terminal paint");
+    }
+
+    fn settle_sidebar_group_anchor(cx: &mut VisualTestContext) {
+        // The grouping popover requests one frame when it first measures its
+        // anchor. Settle the mount before measuring ongoing spinner demand.
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        draw(cx);
     }
 
     fn spinner_tick(cx: &mut VisualTestContext) -> usize {
@@ -423,6 +430,7 @@ mod tests {
         assert_spinner_stopped(&workspace, &mut window);
         window.dispatch_action(ToggleSidebar);
         draw(&mut window);
+        settle_sidebar_group_anchor(&mut window);
         assert_spinner_running(&workspace, &mut window);
 
         window.update(|window, _| assert!(window.is_window_active()));

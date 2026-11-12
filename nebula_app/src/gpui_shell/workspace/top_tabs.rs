@@ -142,7 +142,7 @@ impl NebulaWorkspace {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
-        let active_fg = theme.sidebar_accent_foreground;
+        let (active_fg, idle_title, shell_ink) = crate::gpui_shell::theme::tab_text_colors(cx);
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
@@ -200,66 +200,12 @@ impl NebulaWorkspace {
                 } = self.top_tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
-                let status_color = if active { active_fg } else { muted };
-                let status_width = Self::shell_status_width(
-                    window,
-                    shell_tag.as_ref(),
-                    &metadata_family,
-                    label_px * 0.8,
-                    TOP_TAB_STATUS_W,
-                    tab_w * 0.4,
-                );
-                let resting_status: Option<gpui::AnyElement> = match activity {
-                    SidebarActivity::Running => {
-                        let (track, head) =
-                            crate::gpui_shell::theme::sidebar_spinner_colors(cx, active);
-                        Some(Self::spinner(self.spinner_phase, track, head, cx.weak_entity()).into_any_element())
-                    },
-                    SidebarActivity::Paused => Some(
-                        Icon::new(IconName::Pause)
-                            .xsmall()
-                            .text_color(theme.warning)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::Done => Some(
-                        div().size(px(6.0)).rounded_full().bg(theme.primary).into_any_element(),
-                    ),
-                    SidebarActivity::Completed => Some(
-                        Icon::new(IconName::Check)
-                            .xsmall()
-                            .text_color(theme.success)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::CommandFailed => Some(
-                        Icon::new(IconName::TriangleAlert)
-                            .xsmall()
-                            .text_color(theme.danger)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::WaitingInput => Some(
-                        Self::waiting_hand(label_px, theme.primary)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::Attention => Some(
-                        Self::waiting_hand(label_px, theme.warning)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::Failed => Some(
-                        Icon::new(IconName::CircleX)
-                            .xsmall()
-                            .text_color(theme.danger)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::Idle => shell_tag.map(|tag| {
-                        Self::shell_status_label(
-                            tag,
-                            metadata_family.clone(),
-                            label_px * 0.8,
-                            status_color,
-                        )
-                        .into_any_element()
-                    }),
-                };
+                let resting_status = self.tab_activity_badge(activity, active, cx).or_else(|| {
+                    shell_tag.map(|tag| {
+                        Self::shell_status_label(tag, metadata_family.clone(), label_px * 0.8, shell_ink)
+                            .into_any_element()
+                    })
+                });
                 let strip = color.map(|color| gpui::Rgba {
                     r: color.r as f32 / 255.0,
                     g: color.g as f32 / 255.0,
@@ -305,9 +251,9 @@ impl NebulaWorkspace {
                     .block_mouse_except_scroll()
                     .when(active, |item| item.bg(active_bg).text_color(active_fg))
                     .when(!active && !dragged, |item| {
-                        item.text_color(muted).hover(|style| style.bg(hover_bg))
+                        item.text_color(idle_title).hover(|style| style.bg(hover_bg))
                     })
-                    .when(!active && dragged, |item| item.text_color(muted).bg(hover_bg))
+                    .when(!active && dragged, |item| item.text_color(idle_title).bg(hover_bg))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.activate_top_tab(ix, window, cx);
@@ -488,14 +434,10 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        Self::tab_status_slot(status_width)
+                        Self::tab_status_slot(TOP_TAB_STATUS_W)
                             .when_some(resting_status, |slot, status| {
                                 slot.child(
-                                    h_flex()
-                                        .absolute()
-                                        .inset_0()
-                                        .justify_end()
-                                        .items_center()
+                                    Self::tab_status_lane()
                                         .group_hover(hover_group.clone(), |item| item.invisible())
                                         .child(if matches!(activity, SidebarActivity::Idle) {
                                             status
@@ -505,11 +447,7 @@ impl NebulaWorkspace {
                                 )
                             })
                             .child(
-                                h_flex()
-                                    .absolute()
-                                    .inset_0()
-                                    .justify_end()
-                                    .items_center()
+                                Self::tab_status_lane()
                                     .invisible()
                                     .group_hover(hover_group, |slot| slot.visible())
                                     .when(tab_close_visible || settings_navigation, |slot| {

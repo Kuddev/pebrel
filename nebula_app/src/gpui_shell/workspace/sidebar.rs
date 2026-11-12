@@ -5,6 +5,7 @@ use crate::i18n::Message;
 
 /// 状态图形与 hover 关闭按钮共用的方形槽，中心不随图形宽度改变。
 const TAB_STATUS_ICON_SIDE: f32 = 24.0;
+const TAB_STATUS_SYMBOL_PX: f32 = 14.0;
 
 /// 侧栏新建入口的生产命中区；鼠标测试直接复用，避免只验证一个近似按钮。
 pub(super) fn sidebar_new_tab_control(
@@ -55,8 +56,8 @@ impl NebulaWorkspace {
         size_px: f32,
         color: gpui::Hsla,
     ) -> gpui::Div {
-        // As in 1.7, short labels keep their intrinsic width and align right in
-        // the status row. Only a long label is clipped to the available space.
+        // Short labels retain their width so the status lane can center them.
+        // Long labels truncate inside the same lane.
         div()
             .max_w_full()
             .min_w_0()
@@ -81,30 +82,40 @@ impl NebulaWorkspace {
             .child(icon)
     }
 
-    /// Reserve the shaped shell label's width, capped to leave room for the title.
-    pub(super) fn shell_status_width(
-        window: &Window,
-        tag: Option<&SharedString>,
-        family: &SharedString,
-        size_px: f32,
-        minimum: f32,
-        maximum: f32,
-    ) -> f32 {
-        let Some(tag) = tag else { return minimum };
-        let line = window.text_system().shape_line(
-            tag.clone(),
-            px(size_px),
-            &[gpui::TextRun {
-                len: tag.len(),
-                font: gpui::font(family.clone()),
-                color: gpui::Hsla::default(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            None,
-        );
-        f32::from(line.width).ceil().clamp(minimum, maximum.max(minimum))
+    pub(super) fn tab_status_lane() -> gpui::Div {
+        h_flex().absolute().inset_0().justify_center().items_center()
+    }
+
+    pub(super) fn tab_activity_badge(
+        &self,
+        activity: SidebarActivity,
+        active: bool,
+        cx: &Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let theme = cx.theme();
+        let symbol = |name, color| {
+            Icon::new(name).size(px(TAB_STATUS_SYMBOL_PX)).text_color(color).into_any_element()
+        };
+        Some(match activity {
+            SidebarActivity::Idle => return None,
+            SidebarActivity::Running => {
+                let (track, head) = crate::gpui_shell::theme::sidebar_spinner_colors(cx, active);
+                Self::spinner(self.spinner_phase, track, head, cx.weak_entity()).into_any_element()
+            },
+            SidebarActivity::Paused => symbol(IconName::Pause, theme.warning),
+            SidebarActivity::Done => {
+                div().size(px(7.0)).rounded_full().bg(theme.primary).into_any_element()
+            },
+            SidebarActivity::Completed => symbol(IconName::Check, theme.success),
+            SidebarActivity::CommandFailed => symbol(IconName::TriangleAlert, theme.danger),
+            SidebarActivity::WaitingInput => {
+                Self::waiting_hand(13.0, theme.primary).into_any_element()
+            },
+            SidebarActivity::Attention => {
+                Self::waiting_hand(13.0, theme.warning).into_any_element()
+            },
+            SidebarActivity::Failed => symbol(IconName::CircleX, theme.danger),
+        })
     }
 
     /// 静态细轨道加 30% 的旋转弧。SVG 的缓存身份只含路径和像素尺寸，
@@ -152,7 +163,7 @@ impl NebulaWorkspace {
                 }
             },
         )
-        .size(px(11.0))
+        .size(px(12.0))
     }
 
     /// 保留打包字体 U+F256 的开掌轮廓，用其墨迹边界居中。
@@ -178,7 +189,7 @@ impl NebulaWorkspace {
         // “它就是右边那块”；不再用强调色水洗。
         let active_bg = crate::gpui_shell::theme::raised_fill(cx);
         let active_shadow = crate::gpui_shell::theme::raised_shadow(cx);
-        let active_fg = theme.foreground;
+        let (active_fg, idle_title, shell_ink) = crate::gpui_shell::theme::tab_text_colors(cx);
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
@@ -257,14 +268,6 @@ impl NebulaWorkspace {
                 } = self.tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("sidebar-tab-hover-{ix}").into();
                 let has_program_glyph = program_glyph.is_some();
-                let status_width = Self::shell_status_width(
-                    window,
-                    shell_tag.as_ref(),
-                    &metadata_family,
-                    tag_px,
-                    TAB_STATUS_SLOT_W,
-                    row_w * 0.45,
-                );
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
                 // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7、宽 2.5，
                 // 与旧壳 strip 同源）。默认标签不占这层视觉层级。
@@ -279,70 +282,12 @@ impl NebulaWorkspace {
                     b: color.b as f32 / 255.0,
                     a: 1.0,
                 });
-                let status_color = if active { active_fg } else { muted };
-                let resting_status: Option<gpui::AnyElement> = match activity {
-                    SidebarActivity::Running => {
-                        let (track, head) =
-                            crate::gpui_shell::theme::sidebar_spinner_colors(cx, active);
-                        Some(Self::spinner(self.spinner_phase, track, head, cx.weak_entity()).into_any_element())
-                    },
-                    SidebarActivity::Paused => Some(
-                        Icon::new(IconName::Pause)
-                            .xsmall()
-                            .text_color(theme.warning)
-                            .into_any_element(),
-                    ),
-                    // 回合完成、等下一条指令：旧壳蓝点语义——不转圈，留一个
-                    // 「有结果没看」的痕迹。
-                    SidebarActivity::Done => Some(
-                        div().size(px(6.0)).rounded_full().bg(theme.primary).into_any_element(),
-                    ),
-                    // 刚完成：先闪一个对勾做确认，`COMPLETION_FLASH` 之后沉降
-                    // 成上面那个圆点（同一件事的两个阶段，不是两种语义）。
-                    SidebarActivity::Completed => Some(
-                        Icon::new(IconName::Check)
-                            .xsmall()
-                            .text_color(theme.success)
-                            .into_any_element(),
-                    ),
-                    // 上一条命令非 0 退出：⚠ 三角就是给失败的，形状本身在所有
-                    // 终端/编辑器里都这么读。pane 级故障用下面的 ✕，两者不同。
-                    SidebarActivity::CommandFailed => Some(
-                        Icon::new(IconName::TriangleAlert)
-                            .xsmall()
-                            .text_color(theme.danger)
-                            .into_any_element(),
-                    ),
-                    // 停在 [y/n]/口令/Press ENTER 上：也要你动手，但这是常态，
-                    // 用 Attention 的警示形状去喊会把真正要紧的那个喊废。
-                    SidebarActivity::WaitingInput => Some(
-                        Self::waiting_hand(label_px, theme.primary)
-                            .into_any_element(),
-                    ),
-                    // 停在授权/提问上：同样是「有人在等你」，所以跟
-                    // `WaitingInput` 用同一个手掌——形状表达语义。差别走颜色轴：
-                    // 它会把整个回合卡住，值得 warning。⚠ 三角留给失败，拿它表
-                    // 示「问你一句」会跟所有终端/编辑器的既有读法冲突。
-                    SidebarActivity::Attention => Some(
-                        Self::waiting_hand(label_px, theme.warning)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::Failed => Some(
-                        Icon::new(IconName::CircleX)
-                            .xsmall()
-                            .text_color(theme.danger)
-                            .into_any_element(),
-                    ),
-                    SidebarActivity::Idle => shell_tag.map(|tag| {
-                        Self::shell_status_label(
-                            tag,
-                            metadata_family.clone(),
-                            tag_px,
-                            status_color,
-                        )
-                        .into_any_element()
-                    }),
-                };
+                let resting_status = self.tab_activity_badge(activity, active, cx).or_else(|| {
+                    shell_tag.map(|tag| {
+                        Self::shell_status_label(tag, metadata_family.clone(), tag_px, shell_ink)
+                            .into_any_element()
+                    })
+                });
                 // 三类行位移（旧壳 tab_drag_draw_y 的语义）：被拖行骑指针，
                 // 源与落点之间的行向反方向让一个槽位，其余不动。存储顺序在
                 // 拖拽期间不变，释放时一次性提交。
@@ -392,9 +337,9 @@ impl NebulaWorkspace {
                     item.bg(active_bg).shadow(active_shadow.clone()).text_color(active_fg)
                 })
                 .when(!active && !dragged, |item| {
-                    item.text_color(muted).hover(|style| style.bg(hover_bg))
+                    item.text_color(idle_title).hover(|style| style.bg(hover_bg))
                 })
-                .when(!active && dragged, |item| item.text_color(muted).bg(hover_bg))
+                .when(!active && dragged, |item| item.text_color(idle_title).bg(hover_bg))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_tab(ix, window, cx);
                 }))
@@ -585,14 +530,10 @@ impl NebulaWorkspace {
                     )
                 })
                 .child(
-                    Self::tab_status_slot(status_width)
+                    Self::tab_status_slot(TAB_STATUS_SLOT_W)
                         .when_some(resting_status, |slot, status| {
                             slot.child(
-                                h_flex()
-                                    .absolute()
-                                    .inset_0()
-                                    .justify_end()
-                                    .items_center()
+                                Self::tab_status_lane()
                                     .group_hover(hover_group.clone(), |item| item.invisible())
                                     .child(if matches!(activity, SidebarActivity::Idle) {
                                         status
@@ -604,11 +545,7 @@ impl NebulaWorkspace {
                         .child(
                             // 关闭按钮跟状态徽章共用同一个居中槽位：位置由
                             // flex 给出，不再硬写 top 偏移。
-                            h_flex()
-                                .absolute()
-                                .inset_0()
-                                .justify_end()
-                                .items_center()
+                            Self::tab_status_lane()
                                 .invisible()
                                 .group_hover(hover_group, |slot| slot.visible())
                                 .when(tab_close_visible, |slot| {
@@ -972,7 +909,7 @@ mod tests {
                             .id("status-probe-slot")
                             .debug_selector(|| "status-probe-slot".to_owned())
                             .child(
-                                h_flex().absolute().inset_0().justify_end().items_center().child(
+                                NebulaWorkspace::tab_status_lane().child(
                                     NebulaWorkspace::shell_status_label(
                                         self.label.clone(),
                                         ".SystemUIFont".into(),
@@ -998,9 +935,7 @@ mod tests {
         }
 
         #[gpui::test]
-        fn short_shells_align_right_long_shells_fit_and_glyph_ink_keeps_row_padding(
-            cx: &mut gpui::TestAppContext,
-        ) {
+        fn shell_tags_share_the_status_center_and_keep_row_padding(cx: &mut gpui::TestAppContext) {
             cx.update(gpui_component::init);
             for font_size in [12.0, 15.0, 20.0] {
                 for label in ["sh", "debian", "a-very-long-shell-distribution-name"] {
@@ -1015,10 +950,10 @@ mod tests {
                     let slot = visual.debug_bounds("status-probe-slot").unwrap();
                     let text = visual.debug_bounds("status-probe-label").unwrap();
                     assert!(text.size.width <= slot.size.width);
-                    assert_eq!(
-                        text.right(),
-                        slot.right(),
-                        "shell labels retain the 1.7 right edge"
+                    let offset = text.center() - slot.center();
+                    assert!(
+                        f32::from(offset.x).abs() <= 1.0 && f32::from(offset.y).abs() <= 1.0,
+                        "shell and badge share the slot center: {offset:?}",
                     );
                     if label == "sh" {
                         assert!(text.size.width < slot.size.width, "short labels stay intrinsic");
