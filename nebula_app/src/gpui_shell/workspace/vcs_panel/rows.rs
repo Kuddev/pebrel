@@ -87,14 +87,18 @@ impl NebulaWorkspace {
                 let refs = git_ref_labels(&commit.decorations)
                     .into_iter()
                     .take(2)
-                    .map(|git_ref| {
+                    .enumerate()
+                    .map(|(ref_index, git_ref)| {
                         let color = match git_ref.kind {
                             GitRefKind::Head | GitRefKind::Local => theme.primary,
                             GitRefKind::Remote => lane_purple,
                             GitRefKind::Tag => theme.warning,
                         };
-                        div()
-                            .h(px(15.0))
+                        let label: SharedString = git_ref.label.into();
+                        let tooltip_label = label.clone();
+                        h_flex()
+                            .id(("git-history-ref", ref_index))
+                            .min_h(px(15.0))
                             .max_w(px(72.0))
                             .flex_shrink_0()
                             .px(px(4.0))
@@ -102,11 +106,31 @@ impl NebulaWorkspace {
                             .border_1()
                             .border_color(color.opacity(0.38))
                             .bg(color.opacity(0.12))
-                            .truncate()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_size(theme.font_size - px(3.0))
-                            .text_color(color)
-                            .child(git_ref.label)
+                            .tooltip(move |window, cx| {
+                                let label = tooltip_label.clone();
+                                gpui_component::tooltip::Tooltip::element(move |_, _| {
+                                    div()
+                                        .max_w(px(360.0))
+                                        .whitespace_normal()
+                                        .debug_selector(|| format!("git-ref-tooltip-{label}"))
+                                        .child(label.clone())
+                                })
+                                .build(window, cx)
+                            })
+                            .debug_selector(move || format!("git-history-ref-{index}-{ref_index}"))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_size(theme.font_size - px(3.0))
+                                    .line_height(relative(1.0))
+                                    .text_color(color)
+                                    .debug_selector(move || {
+                                        format!("git-history-ref-text-{index}-{ref_index}")
+                                    })
+                                    .child(label),
+                            )
                             .into_any_element()
                     })
                     .collect::<Vec<_>>();
