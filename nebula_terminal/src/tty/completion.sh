@@ -7,7 +7,10 @@ __pebrel_redraw_owned() {
     if [ -n "${BASH_VERSION-}" ]; then
         local tables
         tables=$(bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null)
-        [[ $tables == *'"\\e[46~": clear-screen'* ]]
+        # Match the entry's tail: the key's ESC escape renders differently
+        # across readline versions, but our key's entry always ends with
+        # 46~": followed by the clear-screen function name.
+        [[ $tables == *"46~\": clear-screen"* ]]
     else
         [[ $(bindkey '\e[46~') == *clear-screen* ]]
     fi
