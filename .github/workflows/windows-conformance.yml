@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   diagnose:
+    if: inputs.runtime_run == '43108083569'
     runs-on: windows-2022
     timeout-minutes: 12
     env:
@@ -50,3 +51,41 @@ jobs:
           path: ${{ runner.temp }}/powershell-erase-evidence
           if-no-files-found: error
           retention-days: 7
+
+  validate-backend:
+    if: inputs.runtime_run == 'c817c08ea33e4be6493fa3eba18eb0898d7ce3c0'
+    name: Console host validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: c817c08ea33e4be6493fa3eba18eb0898d7ce3c0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: -release-check-v2
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Prepare pinned Windows console runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $architecture = if ('${{ runner.arch }}' -eq 'ARM64') { 'arm64' } else { 'x64' }
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture $architecture
+      - name: Test the terminal engine and native PTY
+        run: cargo test --locked --profile ci -p nebula_terminal
+      - name: Check the GPUI product and application tests
+        if: matrix.os == 'windows-2022'
+        run: cargo check --locked --profile ci -p nebula --bin pebrel --features gpui-test-support --tests
