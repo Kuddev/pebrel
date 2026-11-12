@@ -731,7 +731,7 @@ impl NebulaWorkspace {
     }
 
     fn sidebar_fold_widths(&self, cx: &App) -> Option<(f32, f32)> {
-        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
+        if cx.reduce_motion() || tab_reveal_instant(cx) || !self.sidebar_fold_armed {
             return None;
         }
         let width = self.sidebar_closing_width.unwrap_or(self.sidebar_width);
