@@ -164,6 +164,13 @@ impl SshProfiles {
             })
     }
 
+    /// 目的地是否已有保存的 profile。[`Self::for_destination`] 缺失时返回
+    /// 回落默认值，调用方区分不了「库里已有」和「未保存」；写入路径用它
+    /// 在落盘前识别冲突，精确比较与 `upsert` 的替换键一致。
+    pub fn contains_destination(&self, destination: &str) -> bool {
+        self.profiles.iter().any(|profile| profile.destination == destination)
+    }
+
     /// 地址 → 显示名。侧栏每帧都要画主机行，不能每帧读一次 JSON，所以调用方
     /// 把结果缓存起来，只在编辑器保存后刷新。
     pub fn labels(&self) -> std::collections::HashMap<String, String> {
