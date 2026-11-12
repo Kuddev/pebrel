@@ -45,18 +45,22 @@ impl TerminalView {
             && let Some(focused) = window.focused(cx)
             && self.native_results.entities.values().any(|entity| {
                 let result = entity.read(cx);
-                result.focus.contains_focused(window, cx)
+                (result.focus == focused || result.focus.contains_focused(window, cx))
                     && result.source.upgrade().is_some_and(|source| source.has_grid_source())
             })
         {
-            cx.on_next_frame(window, move |view, window, cx| {
-                if window.focused(cx) == Some(focused)
-                    && view
-                        .session
-                        .as_ref()
-                        .is_some_and(|session| !session.automatic_command_views_enabled())
-                {
-                    window.focus(&view.focus_handle, cx);
+            let view = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                if window.focused(cx) == Some(focused) {
+                    let _ = view.update(cx, |view, cx| {
+                        if view
+                            .session
+                            .as_ref()
+                            .is_some_and(|session| !session.automatic_command_views_enabled())
+                        {
+                            window.focus(&view.focus_handle, cx);
+                        }
+                    });
                 }
             });
         }
