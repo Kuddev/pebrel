@@ -5,6 +5,9 @@ use crate::i18n::Message;
 
 /// 状态图形与 hover 关闭按钮共用的方形槽，中心不随图形宽度改变。
 const TAB_STATUS_ICON_SIDE: f32 = 24.0;
+const SIDEBAR_TAB_LEADING_INSET: f32 = 12.0;
+const SIDEBAR_TAB_TRAILING_INSET: f32 = 6.0;
+const SIDEBAR_TAB_CLOSE_SIDE: f32 = 22.0;
 const TAB_STATUS_SYMBOL_PX: f32 = 14.0;
 
 /// 侧栏新建入口的生产命中区；鼠标测试直接复用，避免只验证一个近似按钮。
@@ -49,6 +52,16 @@ pub(super) fn resting_activity(
     }
 }
 
+fn sidebar_status_slot() -> gpui::Div {
+    h_flex()
+        .relative()
+        .h_full()
+        .min_w(px(SIDEBAR_TAB_CLOSE_SIDE))
+        .max_w(px(TAB_STATUS_SLOT_W))
+        .flex_shrink_0()
+        .justify_end()
+}
+
 impl NebulaWorkspace {
     pub(super) fn shell_status_label(
         tag: SharedString,
@@ -56,8 +69,7 @@ impl NebulaWorkspace {
         size_px: f32,
         color: gpui::Hsla,
     ) -> gpui::Div {
-        // Short labels retain their width so the status lane can center them.
-        // Long labels truncate inside the same lane.
+        // Keep short labels intrinsic and truncate long labels inside their lane.
         div()
             .max_w_full()
             .min_w_0()
@@ -203,7 +215,7 @@ impl NebulaWorkspace {
         let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         // Preserve the prototype's type hierarchy when the UI font size changes.
         let ui_scale = f32::from(theme.font_size) / 14.0;
-        let label_px = 13.0 * ui_scale;
+        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let tag_px = 11.0 * ui_scale;
 
         let rows = self.sidebar_tab_rows(cx);
@@ -272,10 +284,7 @@ impl NebulaWorkspace {
                 // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7、宽 2.5，
                 // 与旧壳 strip 同源）。默认标签不占这层视觉层级。
                 //
-                // 光条贴住行左缘，不沿用旧壳的左内缩 4：旧壳内容起点是 14px，这里
-                // 是 `px_2` = 0.5rem，rem 跟随界面字号（默认 14 → 7px，最小 10 →
-                // 5px）。内缩会让光条贴上图标；贴边时间隙就是内边距减光条宽，随
-                // 字号一起缩放。
+                // Keep the color strip at the edge and the icon/text inside the row inset.
                 let strip = tab_color.map(|color| gpui::Rgba {
                     r: color.r as f32 / 255.0,
                     g: color.g as f32 / 255.0,
@@ -323,7 +332,8 @@ impl NebulaWorkspace {
                 // 撑开的行会重新引入上面那个症状。
                 .overflow_hidden()
                 .gap_2()
-                .px_2()
+                .pl(px(SIDEBAR_TAB_LEADING_INSET))
+                .pr(px(SIDEBAR_TAB_TRAILING_INSET))
                 .h(px(row_height))
                 .items_center()
                 // 旧壳 pill 圆角 = UI_CORNER_RADIUS_LOGICAL(8)，rounded_md(6)
@@ -474,7 +484,7 @@ impl NebulaWorkspace {
                     },
                 )
                 // GPUI truncates the actual shaped title within its flex column.
-                .child(match renaming {
+                .child(h_flex().flex_1().min_w_0().h_full().gap_1().child(match renaming {
                     Some(input) => div()
                         .flex_1()
                         .min_w_0()
@@ -496,7 +506,8 @@ impl NebulaWorkspace {
                         )
                         .into_any_element(),
                     None => div()
-                        .flex_1()
+                        .id(("sidebar-tab-title", ix))
+                        .debug_selector(move || format!("sidebar-tab-title-{ix}"))
                         .min_w_0()
                         .font_family(chrome_family.clone())
                         .text_size(px(label_px))
@@ -528,42 +539,48 @@ impl NebulaWorkspace {
                                 if active { active_fg } else { muted },
                             )),
                     )
-                })
-                .child(
-                    Self::tab_status_slot(TAB_STATUS_SLOT_W)
+                }))
+                .when(resting_status.is_some() || tab_close_visible, |row| row.child(
+                    sidebar_status_slot()
                         .when_some(resting_status, |slot, status| {
                             slot.child(
-                                Self::tab_status_lane()
-                                    .group_hover(hover_group.clone(), |item| item.invisible())
-                                    .child(if matches!(activity, SidebarActivity::Idle) {
-                                        status
-                                    } else {
-                                        Self::tab_status_icon(status).into_any_element()
-                                    }),
+                                h_flex()
+                                    .min_w_0()
+                                    .max_w_full()
+                                    .when(tab_close_visible, |status| {
+                                        status.group_hover(hover_group.clone(), |item| item.invisible())
+                                    })
+                                    .child(status),
                             )
                         })
-                        .child(
-                            // 关闭按钮跟状态徽章共用同一个居中槽位：位置由
-                            // flex 给出，不再硬写 top 偏移。
-                            Self::tab_status_lane()
-                                .invisible()
-                                .group_hover(hover_group, |slot| slot.visible())
-                                .when(tab_close_visible, |slot| {
-                                        slot.child(Self::tab_status_icon(
-                                            Button::new(("close-tab", ix))
-                                                .icon(IconName::Close)
-                                                .ghost()
-                                                .xsmall()
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        cx.stop_propagation();
-                                                        this.request_close_tab(ix, window, cx);
-                                                    },
-                                                )),
-                                        ))
-                                    }),
-                        ),
-                )
+                        .when(tab_close_visible, |slot| {
+                            slot.child(
+                                div().absolute().right_0().top_0().bottom_0().flex().items_center()
+                                    .invisible()
+                                    .group_hover(hover_group, |slot| slot.visible())
+                                    .child(
+                                        Button::new(("close-tab", ix))
+                                            .debug_selector(move || format!("sidebar-close-tab-{ix}"))
+                                            .custom(
+                                                gpui_component::button::ButtonCustomVariant::new(cx)
+                                                    .foreground(if active { active_fg } else { muted })
+                                                    .hover(theme.foreground.opacity(0.10))
+                                                    .active(theme.foreground.opacity(0.16)),
+                                            )
+                                            .size(px(SIDEBAR_TAB_CLOSE_SIDE))
+                                            .px_0()
+                                            .rounded(px(5.0))
+                                            .cursor_pointer()
+                                            .aria_label(language.text(crate::i18n::Message::CommonClose))
+                                            .child(Icon::new(IconName::Close).size(px(14.0)))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.request_close_tab(ix, window, cx);
+                                            })),
+                                    ),
+                            )
+                        }),
+                ))
                 // 右键只记锚点：菜单由 workspace 根上唯一一份宿主画。挂
                 // `.context_menu()` 会让每个标签行都渲染同一个 PopupMenu，
                 // 阴影按标签数叠厚（见 `tab_menu.rs` 模块头）。
@@ -634,7 +651,7 @@ impl NebulaWorkspace {
                     .w_full()
                     .h(px(row_height))
                     .pb_1()
-                    .pl_2()
+                    .pl(px(SIDEBAR_TAB_LEADING_INSET))
                     .items_center()
                     .child(
                         h_flex()
@@ -901,15 +918,15 @@ mod tests {
                     .debug_selector(|| "status-probe-row".to_owned())
                     .w(px(200.0))
                     .h(px(tab_scroll::tab_row_height(nebula_settings::DensityName::Standard)))
-                    .px_2()
+                    .pr(px(SIDEBAR_TAB_TRAILING_INSET))
                     .overflow_hidden()
                     .child(div().flex_1())
                     .child(
-                        NebulaWorkspace::tab_status_slot(TAB_STATUS_SLOT_W)
+                        sidebar_status_slot()
                             .id("status-probe-slot")
                             .debug_selector(|| "status-probe-slot".to_owned())
                             .child(
-                                NebulaWorkspace::tab_status_lane().child(
+                                h_flex().min_w_0().max_w_full().child(
                                     NebulaWorkspace::shell_status_label(
                                         self.label.clone(),
                                         ".SystemUIFont".into(),
@@ -935,7 +952,9 @@ mod tests {
         }
 
         #[gpui::test]
-        fn shell_tags_share_the_status_center_and_keep_row_padding(cx: &mut gpui::TestAppContext) {
+        fn shell_tags_align_to_the_trailing_edge_and_keep_row_padding(
+            cx: &mut gpui::TestAppContext,
+        ) {
             cx.update(gpui_component::init);
             for font_size in [12.0, 15.0, 20.0] {
                 for label in ["sh", "debian", "a-very-long-shell-distribution-name"] {
@@ -950,10 +969,11 @@ mod tests {
                     let slot = visual.debug_bounds("status-probe-slot").unwrap();
                     let text = visual.debug_bounds("status-probe-label").unwrap();
                     assert!(text.size.width <= slot.size.width);
-                    let offset = text.center() - slot.center();
+                    assert!((text.right() - slot.right()).abs() <= px(1.0));
+                    assert!((text.center().y - slot.center().y).abs() <= px(1.0));
                     assert!(
-                        f32::from(offset.x).abs() <= 1.0 && f32::from(offset.y).abs() <= 1.0,
-                        "shell and badge share the slot center: {offset:?}",
+                        (row.right() - slot.right() - px(SIDEBAR_TAB_TRAILING_INSET)).abs()
+                            <= px(1.0)
                     );
                     if label == "sh" {
                         assert!(text.size.width < slot.size.width, "short labels stay intrinsic");
