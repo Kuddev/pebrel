@@ -156,6 +156,8 @@ fn parse(bytes: &[u8], mut output: Option<(&mut Vec<u8>, usize)>) -> Option<Info
     let mut palette = default_palette();
     let mut color = 0;
     let (mut x, mut y, mut work) = (0usize, 0usize, 0usize);
+    let mut band_end = 0;
+    let mut has_raster_height = false;
     while at < body.len() {
         let byte = body[at];
         at += 1;
@@ -174,17 +176,16 @@ fn parse(bytes: &[u8], mut output: Option<(&mut Vec<u8>, usize)>) -> Option<Info
                 };
                 let end = x.checked_add(repeat)?;
                 work = work.checked_add(repeat.checked_mul(6)?)?;
-                let painted_height = (u8::BITS - bits.leading_zeros()) as usize;
-                if end > MAX_EDGE || y + painted_height > MAX_EDGE || work > MAX_PAINTED_PIXELS {
+                let painted_end = y + (u8::BITS - bits.leading_zeros()) as usize;
+                if end > MAX_EDGE || painted_end > MAX_EDGE || work > MAX_PAINTED_PIXELS {
                     return None;
                 }
                 info.width = info.width.max(end);
-                // Opaque zero bits still fill a six-pixel background band.
-                // Only unused background is clipped at the advertised edge;
-                // a set bit beyond it is rejected above.
-                let height =
-                    if info.transparent { y + painted_height } else { (y + 6).min(MAX_EDGE) };
-                info.height = info.height.max(height);
+                // With an opaque raster, only set bits can extend its declared height.
+                if bits != 0 || info.transparent {
+                    info.height = info.height.max(painted_end);
+                }
+                band_end = y + 6;
                 if let Some((pixels, stride)) = &mut output {
                     for row in 0..6 {
                         if bits & (1 << row) == 0 {
@@ -215,6 +216,7 @@ fn parse(bytes: &[u8], mut output: Option<(&mut Vec<u8>, usize)>) -> Option<Info
                 info.aspect = (values[0].max(1), values[1].max(1));
                 info.width = info.width.max(values[2] as usize);
                 info.height = info.height.max(values[3] as usize);
+                has_raster_height |= values[3] != 0;
             },
             b'#' => {
                 let (values, count) = parameters::<5>(body, &mut at)?;
@@ -240,18 +242,23 @@ fn parse(bytes: &[u8], mut output: Option<(&mut Vec<u8>, usize)>) -> Option<Info
             0x00..=0x17 | 0x19 | 0x1c..=0x20 | 0x7f => (),
             _ => return None,
         }
-        if info.width > MAX_EDGE
-            || info.height > MAX_EDGE
-            || info.width.checked_mul(info.height)? > MAX_PIXELS
-        {
+        if info.width > MAX_EDGE || info.height > MAX_EDGE {
             return None;
         }
+    }
+    // With no declared height, opaque zero bits fill whole background bands.
+    if !info.transparent && !has_raster_height {
+        info.height = band_end.min(MAX_EDGE);
     }
     let display_height = u64::try_from(info.height)
         .ok()?
         .checked_mul(u64::from(info.aspect.0))?
         .div_ceil(u64::from(info.aspect.1));
-    (info.width > 0 && info.height > 0 && display_height <= MAX_EDGE as u64).then_some(info)
+    (info.width > 0
+        && info.height > 0
+        && info.width.checked_mul(info.height)? <= MAX_PIXELS
+        && display_height <= MAX_EDGE as u64)
+        .then_some(info)
 }
 
 fn percent(value: u32) -> u8 {

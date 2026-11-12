@@ -141,3 +141,31 @@ fn opaque_zero_bits_keep_background_bands_and_clip_only_unused_edge_pixels() {
         }
     }
 }
+
+#[test]
+fn libsixel_opaque_partial_band_preserves_declared_height() {
+    // img2sixel 1.10.3 -7 -d none, from a solid red 3x19 RGB PNG.
+    let bytes = b"\x1bPq\"1;1;3;19#0;2;97;0;0#0~~~-~~~-~~~-@@@\x1b\\";
+    let image = SixelImage::parse(bytes.to_vec()).unwrap();
+    assert_eq!(image.dimensions(), (3, 19));
+    assert_eq!(
+        image.decode_rgba_with_background([10, 20, 30]).unwrap(),
+        [247, 0, 0, 255].repeat(3 * 19)
+    );
+}
+
+#[test]
+fn opaque_raster_height_counts_set_bits_beyond_the_declaration() {
+    for (body, height) in [
+        ("\"1;1;1;1~-?", 6),
+        ("\"1;1;1;1~-$@", 7),
+        ("\"1;1;1;1?", 1),
+        ("\"1;1;1;3-?", 3),
+        ("-?\"1;1;1;3", 3),
+        ("\"1;1;1;0-?", 12),
+    ] {
+        let image = SixelImage::parse(format!("\x1bP9;2q{body}\x1b\\").into_bytes()).unwrap();
+        assert_eq!(image.dimensions(), (1, height), "{body}");
+        assert_eq!(image.decode_rgba().unwrap().len(), height as usize * 4);
+    }
+}

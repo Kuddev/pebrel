@@ -131,14 +131,25 @@ fn sixel_modes_report_reset_and_remain_independent_of_text_modes() {
 
 #[test]
 fn single_row_sixel_does_not_scroll_until_following_linefeed() {
-    let (mut term, mut stream, listener) = setup();
-    stream.feed(&mut term, &listener, b"\x1b[8;1H\x1bP9;1q\"1;1;10;6!10~\x1b\\");
-    assert_eq!(term.grid().history_size(), 0);
-    assert_eq!(snap(&term).image_runs[0].row, 7);
-    stream.feed(&mut term, &listener, b"\r\nNEXT");
-    assert_eq!(term.grid().history_size(), 1);
-    assert_eq!(snap(&term).image_runs[0].row, 6);
-    assert_eq!(term.grid()[Line(7)][Column(0)].c, 'N');
+    // The opaque streams are img2sixel 1.10.3 output from 3x19 and 3x20 red PNGs.
+    for wire in [
+        b"\x1bP9;1q\"1;1;10;6!10~\x1b\\".as_slice(),
+        b"\x1bPq\"1;1;3;19#0;2;97;0;0#0~~~-~~~-~~~-@@@\x1b\\".as_slice(),
+        b"\x1bPq\"1;1;3;20#0;2;97;0;0#0~~~-~~~-~~~-BBB\x1b\\".as_slice(),
+    ] {
+        let (mut term, mut stream, listener) = setup();
+        stream.feed(&mut term, &listener, b"\x1b[8;1H");
+        stream.feed(&mut term, &listener, wire);
+        assert_eq!(term.grid().history_size(), 0, "unexpected scroll for {wire:?}");
+        let runs = snap(&term).image_runs;
+        assert_eq!(runs.len(), 1);
+        assert_eq!((runs[0].row, runs[0].source_row), (7, 0));
+        assert_eq!(term.grid().cursor.point.line, Line(7));
+        stream.feed(&mut term, &listener, b"\r\nNEXT");
+        assert_eq!(term.grid().history_size(), 1);
+        assert_eq!(snap(&term).image_runs[0].row, 6);
+        assert_eq!(term.grid()[Line(7)][Column(0)].c, 'N');
+    }
 }
 
 #[test]
