@@ -42,7 +42,7 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'Pebrel-v2.5.3-windows-x64.zip'
           $output = Join-Path $env:RUNNER_TEMP 'powershell-erase-evidence'
-          python -m scripts.conformance.windows_powershell_erase_probe --app $archive --output $output
+          python scripts/conformance/windows_standard_user.py -m scripts.conformance.windows_powershell_erase_probe --app $archive --output $output
       - uses: actions/upload-artifact@v4
         if: always()
         with:
