@@ -37,8 +37,15 @@ fn every_source_file_respects_its_line_budget() {
     let mut limit = None;
     let mut roots = HashSet::new();
     let mut exceptions = HashMap::new();
+    let mut moves = Vec::new();
     for record in POLICY.lines().filter(|record| !record.trim().is_empty()) {
         let fields = record.split_whitespace().collect::<Vec<_>>();
+        // Base-relative coverage of a moved root is checked by check_architecture.py.
+        if fields[0] == "moved" {
+            assert_eq!(fields.len(), 3, "invalid move record: {record}");
+            moves.push((fields[1], fields[2]));
+            continue;
+        }
         assert_eq!(fields.len(), 2, "invalid budget record: {record}");
         match fields[0] {
             "limit" => {
@@ -54,6 +61,11 @@ fn every_source_file_respects_its_line_budget() {
     }
     let limit = limit.expect("missing default limit");
     assert!(limit > 0 && !roots.is_empty());
+    for (old, new) in moves {
+        assert!(roots.contains(new), "moved root target is not a source root: {new}");
+        assert!(!roots.contains(old), "moved root source is still a source root: {old}");
+        assert!(!repo_root.join(old).exists(), "moved source root still exists: {old}");
+    }
     let mut files = Vec::new();
     for root in roots {
         assert!(!Path::new(root).is_absolute() && !root.contains("..") && !root.contains(':'));

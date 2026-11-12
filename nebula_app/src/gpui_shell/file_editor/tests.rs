@@ -427,6 +427,35 @@ fn source_mode_releases_preview_views_without_changing_the_document(cx: &mut Tes
 }
 
 #[gpui::test]
+fn reloading_rewritten_markdown_replaces_the_visible_snapshot(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rewrite.md");
+    std::fs::write(&path, "# 旧标题\r\n\r\n原来较长的段落\r\n").unwrap();
+    let (file, mut cx) = open(path.clone(), cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds("markdown-preview-block-1").is_some());
+    let old_range = file.read_with(&cx, |view, _| view.outline.source_ranges[1].clone());
+
+    std::fs::write(&path, "正\r\n").unwrap();
+    cx.update(|window, cx| {
+        file.update(cx, |view, cx| view.reload(window, cx));
+        // Draw while the async read is still pending, before installing the new snapshot.
+        window.draw(cx).clear(cx);
+        assert!(file.read(cx).loading);
+    });
+    assert!(cx.debug_bounds("markdown-preview-block-1").is_none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds("markdown-preview-block-0").is_some());
+    file.read_with(&cx, |view, cx| {
+        assert_eq!(view.outline.blocks, ["正"]);
+        assert_eq!(view.source_slice(0..3, cx).as_deref(), Some("正"));
+        assert_eq!(view.source_slice(0..1, cx), None);
+        assert_eq!(view.source_slice(old_range, cx), None);
+    });
+}
+
+#[gpui::test]
 fn keyboard_save_writes_the_file_and_conflicts_preserve_the_draft(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("code.rs");

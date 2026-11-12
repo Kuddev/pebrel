@@ -5,6 +5,7 @@
 - GLSL/WGSL 源码转换、Luau shader 参数与帧 ABI 边界见 [`shader_source`](../architecture/notes/nebula_app/gpui_shell/shader_source/)。
 - `src/gpui_shell` 负责 GPUI 呈现、命令和订阅。交互改动必须覆盖默认、hover、pressed、键盘焦点、disabled/loading 以及成功/失败中实际需要的状态。
 - 首帧窗口尺寸、非阻塞 logo 准备与原生呈现顺序的因果记录见 [`workspace`](../architecture/notes/nebula_app/gpui_shell/workspace/)。
+- Windows 指定目录启动时的窗口尺寸恢复见 [`startup geometry`](../architecture/notes/nebula_app/gpui_shell/workspace/windowing/2026-11-11-directory-launch-window-size.md)。
 - 本地启动失败的诊断保留与显式 Shell 选择见 [`terminal/view`](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-24-failed-local-session-retention.md)。
 - 独立本地草稿写入的 canonical target 并发合同见 [`file_editor writers`](../architecture/notes/nebula_app/gpui_shell/file_editor/2026-10-11-canonical-target-writers.md)。
 - GPUI 图片解码帧与 zoom/pan 几何一致性见 [`doc_tabs`](../architecture/notes/nebula_app/gpui_shell/doc_tabs/)。
@@ -18,6 +19,7 @@
 - 只有跨层所有权、持久化、协议、线程/生命周期或重要性能取舍才写 note，路径镜像到 `architecture/notes/nebula_app/<capability>/`。
 - Agent 集成、改键输入与 SSH 认证的因果记录分别位于 [`ai_hook`](../architecture/notes/nebula_app/ai_hook/)、[`input`](../architecture/notes/nebula_app/input/) 和 [`ssh_session`](../architecture/notes/nebula_app/ssh_session/)。
 - Windows PowerShell 剪贴板粘贴与当前编辑器能力的边界见 [`terminal/view`](../architecture/notes/nebula_app/gpui_shell/terminal/view/)。
+- Windows 回收站调用的消息重入与后台 COM 生命周期见 [`file_operations`](../architecture/notes/nebula_app/display/file_operations/2026-11-11-recycle-bin-reentrancy.md)。
 - Runtime 地址发现与隔离实例的生命周期边界见 [`runtime_api`](../architecture/notes/nebula_app/runtime_api/)。
 - 补齐数据源选择和请求快照归 `completion.rs`，界面仅拥有任务与交互；边界依据见 [`completion`](../architecture/notes/nebula_app/completion/)。
 - 旧渲染入口的窗口动画状态归 `display/animations.rs`；迁移及显式 legacy 验证依据见 [`display`](../architecture/notes/nebula_app/display/)。

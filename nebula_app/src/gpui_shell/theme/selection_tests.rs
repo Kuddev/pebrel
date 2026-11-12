@@ -11,6 +11,40 @@ use nebula_settings::ThemeName;
 
 use super::{ResolvedTheme, apply_skin_tokens};
 
+#[test]
+fn settings_cards_keep_readable_text_and_distinct_dark_layers() {
+    for name in ThemeName::BUILTIN {
+        let theme = ResolvedTheme::builtin(name, None);
+        let skin = theme.skin();
+        let card = super::settings_card_fill_for_theme(&theme);
+        assert_eq!(card.a, 1.0, "{name:?}");
+        if skin.is_light {
+            continue;
+        }
+        assert!(card.l > super::solid(skin.panel).l, "{name:?}");
+        assert!(contrast(card, super::ink(skin.ink_dim)) >= 4.5, "{name:?}: description");
+        assert!(contrast(card, super::ink(skin.accent)) >= 3.0, "{name:?}: focus");
+        if name == ThemeName::Nord {
+            assert_eq!(card, super::to_hsla(0x35, 0x3b, 0x49));
+        }
+    }
+}
+
+#[test]
+fn custom_dark_settings_cards_keep_the_panel_hue() {
+    let mut definition = nebula_settings::ThemeDefinition::from_builtin(ThemeName::MintDark);
+    let background = definition.ui.background;
+    for shell in [background, [0x10, 0x18, 0x14], [0x88, 0x55, 0x33]] {
+        definition.ui.shell = shell;
+        let theme = ResolvedTheme::custom(definition.clone(), None, None);
+        let panel = super::solid(theme.skin().panel);
+        let card = super::settings_card_fill_for_theme(&theme);
+        assert_eq!(card.a, 1.0);
+        assert!(card.l > panel.l);
+        assert!((card.h - panel.h).abs() < 0.005, "shell: {shell:?}");
+    }
+}
+
 fn apply_reader_theme(name: ThemeName, cx: &mut App) {
     let chrome = ResolvedTheme::builtin(name, None);
     let mode = if chrome.skin().is_light { ThemeMode::Light } else { ThemeMode::Dark };

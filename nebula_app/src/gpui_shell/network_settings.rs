@@ -176,9 +176,9 @@ impl SettingsPane {
     pub(super) fn section_network(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let custom = shows_manual_proxy_address(self.runtime.ssh_proxy_mode);
         let language = crate::gpui_shell::config::ui_language(cx);
-        self.group(language.tr("settings.network.title"), cx)
-            .child(self.proxy_test_banner(cx))
-            .child(div().h(px(PROXY_TEST_GAP)).w_full().flex_shrink_0())
+        // 连通性检测是页面级状态，放在卡片之上；卡内只放设置行。
+        let settings = self
+            .group(language.tr("settings.network.title"), cx)
             .child(self.proxy_mode_row(cx))
             .when(custom, |page| page.child(self.proxy_address_row(cx)))
             .child(self.switch_row(
@@ -187,7 +187,8 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsNetworkTerminalDescription),
                 self.runtime.terminal_proxy,
                 cx,
-            ))
+            ));
+        v_flex().w_full().gap(px(PROXY_TEST_GAP)).child(self.proxy_test_banner(cx)).child(settings)
     }
 
     fn proxy_test_banner(&self, cx: &mut Context<Self>) -> gpui::Div {

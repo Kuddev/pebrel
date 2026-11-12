@@ -276,8 +276,7 @@ impl SettingsPane {
             panel.child(
                 v_flex()
                     .w_full()
-                    .pl(px(super::design::RAIL_INDENT))
-                    .pr_4()
+                    .px(px(super::design::CARD_PAD_X))
                     .pb(px(self.row_padding_y()))
                     .gap_2()
                     .children(sources),
