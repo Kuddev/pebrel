@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
+    App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
     RenderImage, RenderOnce, SharedString, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
@@ -79,35 +79,48 @@ pub(crate) fn terminal_glyph(glyph: impl Into<SharedString>, size: f32) -> gpui:
     }
 }
 
+/// Read the vector outline: some platform text systems return advance metrics
+/// for typographic bounds, which include the blank space around the glyph.
+fn host_symbol_geometry(glyph: char, side: f32) -> Option<(Pixels, gpui::Point<Pixels>)> {
+    static SYMBOLS: std::sync::OnceLock<Option<ttf_parser::Face<'static>>> =
+        std::sync::OnceLock::new();
+    let face = SYMBOLS
+        .get_or_init(|| ttf_parser::Face::parse(crate::font_install::SYMBOL_FONT_BYTES, 0).ok())
+        .as_ref()?;
+    let bounds = face.glyph_bounding_box(face.glyph_index(glyph)?)?;
+    let x0 = f32::from(bounds.x_min);
+    let x1 = f32::from(bounds.x_max);
+    let y0 = f32::from(bounds.y_min);
+    let y1 = f32::from(bounds.y_max);
+    let span = (x1 - x0).max(y1 - y0);
+    if span <= 0.0 {
+        return None;
+    }
+    let scale = side * 0.825 / span;
+    // Font outline coordinates are relative to the baseline with positive Y upwards.
+    let center = gpui::point(px((x0 + x1) * 0.5 * scale), px(-(y0 + y1) * 0.5 * scale));
+    Some((px(f32::from(face.units_per_em()) * scale), center))
+}
+
 /// Center the glyph's ink, not its monospace advance or the surrounding text line.
 pub(crate) fn host_icon(glyph: char, side: f32, color: gpui::Hsla) -> gpui::AnyElement {
-    if glyph == '\u{f489}' {
+    let geometry = if glyph == '\u{f489}' { None } else { host_symbol_geometry(glyph, side) };
+    let Some((font_size, ink_center)) = geometry else {
         return Icon::new(Icon::empty())
             .path(crate::gpui_shell::assets::nav::TERMINAL)
             .size(px(side))
             .text_color(color)
             .into_any_element();
-    }
+    };
     gpui::canvas(
         move |bounds, window, _| {
-            let font = gpui::font(crate::font_install::SYMBOL_FONT_FAMILY);
-            let text_system = window.text_system();
-            let font_id = text_system.resolve_font(&font);
-            let ink_side = side * 0.825;
-            let base_size = px(ink_side);
-            let ink = text_system.typographic_bounds(font_id, base_size, glyph).ok();
-            let scale = ink
-                .filter(|ink| ink.size.width > px(0.0) && ink.size.height > px(0.0))
-                .map(|ink| ink_side / f32::from(ink.size.width.max(ink.size.height)))
-                .unwrap_or(1.0);
-            let font_size = base_size * scale;
             let text: SharedString = glyph.to_string().into();
-            let line = text_system.shape_line(
+            let line = window.text_system().shape_line(
                 text.clone(),
                 font_size,
                 &[gpui::TextRun {
                     len: text.len(),
-                    font,
+                    font: gpui::font(crate::font_install::SYMBOL_FONT_FAMILY),
                     color,
                     background_color: None,
                     underline: None,
@@ -116,13 +129,7 @@ pub(crate) fn host_icon(glyph: char, side: f32, color: gpui::Hsla) -> gpui::AnyE
                 None,
             );
             let height = line.ascent + line.descent;
-            let origin = if let Some(ink) = ink {
-                // Font coordinates are relative to the baseline with positive Y upwards.
-                let center = ink.center() * scale;
-                bounds.center() - gpui::point(center.x, line.ascent - center.y)
-            } else {
-                bounds.center() - gpui::point(line.width / 2.0, height / 2.0)
-            };
+            let origin = bounds.center() - ink_center - gpui::point(px(0.0), line.ascent);
             (line, origin, height)
         },
         |_, (line, origin, height), window, cx| {
