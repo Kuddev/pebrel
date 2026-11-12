@@ -46,10 +46,27 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
                 @(Get-PSReadLineKeyHandler | Where-Object { $_.Key -in 'Ctrl+Shift+F9','Shift+Ctrl+F9' })
             }
             if (-not $clearExisting -or $clearExisting.Function -eq 'Unbound') {
-                $global:PebrelRedrawDescription = 'PebrelRedraw:' + $global:PebrelShellToken
-                Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function ClearScreen `
-                    -Description $global:PebrelRedrawDescription
-                $global:PebrelRedrawReady = $true
+                # The redraw install is an optional capability: a PSReadLine that
+                # refuses the binding must not take the editor and pointer init
+                # down with it, so its failure stays inside this try and only
+                # leaves the redraw advertisement off.
+                try {
+                    $global:PebrelRedrawDescription = 'PebrelRedraw:' + $global:PebrelShellToken
+                    # -Function and -Description live in different parameter sets
+                    # (PSReadLine 2.4.5: "Parameter 'Function' cannot be specified
+                    # in parameter set 'ScriptBlock.'"), so the ScriptBlock set is
+                    # the only one that carries the identity token. The handler
+                    # performs the native ClearScreen work itself — erase display
+                    # and scrollback, then re-prompt — exactly what the built-in
+                    # does, and Description stays what the per-prompt re-check
+                    # matches; Function is a display name scriptblocks imitate.
+                    Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ScriptBlock {
+                        param($key, $arg)
+                        [Console]::Write("$([char]27)[2J$([char]27)[3J$([char]27)[H")
+                        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+                    } -Description $global:PebrelRedrawDescription
+                    $global:PebrelRedrawReady = $true
+                } catch { $global:PebrelRedrawReady = $false }
             }
             # PSReadLine 2.0 loses surrogate pairs inserted after native editing.
             # Advertise that boundary so completion cannot silently alter a name.
@@ -72,10 +89,10 @@ function global:Test-PebrelRedrawBinding {
         } else {
             @(Get-PSReadLineKeyHandler -ErrorAction Stop | Where-Object { $_.Key -in 'Ctrl+Shift+F9','Shift+Ctrl+F9' })
         }
-        # Function is only a display description (see the installation probe):
-        # the token in Description is what proves the chord still carries the
+        # Function is only a display description (see the installation probe),
+        # and the installed binding is a scriptblock carrying its identity in
+        # Description: the token is what proves the chord still carries the
         # binding this session installed.
-        $bound -and $bound.Function -eq 'ClearScreen' -and
-            $bound.Description -eq $global:PebrelRedrawDescription
+        $bound -and $bound.Description -eq $global:PebrelRedrawDescription
     } catch { $false }
 }

@@ -42,7 +42,8 @@ class CompletionEditorTests(unittest.TestCase):
 
     def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False,
                         owned_redraw: bool = False, owned_macro: bool = False,
-                        vicmd_widget: bool = False) -> shell_integration.ShellSession:
+                        vicmd_widget: bool = False, vicmd_macro: bool = False,
+                        vi_command_macro: bool = False) -> shell_integration.ShellSession:
         root = Path(__file__).resolve().parents[2]
         program = shutil.which(shell)
         if not program:
@@ -67,7 +68,7 @@ class CompletionEditorTests(unittest.TestCase):
             rc.write_text(body.group(1) + "\n" + adapter)
             args = ["--noprofile", "--rcfile", str(rc), "-i"] if shell == "bash" else ["-d", "-i"]
             env = {} if shell == "bash" else {"ZDOTDIR": str(directory)}
-        if owned_binding or owned_redraw or owned_macro or vicmd_widget:
+        if owned_binding or owned_redraw or owned_macro or vicmd_widget or vicmd_macro or vi_command_macro:
             if shell == "bash":
                 inputrc = self.fixture.home / ".inputrc"
                 lines = ""
@@ -78,6 +79,13 @@ class CompletionEditorTests(unittest.TestCase):
                 if owned_macro:
                     # A string macro, which bind -p and bind -X do not list.
                     lines += '"\\e[46~": "PEBREL-USER-MACRO"\n'
+                if vi_command_macro:
+                    # vi mode: the integration installs its clear-screen into
+                    # the startup keymap (vi-insert) while the chord carries a
+                    # user macro in vi-command, reachable mid-prompt via ESC.
+                    # The leading "a" makes the vi-command macro append text,
+                    # so the insertion is deterministic.
+                    lines += 'set editing-mode vi\nset keymap vi-command\n"\\e[46~": "aPEBREL-USER-MACRO"\n'
                 inputrc.write_text(lines)
                 env["INPUTRC"] = str(inputrc)
             else:
@@ -95,6 +103,16 @@ class CompletionEditorTests(unittest.TestCase):
                         "bindkey -v\n"
                         "userwid() { BUFFER+='VICMD-USER' }; zle -N userwid\n"
                         "bindkey -M vicmd '\\e[46~' userwid\n"
+                    )
+                if vicmd_macro:
+                    # vi mode: the chord resolves to our built-in in viins, but
+                    # vicmd carries a quoted string macro whose body merely
+                    # contains the word undefined-key. A bare undefined-key
+                    # report means unbound; a quoted macro ends in a quote and
+                    # must revoke.
+                    zshrc += (
+                        "bindkey -v\n"
+                        "bindkey -M vicmd -s '\\e[46~' 'aundefined-key'\n"
                     )
                 (self.fixture.home / ".zshrc").write_text(zshrc)
         session = shell_integration.ShellSession(program, self.fixture.home, args, env)
@@ -380,6 +398,39 @@ class CompletionEditorTests(unittest.TestCase):
 
     def test_ssh_zsh_redraw_keymap_switch_in_the_same_prompt_revokes(self) -> None:
         self.check_redraw_keymap_switch("ssh")
+
+    def check_redraw_foreign_keymap_macro(self, shell: str, route: str) -> None:
+        # The chord is ours in the startup keymap, but a quoted macro waits in
+        # the keymap ESC reaches mid-prompt (vicmd / vi-command). A macro body
+        # that merely contains the word undefined-key is user code, not an
+        # unbound key: the prompt must revoke instead of announcing, and the
+        # macro keeps firing.
+        flag = {"bash": "vi_command_macro", "zsh": "vicmd_macro"}[shell]
+        session = self.start_bootstrap(shell, route, **{flag: True})
+        if self.check_legacy_bash(shell, session):
+            return
+        self.assertIsNotNone(
+            re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output),
+            session.output,
+        )
+        token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
+        self.assertIsNone(token, session.output)
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", session.output)
+        # Within the same prompt: ESC switches to the foreign keymap and the
+        # chord fires the user's macro into the line, then Enter runs it.
+        os.write(session.master, b"echo tail")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b[46~\n")
+        output = session.wait(b"tailPEBREL-USER-MACRO\r\n" if shell == "bash" else b"tailundefined-key\r\n")
+        self.assertIn(b"tailPEBREL-USER-MACRO\r\n" if shell == "bash" else b"tailundefined-key\r\n", output)
+
+    def test_ssh_bash_redraw_macro_in_the_vi_command_keymap_revokes(self) -> None:
+        self.check_redraw_foreign_keymap_macro("bash", "ssh")
+
+    def test_ssh_zsh_quoted_macro_in_another_keymap_revokes(self) -> None:
+        self.check_redraw_foreign_keymap_macro("zsh", "ssh")
 
     def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
         self.check_query_only_session("bash", "ssh")

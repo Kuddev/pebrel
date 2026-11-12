@@ -13,7 +13,27 @@ __pebrel_redraw_owned() {
         # clear-screen). Only our own binding's full line proves ownership.
         # An unrecognized table counts as not owned.
         { bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; } |
-            grep -qxF '"\e[46~": clear-screen'
+            grep -qxF '"\e[46~": clear-screen' || return 1
+        # Ownership must also hold in every keymap reachable within one prompt:
+        # vi mode switches vi-insert <-> vi-command mid-line via ESC, so a
+        # clear-screen in vi-insert next to a user macro waiting in vi-command
+        # would still send the byte into user code. The other keymaps may carry
+        # our binding or leave the chord unbound (an unbound key is inert, no
+        # user code runs), but any user function or macro revokes. Entries are
+        # anchored to the key's complete line, so a lookalike chord sequence
+        # ending in \e[46~ never trips the probe; the enumeration runs in one
+        # subshell and the original keymap is restored before returning. The
+        # probe only reads, so the user's bindings stay untouched.
+        local current rest keymap
+        current=$(bind -v 2>/dev/null | grep -E '^set keymap ' | cut -d ' ' -f3)
+        [ -n "$current" ] || return 1
+        rest=$(for keymap in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do
+            [ "$keymap" = "$current" ] && continue
+            bind "set keymap $keymap" 2>/dev/null || continue
+            { bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; }
+        done 2>/dev/null | grep -E '^"\\e\[46~":' | grep -vxF '"\e[46~": clear-screen')
+        bind "set keymap $current" 2>/dev/null
+        [ -z "$rest" ]
     else
         # The bound widget must be the built-in original: bindkey reports the
         # value space-separated, so a space-anchored ".clear-screen" tail only
@@ -26,19 +46,21 @@ __pebrel_redraw_owned() {
         # would still send the byte into a user widget waiting in vicmd. The
         # chord must therefore resolve to the built-in (or be unbound — an
         # unbound key is inert, no user code runs) in every keymap; a string
-        # macro or a user widget anywhere revokes ownership. The probe only
-        # reads, so the user's vicmd binding stays untouched.
-        local -a keymaps reports
-        local keymap line owned=1
+        # macro or a user widget anywhere revokes ownership. The queried key
+        # renders before the value, so an unbound keymap reports a bare
+        # space-anchored "undefined-key" tail while a macro always ends in a
+        # quote — one whose body merely contains the word (e.g.
+        # 'aundefined-key') revokes. A keymap the probe cannot query reports
+        # nothing, which revokes too. The probe only reads, so the user's
+        # vicmd binding stays untouched.
+        local -a keymaps
+        local keymap report owned=1
         keymaps=(${(f)"$(bindkey -l 2>/dev/null)"})
         (( ${#keymaps} )) || return 1
-        reports=(${(f)"$(for keymap in "${keymaps[@]}"; do
-            bindkey -M "$keymap" '\e[46~' 2>/dev/null
-        done)"})
-        (( ${#reports} )) || return 1
-        for line in "${reports[@]}"; do
-            case $line in
-                *undefined-key*|*' .clear-screen') ;;
+        for keymap in "${keymaps[@]}"; do
+            report=$(bindkey -M "$keymap" '\e[46~' 2>/dev/null)
+            case $report in
+                *' undefined-key'|*' .clear-screen') ;;
                 *) owned=0; break ;;
             esac
         done
