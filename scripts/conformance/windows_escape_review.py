@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 
-from harness import ConformanceContext, ConformanceError, ResolvedApp, require
+from scripts.conformance.harness import ConformanceContext, ConformanceError, ResolvedApp, require
 
 
 class KeyInput(ctypes.Structure):

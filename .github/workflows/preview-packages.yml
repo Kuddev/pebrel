@@ -55,7 +55,7 @@ jobs:
       - name: Run Left, Right, MCP, Escape on the Windows input path
         shell: pwsh
         run: |
-          python scripts/conformance/windows_standard_user.py scripts/conformance/windows_escape_review.py --archive $env:PEBREL_655_ARCHIVE --cli $env:PEBREL_655_CLI --evidence review-evidence
+          python scripts/conformance/windows_standard_user.py -m scripts.conformance.windows_escape_review --archive $env:PEBREL_655_ARCHIVE --cli $env:PEBREL_655_CLI --evidence review-evidence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload terminal state and result
