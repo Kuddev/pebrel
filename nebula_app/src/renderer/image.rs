@@ -128,6 +128,36 @@ pub fn decode_png_bytes(_png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Err("PNG support is not enabled for this build".to_owned())
 }
 
+pub fn decode_inline_image(
+    data: &nebula_terminal::inline_image::ImageData,
+    palette: &crate::display::color::List,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    match data {
+        nebula_terminal::inline_image::ImageData::Encoded(bytes) => decode_png_bytes(bytes),
+        nebula_terminal::inline_image::ImageData::Sixel(image) => {
+            let (width, height) = image.dimensions();
+            use nebula_terminal::vte::ansi::Color;
+            let background = image
+                .background_color()
+                .map(|color| match color {
+                    Color::Spec(rgb) => [rgb.r, rgb.g, rgb.b],
+                    Color::Named(named) => {
+                        let rgb = palette[named];
+                        [rgb.r, rgb.g, rgb.b]
+                    },
+                    Color::Indexed(index) => {
+                        let rgb = palette[index as usize];
+                        [rgb.r, rgb.g, rgb.b]
+                    },
+                })
+                .unwrap_or_default();
+            let pixels =
+                image.decode_rgba_with_background(background).ok_or("invalid SIXEL image")?;
+            Ok((width, height, pixels))
+        },
+    }
+}
+
 #[cfg(all(feature = "png", not(target_os = "macos")))]
 fn decode_png_reader<R: std::io::Read>(reader: R) -> Result<DecodedImage, String> {
     let mut decoder = png::Decoder::new(reader);
