@@ -41,6 +41,7 @@ mod drag_motion;
 use drag_motion::PaneDragMotion;
 mod layout;
 mod sidebar;
+pub(super) use layout::PaneBounds;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod visual_tests;
