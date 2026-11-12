@@ -1,56 +1,52 @@
-name: Windows conformance diagnostics
+name: Windows PowerShell erase diagnostics (WIP)
 
 on:
   workflow_call:
     inputs:
       runtime_run:
-        description: Release run whose Windows runtime artifact should be diagnosed
+        description: Release run associated with the Windows package under test
         required: true
         type: string
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   diagnose:
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       PYTHONUTF8: "1"
-      NEBULA_RESIZE_TRACE: "1"
-      NEBULA_BOOT_TRACE: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - uses: actions/download-artifact@v4
-        with:
-          name: stable-runtime-windows-x64
-          run-id: ${{ inputs.runtime_run }}
-          github-token: ${{ github.token }}
-          path: diagnostic-runtime
-      - name: Test native permission helpers
-        run: python -m unittest scripts.conformance.tests.test_windows_standard_user -v
-      - name: Read runtime file permissions
-        if: always()
+      - name: Download and verify the published v2.5.3 x64 archive
+        env:
+          PEBREL_RELEASE_RUN: ${{ inputs.runtime_run }}
         shell: pwsh
         run: |
-          Get-Acl diagnostic-runtime/pebrel.exe | Format-List
-          Get-Acl $env:pythonLocation/python.exe | Format-List
-      - name: Test containment with an ordinary token
-        if: always()
-        run: python scripts/conformance/windows_standard_user.py -m unittest scripts.conformance.tests.test_lifecycle -v
-      - name: Diagnose the previously built runtime
-        if: always()
+          if ($env:PEBREL_RELEASE_RUN -ne '43108083569') {
+            throw 'This diagnostic is pinned to the v2.5.3 release.'
+          }
+          $archive = Join-Path $env:RUNNER_TEMP 'Pebrel-v2.5.3-windows-x64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/Kuddev/pebrel/releases/download/v2.5.3/Pebrel-v2.5.3-windows-x64.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'c6d7faf53defa32fc43e596d5b8a34963ef6241e95d858762bea450d5f127141') {
+            throw 'The published x64 archive did not match SHA256SUMS.'
+          }
+      - name: Capture terminal cells and ConPTY bytes during input erasure
         shell: pwsh
         run: |
-          python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app diagnostic-runtime/pebrel.exe --platform windows-x86_64 --output diagnostic-output/windows-report.json
+          $archive = Join-Path $env:RUNNER_TEMP 'Pebrel-v2.5.3-windows-x64.zip'
+          $output = Join-Path $env:RUNNER_TEMP 'powershell-erase-evidence'
+          python -m scripts.conformance.windows_powershell_erase_probe --app $archive --output $output
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-conformance-diagnostics
-          path: diagnostic-output
-          if-no-files-found: warn
+          name: powershell-erase-evidence
+          path: ${{ runner.temp }}/powershell-erase-evidence
+          if-no-files-found: error
           retention-days: 7
