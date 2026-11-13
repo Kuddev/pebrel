@@ -272,16 +272,26 @@ fn quick_add_commit_failure_rolls_the_password_back(cx: &mut gpui::TestAppContex
 /// 提交失败但本次没写过密码：自动认证与密码留空的保存不得碰凭据——
 /// 目的地原有的密码不是这次写的，回滚删除就是替用户清库。提交失败用
 /// 维护者的注入方式复现：预置锁文件后目录只读，租约照常取得，落盘的
-/// 临时文件建不出来。目录权限在 Windows 上不拦截建文件，这条只在
-/// Unix 上跑。
-#[cfg(unix)]
+/// 临时文件建不出来。目录权限在 Windows 上拦不住建文件，提交不会失败，
+/// 所以注入只跑 Unix；用运行时判断而不是编译期平台属性，平台 cfg 预算
+/// 只能减不能增，chmod 走子进程，Windows 上不执行但全平台可编译。
 #[gpui::test]
 fn quick_add_commit_failure_without_a_password_write_keeps_the_existing_credential(
     cx: &mut gpui::TestAppContext,
 ) {
-    use std::os::unix::fs::PermissionsExt as _;
+    if std::env::consts::OS == "windows" {
+        return;
+    }
     let (mut state, cx) = init_and_build("core.example.cn", cx);
     let directory = temp_profile_dir("rollback-no-write");
+    let chmod = |mode: u32| {
+        let status = std::process::Command::new("chmod")
+            .arg(format!("{mode:o}"))
+            .arg(&directory)
+            .status()
+            .expect("run chmod");
+        assert!(status.success(), "chmod {mode:o} on the profile directory failed: {status}");
+    };
     let path = directory.join("ssh_profiles.json");
     // 库里先有另一台主机，目的地原有的密码只存在凭据库里。
     let mut seeded = crate::ssh_profiles::SshProfiles::default();
@@ -297,7 +307,7 @@ fn quick_add_commit_failure_without_a_password_write_keeps_the_existing_credenti
     // 预置锁文件：目录只读后，已有锁文件仍能打开加锁，落盘才会败在
     // 建临时文件这一步——正好是提交失败，而不是取租约失败。
     std::fs::write(path.with_extension("json.nebula-lock"), b"0").unwrap();
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+    chmod(0o555);
 
     // 「本次没写密码」的两种保存：自动认证、密码认证但密码留空。
     for (name, auth) in [
@@ -339,7 +349,7 @@ fn quick_add_commit_failure_without_a_password_write_keeps_the_existing_credenti
             "{name}: the existing credential must survive a failed commit it did not write"
         );
     }
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    chmod(0o755);
     let _ = std::fs::remove_dir_all(&directory);
 }
 
