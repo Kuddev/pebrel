@@ -488,6 +488,51 @@ fn stale_claude_prompt_submit_cannot_rewind_the_current_turn() {
     assert_eq!(activity.status(), AgentStatus::Working);
 }
 
+#[test]
+fn provider_confirmed_prompt_starts_the_next_turn_without_a_local_submit() {
+    let mut activity = AgentActivity::default();
+    let first = event_with_turn("claude", "s", "UserPromptSubmit", "first-prompt");
+    assert!(activity.apply_hook(&first));
+    assert!(activity.apply_hook(&event_with_turn("claude", "s", "Stop", "first-prompt")));
+    assert_eq!(activity.status(), AgentStatus::Done);
+
+    // Claude can submit through a rebound keybinding, so the provider-confirmed
+    // identity must start the turn without Pebrel's physical Enter branch.
+    let second = event_with_turn("claude", "s", "UserPromptSubmit", "second-prompt");
+    assert!(activity.apply_hook(&second));
+    assert!(activity.is_current_turn("second-prompt"));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    assert!(!activity.apply_hook(&first), "a replayed prompt ID must stay rejected");
+}
+
+#[test]
+fn queued_prompt_records_the_current_completion_and_blocks_retry() {
+    let mut activity = AgentActivity::default();
+    assert!(activity.apply_hook(&event_with_turn(
+        "claude",
+        "s",
+        "UserPromptSubmit",
+        "first-prompt"
+    )));
+    activity.queued_submit();
+    assert!(activity.queued_prompt_pending());
+
+    // The completion is a fact about the current turn; only the retry decision
+    // waits for the queued prompt's identity.
+    assert!(activity.apply_hook(&event_with_turn("claude", "s", "StopFailure", "first-prompt")));
+    assert_eq!(activity.status(), AgentStatus::Idle);
+    assert!(activity.queued_prompt_pending());
+
+    assert!(activity.apply_hook(&event_with_turn(
+        "claude",
+        "s",
+        "UserPromptSubmit",
+        "second-prompt"
+    )));
+    assert!(!activity.queued_prompt_pending());
+    assert!(activity.is_current_turn("second-prompt"));
+}
+
 /// Age and familiar screen forms cannot replace a complete provider lifecycle.
 #[test]
 fn full_hook_states_remain_authoritative_after_long_silence() {

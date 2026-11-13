@@ -195,7 +195,9 @@ fn runtime_claude_submit_fences_queued_old_hooks(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn shift_enter_does_not_arm_a_new_claude_turn(cx: &mut TestAppContext) {
+fn shift_enter_does_not_arm_a_local_turn_but_provider_prompts_are_authoritative(
+    cx: &mut TestAppContext,
+) {
     let owner = "shift-enter-submit-fence";
     let (view, window, _) = open(cx);
     window.update(|window, cx| {
@@ -211,9 +213,17 @@ fn shift_enter_does_not_arm_a_new_claude_turn(cx: &mut TestAppContext) {
                 window,
                 cx,
             );
+            assert!(!view.agent_activity.queued_prompt_pending());
+
+            // A provider-confirmed, distinct prompt is authoritative even
+            // when a rebound keybinding bypassed Pebrel's Enter branch.
             let next = hook_with_prompt(owner, "UserPromptSubmit", 2, Some("next-prompt"));
-            assert!(!view.handle_ai_hook(&next, cx));
-            assert!(view.agent_activity.is_current_turn(owner));
+            assert!(view.handle_ai_hook(&next, cx));
+            assert!(view.agent_activity.is_current_turn("next-prompt"));
+            // A replayed old prompt ID cannot consume the submit guard.
+            let replay = hook_with_prompt(owner, "UserPromptSubmit", 3, Some(owner));
+            assert!(!view.handle_ai_hook(&replay, cx));
+            assert!(view.agent_activity.is_current_turn("next-prompt"));
         });
     });
 }
@@ -369,12 +379,24 @@ fn working_claude_enter_allows_the_queued_prompt_after_the_current_turn(cx: &mut
 
             let previous_failure =
                 hook_with_prompt(owner, "StopFailure", 2, Some("current-prompt"));
-            assert!(!view.handle_ai_hook(&previous_failure, cx));
+            // The queued prompt must not swallow the current turn's completion.
+            assert!(view.handle_ai_hook(&previous_failure, cx));
+            assert_eq!(view.agent_activity.status(), AgentStatus::Idle);
+            assert!(view.last_command_failed);
+            // Retrying would add another prompt on top of the queued one.
+            assert!(view.agent_activity.queued_prompt_pending());
+            assert!(view.auto_continue_task.is_none());
 
+            // The provider-confirmed prompt starts the turn without a local
+            // Enter; a replayed old prompt ID must stay rejected.
             let next = hook_with_prompt(owner, "UserPromptSubmit", 3, Some("queued-prompt"));
             assert!(view.handle_ai_hook(&next, cx));
             assert!(view.agent_activity.is_current_turn("queued-prompt"));
             assert_eq!(view.agent_activity.status(), AgentStatus::Working);
+            assert!(!view.handle_ai_hook(
+                &hook_with_prompt(owner, "UserPromptSubmit", 6, Some("current-prompt")),
+                cx,
+            ));
 
             let queued_failure = hook_with_prompt(owner, "StopFailure", 4, Some("queued-prompt"));
             assert!(view.handle_ai_hook(&queued_failure, cx));
@@ -405,6 +427,44 @@ fn working_claude_enter_allows_the_queued_prompt_after_the_current_turn(cx: &mut
     window.run_until_parked();
     assert!(!receiver.try_iter().any(|msg| matches!(msg, Msg::Input(_))));
     receiver.try_iter().for_each(drop);
+}
+
+#[gpui::test]
+fn working_claude_enter_without_a_next_prompt_records_the_completion(cx: &mut TestAppContext) {
+    let owner = "working-enter-without-next-prompt";
+    let (view, window, receiver) = open(cx);
+    window.update(|_, cx| cx.update_global::<Settings, _>(|s, _| s.ai_auto_continue = true));
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert!(view.handle_ai_hook(
+                &hook_with_prompt(owner, "UserPromptSubmit", 1, Some("only-prompt")),
+                cx,
+            ));
+            view.on_key_down(
+                &gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("enter").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                window,
+                cx,
+            );
+            assert!(view.agent_activity.queued_prompt_pending());
+
+            // An empty Enter queues nothing; the current turn's completion
+            // must still be recorded instead of leaving the pane Working.
+            assert!(
+                view.handle_ai_hook(&hook_with_prompt(owner, "Stop", 2, Some("only-prompt")), cx,)
+            );
+            assert_eq!(view.agent_activity.status(), AgentStatus::Done);
+            assert!(view.auto_continue_task.is_none());
+        });
+    });
+    receiver.try_iter().for_each(drop);
+    window.run_until_parked();
+    window.executor().advance_clock(Duration::from_secs(10));
+    window.run_until_parked();
+    assert!(!receiver.try_iter().any(|msg| matches!(msg, Msg::Input(_))));
 }
 
 #[gpui::test]

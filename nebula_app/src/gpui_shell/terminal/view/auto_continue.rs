@@ -20,6 +20,12 @@ impl TerminalView {
         // A newer accepted event cancels the old turn's timer, even if not retryable.
         self.auto_continue_task = None;
         let delay = self.auto_continue.observe(event, Instant::now());
+        // Enter pressed while Claude was still Working may have queued the
+        // next prompt. The completion above is still recorded, but retrying
+        // would submit one prompt too many.
+        if self.agent_activity.queued_prompt_pending() {
+            return;
+        }
         if !cx.try_global::<Settings>().is_some_and(|settings| settings.ai_auto_continue) {
             return;
         }

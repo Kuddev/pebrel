@@ -44,6 +44,11 @@ pub(crate) struct AgentActivity {
     screen_blocked_fallback: Option<(AgentStatusSource, Option<String>)>,
     turn_observed: bool,
     pending_submit: bool,
+    /// A Claude prompt was typed while the previous turn was still Working.
+    /// The current turn's completion must still be recorded, but an automatic
+    /// retry would submit one prompt too many. Cleared when the provider
+    /// accepts a new prompt, a new turn is observed, or the session ends.
+    queued_prompt: bool,
     /// A completion-only hook latches its result until an idle screen or an
     /// explicit submission separates the old frame from a new turn.
     screen_armed: bool,
@@ -77,6 +82,7 @@ impl Default for AgentActivity {
             screen_blocked_fallback: None,
             turn_observed: false,
             pending_submit: false,
+            queued_prompt: false,
             screen_armed: true,
             command_ended: false,
             native_codex: false,
@@ -97,6 +103,12 @@ impl AgentActivity {
 
     pub fn is_current_turn(&self, turn_id: &str) -> bool {
         self.turn_id.as_deref() == Some(turn_id)
+    }
+
+    /// Whether a prompt typed during the current turn is still waiting for its
+    /// provider-confirmed identity. Automatic retry must not add another one.
+    pub fn queued_prompt_pending(&self) -> bool {
+        self.queued_prompt
     }
 
     pub fn source(&self) -> AgentStatusSource {
@@ -156,6 +168,7 @@ impl AgentActivity {
         if signal == Some(AgentStatus::Working) {
             self.turn_observed = true;
             self.screen_armed = true;
+            self.queued_prompt = false;
         }
         true
     }
@@ -199,14 +212,17 @@ impl AgentActivity {
         self.screen_blocked_fallback = None;
         self.turn_observed = true;
         self.pending_submit = true;
+        self.queued_prompt = false;
         self.last_activity_at = Some(std::time::Instant::now());
         self.input_sent_at(received_sequence);
     }
 
     /// Input sent while Claude is still working may queue the next prompt.
-    /// Keep the current turn active while waiting for its distinct prompt ID.
+    /// Record the current turn's completion normally, but do not auto-retry
+    /// over the prompt the user already queued.
     pub fn queued_submit(&mut self) {
         self.pending_submit = true;
+        self.queued_prompt = true;
         self.last_activity_at = Some(std::time::Instant::now());
         self.input_sent_at(super::current_receive_sequence());
     }
@@ -273,20 +289,24 @@ impl AgentActivity {
         {
             return false;
         }
-        // Claude provides no source sequence. A new prompt must have a new
-        // identity; a delayed hook from a previously observed turn cannot
-        // consume the submit guard.
+        // Claude provides no source sequence, so the provider-confirmed prompt
+        // identity is the authority. A distinct unseen ID may start the next
+        // turn even when a keybinding submitted it without a local Enter;
+        // replayed or still-current IDs cannot consume the submit guard.
         if event.source == "claude"
             && event.kind == AiHookKind::PromptSubmit
             && self.turn_id.is_some()
-            && (!self.pending_submit
-                || event.turn_id.is_none()
-                || event.turn_id.as_deref() == self.turn_id.as_deref())
+            && (event.turn_id.is_none() || event.turn_id.as_deref() == self.turn_id.as_deref())
         {
             return false;
         }
+        // An explicit local submission is waiting for its provider identity;
+        // the previous turn's completion must not close the new turn. A plain
+        // Enter during Working may have queued nothing, so its completion is
+        // recorded normally and only the automatic retry is suppressed.
         if event.source == "claude"
             && self.pending_submit
+            && !self.queued_prompt
             && event.kind != AiHookKind::SessionStart
             && event.kind != AiHookKind::PromptSubmit
             && self.turn_id.is_some()
@@ -391,6 +411,15 @@ impl AgentActivity {
             })
         {
             self.claude_prompt_ids.clear();
+        }
+        if event.source == "claude"
+            && event.kind == AiHookKind::SessionStart
+            && !event.session_compacted
+        {
+            self.queued_prompt = false;
+        }
+        if event.source == "claude" && event.kind == AiHookKind::PromptSubmit {
+            self.queued_prompt = false;
         }
         if event.source == "claude"
             && event.kind == AiHookKind::PromptSubmit
@@ -534,6 +563,7 @@ impl AgentActivity {
                     return false;
                 }
                 self.pending_submit = false;
+                self.queued_prompt = false;
                 self.turn_observed |= status == AgentStatus::Working;
                 status
             },
