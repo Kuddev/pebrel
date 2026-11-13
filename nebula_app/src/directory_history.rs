@@ -28,6 +28,10 @@ const FLUSH_DEBOUNCE: Duration = Duration::from_millis(500);
 #[cfg(test)]
 const FLUSH_DEBOUNCE: Duration = Duration::from_millis(10);
 
+/// 连续写盘失败达到该次数后关闭持久化：磁盘持续拒绝写入时，继续按去抖节奏
+/// 重试整库序列化与写穿透只会反复刷日志和 I/O。
+const MAX_FLUSH_FAILURES: u32 = 3;
+
 #[derive(Clone)]
 pub(crate) struct DirectoryHistory {
     state: Arc<Mutex<ServiceState>>,
@@ -177,7 +181,7 @@ impl DirectoryHistory {
             flusher.stop();
         }
         // 线程停止后同步收尾一次：覆盖与退出并发、尚未被 worker 看到的记录。
-        flush(&self.state);
+        let _ = flush(&self.state);
     }
 
     /// 空的内存实例，不碰磁盘。给**其它模块**的测试用（补齐引擎要一个不产出
@@ -383,6 +387,7 @@ fn flush_worker(
     wake: mpsc::Receiver<()>,
     stopping: Arc<AtomicBool>,
 ) {
+    let mut failures = 0u32;
     'worker: while !stopping.load(Ordering::Acquire) {
         if wake.recv().is_err() {
             break;
@@ -406,7 +411,22 @@ fn flush_worker(
             if stopping.load(Ordering::Acquire) {
                 break 'worker;
             }
-            flush(&state);
+            match flush(&state) {
+                None => failures = 0,
+                Some(err) => {
+                    failures += 1;
+                    if failures >= MAX_FLUSH_FAILURES {
+                        log::warn!(
+                            "Directory history persistence disabled after {failures} failed saves: {err}"
+                        );
+                        disable_persistence(&state);
+                        break;
+                    }
+                    log::debug!(
+                        "Failed to save directory history ({failures}/{MAX_FLUSH_FAILURES}): {err}"
+                    );
+                },
+            }
             // 信号可能在上一次落盘/去抖期间被容量为 1 的通道丢弃；以实际
             // pending 为准继续合并，保证锁竞争或落盘期间的新记录不会滞留。
             if !has_pending(&state) {
@@ -415,7 +435,7 @@ fn flush_worker(
         }
     }
     // 停止前的最后一次变更也要落盘，而不只是丢掉信号。
-    flush(&state);
+    let _ = flush(&state);
 }
 
 fn has_pending(state: &Mutex<ServiceState>) -> bool {
@@ -485,20 +505,21 @@ impl DirectoryDatabase {
 }
 
 /// 合并一次待落盘记录。磁盘 I/O 期间不持有状态锁，UI 线程的 `record`
-/// 与补全查询不会因为一次 JSON 写而停顿；失败时把批次放回队首等待重试。
-fn flush(state: &Mutex<ServiceState>) {
+/// 与补全查询不会因为一次 JSON 写而停顿；写失败时把批次放回队首，并把错误
+/// 交给 worker 累计。
+fn flush(state: &Mutex<ServiceState>) -> Option<String> {
     let (batch, path) = {
         let mut state = state.lock();
         if !state.persistence_enabled || (state.pending.is_empty() && state.unsaved_seed.is_none())
         {
-            return;
+            return None;
         }
         (std::mem::take(&mut state.pending), state.path.clone())
     };
 
     let Ok(Some(_lock)) = crate::atomic_file::try_lock(&path) else {
         restore_pending(state, batch);
-        return;
+        return None;
     };
 
     let mut merged = match read_database(&path) {
@@ -506,9 +527,8 @@ fn flush(state: &Mutex<ServiceState>) {
         Ok(None) => state.lock().unsaved_seed.clone().unwrap_or_default(),
         Err(err) => {
             log::warn!("Refusing to overwrite invalid directory history: {err}");
-            restore_pending(state, batch);
-            state.lock().persistence_enabled = false;
-            return;
+            disable_persistence(state);
+            return None;
         },
     };
     for observation in &batch {
@@ -530,10 +550,19 @@ fn flush(state: &Mutex<ServiceState>) {
             state.unsaved_seed = None;
         },
         Err(err) => {
-            log::warn!("Failed to save directory history: {err}");
             restore_pending(state, batch);
+            return Some(err.to_string());
         },
     }
+    None
+}
+
+/// 关闭持久化并丢弃待写批次：内存数据库仍是本进程的权威副本，重启后重新启用。
+fn disable_persistence(state: &Mutex<ServiceState>) {
+    let mut state = state.lock();
+    state.persistence_enabled = false;
+    state.pending.clear();
+    state.unsaved_seed = None;
 }
 
 fn restore_pending(state: &Mutex<ServiceState>, batch: Vec<Observation>) {
@@ -973,7 +1002,7 @@ mod tests {
             path: path.clone(),
             persistence_enabled: true,
         });
-        flush(&state);
+        assert_eq!(flush(&state), None);
         assert_eq!(std::fs::read(&path).unwrap(), future);
         assert!(!state.lock().persistence_enabled);
 
@@ -999,7 +1028,9 @@ mod tests {
         drop(lock);
         assert!(history.record(second.to_str().unwrap()));
 
-        wait_until(|| history.state.lock().pending.is_empty());
+        wait_until(|| {
+            read_database(&path).ok().flatten().is_some_and(|database| database.entries.len() == 2)
+        });
         let database = read_database(&path).unwrap().unwrap();
         assert_eq!(database.entries.len(), 2);
     }
@@ -1044,7 +1075,9 @@ mod tests {
         wait_until(|| history.state.lock().pending.len() == 3);
         drop(lock);
 
-        wait_until(|| history.state.lock().pending.is_empty());
+        wait_until(|| {
+            read_database(&path).ok().flatten().is_some_and(|database| database.entries.len() == 3)
+        });
         let database = read_database(&path).unwrap().unwrap();
         assert_eq!(database.entries.len(), 3);
         assert!(database.entries.iter().all(|entry| entry.rank == 1.0));
@@ -1067,6 +1100,30 @@ mod tests {
             history.score(&directory).is_some(),
             "a failed persistence pass must not roll back the in-memory record"
         );
+    }
+
+    #[test]
+    fn disabling_persistence_drops_the_batch_and_keeps_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("directory_history.json");
+        let directory = temp.path().join("kept");
+        std::fs::create_dir(&directory).unwrap();
+        let pending = observation(directory.to_str().unwrap(), current_time()).unwrap();
+        let state = Mutex::new(ServiceState {
+            database: DirectoryDatabase::default(),
+            pending: vec![pending],
+            unsaved_seed: Some(DirectoryDatabase::default()),
+            path,
+            persistence_enabled: true,
+        });
+
+        // 反复写盘失败后的终态：不再重试、不再保留待写批次。
+        disable_persistence(&state);
+
+        let state = state.lock();
+        assert!(!state.persistence_enabled);
+        assert!(state.pending.is_empty());
+        assert!(state.unsaved_seed.is_none());
     }
 
     #[test]
@@ -1129,7 +1186,7 @@ mod tests {
             persistence_enabled: true,
         });
 
-        flush(&state);
+        assert_eq!(flush(&state), None);
         let database = read_database(&path).unwrap().unwrap();
         assert_eq!(database.entries.len(), 2);
         assert!(state.lock().unsaved_seed.is_none());
