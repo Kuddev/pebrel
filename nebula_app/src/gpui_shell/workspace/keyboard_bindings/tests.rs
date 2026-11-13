@@ -930,9 +930,7 @@ mod dispatch {
     }
 
     #[gpui::test]
-    fn copy_working_directory_shortcut_respects_settings_search_focus(
-        cx: &mut TestAppContext,
-    ) {
+    fn copy_working_directory_shortcut_respects_settings_search_focus(cx: &mut TestAppContext) {
         use gpui::{ClipboardItem, Focusable as _};
 
         const SENTINEL: &str = "copy-cwd-sentinel";
