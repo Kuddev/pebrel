@@ -1,7 +1,7 @@
 //! Bounded native transcript projection. No history scan or screen-to-message guessing.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::Path,
@@ -23,7 +23,10 @@ const MESSAGE_BYTES: usize = 48 * 1024;
 const OUTPUT_BYTES: usize = 128 * 1024;
 const MESSAGE_COUNT: usize = 160;
 
+mod antigravity;
 mod remote;
+
+pub(crate) use antigravity::valid_session_id as valid_antigravity_session_id;
 
 pub(crate) enum Location {
     Local(PaneExecContext),
@@ -55,6 +58,7 @@ pub(crate) struct Message {
 }
 
 struct Capture {
+    path: String,
     head: Vec<u8>,
     bytes: Vec<u8>,
     start: u64,
@@ -68,13 +72,16 @@ pub(crate) fn read(
     previous: Option<&str>,
 ) -> Result<Value, ApiError> {
     let capture = match &source.location {
-        Location::Ssh(reader) => remote::capture(reader, &source.path, before)?,
+        Location::Ssh(reader) => remote::capture(reader, &source, before)?,
         Location::Local(context) if context.wsl_distribution().is_some() => {
             capture_wsl(&source, context, before)?
         },
+        Location::Local(_) if source.identity.kind == "antigravity" => {
+            antigravity::capture_local(&source.identity.session_id, before)?
+        },
         Location::Local(_) => capture_file(Path::new(&source.path), before)?,
     };
-    validate_source(&source.identity, &source.path, &capture.head)?;
+    validate_source(&source.identity, &capture.path, &capture.head)?;
     let mut hash = Sha256::new();
     hash.update(capture.stamp.as_bytes());
     hash.update(&capture.bytes);
@@ -96,7 +103,16 @@ fn io_failure(_: impl std::fmt::Display) -> ApiError {
 }
 
 fn capture_file(path: &Path, before: Option<u64>) -> Result<Capture, ApiError> {
-    let mut file = File::open(path).map_err(io_failure)?;
+    let file = File::open(path).map_err(io_failure)?;
+    let resolved = path.to_str().ok_or_else(|| io_failure("utf8 path"))?.to_owned();
+    capture_open_file(file, resolved, before)
+}
+
+fn capture_open_file(
+    mut file: File,
+    path: String,
+    before: Option<u64>,
+) -> Result<Capture, ApiError> {
     let meta = file.metadata().map_err(io_failure)?;
     if !meta.is_file() {
         return Err(io_failure("not a file"));
@@ -116,6 +132,7 @@ fn capture_file(path: &Path, before: Option<u64>) -> Result<Capture, ApiError> {
         return Err(changed());
     }
     Ok(Capture {
+        path,
         head,
         bytes,
         start,
@@ -129,21 +146,57 @@ fn capture_wsl(
     context: &PaneExecContext,
     before: Option<u64>,
 ) -> Result<Capture, ApiError> {
+    let antigravity_id = if source.identity.kind == "antigravity" {
+        if !valid_antigravity_session_id(&source.identity.session_id) {
+            return Err(io_failure("session_id"));
+        }
+        source.identity.session_id.clone()
+    } else {
+        String::new()
+    };
     // 路径只作为 argv 传入，脚本固定；在所属发行版中读取，避免 9P/UNC 与用户映射差异。
     const SCRIPT: &str = r#"set -eu
 p=$1
+used_compact=0
+if [ -n "${3:-}" ]; then
+  d="$HOME"
+  for seg in .gemini antigravity-cli brain "$3" .system_generated logs; do
+    d="$d/$seg"
+    [ ! -L "$d" ] && [ -d "$d" ]
+  done
+  if [ -e "$d/transcript_full.jsonl" ] || [ -L "$d/transcript_full.jsonl" ]; then
+    p="$d/transcript_full.jsonl"
+  else
+    p="$d/transcript.jsonl"
+    used_compact=1
+  fi
+  [ ! -L "$p" ]
+fi
 [ -f "$p" ]
 size=$(stat -c %s -- "$p")
-stamp=$(stat -c '%i:%s:%y:%z' -- "$p")
+stamp=$(stat -c '%i:%s:%y:%z:%F' -- "$p")
 end=${2:-$size}
 [ "$end" -le "$size" ]
 start=$((end > 1048576 ? end - 1048576 : 0))
 readstart=$((start > 0 ? start - 1 : 0))
-printf '%s\n%s\n' "$end" "$stamp"
+printf '%s' "$p" | base64 -w 0
+printf '\n%s\n%s\n' "$end" "$stamp"
 head -c 262144 -- "$p" | base64 -w 0
 printf '\n'
 tail -c +$((readstart + 1)) -- "$p" | head -c $((end - readstart)) | base64 -w 0
-printf '\n%s\n' "$(stat -c '%i:%s:%y:%z' -- "$p")"
+after=$(stat -c '%i:%s:%y:%z:%F' -- "$p")
+if [ -n "${3:-}" ]; then
+  d="$HOME"
+  for seg in .gemini antigravity-cli brain "$3" .system_generated logs; do
+    d="$d/$seg"
+    [ ! -L "$d" ] && [ -d "$d" ]
+  done
+  [ ! -L "$p" ]
+  if [ "$used_compact" = 1 ] && { [ -e "$d/transcript_full.jsonl" ] || [ -L "$d/transcript_full.jsonl" ]; }; then
+    after=upgraded
+  fi
+fi
+printf '\n%s\n' "$after"
 "#;
     let result = crate::runtime_exec::execute(
         context.clone(),
@@ -155,6 +208,7 @@ printf '\n%s\n' "$(stat -c '%i:%s:%y:%z' -- "$p")"
             "pebrel-conversation".into(),
             source.path.clone(),
             before.map(|value| value.to_string()).unwrap_or_default(),
+            antigravity_id,
         ],
         5000,
         2 * 1024 * 1024,
@@ -163,16 +217,19 @@ printf '\n%s\n' "$(stat -c '%i:%s:%y:%z' -- "$p")"
         return Err(io_failure("guest read failed"));
     }
     let mut lines = result["stdout"].as_str().unwrap_or_default().lines();
+    let base64 = base64::engine::general_purpose::STANDARD;
+    let path_bytes =
+        base64.decode(lines.next().ok_or_else(|| io_failure("path"))?).map_err(io_failure)?;
+    let path = String::from_utf8(path_bytes).map_err(io_failure)?;
     let end =
         lines.next().and_then(|s| s.parse::<u64>().ok()).ok_or_else(|| io_failure("metadata"))?;
     let stamp = lines.next().ok_or_else(|| io_failure("metadata"))?.to_owned();
-    let base64 = base64::engine::general_purpose::STANDARD;
     let head = base64.decode(lines.next().unwrap_or_default()).map_err(io_failure)?;
     let bytes = base64.decode(lines.next().unwrap_or_default()).map_err(io_failure)?;
     if lines.next() != Some(stamp.as_str()) {
         return Err(changed());
     }
-    Ok(Capture { head, bytes, start: end.saturating_sub(PAGE_BYTES as u64), end, stamp })
+    Ok(Capture { path, head, bytes, start: end.saturating_sub(PAGE_BYTES as u64), end, stamp })
 }
 
 fn changed() -> ApiError {
@@ -195,6 +252,7 @@ fn validate_source(identity: &Identity, path: &str, head: &[u8]) -> Result<(), A
             path.rsplit(['/', '\\']).next().and_then(|name| name.strip_suffix(".jsonl"))
                 == Some(identity.session_id.as_str())
         },
+        "antigravity" => antigravity::valid_source(&identity.session_id, path, head),
         _ => false,
     };
     if valid {
@@ -226,6 +284,7 @@ fn project(
     let cursor = (offset > 0).then_some(offset);
     let mut messages = Vec::new();
     let mut calls = HashMap::new();
+    let mut pending_tools = VecDeque::new();
     let mut truncated = false;
     for line in bytes.split_inclusive(|b| *b == b'\n') {
         let id = offset.to_string();
@@ -238,10 +297,12 @@ fn project(
             truncated = true;
             continue;
         };
-        if identity.kind == "codex" {
-            codex(&record, &id, &mut messages, &mut calls);
-        } else {
-            claude(&record, identity, &id, &mut messages, &mut calls)?;
+        match identity.kind.as_str() {
+            "codex" => codex(&record, &id, &mut messages, &mut calls),
+            "antigravity" => {
+                antigravity::project_step(&record, &id, &mut messages, &mut pending_tools)
+            },
+            _ => claude(&record, identity, &id, &mut messages, &mut calls)?,
         }
     }
     let mut kept = 0;

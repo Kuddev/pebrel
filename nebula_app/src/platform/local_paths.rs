@@ -54,6 +54,51 @@ pub(crate) fn drive_exists(letter: char) -> bool {
     }
 }
 
+/// Whether `symlink_metadata` / unfollowed handle metadata describes a symlink
+/// or Windows reparse point (including directory junctions).
+pub(crate) fn is_symlink_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.file_type().is_symlink()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_type().is_symlink()
+            || (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    }
+}
+
+/// Open a regular file for reading without following a leaf symlink or Windows
+/// reparse point, closing the check-to-open race on the final path component.
+pub(crate) fn open_regular_file_no_follow(
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path)?
+    };
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || is_symlink_or_reparse(&metadata) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular non-reparse file",
+        ));
+    }
+    Ok(file)
+}
+
 #[cfg(unix)]
 fn system_hostname() -> Option<String> {
     let mut buffer = [0u8; 256];
@@ -161,5 +206,26 @@ mod tests {
         assert_eq!(hostname_from_buffer(b"\xff\0"), None);
         assert_eq!(hostname_from_buffer(b"\0"), None);
         assert_eq!(hostname_from_buffer(b""), None);
+    }
+
+    #[test]
+    fn open_regular_file_no_follow_accepts_plain_files_and_rejects_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("plain.jsonl");
+        std::fs::write(&plain, b"{}\n").unwrap();
+        assert!(super::open_regular_file_no_follow(&plain).is_ok());
+        assert!(super::open_regular_file_no_follow(dir.path()).is_err());
+
+        let link = dir.path().join("linked.jsonl");
+        if let Err(error) = super::symlink_file_for_test(&plain, &link) {
+            #[cfg(windows)]
+            if error.raw_os_error() == Some(1314) {
+                return;
+            }
+            panic!("file symlink fixture: {error}");
+        }
+        let link_meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(super::is_symlink_or_reparse(&link_meta));
+        assert!(super::open_regular_file_no_follow(&link).is_err());
     }
 }
