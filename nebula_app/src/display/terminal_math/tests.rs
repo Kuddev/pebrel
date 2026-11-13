@@ -1007,6 +1007,26 @@ fn single_dollar_accepts_only_explicit_math_shapes() {
 }
 
 #[test]
+fn inline_dollar_at_the_right_edge_only_checks_neighbors_on_the_same_logical_line() {
+    use nebula_terminal::term::test::mock_term;
+
+    let term = mock_term("$x^2$\r\nnext ");
+    let size = test_size(5.0, 2.0);
+    let mut state = TerminalMathState::default();
+    let overlays =
+        scan_visible(&mut state, &term, &size, &[], false, None, Rgb::default(), |_| true);
+    assert_eq!(overlays.len(), 1, "a hard newline terminates the current formula");
+    assert_eq!(overlays[0].source.as_ref(), "x^2");
+
+    // An actual continuation still counts, as does a word on the same row.
+    let mut wrapped = TextGrid::from_rows(&["$x^2$", "next "]);
+    wrapped.wrapped[0] = true;
+    assert!(scan_grid(&wrapped).is_empty());
+    assert!(sources(&["$x^2$next"]).is_empty());
+    assert!(sources(&["echo $1$2"]).is_empty());
+}
+
+#[test]
 fn issue420_inline_atoms_and_polynomials_do_not_consume_neighboring_formulas() {
     assert_eq!(
         sources(&[

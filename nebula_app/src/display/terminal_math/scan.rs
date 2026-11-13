@@ -170,6 +170,12 @@ impl TextGrid {
         }
     }
 
+    fn logical_neighbor(&self, position: GridPosition, adjacent: GridPosition) -> Option<char> {
+        (position.row == adjacent.row || self.wrapped[position.row.min(adjacent.row)])
+            .then(|| self.character(adjacent))
+            .flatten()
+    }
+
     /// Closing search for **display** delimiters: they own the rows between
     /// them, so a real newline is part of the formula. Agent TUIs that hard-wrap
     /// a block formula across rows are recovered by this path.
@@ -833,7 +839,7 @@ pub(super) fn find_dollar_formula(
     }
     // 第一个闭合候选失败就交回逐格扫描，不能越过后续公式把正文吞进同一源码。
     let close = find_inline_dollar_closing(grid, source_start)?;
-    let next = grid.next(close).and_then(|position| grid.character(position));
+    let next = grid.next(close).and_then(|next| grid.logical_neighbor(close, next));
     if next.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_') {
         return None;
     }
@@ -865,10 +871,13 @@ pub(super) fn find_inline_dollar_closing(
         }
         bytes = bytes.checked_sub(grid.character(position).map_or(0, char::len_utf8))?;
         if grid.character(position) == Some('$') && !grid.is_escaped(position) {
-            let previous_is_dollar =
-                grid.previous(position).and_then(|previous| grid.character(previous)) == Some('$');
+            let previous_is_dollar = grid
+                .previous(position)
+                .and_then(|previous| grid.logical_neighbor(position, previous))
+                == Some('$');
             let next_is_dollar =
-                grid.next(position).and_then(|next| grid.character(next)) == Some('$');
+                grid.next(position).and_then(|next| grid.logical_neighbor(position, next))
+                    == Some('$');
             if !previous_is_dollar && !next_is_dollar {
                 return Some(position);
             }
