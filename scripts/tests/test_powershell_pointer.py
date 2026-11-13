@@ -286,10 +286,16 @@ class PowerShellPointerTests(unittest.TestCase):
         # redraw advertisement appears.
         session = self.start(before=(
             "function global:Set-PSReadLineKeyHandler {\n"
-            "  if (\"$args\" -match 'Ctrl\\\\+Shift\\\\+F9') { throw 'fixture: redraw refused' }\n"
+            "  if ($args -contains 'Ctrl+Shift+F9') {\n"
+            "    [Console]::Write(\"$([char]27)]1337;SetUserVar=qa_redraw_refused=eQ==$([char]7)\")\n"
+            "    throw 'fixture: redraw refused'\n"
+            "  }\n"
             "  & (Get-Command Set-PSReadLineKeyHandler -CommandType Cmdlet) @args\n"
             "}\n"
         ))
+        # The fixture must prove the refusal was actually injected before the
+        # isolation assertions mean anything.
+        self.assertIn(b"SetUserVar=qa_redraw_refused=eQ==\x07", session.output)
         self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
         self.assertIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
         self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
@@ -339,8 +345,13 @@ class PowerShellPointerTests(unittest.TestCase):
             "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ScriptBlock { "
             "[Microsoft.PowerShell.PSConsoleReadLine]::Insert('USER-F9') } -BriefDescription ClearScreen\r"
         ).encode())
-        output = session.wait(b"PS> ")
-        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        # Keying the raw chord as soon as the prompt shows up lands it inside
+        # the read's cursor-position handshake and the buffer receives "~;".
+        # Wait for the next editor read to announce itself, then finish the
+        # handshake before sending the chord.
+        session.wait(b"SetUserVar=qa_ready=")
+        session.settle()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", session.output)
         os.write(session.master, b"\x1b[20;6~")
         session.settle()
         self.assertEqual(self.snapshot(session)[1], "USER-F9")
