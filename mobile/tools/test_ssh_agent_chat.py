@@ -177,10 +177,12 @@ class RelayTest(unittest.TestCase):
         calls = []
 
         def run(args, **options):
+            self.assertEqual(Path(SPEC.origin).read_bytes(), options["input"])
             calls.append((args, json.loads(chat.base64.b64decode(args[-1]))))
             return mock.Mock(stdout=("PEBREL_SSH_CHAT=" + json.dumps(reply) + "\n").encode())
 
-        with mock.patch.object(chat, "processes", lambda: self.rows), \
+        with mock.patch.object(chat.sys, "argv", [SPEC.origin]), \
+                mock.patch.object(chat, "processes", lambda: self.rows), \
                 mock.patch.object(chat, "tmux_pane", lambda client, terminal: None), \
                 mock.patch.object(chat, "owner", lambda pid: os.getuid() + 1), \
                 mock.patch.object(chat, "link", lambda path: None), mock.patch.object(chat.subprocess, "run", run):
