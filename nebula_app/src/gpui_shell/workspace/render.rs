@@ -257,7 +257,6 @@ impl Render for NebulaWorkspace {
                 {
                     view.update(cx, |view, cx| view.copy_working_directory(window, cx));
                 }
-                this.focus_active(window, cx);
             }))
             .child(
                 // 用户显式配置的背景图画在 chrome 之下；系统 Mica/Aero/Acrylic
