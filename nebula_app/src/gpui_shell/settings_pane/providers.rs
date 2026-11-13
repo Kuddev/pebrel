@@ -5,7 +5,7 @@ use crate::ai_providers::{AiProvider, ProviderKind};
 mod brand;
 mod predictions;
 mod select_trigger;
-pub(super) use select_trigger::ProviderSelectTrigger;
+use select_trigger::ProviderSelectTrigger;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod interaction_tests {

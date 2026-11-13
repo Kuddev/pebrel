@@ -374,13 +374,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn agent_resume_rule_search_opens_the_agents_controls() {
-        for query in ["antigravity", "yolo", "fork", "会话恢复", "分叉", "附加参数"] {
-            for language in [crate::display::UiLanguage::ZhCn, crate::display::UiLanguage::EnUs] {
-                assert_eq!(matching_sections(query, language).first(), Some(&10), "{query}");
-            }
-        }
-    }
 }

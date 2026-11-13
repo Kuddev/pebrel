@@ -210,7 +210,7 @@
         "keymap": "keymap key binding shortcut quick terminal",
         "advanced": "advanced session tray restore startup autostart login silent",
         "backup": "backup cloud sync export restore webdav s3 sftp 123 nextcloud synology nas r2 minio snapshots",
-        "agents": "agents agent hook hooks claude codex antigravity gemini amp opencode cursor kimi pi omp copilot grok resume fork yolo arguments rules",
+        "agents": "agents agent hook hooks claude codex opencode cursor kimi pi omp copilot grok",
         "mobile": "mobile phone android ios remote pairing qr lan relay",
         "plugins": "plugins plugin extension extensions luau install grant generate"
       }
@@ -540,18 +540,7 @@
       "helper_missing": "The hook helper is missing. Repair the Pebrel installation to enable hooks.",
       "needs_repair": "Hook installed · needs repair",
       "initialize": "Run this agent once to create its configuration, then refresh.",
-      "config_path": "Configuration: {path}",
-      "resume_args_title": "Session resume & fork rules",
-      "resume_args_description": "Append custom CLI arguments when Pebrel resumes or forks an agent session (for example, --yolo for Codex or --dangerously-skip-permissions for Claude Code and Antigravity).",
-      "resume_args_agent": "Agent",
-      "resume_args_suffix": "Command suffix",
-      "resume_args_placeholder": "e.g. --yolo or --dangerously-skip-permissions",
-      "resume_args_add": "Save rule",
-      "resume_args_empty": "No argument rules configured yet. Choose an agent above and enter a command suffix to add one.",
-      "resume_args_invalid": "Enter valid CLI flags (without unquoted shell operators) or a JSON string array.",
-      "resume_args_saved": "Saved argument rule for {agent}.",
-      "resume_args_cmd_note": "Contains \", %, or ! — supported in POSIX shells and PowerShell, but rejected in cmd.exe.",
-      "resume_args_saved_cmd_note": "Saved argument rule for {agent}. Contains \", %, or ! — supported in POSIX shells and PowerShell, but rejected in cmd.exe."
+      "config_path": "Configuration: {path}"
     },
     "plugins": {
       "title": "Plugins",
@@ -1541,8 +1530,8 @@
     "restore_failed": "This AI conversation could not be restored. Its saved target is preserved. Use Retry recovery in the tab menu, or locate it in session history.",
     "restore_choose_codex": "The saved Codex conversation is unavailable. Choose a conversation in Codex to continue.",
     "restore_ambiguous": "More than one native session file matches this conversation. The saved target is preserved; choose the exact conversation from session history.",
-    "restore_rule_incompatible": "{agent} resume rule cannot be passed safely in {shell}. Edit or disable it in Settings → Agents, or continue once without applying the rule.",
-    "restore_rule_invalid": "{agent} resume rule has invalid syntax. Edit or disable it in Settings → Agents, or continue once without applying the rule.",
+    "restore_rule_incompatible": "{agent} resume rule cannot be passed safely in {shell}. Update or disable the rule in settings, or continue once without applying it.",
+    "restore_rule_invalid": "{agent} resume rule has invalid syntax. Update or disable the rule in settings, or continue once without applying it.",
     "retry": "Retry session recovery",
     "retry_without_rule": "Continue without rule"
   },

@@ -18,13 +18,12 @@ type TestOperation = std::sync::Arc<
 >;
 
 pub(super) struct AgentSettingsState {
-    pub(super) rows: Option<Vec<AgentIntegration>>,
+    rows: Option<Vec<AgentIntegration>>,
     loading: bool,
     busy: Option<AgentKind>,
     sequence: u64,
     feedback: Option<(AgentKind, Result<bool, String>)>,
     focus: Vec<FocusHandle>,
-    pub(super) resume_ui: Option<super::agent_resume::AgentResumeSettingsUi>,
     #[cfg(all(test, feature = "gpui-test-support"))]
     test_operation: Option<TestOperation>,
 }
@@ -38,7 +37,6 @@ impl AgentSettingsState {
             sequence: 0,
             feedback: None,
             focus: integrations::AGENTS.iter().map(|_| cx.focus_handle().tab_stop(true)).collect(),
-            resume_ui: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             test_operation: None,
         }
@@ -114,13 +112,8 @@ impl SettingsPane {
         cx.notify();
     }
 
-    pub(super) fn section_agents(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    pub(super) fn section_agents(&mut self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         self.prepare_agent_brands(window, cx);
-        self.prepare_agent_resume_settings(window, cx);
         if self.agents.rows.is_none() && !self.agents.loading {
             self.refresh_agents(cx);
         }
@@ -189,50 +182,6 @@ impl SettingsPane {
                     .text_color(muted)
                     .child(language.text(Message::SettingsAgentsRestart)),
             )
-            .child(self.agent_resume_settings(cx))
-    }
-
-    pub(super) fn agent_brand_icon(&self, agent: AgentKind, cx: &App) -> gpui::AnyElement {
-        use crate::gpui_shell::assets::nav;
-        if matches!(
-            agent,
-            AgentKind::Qoder
-                | AgentKind::Qwen
-                | AgentKind::CodeBuddy
-                | AgentKind::Droid
-                | AgentKind::Antigravity
-                | AgentKind::Hermes
-        ) {
-            self.provider_brand(agent)
-        } else if let Some(path) = match agent {
-            AgentKind::Claude => Some(nav::AGENT_CLAUDE),
-            AgentKind::Codex => Some(nav::AGENT_OPENAI),
-            AgentKind::Gemini => Some("icons/nebula-provider-gemini.svg"),
-            AgentKind::OpenCode => Some(nav::AGENT_OPENCODE),
-            AgentKind::Cursor => Some(nav::AGENT_CURSOR),
-            AgentKind::Kimi => Some(nav::AGENT_KIMI),
-            AgentKind::Pi => Some(nav::AGENT_PI),
-            AgentKind::OhMyPi => Some(nav::AGENT_OMP),
-            AgentKind::Copilot => Some(nav::AGENT_COPILOT),
-            AgentKind::Grok => Some(nav::AGENT_GROK),
-            _ => None,
-        } {
-            Icon::default()
-                .path(path)
-                .size(px(24.0))
-                .text_color(match agent {
-                    AgentKind::Claude => rgb_hsla(217, 119, 87),
-                    AgentKind::OhMyPi => rgb_hsla(147, 98, 239),
-                    _ => cx.theme().foreground,
-                })
-                .into_any_element()
-        } else {
-            div()
-                .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
-                .text_size(px(24.0))
-                .child(crate::display::program_icon(agent.slug()))
-                .into_any_element()
-        }
     }
 
     fn agent_hook_row(
@@ -314,7 +263,45 @@ impl SettingsPane {
             .when_some(note, |view, note| {
                 view.child(div().text_xs().text_color(muted).child(note))
             });
-        let icon = self.agent_brand_icon(agent, cx);
+        use crate::gpui_shell::assets::nav;
+        let icon = if matches!(
+            agent,
+            AgentKind::Qoder
+                | AgentKind::Qwen
+                | AgentKind::CodeBuddy
+                | AgentKind::Droid
+                | AgentKind::Antigravity
+                | AgentKind::Hermes
+        ) {
+            self.provider_brand(agent)
+        } else if let Some(path) = match agent {
+            AgentKind::Claude => Some(nav::AGENT_CLAUDE),
+            AgentKind::Codex => Some(nav::AGENT_OPENAI),
+            AgentKind::OpenCode => Some(nav::AGENT_OPENCODE),
+            AgentKind::Cursor => Some(nav::AGENT_CURSOR),
+            AgentKind::Kimi => Some(nav::AGENT_KIMI),
+            AgentKind::Pi => Some(nav::AGENT_PI),
+            AgentKind::OhMyPi => Some(nav::AGENT_OMP),
+            AgentKind::Copilot => Some(nav::AGENT_COPILOT),
+            AgentKind::Grok => Some(nav::AGENT_GROK),
+            _ => None,
+        } {
+            Icon::default()
+                .path(path)
+                .size(px(24.0))
+                .text_color(match agent {
+                    AgentKind::Claude => rgb_hsla(217, 119, 87),
+                    AgentKind::OhMyPi => rgb_hsla(147, 98, 239),
+                    _ => cx.theme().foreground,
+                })
+                .into_any_element()
+        } else {
+            div()
+                .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
+                .text_size(px(24.0))
+                .child(crate::display::program_icon(agent.slug()))
+                .into_any_element()
+        };
         h_flex()
             .id(("agent-hook-row", index))
             .debug_selector(move || format!("agent-hook-row-{index}"))

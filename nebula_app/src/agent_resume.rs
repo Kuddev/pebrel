@@ -99,6 +99,7 @@ pub(crate) fn shell_label(shell: PathQuote, program: Option<&str>) -> String {
         .to_owned()
 }
 
+#[cfg(test)]
 pub(crate) fn incompatible_with_cmd(value: &str) -> bool {
     parse(value).is_some_and(|args| {
         !args.is_empty()
