@@ -116,12 +116,9 @@ pub fn run_shell(
             cwd: crate::platform::startup::resident_launch_directory(
                 initial_cwd.clone(),
                 &settings,
-                crate::platform::launch_directory::is_wsl(
-                    initial_command
-                        .clone()
-                        .map(Into::into)
-                        .or_else(|| workspace::shell_launch::startup_shell(shell_id.clone()))
-                        .as_ref(),
+                workspace::shell_launch::requests_wsl(
+                    initial_command.as_ref(),
+                    shell_id.as_deref().or(settings.shell.as_deref()),
                 ),
             ),
             command: initial_command.clone(),
@@ -205,8 +202,9 @@ pub fn run_shell(
         let handover_cwd = crate::platform::startup::resident_launch_directory(
             initial_cwd.clone(),
             &settings,
-            crate::platform::launch_directory::is_wsl(
-                workspace::shell_launch::startup_shell(shell_id.clone()).as_ref(),
+            workspace::shell_launch::requests_wsl(
+                None,
+                shell_id.as_deref().or(settings.shell.as_deref()),
             ),
         );
         for _ in 0..40 {
