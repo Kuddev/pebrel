@@ -666,7 +666,7 @@ fn active_cli_input_logical_line_is_never_persisted_as_math_output() {
 
     let mut state = TerminalMathState::default();
     state.synchronize_grid(&grid);
-    assert!(state.scan_visible_grid(&grid, Some(&active_rows)).is_none());
+    state.scan_visible_grid(&grid, Some(&active_rows));
 
     let overlays = state.visible_overlays(&grid);
     assert_eq!(overlays.len(), 1);
@@ -674,14 +674,21 @@ fn active_cli_input_logical_line_is_never_persisted_as_math_output() {
 }
 
 #[test]
-fn unmatched_display_delimiter_on_live_input_does_not_start_history_reconstruction() {
-    let grid = TextGrid::from_rows(&["prompt $$"]);
-    let active_rows = grid.logical_rows_containing(0).expect("cursor row");
-    let mut state = TerminalMathState::default();
-    state.synchronize_grid(&grid);
+fn clipped_display_formula_leaves_active_or_masked_source_rows_untouched() {
+    use nebula_terminal::term::test::mock_term;
 
-    assert!(state.scan_visible_grid(&grid, Some(&active_rows)).is_none());
-    assert!(state.pending_display.is_none());
+    let mut term = mock_term("ordinary terminal output\r\n\\[\r\nx^2\r\n\\]\r\nprompt");
+    term.set_presentation_origin(Some(Line(2)));
+    let size = test_size(term.columns() as f32, 2.0);
+    for (cursor, masked) in [(Some(Point::new(0, Column(0))), false), (None, true)] {
+        let mut state = TerminalMathState::default();
+        let overlays =
+            scan_visible(&mut state, &term, &size, &[], false, cursor, Rgb::default(), |row| {
+                !masked || row != 0
+            });
+        assert!(overlays.is_empty());
+        assert!(state.formulas.is_empty());
+    }
 }
 
 #[test]
@@ -1076,58 +1083,68 @@ fn persisted_formula_survives_partial_scroll_without_rescaling_its_bounds() {
 }
 
 #[test]
+fn display_formula_is_clipped_on_its_first_frame_at_either_viewport_edge() {
+    use nebula_terminal::term::test::mock_term;
+
+    for (open, close) in [(r"\[", r"\]"), ("$$", "$$")] {
+        let mut term = mock_term(&format!(
+            "a line of ordinary terminal output\r\nprose\r\n{open}\r\nx^2 + \\frac{{1}}{{2}}\r\n{close}\r\ntail\r\nprompt"
+        ));
+        for (origin, lines, first_row, last_row) in [(1, 3, 1, 3), (3, 3, -1, 1), (3, 1, -1, 1)] {
+            term.set_presentation_origin(Some(Line(origin)));
+            let size = test_size(term.columns() as f32, lines as f32);
+            let mut state = TerminalMathState::default();
+            let overlays =
+                scan_visible(&mut state, &term, &size, &[], false, None, Rgb::default(), |_| true);
+
+            assert_eq!(overlays.len(), 1, "{open} at viewport origin {origin}");
+            assert_eq!(overlays[0].source.as_ref(), r"x^2 + \frac{1}{2}");
+            assert_eq!(overlays[0].spans.first().map(|span| span.row), Some(first_row));
+            assert_eq!(overlays[0].spans.last().map(|span| span.row), Some(last_row));
+            let prepared = prepare_overlays(&mut state, &overlays, &size, TEST_FONT_PX, 1.0);
+            let plan = plan_overlay_draw(
+                &mut state,
+                &overlays[0],
+                prepared[0].as_ref().expect("the full formula must fit"),
+                &size,
+                1.0,
+            )
+            .expect("a visible portion of the formula must remain paintable");
+            if first_row < 0 {
+                assert_eq!(plan.clip_top, 0.0);
+            }
+            if last_row >= lines {
+                assert_eq!(plan.clip_bottom, size.height());
+            }
+        }
+    }
+}
+
+#[test]
 fn streamed_display_formula_completes_after_opening_scrolls_into_history() {
+    use nebula_terminal::event::VoidListener;
+    use nebula_terminal::event_loop::StreamProcessor;
+    use nebula_terminal::term::test::mock_term;
+
+    let mut term = mock_term(&format!("{}\r\n\r\n\r\n", " ".repeat(48)));
+    let size = test_size(term.columns() as f32, term.screen_lines() as f32);
     let mut state = TerminalMathState::default();
-    let opening = grid_at(
-        &[
-            "$$                      ",
-            r"\begin{aligned}         ",
-            r"f(x) &= x^2 \\          ",
-            "h(x) &= x^3            ",
-        ],
-        40,
-        0,
+    let mut stream = StreamProcessor::default();
+    stream.feed(
+        &mut term,
+        &VoidListener,
+        b"$$\r\n\\begin{aligned}\r\nf(x) &= x^2 \\\\\r\nh(x) &= x^3",
     );
-    state.synchronize_grid(&opening);
-    assert!(state.scan_visible_grid(&opening, None).is_none());
+    let before = scan_visible(&mut state, &term, &size, &[], false, None, Rgb::default(), |_| true);
+    assert!(before.is_empty());
 
-    let visible_tail = grid_at(
-        &[
-            r"g(x) &= x+1            ",
-            r"\end{aligned}           ",
-            "$$                      ",
-            "tail                    ",
-        ],
-        44,
-        0,
-    );
-    state.synchronize_grid(&visible_tail);
-    let history_anchor = state
-        .scan_visible_grid(&visible_tail, None)
-        .expect("closing delimiter requests the pending opening from history");
-    assert_eq!(history_anchor, FormulaAnchor { row: 40, column: 0 });
-
-    let history = grid_at(
-        &[
-            "$$                      ",
-            r"\begin{aligned}         ",
-            r"f(x) &= x^2 \\          ",
-            "h(x) &= x^3            ",
-            "g(x) &= x+1            ",
-            r"\end{aligned}           ",
-            "$$                      ",
-            "tail                    ",
-        ],
-        40,
-        0,
-    );
-    assert!(state.complete_pending_from_history(&history));
-
-    let overlays = state.visible_overlays(&visible_tail);
-    assert_eq!(overlays.len(), 1);
-    assert!(overlays[0].source.contains("f(x)"));
-    assert_eq!(overlays[0].spans.first().map(|span| span.row), Some(-4));
-    assert_eq!(overlays[0].spans.last().map(|span| span.row), Some(2));
+    stream.feed(&mut term, &VoidListener, b"\r\n\\end{aligned}\r\n$$\r\nprompt");
+    assert_eq!(term.grid().history_size(), 3);
+    let after = scan_visible(&mut state, &term, &size, &[], false, None, Rgb::default(), |_| true);
+    assert_eq!(after.len(), 1);
+    assert!(after[0].source.contains("f(x)"));
+    assert_eq!(after[0].spans.first().map(|span| span.row), Some(-3));
+    assert_eq!(after[0].spans.last().map(|span| span.row), Some(2));
 }
 
 #[test]
@@ -1163,31 +1180,23 @@ fn tui_redraw_blank_interim_frame_keeps_the_persisted_formula() {
 }
 
 #[test]
-fn orphan_closing_delimiter_recovers_the_formula_from_history() {
+fn clipped_closer_does_not_consume_the_next_display_formula() {
+    use nebula_terminal::term::test::mock_term;
+
+    let mut term = mock_term(
+        "ordinary terminal output\r\n$$\r\nx^2\r\n$$\r\ny^2 + z^2\r\n$$\r\na^2 + b^2\r\n$$\r\nprompt",
+    );
+    term.set_presentation_origin(Some(Line(3)));
+    let size = test_size(term.columns() as f32, 5.0);
     let mut state = TerminalMathState::default();
-    // Viewport starts below the formula opener: only the closing `$$` is
-    // visible (e.g. the persisted copy was evicted by a redraw glitch).
-    let visible = grid_at(&["$$   ", "tail "], 45, 0);
-    state.synchronize_grid(&visible);
-    assert!(state.scan_visible_grid(&visible, None).is_none());
-
-    let anchor = state
-        .scan_visible_grid(&visible, None)
-        .expect("stable orphan delimiter requests one history pass");
-    assert_eq!(anchor, FormulaAnchor { row: 45, column: 0 });
-
-    let history = grid_at(&["$$   ", "x^2  ", "$$   ", "tail "], 43, 0);
-    assert!(state.complete_pending_from_history(&history));
-
-    let overlays = state.visible_overlays(&visible);
-    assert_eq!(overlays.len(), 1);
-    assert_eq!(overlays[0].source.as_ref(), "x^2");
-    assert_eq!(overlays[0].spans.first().map(|span| span.row), Some(-2));
-
-    // The attempt is consumed: the same orphan never re-triggers, even
-    // though the scanner keeps reporting it as unmatched every frame.
-    assert!(state.scan_visible_grid(&visible, None).is_none());
-    assert!(state.scan_visible_grid(&visible, None).is_none());
+    for _ in 0..2 {
+        let overlays =
+            scan_visible(&mut state, &term, &size, &[], false, None, Rgb::default(), |_| true);
+        let sources: Vec<_> = overlays.iter().map(|overlay| overlay.source.as_ref()).collect();
+        assert_eq!(sources, ["x^2", "a^2 + b^2"]);
+        assert_eq!(overlays[0].spans.last().map(|span| span.row), Some(0));
+        assert_eq!(overlays[1].spans.first().map(|span| span.row), Some(2));
+    }
 }
 
 #[test]

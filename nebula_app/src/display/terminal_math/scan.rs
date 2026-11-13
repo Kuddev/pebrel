@@ -1,6 +1,9 @@
 //! Terminal-grid recognition and bounded delimiter searches.
 
 use super::*;
+use nebula_terminal::grid::Grid;
+use nebula_terminal::term::cell::Cell;
+use std::ops::Range;
 
 // Non-text grid content must neither become TeX nor lend its occupied height.
 const OBJECT: char = '\u{fffc}';
@@ -12,21 +15,17 @@ pub(super) struct TextGrid {
     pub(super) columns: usize,
     pub(super) absolute_top: usize,
     pub(super) scrolled_out: usize,
+    pub(super) viewport: Range<usize>,
 }
 
 impl TextGrid {
-    fn from_term<T>(
-        terminal: &Term<T>,
-        size: &SizeInfo,
-        requested_lookback: usize,
-        include: &impl Fn(usize) -> bool,
-    ) -> Self {
+    fn from_term<T>(terminal: &Term<T>, size: &SizeInfo, include: &impl Fn(usize) -> bool) -> Self {
         let grid = terminal.grid();
         // Grid and PTY resizes are committed together while display geometry
         // updates every drag tick, so the visual viewport can differ from the
         // grid. Anchor the scan to the renderer's viewport origin and only
-        // cover their shared rectangle, keeping overlay coordinates in the
-        // same space as the rendered cells they are matched against.
+        // paint their shared rectangle. Retained rows around it can supply a
+        // clipped display formula's delimiters, but do not become paint rows.
         let origin = terminal.viewport_origin_for(size.screen_lines());
         let columns = size.columns().min(grid.columns());
         let screen_lines = size
@@ -34,18 +33,33 @@ impl TextGrid {
             .min(((grid.bottommost_line() - origin).0.max(0) as usize).saturating_add(1));
         let scrolled_out = grid.scrolled_out();
         let history_size = grid.history_size();
-        let available_lookback = (history_size as i64 + origin.0 as i64).max(0) as usize;
-        let lookback = requested_lookback.min(available_lookback);
+        let last = origin + screen_lines.saturating_sub(1) as i32;
+        // The source limit counts terminal padding. Bound both sides by that
+        // same budget and avoid copying any context unless it has a delimiter.
+        let limit = DEFAULT_LIMITS
+            .max_source_bytes
+            .div_ceil(columns.max(1))
+            .saturating_add(MAX_ABSORBED_BLANK_ROWS + 2)
+            .min(MAX_CONTEXT_FORMULA_ROWS);
+        let (lookback, lookahead) = if columns >= 2 && screen_lines > 0 {
+            (
+                display_context(grid, origin, -1, columns, limit, '['),
+                display_context(grid, last, 1, columns, limit, ']'),
+            )
+        } else {
+            (0, 0)
+        };
         let absolute_top = (scrolled_out as i64 + history_size as i64 + origin.0 as i64
             - lookback as i64)
             .max(0) as usize;
-        let row_count = screen_lines.saturating_add(lookback);
+        let viewport = lookback..lookback + screen_lines;
+        let row_count = viewport.end + lookahead;
         let mut rows = Vec::with_capacity(row_count);
         let mut wrapped = Vec::with_capacity(row_count);
 
         for row in 0..row_count {
             let line = origin + (row as i32 - lookback as i32);
-            let included = row.checked_sub(lookback).is_none_or(include);
+            let included = !viewport.contains(&row) || include(row - viewport.start);
             let mut cells = Vec::with_capacity(columns);
             for column in 0..columns {
                 let cell = &grid[line][Column(column)];
@@ -65,7 +79,11 @@ impl TextGrid {
             wrapped.push(is_wrapped);
         }
 
-        Self { rows, wrapped, columns, absolute_top, scrolled_out }
+        Self { rows, wrapped, columns, absolute_top, scrolled_out, viewport }
+    }
+
+    pub(super) fn viewport_top(&self) -> usize {
+        self.absolute_top.saturating_add(self.viewport.start)
     }
 
     #[cfg(test)]
@@ -80,7 +98,8 @@ impl TextGrid {
             })
             .collect::<Vec<_>>();
         let wrapped = vec![false; rows.len()];
-        Self { rows, wrapped, columns, absolute_top: 0, scrolled_out: 0 }
+        let viewport = 0..rows.len();
+        Self { rows, wrapped, columns, absolute_top: 0, scrolled_out: 0, viewport }
     }
 
     pub(super) fn character(&self, position: GridPosition) -> Option<char> {
@@ -163,8 +182,7 @@ impl TextGrid {
     /// the *next* block's delimiter and swallows every paragraph and formula in
     /// between into one giant candidate, which then compiles (prose renders as
     /// math identifiers) and covers the whole region with one image. Stopping at
-    /// the blank row leaves it unmatched instead, which is what hands it to the
-    /// history reconstruction in [`TerminalMathState::scan_visible_grid`].
+    /// the blank row leaves it unmatched when its opener is no longer retained.
     ///
     /// One blank row is **not** a paragraph break, though: the *TUI's* one. The
     /// agent CLIs run the answer through a Markdown renderer that does not know
@@ -416,6 +434,44 @@ impl TextGrid {
     }
 }
 
+/// Find the furthest plausible display delimiter on one side of the viewport.
+/// Two hard blank rows end any display block or soft-wrapped source span.
+/// The regular scanner still decides escape rules, pairs and source validity.
+fn display_context(
+    grid: &Grid<Cell>,
+    edge: Line,
+    step: i32,
+    columns: usize,
+    limit: usize,
+    bracket: char,
+) -> usize {
+    let available =
+        if step < 0 { edge - grid.topmost_line() } else { grid.bottommost_line() - edge };
+    let limit = limit.min(available.0.max(0) as usize);
+    let mut depth = 0;
+    let mut previous_hard_blank = false;
+    for distance in 1..=limit {
+        let row = &grid[edge + step * distance as i32][..Column(columns)];
+        if row.iter().zip(row.iter().skip(1)).any(|(cell, next)| match cell.c {
+            '$' => next.c == '$',
+            '\\' => next.c == bracket,
+            _ => false,
+        }) {
+            depth = (distance + MAX_ABSORBED_BLANK_ROWS).min(limit);
+            previous_hard_blank = false;
+            continue;
+        }
+        // Dense output normally rejects the blank check at the first cell.
+        let hard_blank = row.last().is_none_or(|cell| !cell.flags.contains(Flags::WRAPLINE))
+            && row.iter().all(|cell| cell.c == ' ');
+        if hard_blank && previous_hard_blank {
+            break;
+        }
+        previous_hard_blank = hard_blank;
+    }
+    depth
+}
+
 impl PartialOrd for GridPosition {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -440,39 +496,22 @@ pub(crate) fn scan_visible<T>(
     default_foreground: Rgb,
     include: impl Fn(usize) -> bool,
 ) -> Vec<FormulaOverlay> {
-    let grid = TextGrid::from_term(terminal, size, 0, &include);
-    let active_edit_rows = cursor.and_then(|cursor| grid.logical_rows_containing(cursor.line));
+    let grid = TextGrid::from_term(terminal, size, &include);
+    let active_edit_rows = cursor
+        .filter(|cursor| cursor.line < grid.viewport.len())
+        .and_then(|cursor| grid.logical_rows_containing(grid.viewport.start + cursor.line));
     state.synchronize_grid(&grid);
-    if let Some(anchor) = state.scan_visible_grid(&grid, active_edit_rows.as_ref()) {
-        // `extract` counts every terminal cell toward the 16 KiB parser limit.
-        // Deriving the row cap from the current width keeps this rare temporary
-        // grid near 64 KiB of cell data instead of scanning all scrollback.
-        let source_rows = DEFAULT_LIMITS
-            .max_source_bytes
-            .div_ceil(grid.columns.max(1))
-            .saturating_add(4)
-            .min(MAX_HISTORY_FORMULA_ROWS);
-        // A viewport anchor means the pending delimiter is an orphan closer
-        // whose opener sits somewhere above; its depth is unknown, so look
-        // back by the full source budget instead of an exact distance.
-        let lookback = if anchor.row >= grid.absolute_top {
-            source_rows
-        } else {
-            grid.absolute_top - anchor.row
-        };
-        if lookback <= source_rows {
-            let history = TextGrid::from_term(terminal, size, lookback, &include);
-            state.complete_pending_from_history(&history);
-        } else {
-            state.pending_display = None;
-        }
-    }
+    state.scan_visible_grid(&grid, active_edit_rows.as_ref());
+    let active_viewport_rows = active_edit_rows.map(|rows| {
+        rows.start().saturating_sub(grid.viewport.start)
+            ..=rows.end().saturating_sub(grid.viewport.start)
+    });
 
     let mut overlays: Vec<_> = state
         .visible_overlays(&grid)
         .into_iter()
         .filter(|overlay| {
-            active_edit_rows.as_ref().is_none_or(|rows| !overlay.intersects_rows(rows))
+            active_viewport_rows.as_ref().is_none_or(|rows| !overlay.intersects_rows(rows))
         })
         .filter_map(|mut overlay| {
             overlay.fallback = rendered_cells
@@ -543,25 +582,32 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
     let (Some(first), Some(last)) = (overlay.spans.first(), overlay.spans.last()) else {
         return;
     };
-    overlay.neighbours_above = neighbour_rows(grid, first.row, -1, overlay.display);
-    overlay.neighbours_below = neighbour_rows(grid, last.row, 1, overlay.display);
+    let first_row = first.row + grid.viewport.start as i32;
+    let last_row = last.row + grid.viewport.start as i32;
+    let display = overlay.display;
+    overlay.neighbours_above = neighbour_rows(grid, first_row, -1, display);
+    overlay.neighbours_below = neighbour_rows(grid, last_row, 1, display);
+    let row_has_object = |row| {
+        (display || usize::try_from(row).is_ok_and(|row| grid.viewport.contains(&row)))
+            && grid.row_has_object(row)
+    };
     for distance in 0..MAX_ABSORBED_BLANK_ROWS {
         overlay.formula_neighbours_above[distance] =
-            grid.row_has_object(first.row - distance as i32 - 1);
-        overlay.formula_neighbours_below[distance] =
-            grid.row_has_object(last.row + distance as i32 + 1);
+            row_has_object(first_row - distance as i32 - 1);
+        overlay.formula_neighbours_below[distance] = row_has_object(last_row + distance as i32 + 1);
     }
 
     // Rows that hold nothing right of the source span let a display formula
     // lay out across the rest of the line, so its rendered size no longer
-    // depends on how many columns the source happened to span. Rows scrolled
-    // out of the viewport cannot be inspected; treating them as blank is safe
-    // because only visible rows can show a horizontal collision.
+    // depends on how many columns the source happened to span. Retained context
+    // also supplies the occupied columns of clipped source rows.
     let source_right = overlay.spans.iter().map(|span| span.end).max().unwrap_or(0);
     overlay.widen_right_to = (overlay.display
-        && overlay.spans.iter().all(|span| match usize::try_from(span.row) {
-            Ok(row) if row < grid.rows.len() => grid.span_is_blank(row, span.end, grid.columns),
-            _ => true,
+        && overlay.spans.iter().all(|span| {
+            match usize::try_from(span.row + grid.viewport.start as i32) {
+                Ok(row) if row < grid.rows.len() => grid.span_is_blank(row, span.end, grid.columns),
+                _ => true,
+            }
         }))
     .then_some(grid.columns.max(source_right));
 }
@@ -616,7 +662,9 @@ pub(super) fn neighbour_rows(
     std::array::from_fn(|index| {
         let row = from + step * (index as i32 + 1);
         match usize::try_from(row) {
-            Ok(row) if row < grid.rows.len() => grid.row_ink_columns(row),
+            Ok(row) if row < grid.rows.len() && (display || grid.viewport.contains(&row)) => {
+                grid.row_ink_columns(row)
+            },
             _ => (!display).then_some((0, grid.columns)),
         }
     })
@@ -642,17 +690,20 @@ pub(super) fn scan_grid_with_hints(grid: &TextGrid) -> Vec<FormulaOverlay> {
 #[derive(Clone)]
 pub(super) struct GridScanResult {
     pub(super) overlays: Vec<FormulaOverlay>,
+    #[cfg(test)]
     pub(super) unmatched_display: Option<(GridPosition, DisplayDelimiterKind)>,
 }
 
 pub(super) fn scan_grid_result(grid: &TextGrid) -> GridScanResult {
     let mut overlays = Vec::new();
+    #[cfg(test)]
     let mut unmatched_display = None;
     let mut position = GridPosition { row: 0, column: 0 };
     // 只有裸定界符消费它：其余四类各自有 O(1) 前置闸。
     let mut bare_budget = BARE_SEARCH_CELL_BUDGET;
 
-    while position.row < grid.rows.len() && overlays.len() < MAX_VISIBLE_FORMULAS {
+    while position.row < grid.viewport.end && overlays.len() < MAX_VISIBLE_FORMULAS {
+        let in_viewport = grid.viewport.contains(&position.row);
         let (candidate, incomplete_display) =
             if grid.starts_with(position, &['$', '$']) && !grid.is_escaped(position) {
                 let candidate = find_formula(
@@ -674,6 +725,8 @@ pub(super) fn scan_grid_result(grid: &TextGrid) -> GridScanResult {
                 (candidate, Some(DisplayDelimiterKind::Brackets))
             } else if grid.starts_with(position, &['\\', ']']) && !grid.is_escaped(position) {
                 (None, Some(DisplayDelimiterKind::Brackets))
+            } else if !in_viewport {
+                (None, None)
             } else if grid.starts_with(position, &['\\', '(']) && !grid.is_escaped(position) {
                 (
                     find_formula(
@@ -695,23 +748,28 @@ pub(super) fn scan_grid_result(grid: &TextGrid) -> GridScanResult {
                 (None, None)
             };
 
-        if let Some((overlay, after)) = candidate {
-            overlays.push(overlay);
+        if let Some((overlay, after)) = candidate
+            .filter(|(_, after)| incomplete_display.is_some() || after.row < grid.viewport.end)
+        {
+            if after.row >= grid.viewport.start {
+                overlays.push(overlay);
+            }
             position = after;
-        } else if let Some(next) = grid.next(position) {
-            if let Some(kind) = incomplete_display {
-                unmatched_display = Some((position, kind));
-            }
-            position = next;
         } else {
-            if let Some(kind) = incomplete_display {
+            #[cfg(test)]
+            if in_viewport && let Some(kind) = incomplete_display {
                 unmatched_display = Some((position, kind));
             }
-            break;
+            let Some(next) = grid.next(position) else { break };
+            position = next;
         }
     }
 
-    GridScanResult { overlays, unmatched_display }
+    GridScanResult {
+        overlays,
+        #[cfg(test)]
+        unmatched_display,
+    }
 }
 
 pub(super) fn find_formula(

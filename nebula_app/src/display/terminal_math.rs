@@ -35,7 +35,7 @@ use crate::renderer::{GlyphCache, Renderer};
 const MAX_VISIBLE_FORMULAS: usize = 64;
 const MAX_PERSISTED_FORMULAS: usize = 2_048;
 const PERSISTED_FORMULA_BUDGET: usize = 1024 * 1024;
-const MAX_HISTORY_FORMULA_ROWS: usize = 512;
+const MAX_CONTEXT_FORMULA_ROWS: usize = 512;
 /// Row budget for the closing search of a **bare** delimiter (`(…)` / `[…]`
 /// left over after Markdown ate the backslashes). `MAX_VISIBLE_FORMULAS` caps
 /// how many formulas *succeed*, not how many candidates fail, and a bare opener
@@ -104,7 +104,6 @@ pub(crate) struct TerminalMathState {
     max_formula_rows: usize,
     columns: Option<usize>,
     last_scrolled_out: Option<usize>,
-    pending_display: Option<PendingDisplayFormula>,
 }
 
 impl Default for TerminalMathState {
@@ -119,7 +118,6 @@ impl Default for TerminalMathState {
             max_formula_rows: 0,
             columns: None,
             last_scrolled_out: None,
-            pending_display: None,
         }
     }
 }
@@ -233,15 +231,13 @@ impl TerminalMathState {
         }
     }
 
-    /// Remember complete formulas in the current viewport and track one
-    /// streaming display formula whose opening delimiter may scroll away before
-    /// its closing delimiter arrives.
+    /// Remember complete formulas intersecting the viewport. Recognition may
+    /// use retained rows on either side, while persistence uses absolute rows.
     fn scan_visible_grid(
         &mut self,
         grid: &TextGrid,
         active_edit_rows: Option<&std::ops::RangeInclusive<usize>>,
-    ) -> Option<FormulaAnchor> {
-        let mut completed_pending = false;
+    ) {
         let scan = match &self.last_scan {
             Some((previous, scan)) if previous == grid => scan.clone(),
             _ => {
@@ -251,99 +247,11 @@ impl TerminalMathState {
             },
         };
         for overlay in scan.overlays {
-            // 当前光标所在的逻辑行仍由 CLI 编辑器拥有。这里必须在持久化
-            // 之前排除整段换行链，否则公式会先进入缓存，下一帧又覆盖输入。
-            if active_edit_rows.is_some_and(|rows| overlay.intersects_rows(rows)) {
-                continue;
-            }
-            let anchor = overlay_anchor(grid, &overlay);
-            completed_pending |= self
-                .pending_display
-                .is_some_and(|pending| Some(pending.anchor) == anchor && overlay.display);
-            self.remember(grid, &overlay);
-        }
-        if completed_pending {
-            self.pending_display = None;
-        }
-
-        let Some((position, kind)) = scan.unmatched_display else {
-            return None;
-        };
-        if active_edit_rows.is_some_and(|rows| rows.contains(&position.row)) {
-            return None;
-        }
-        let current = FormulaAnchor {
-            row: grid.absolute_top.saturating_add(position.row),
-            column: position.column,
-        };
-
-        match self.pending_display {
-            None => {
-                self.pending_display =
-                    Some(PendingDisplayFormula { anchor: current, kind, attempted_at: None });
-                None
-            },
-            // 同一位置的孤立定界符稳定存在：它既可能是仍在流式输出的开头，
-            // 也可能是"公式被误删后只剩下的闭合"。对这个位置回看一次历史，
-            // 尝试把完整公式重新组装出来。
-            Some(pending) if pending.anchor == current && pending.kind == kind => {
-                if pending.attempted_at == Some(current) {
-                    None
-                } else {
-                    self.pending_display =
-                        Some(PendingDisplayFormula { attempted_at: Some(current), ..pending });
-                    Some(current)
-                }
-            },
-            Some(pending) if pending.kind == kind && pending.anchor < current => {
-                if pending.attempted_at == Some(current) {
-                    None
-                } else {
-                    self.pending_display =
-                        Some(PendingDisplayFormula { attempted_at: Some(current), ..pending });
-                    Some(pending.anchor)
-                }
-            },
-            Some(_) => {
-                self.pending_display =
-                    Some(PendingDisplayFormula { anchor: current, kind, attempted_at: None });
-                None
-            },
-        }
-    }
-
-    fn complete_pending_from_history(&mut self, history: &TextGrid) -> bool {
-        let Some(pending) = self.pending_display.take() else {
-            return false;
-        };
-
-        for overlay in scan_grid_result(history).overlays {
-            if !overlay.display {
-                continue;
-            }
-            // 原场景：pending 记录的是已滚入历史的开头。孤立闭合场景：
-            // pending 记录的是视口里那个落单的 `$$`，此时要求组装出的公式
-            // 恰好以它收尾，才能证明它确实是被误删公式的闭合定界符。
-            let opens_at_pending = overlay_anchor(history, &overlay) == Some(pending.anchor);
-            let closes_at_pending = overlay.spans.last().is_some_and(|span| {
-                usize::try_from(span.row).ok().and_then(|row| history.absolute_top.checked_add(row))
-                    == Some(pending.anchor.row)
-                    && span.end >= 2
-                    && span.end - 2 == pending.anchor.column
-            });
-            if opens_at_pending || closes_at_pending {
-                self.remember(history, &overlay);
-                // 放回带 attempted 标记的 pending：孤立闭合在网格里仍会被
-                // 扫成 unmatched（persisted 覆盖对扫描不可见），清空会让它
-                // 每两帧重建并再次触发历史回看。
-                self.pending_display = Some(pending);
-                return true;
+            // Keep the active editor's entire logical line in source form.
+            if active_edit_rows.is_none_or(|rows| !overlay.intersects_rows(rows)) {
+                self.remember(grid, &overlay);
             }
         }
-        // 失败时放回（保留单次尝试标记），否则同一个孤立定界符每帧都会
-        // 触发一轮历史扫描。
-        self.pending_display = Some(pending);
-        false
     }
 
     fn remember(&mut self, grid: &TextGrid, overlay: &FormulaOverlay) {
@@ -382,18 +290,19 @@ impl TerminalMathState {
     }
 
     fn visible_overlays(&mut self, grid: &TextGrid) -> Vec<FormulaOverlay> {
-        if grid.rows.is_empty() || self.formulas.is_empty() {
+        if grid.viewport.is_empty() || self.formulas.is_empty() {
             return Vec::new();
         }
 
-        let viewport_bottom = grid.absolute_top.saturating_add(grid.rows.len() - 1);
-        let search_top = grid.absolute_top.saturating_sub(self.max_formula_rows.saturating_sub(1));
+        let viewport_top = grid.viewport_top();
+        let viewport_bottom = viewport_top.saturating_add(grid.viewport.len() - 1);
+        let search_top = viewport_top.saturating_sub(self.max_formula_rows.saturating_sub(1));
         let lower = FormulaAnchor { row: search_top, column: 0 };
         let upper = FormulaAnchor { row: viewport_bottom, column: usize::MAX };
         let candidates: Vec<_> = self
             .formulas
             .range(lower..=upper)
-            .filter(|(_, formula)| formula.intersects(grid.absolute_top, viewport_bottom))
+            .filter(|(_, formula)| formula.intersects(viewport_top, viewport_bottom))
             .map(|(&anchor, formula)| (anchor, formula.matches_visible_rows(grid)))
             .collect();
 
@@ -405,7 +314,7 @@ impl TerminalMathState {
             }
             if overlays.len() < MAX_VISIBLE_FORMULAS {
                 if let Some(formula) = self.formulas.get(&anchor) {
-                    overlays.push(formula.to_overlay(grid.absolute_top));
+                    overlays.push(formula.to_overlay(viewport_top));
                 }
             }
         }
@@ -413,9 +322,6 @@ impl TerminalMathState {
     }
 
     fn prune_before(&mut self, absolute_floor: usize) {
-        if self.pending_display.is_some_and(|pending| pending.anchor.row < absolute_floor) {
-            self.pending_display = None;
-        }
         loop {
             let stale = self
                 .formulas
@@ -444,7 +350,6 @@ impl TerminalMathState {
         self.formulas.clear();
         self.persisted_bytes = 0;
         self.max_formula_rows = 0;
-        self.pending_display = None;
     }
 
     fn layout(
@@ -478,23 +383,6 @@ struct FormulaAnchor {
 enum DisplayDelimiterKind {
     Dollars,
     Brackets,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PendingDisplayFormula {
-    anchor: FormulaAnchor,
-    kind: DisplayDelimiterKind,
-    /// The unmatched-delimiter position that already triggered one history
-    /// reconstruction. Each position gets a single attempt: without this, a
-    /// delimiter that stays unmatched (e.g. its formula was already persisted)
-    /// would re-scan history every frame.
-    attempted_at: Option<FormulaAnchor>,
-}
-
-fn overlay_anchor(grid: &TextGrid, overlay: &FormulaOverlay) -> Option<FormulaAnchor> {
-    let first = overlay.spans.first()?;
-    let row = usize::try_from(first.row).ok()?;
-    Some(FormulaAnchor { row: grid.absolute_top.checked_add(row)?, column: first.start })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -585,7 +473,7 @@ impl PersistedFormula {
             if grid.span_fingerprint(row, span.start, span.end, span.include_wrap)
                 == Some(span.fingerprint)
             {
-                compared = true;
+                compared |= grid.viewport.contains(&row);
                 continue;
             }
             // 整段被清空是 TUI 重绘的中间帧（先清行再重画）：跳过比较，
