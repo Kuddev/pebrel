@@ -94,32 +94,36 @@ fn valid_transcript_path(path: &str, session_id: &str) -> bool {
         && matches!(parts[parts.len() - 1], FULL_FILE | COMPACT_FILE)
 }
 
+fn valid_primary_record(record: &Value) -> bool {
+    record.get("step_index").and_then(Value::as_u64).is_some()
+        && record["source"].as_str().is_some_and(|source| source != "SYSTEM")
+}
+
+fn header_before_content(prefix: &str) -> Option<Value> {
+    let pos = prefix.find("\"content\"")?;
+    let trimmed = prefix[..pos].trim_end().strip_suffix(',')?;
+    serde_json::from_str::<Value>(&format!("{trimmed}}}")).ok()
+}
+
 fn valid_primary_head(head: &[u8]) -> bool {
     if head.is_empty() {
         return true;
     }
     if let Some(newline) = head.iter().position(|&b| b == b'\n') {
-        return serde_json::from_slice::<Value>(&head[..newline]).ok().is_some_and(|record| {
-            record.get("step_index").and_then(Value::as_u64).is_some()
-                && record["source"].as_str().is_some_and(|source| source != "SYSTEM")
-        });
+        return serde_json::from_slice::<Value>(&head[..newline])
+            .ok()
+            .is_some_and(|record| valid_primary_record(&record));
     }
-    let prefix_len = head.len().min(256);
+    let prefix_len = head.len().min(512);
     let mut end = prefix_len;
     while end > 0 && std::str::from_utf8(&head[..end]).is_err() {
         end -= 1;
     }
     let prefix = std::str::from_utf8(&head[..end]).unwrap_or_default();
-    if prefix.contains("\"source\":\"SYSTEM\"") {
-        return false;
+    if let Some(record) = header_before_content(prefix) {
+        return valid_primary_record(&record);
     }
-    if head.len() < HEAD_BYTES {
-        prefix.starts_with('{')
-    } else {
-        prefix.starts_with('{')
-            && prefix.contains("\"step_index\":")
-            && prefix.contains("\"source\":\"")
-    }
+    head.len() < HEAD_BYTES && prefix.trim_start().starts_with('{') && !prefix.contains("SYSTEM")
 }
 
 pub(super) fn unwrap_user_input(raw: &str) -> &str {
@@ -300,6 +304,39 @@ mod tests {
         assert!(!serialized.contains("more secret thought"));
         assert!(!serialized.contains("internal wakeup"));
         assert!(!serialized.contains("ADDITIONAL_METADATA"));
+
+        // Multi-page backward reads starting mid-turn on a GENERIC step stay valid and cursor-addressable.
+        let paged_id = "paged-session";
+        let paged_identity = antigravity_identity(paged_id);
+        let padding = "p".repeat(super::super::PAGE_BYTES - 300);
+        let tool_out = "ok ".repeat(80);
+        write_brain_logs(
+            home.path(),
+            paged_id,
+            FULL_FILE,
+            &[
+                json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"first turn"}),
+                json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":padding,"tool_calls":[{"name":"run_command","args":{"CommandLine":"cargo test"}}]}),
+                json!({"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","content":tool_out}),
+                json!({"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"全部通过。"}),
+            ],
+        );
+        let tail_page = capture_in(home.path(), paged_id, None).unwrap();
+        assert!(valid_source(paged_id, &tail_page.path, &tail_page.head));
+        let (tail_msgs, older_cursor, _) = project(&paged_identity, &tail_page).unwrap();
+        assert!(older_cursor.is_some());
+        assert_eq!(tail_msgs.len(), 2);
+        assert_eq!(tail_msgs[0].role, "tool");
+        assert_eq!(tail_msgs[0].detail.as_deref(), Some(tool_out.as_str()));
+        assert!(tail_msgs[0].complete);
+        assert_eq!(tail_msgs[1].role, "assistant");
+        assert_eq!(tail_msgs[1].text, "全部通过。");
+
+        let head_page = capture_in(home.path(), paged_id, older_cursor).unwrap();
+        let (head_msgs, earliest_cursor, _) = project(&paged_identity, &head_page).unwrap();
+        assert!(earliest_cursor.is_none());
+        assert_eq!(head_msgs[0].role, "user");
+        assert_eq!(head_msgs[0].text, "first turn");
     }
 
     #[test]
@@ -324,6 +361,19 @@ mod tests {
         let sub_capture = capture_in(home.path(), subagent, None).unwrap();
         assert!(!valid_source(subagent, &sub_capture.path, &sub_capture.head));
         assert!(!valid_source("other-session", sub_path.to_str().unwrap(), b""));
+
+        let oversized_tail = "x".repeat(HEAD_BYTES);
+        let oversized_user = format!(
+            "{{\"step_index\": 0, \"source\": \"USER_EXPLICIT\", \"type\": \"USER_INPUT\", \"content\": \"{oversized_tail}"
+        );
+        assert!(valid_primary_head(&oversized_user.as_bytes()[..HEAD_BYTES]));
+        let oversized_subagent = format!(
+            "{{\"step_index\": 0, \"source\": \"SYSTEM\", \"type\": \"SYSTEM_MESSAGE\", \"content\": \"{oversized_tail}"
+        );
+        assert!(!valid_primary_head(&oversized_subagent.as_bytes()[..HEAD_BYTES]));
+        assert!(!valid_primary_head(oversized_tail.as_bytes()));
+        assert!(valid_primary_head(b"{\"step_index\":0,\"source\":\"USER_"));
+        assert!(!valid_primary_head(b"{\"step_index\":0, \"source\": \"SYSTEM\""));
 
         let outside = tempfile::tempdir().unwrap();
         let secret = outside.path().join("secret.jsonl");
