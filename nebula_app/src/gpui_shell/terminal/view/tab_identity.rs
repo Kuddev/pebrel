@@ -15,14 +15,18 @@ pub(super) fn shell_artwork(
             None => color_icon_svgz("wsl"),
         };
     }
-    match context.shell_program() {
+    let id = match context.shell_program() {
         Some(program) => {
             let filename = program.rsplit(['/', '\\']).next().unwrap_or(program);
-            let stem = std::path::Path::new(filename).file_stem()?.to_str()?;
-            color_icon_svgz(stem).or_else(|| shell_name.and_then(color_icon_svgz))
+            std::borrow::Cow::Borrowed(std::path::Path::new(filename).file_stem()?.to_str()?)
         },
-        None => color_icon_svgz(&crate::platform::shell::default_shell_id()),
+        None => std::borrow::Cow::Owned(crate::platform::shell::default_shell_id()),
+    };
+    // The Bash artwork belongs to Git Bash. Ordinary Unix Bash uses the terminal mark.
+    if !cfg!(windows) && id.eq_ignore_ascii_case("bash") {
+        return None;
     }
+    color_icon_svgz(&id).or_else(|| shell_name.and_then(color_icon_svgz))
 }
 
 fn ssh_label(destination: Option<&str>, directory: &std::path::Path) -> Option<String> {
