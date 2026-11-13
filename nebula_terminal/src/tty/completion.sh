@@ -14,26 +14,29 @@ __pebrel_redraw_owned() {
         # An unrecognized table counts as not owned.
         { bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; } |
             grep -qxF '"\e[46~": clear-screen' || return 1
-        # Ownership must also hold in every keymap reachable within one prompt:
-        # vi mode switches vi-insert <-> vi-command mid-line via ESC, so a
-        # clear-screen in vi-insert next to a user macro waiting in vi-command
-        # would still send the byte into user code. The other keymaps may carry
-        # our binding or leave the chord unbound (an unbound key is inert, no
-        # user code runs), but any user function or macro revokes. Entries are
-        # anchored to the key's complete line, so a lookalike chord sequence
-        # ending in \e[46~ never trips the probe; the enumeration runs in one
-        # subshell and the original keymap is restored before returning. The
-        # probe only reads, so the user's bindings stay untouched.
-        local current rest keymap
+        # Ownership must also hold in every keymap reachable within one prompt,
+        # and it must be complete: vi mode switches vi-insert <-> vi-command
+        # mid-line via ESC, and an unbound multi-byte chord is NOT consumed as
+        # a whole there — vi-command leaves the tail "~" bound to the
+        # invert-case command, so sending our redraw into a keymap where the
+        # chord is merely unbound still rewrites the user's line (review
+        # reproduction: "original" became "originaL"). Every reachable keymap
+        # must therefore carry exactly our clear-screen binding — nothing else
+        # on the chord counts, unbound included. Entries are anchored to the
+        # key's complete line, so a lookalike chord sequence ending in \e[46~
+        # never trips the probe; each keymap is restored right after its dump
+        # and the probe only reads, so the user's bindings stay untouched.
+        local current dump keymap
         current=$(bind -v 2>/dev/null | grep -E '^set keymap ' | cut -d ' ' -f3)
         [ -n "$current" ] || return 1
-        rest=$(for keymap in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do
+        for keymap in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do
             [ "$keymap" = "$current" ] && continue
             bind "set keymap $keymap" 2>/dev/null || continue
-            { bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; }
-        done 2>/dev/null | grep -E '^"\\e\[46~":' | grep -vxF '"\e[46~": clear-screen')
-        bind "set keymap $current" 2>/dev/null
-        [ -z "$rest" ]
+            dump=$({ bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; } |
+                grep -E '^"\\e\[46~":')
+            bind "set keymap $current" 2>/dev/null
+            [ "$dump" = '"\e[46~": clear-screen' ] || return 1
+        done
     else
         # The bound widget must be the built-in original: bindkey reports the
         # value space-separated, so a space-anchored ".clear-screen" tail only
@@ -42,25 +45,22 @@ __pebrel_redraw_owned() {
         # widget shadowing the name reports the bare name — both revoke.
         [[ $(bindkey '\e[46~' 2>/dev/null) == *' .clear-screen' ]] || return 1
         # One prompt can switch keymaps mid-line (viins -> vicmd via ESC), and
-        # the check above only sees the current one: a viins announcement
-        # would still send the byte into a user widget waiting in vicmd. The
-        # chord must therefore resolve to the built-in (or be unbound — an
-        # unbound key is inert, no user code runs) in every keymap; a string
-        # macro or a user widget anywhere revokes ownership. The queried key
-        # renders before the value, so an unbound keymap reports a bare
-        # space-anchored "undefined-key" tail while a macro always ends in a
-        # quote — one whose body merely contains the word (e.g.
-        # 'aundefined-key') revokes. A keymap the probe cannot query reports
-        # nothing, which revokes too. The probe only reads, so the user's
-        # vicmd binding stays untouched.
-        local -a keymaps
+        # the check above only sees the current one. Ownership is re-verified
+        # against the exact keymap set the installation recorded: every keymap
+        # in it must still resolve the chord to the built-in widget. An
+        # unbound keymap is NOT safe — a multi-byte sequence is not consumed
+        # as a whole there, and vicmd leaves the trailing "~" bound to the
+        # invert-case command, so sending the redraw would rewrite the user's
+        # line (review reproduction: "original" became "originaL"). A string
+        # macro, a user widget, an unbound keymap and one the probe cannot
+        # query all revoke ownership. The probe only reads, so the user's
+        # bindings stay untouched.
+        [[ -n ${__pebrel_redraw_keymaps:-} ]] || return 1
         local keymap report owned=1
-        keymaps=(${(f)"$(bindkey -l 2>/dev/null)"})
-        (( ${#keymaps} )) || return 1
-        for keymap in "${keymaps[@]}"; do
+        for keymap in ${=__pebrel_redraw_keymaps}; do
             report=$(bindkey -M "$keymap" '\e[46~' 2>/dev/null)
             case $report in
-                *' undefined-key'|*' .clear-screen') ;;
+                *' .clear-screen') ;;
                 *) owned=0; break ;;
             esac
         done
@@ -129,9 +129,34 @@ if [ -n "${BASH_VERSION-}" ] && (( BASH_VERSINFO[0] >= 4 )) && [[ $- == *i* ]]; 
         fi
     fi
     if [[ $__pebrel_clear_bound == 0 ]]; then
-        if bind '"\e[46~": clear-screen' 2>/dev/null; then
-            __pebrel_editor_redraw=1
+        # The redraw chord is all-or-nothing across keymaps: the capability is
+        # only announced when the sequence is fully consumed everywhere it can
+        # be reached, and an unbound tail byte still runs Vi commands (see
+        # __pebrel_redraw_owned). Scan every reachable keymap first — a user
+        # binding in any one of them leaves the whole capability off and the
+        # key untouched — then install the built-in clear-screen into each of
+        # them, vi users included. The startup keymap is restored afterwards.
+        __pebrel_clear_free=1
+        __pebrel_start_keymap=$(bind -v 2>/dev/null | grep -E '^set keymap ' | cut -d ' ' -f3)
+        for __pebrel_keymap in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do
+            bind "set keymap $__pebrel_keymap" 2>/dev/null || continue
+            while IFS= read -r __pebrel_binding; do
+                [[ $__pebrel_binding == '"\e[46~":'* ]] && __pebrel_clear_free=0
+            done < <(bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null)
+        done
+        if [[ -n "$__pebrel_start_keymap" ]]; then
+            bind "set keymap $__pebrel_start_keymap" 2>/dev/null
         fi
+        if [[ $__pebrel_clear_free == 1 ]]; then
+            for __pebrel_keymap in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do
+                bind -m "$__pebrel_keymap" '"\e[46~": clear-screen' 2>/dev/null || {
+                    __pebrel_clear_free=0
+                    break
+                }
+            done
+            [[ $__pebrel_clear_free == 1 ]] && __pebrel_editor_redraw=1
+        fi
+        unset __pebrel_clear_free __pebrel_start_keymap __pebrel_keymap __pebrel_binding
     fi
     unset __pebrel_editor_bound __pebrel_clear_bound __pebrel_binding
 elif [ -n "${ZSH_VERSION-}" ]; then
@@ -140,13 +165,33 @@ elif [ -n "${ZSH_VERSION-}" ]; then
         bindkey '\e[45~' __pebrel_editor_report
         __pebrel_editor_ready=1
     fi
-    # A bindkey -s string macro also reports a non-widget body, so the
-    # undefined-key probe treats it as user-owned and leaves it in place.
-    if [[ $(bindkey '\e[46~') == *undefined-key ]]; then
-        # Bind the built-in widget's canonical name: a user widget may shadow
-        # `clear-screen`, and binding the original keeps the redraw independent
-        # of such shadowing.
-        bindkey '\e[46~' .clear-screen
-        __pebrel_editor_redraw=1
+    # The redraw chord is all-or-nothing across keymaps (see
+    # __pebrel_redraw_owned): the capability is announced only when the chord
+    # is ours in every keymap that can be reached while editing. Scan every
+    # keymap first — a user binding anywhere (a widget, or a bindkey -s macro
+    # whose quoted body ends in a quote, even one reading "undefined-key")
+    # keeps the key untouched and the whole capability off. All free → install
+    # the built-in into each keymap and record the set for the per-prompt
+    # re-verification. zsh refuses binding into protected keymaps (like
+    # .safe); such a keymap can never carry our binding and is not reachable
+    # through a typed chord, so it is excluded from the contract instead of
+    # killing it.
+    __pebrel_clear_free=1
+    __pebrel_redraw_keymaps=''
+    __pebrel_keymaps=(${(f)"$(bindkey -l 2>/dev/null)"})
+    if (( ${#__pebrel_keymaps} )); then
+        for __pebrel_keymap in "${__pebrel_keymaps[@]}"; do
+            [[ $(bindkey -M "$__pebrel_keymap" '\e[46~' 2>/dev/null) == *' undefined-key' ]] ||
+                __pebrel_clear_free=0
+        done
+        if [[ $__pebrel_clear_free == 1 ]]; then
+            for __pebrel_keymap in "${__pebrel_keymaps[@]}"; do
+                if bindkey -M "$__pebrel_keymap" '\e[46~' .clear-screen 2>/dev/null; then
+                    __pebrel_redraw_keymaps="$__pebrel_redraw_keymaps $__pebrel_keymap"
+                fi
+            done
+            [[ -n $__pebrel_redraw_keymaps ]] && __pebrel_editor_redraw=1
+        fi
     fi
+    unset __pebrel_clear_free __pebrel_keymaps __pebrel_keymap
 fi

@@ -4,7 +4,10 @@
 
 Implemented; resolves the clear-screen limitation recorded in
 [2026-09-21-macos-command-key-aliases.md](2026-09-21-macos-command-key-aliases.md)
-under Consequences and Revisit when.
+under Consequences and Revisit when. Amended 2026-11-13: the redraw
+capability contract tightened to full-sequence consumption across every
+reachable keymap (review round 13, PR #653) — see the last Decision
+bullet.
 
 ## Context
 
@@ -73,6 +76,19 @@ established macOS ⌘K clear convention had no path to that behavior.
   restores a prompt.
 - The row label uses the typed message `common.clear_screen` (Simplified Chinese
   and English catalogs; other languages fall back per the catalog contract).
+- **Amendment (2026-11-13, review round 13):** ownership of the Bash/zsh redraw
+  key is all-or-nothing across keymaps. A multi-byte chord is not consumed as a
+  whole in an unbound keymap — vi(zsh) `vicmd` and readline `vi-command` leave
+  the trailing `~` bound to the invert-case command, so a redraw sent into a
+  merely-unbound keymap rewrote the user's line ("original" → "originaL").
+  Installation therefore scans every reachable keymap and either installs the
+  built-in clear-screen into each of them (vi users included) or, if any keymap
+  holds a user binding, installs nothing at all; keymaps that refuse binding
+  (zsh protected keymaps like `.safe`) are unreachable through a typed chord and
+  are excluded from the contract rather than killing it. The per-prompt probe
+  re-verifies exactly the recorded keymap set: anything that is not our
+  binding — rebind, unbind, macro — revokes the announcement and the view falls
+  back to the app-side cursor home.
 
 ## Rejected alternatives
 

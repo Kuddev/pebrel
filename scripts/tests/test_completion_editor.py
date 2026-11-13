@@ -43,7 +43,7 @@ class CompletionEditorTests(unittest.TestCase):
     def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False,
                         owned_redraw: bool = False, owned_macro: bool = False,
                         vicmd_widget: bool = False, vicmd_macro: bool = False,
-                        vi_command_macro: bool = False) -> shell_integration.ShellSession:
+                        vi_command_macro: bool = False, vi_mode: bool = False) -> shell_integration.ShellSession:
         root = Path(__file__).resolve().parents[2]
         program = shutil.which(shell)
         if not program:
@@ -68,7 +68,7 @@ class CompletionEditorTests(unittest.TestCase):
             rc.write_text(body.group(1) + "\n" + adapter)
             args = ["--noprofile", "--rcfile", str(rc), "-i"] if shell == "bash" else ["-d", "-i"]
             env = {} if shell == "bash" else {"ZDOTDIR": str(directory)}
-        if owned_binding or owned_redraw or owned_macro or vicmd_widget or vicmd_macro or vi_command_macro:
+        if owned_binding or owned_redraw or owned_macro or vicmd_widget or vicmd_macro or vi_command_macro or vi_mode:
             if shell == "bash":
                 inputrc = self.fixture.home / ".inputrc"
                 lines = ""
@@ -86,6 +86,9 @@ class CompletionEditorTests(unittest.TestCase):
                     # The leading "a" makes the vi-command macro append text,
                     # so the insertion is deterministic.
                     lines += 'set editing-mode vi\nset keymap vi-command\n"\\e[46~": "aPEBREL-USER-MACRO"\n'
+                elif vi_mode:
+                    # Plain vi mode, no custom keys anywhere on the chord.
+                    lines += 'set editing-mode vi\n'
                 inputrc.write_text(lines)
                 env["INPUTRC"] = str(inputrc)
             else:
@@ -114,6 +117,9 @@ class CompletionEditorTests(unittest.TestCase):
                         "bindkey -v\n"
                         "bindkey -M vicmd -s '\\e[46~' 'aundefined-key'\n"
                     )
+                if vi_mode:
+                    # Plain vi mode, no custom keys anywhere on the chord.
+                    zshrc += "bindkey -v\n"
                 (self.fixture.home / ".zshrc").write_text(zshrc)
         session = shell_integration.ShellSession(program, self.fixture.home, args, env)
         self.addCleanup(session.close)
@@ -290,10 +296,15 @@ class CompletionEditorTests(unittest.TestCase):
             return
         ready_token = re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output)
         self.assertIsNotNone(ready_token, session.output)
-        # Withdraw only the redraw binding this invocation installed, which is
-        # exactly the state a query-only integration advertises.
+        # Withdraw the redraw binding this invocation installed — it now spans
+        # every keymap, so the withdrawal must too — which lands the session
+        # exactly where a query-only integration advertises: the chord free in
+        # every keymap.
         session.command(
-            "bind -r '\\e[46~' 2>/dev/null; bindkey -r '\\e[46~' 2>/dev/null; printf 'WITHDRAWN\\n'",
+            "for km in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do"
+            " bind -m \"$km\" -r '\\e[46~' 2>/dev/null; done;"
+            " for km in $(bindkey -l 2>/dev/null); do bindkey -M \"$km\" -r '\\e[46~' 2>/dev/null; done;"
+            " printf 'WITHDRAWN\\n'",
             b"WITHDRAWN\r\n",
         )
         # The next prompt re-verifies ownership and revokes the capability with
@@ -379,13 +390,14 @@ class CompletionEditorTests(unittest.TestCase):
         # in vicmd keeps the capability revoked — announcing from viins alone
         # would send the byte into user code — while the widget itself stays.
         session = self.start_bootstrap("zsh", route, vicmd_widget=True)
+        # A user widget on the chord in any keymap aborts the whole install:
+        # the capability is never announced at all — no token and no empty
+        # revocation either — while the widget itself stays.
         self.assertIsNotNone(
             re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output),
             session.output,
         )
-        token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
-        self.assertIsNone(token, session.output)
-        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
         # Within the same prompt: ESC switches to vicmd and the chord fires
         # the user's widget into the line, then Enter runs the buffer.
         os.write(session.master, b"echo tail")
@@ -409,13 +421,14 @@ class CompletionEditorTests(unittest.TestCase):
         session = self.start_bootstrap(shell, route, **{flag: True})
         if self.check_legacy_bash(shell, session):
             return
+        # A user binding in any keymap aborts the whole install: no redraw
+        # announcement and no empty revocation either, while query readiness
+        # and the user's macro keep working.
         self.assertIsNotNone(
             re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output),
             session.output,
         )
-        token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
-        self.assertIsNone(token, session.output)
-        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
         # Within the same prompt: ESC switches to the foreign keymap and the
         # chord fires the user's macro into the line, then Enter runs it.
         os.write(session.master, b"echo tail")
@@ -431,6 +444,37 @@ class CompletionEditorTests(unittest.TestCase):
 
     def test_ssh_zsh_quoted_macro_in_another_keymap_revokes(self) -> None:
         self.check_redraw_foreign_keymap_macro("zsh", "ssh")
+
+    def check_redraw_vi_mode_plain(self, shell: str, route: str) -> None:
+        # Review reproduction, vi mode with no custom keys anywhere on the
+        # chord: the capability is announced only because the installation now
+        # covers every reachable keymap, so vicmd / vi-command consume the
+        # whole chord with our clear-screen. Sending it mid-line clears the
+        # glass and leaves the line intact — the tail "~" must never run the
+        # invert-case command ("original" -> "originaL").
+        session = self.start_bootstrap(shell, route, vi_mode=True)
+        if self.check_legacy_bash(shell, session):
+            return
+        self.assertIsNotNone(
+            re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output),
+            session.output,
+        )
+        os.write(session.master, b"printf 'LINE:%s\\n' original")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b[46~")
+        time.sleep(0.4)
+        os.write(session.master, b"\n")
+        output = session.wait(b"LINE:original")
+        self.assertIn(b"LINE:original\r\n", output)
+        self.assertNotIn(b"originaL", session.output)
+
+    def test_ssh_zsh_plain_vi_mode_fully_consumes_the_redraw_chord(self) -> None:
+        self.check_redraw_vi_mode_plain("zsh", "ssh")
+
+    def test_ssh_bash_plain_vi_mode_fully_consumes_the_redraw_chord(self) -> None:
+        self.check_redraw_vi_mode_plain("bash", "ssh")
 
     def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
         self.check_query_only_session("bash", "ssh")
