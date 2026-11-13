@@ -206,6 +206,9 @@ impl TerminalView {
                 session::spawn_serial(&destination, initial, term_config),
             ),
         };
+        let shell_artwork = exec_context.as_ref().and_then(|context| {
+            super::tab_identity::shell_artwork(context, intro_shell_name.as_deref())
+        });
         let is_ssh = ssh_destination.is_some();
         let (session, error) = match spawned {
             Ok((session, rx, stage_rx)) => {
@@ -355,6 +358,7 @@ impl TerminalView {
             pending_shell_command: None,
             recovery: startup_command::SessionRecovery::default(),
             session_launch,
+            shell_artwork,
             inline_images: super::super::inline_image::InlineImageStore::default(),
             image_paste: image_paste::ImagePasteState::default(),
             native_clipboard: native_clipboard::NativeClipboard::default(),

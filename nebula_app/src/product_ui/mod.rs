@@ -97,7 +97,9 @@ pub(crate) use network_proxy_model::{
     MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
     manual_proxy_parts, manual_proxy_protocol_label, manual_proxy_value,
 };
-pub(crate) use program_identity::{ai_logo_for_program, prepare_ai_logo_texture, program_icon};
+pub(crate) use program_identity::{
+    ai_logo_for_program, prepare_ai_logo_texture, program_icon, recognized_program_icon,
+};
 pub(crate) use text_path_model::{fit_tail, strip_file_scheme, truncate_tab_label};
 
 pub(crate) const NEBULA_UNFOCUSED_SPLIT_DIM: f32 = 0.30;

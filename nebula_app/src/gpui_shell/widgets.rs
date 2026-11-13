@@ -56,6 +56,10 @@ pub fn shell_brand_image(
 ) -> Option<Arc<RenderImage>> {
     let bytes = crate::shell_detect::color_icon_svgz(id)?;
     let target_size = (logical_size * scale_factor).round().max(1.0) as u32;
+    shell_brand_texture(bytes, target_size)
+}
+
+pub(super) fn shell_brand_texture(bytes: &[u8], target_size: u32) -> Option<Arc<RenderImage>> {
     let (mut rgba, width, height) = crate::display::AiLogo::render_shell_brand(bytes, target_size)?;
     // GPUI RenderImage stores BGRA.
     for pixel in rgba.chunks_exact_mut(4) {

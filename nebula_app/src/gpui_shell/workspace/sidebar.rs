@@ -189,7 +189,7 @@ impl NebulaWorkspace {
             .text_color(color)
     }
 
-    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let header_group: SharedString = "sidebar-tabs-header-hover".into();
         let grouping_control = self.sidebar_group_control(header_group.clone(), cx);
         let row_height = tab_scroll::tab_row_height(self.density);
@@ -204,7 +204,7 @@ impl NebulaWorkspace {
         let (active_fg, idle_title, shell_ink) = crate::gpui_shell::theme::tab_text_colors(cx);
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
-        // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
+        // 标题使用界面字体，状态短标保留等宽字体。
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let tab_close_visible = settings.map(|settings| settings.tab_close_visible).unwrap_or(true);
         let tab_reveal = settings
@@ -212,7 +212,6 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
-        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         // Preserve the prototype's type hierarchy when the UI font size changes.
         let ui_scale = f32::from(theme.font_size) / 14.0;
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
@@ -295,11 +294,8 @@ impl NebulaWorkspace {
                 let TabPresentation {
                     title,
                     tooltip,
-                    is_settings,
                     activity,
-                    logo_image,
-                    logo_pending,
-                    program_glyph,
+                    icon,
                     shell_tag,
                     color: tab_color,
                     renaming,
@@ -307,7 +303,6 @@ impl NebulaWorkspace {
                     local_administrator,
                 } = self.tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("sidebar-tab-hover-{ix}").into();
-                let has_program_glyph = program_glyph.is_some();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
                 // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7、宽 2.5，
                 // 与旧壳 strip 同源）。默认标签不占这层视觉层级。
@@ -433,84 +428,11 @@ impl NebulaWorkspace {
                         cx,
                     ))
                 })
-                // 行首图标的优先级：**先身份、后形态**。AI 品牌图 / 程序字位
-                // 表达「这个 tab 里在跑什么」，它必须跟随聚焦 pane；2×2
-                // 分屏标记只在没有身份可显示时补位。
-                // 反过来（分屏就一律画 grid）会让 claude 分屏之后标签上再也
-                // 看不出跑着 claude——用户 08-23 报的「侧边 tab 不跟随激活
-                // tab 变化」就是这个。数量由尾部胶囊表达，不必和图标抢槽位。
-                .when(is_settings, |row| {
-                    row.child(
-                        div().w(px(TAB_LABEL_ICON_W)).flex_shrink_0().flex().justify_center().child(
-                            Icon::new(IconName::Settings)
-                                .small()
-                                .text_color(if active { active_fg } else { muted }),
-                        ),
-                    )
-                })
-                .when_some(logo_image.clone(), |row, image| {
-                    row.child(
-                        div().w(px(TAB_LABEL_ICON_W)).flex_shrink_0().flex().items_center().justify_center().child(
-                            // 共用原图和 GPU 灰度处理；hover 只切绘制层，不重解码或改变占位。
-                            div()
-                                .relative()
-                                .size(px(TAB_LABEL_ICON_SIZE))
-                                .child(
-                                    img(image.clone())
-                                        .id(("sidebar-logo-idle", ix))
-                                        .size_full()
-                                        .object_fit(ObjectFit::Contain)
-                                        .when(!active, |icon| {
-                                            icon.grayscale(true).opacity(0.85)
-                                                .group_hover(hover_group.clone(), |style| style.invisible())
-                                        }),
-                                )
-                                .when(!active, |slot| {
-                                    slot.child(
-                                        img(image)
-                                            .id(("sidebar-logo-hover", ix))
-                                            .absolute()
-                                            .inset_0()
-                                            .size_full()
-                                            .object_fit(ObjectFit::Contain)
-                                            .invisible()
-                                            .group_hover(hover_group.clone(), |style| style.visible()),
-                                    )
-                                }),
-                        ),
-                    )
-                })
-                .when_some(program_glyph, |row, glyph| {
-                    row.child(
-                        div()
-                            .id(("sidebar-program-icon", ix))
-                            .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
-                            .flex_shrink_0()
-                            .font_family(symbol_family.clone())
-                            .text_size(px(label_px))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(if active { active_fg } else { muted })
-                            .group_hover(hover_group.clone(), |style| style.text_color(active_fg))
-                            .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
-                    )
-                })
-                .when(
-                    pane_count > 1 && !is_settings && logo_image.is_none() && !has_program_glyph,
-                    |row| {
-                        row.child(
-                            div()
-                                .w(px(TAB_LABEL_ICON_W))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(pane_header::split_glyph(
-                                    label_px * 0.78,
-                                    if active { active_fg } else { muted },
-                                )),
-                        )
-                    },
-                )
+                .child(icon.leading_slot(
+                    format!("sidebar-tab-icon-{ix}").into(),
+                    if active { active_fg } else { muted },
+                    (!active).then(|| (hover_group.clone(), active_fg)),
+                ))
                 // GPUI truncates the actual shaped title within its flex column.
                 .child(h_flex().flex_1().min_w_0().h_full().gap_1().child(match renaming {
                     Some(input) => div()
@@ -803,20 +725,16 @@ impl NebulaWorkspace {
     /// response=0.14 的 swift-out 弹簧；内容保持固定宽、由槽位裁剪，
     /// 终端卡随 flex 布局自然滑移收编空间（对齐旧壳"卡骑在折叠动画上"
     /// 的观感）。动画按方向换 key 重启，端点随运行时设置变化。
-    pub(super) fn render_sidebar_slot(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    pub(super) fn render_sidebar_slot(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(widths) = self.sidebar_fold_widths(cx) else {
             return if self.sidebar_collapsed {
                 div().into_any_element()
             } else {
-                self.render_sidebar(window, cx).into_any_element()
+                self.render_sidebar(cx).into_any_element()
             };
         };
         self.animate_sidebar_width(
-            div().h_full().flex_shrink_0().overflow_hidden().child(self.render_sidebar(window, cx)),
+            div().h_full().flex_shrink_0().overflow_hidden().child(self.render_sidebar(cx)),
             "sidebar-fold",
             widths,
             |slot, width| slot.w(px(width)),

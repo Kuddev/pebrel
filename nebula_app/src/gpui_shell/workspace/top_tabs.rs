@@ -8,9 +8,9 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, Context, FontWeight, InteractiveElement as _,
-    IntoElement as _, KeyDownEvent, Length, MouseButton, MouseDownEvent, ObjectFit,
-    ParentElement as _, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledImage as _, Window, div, ease_out_quint, img, px,
+    IntoElement as _, KeyDownEvent, Length, MouseButton, MouseDownEvent, ParentElement as _,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    ease_out_quint, px,
 };
 use gpui_component::menu::PopupMenuItem;
 
@@ -21,8 +21,8 @@ use crate::i18n::{Message, UiLanguage};
 
 use super::window_titlebar::title_bar_right_controls;
 use super::{
-    NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
-    TabDragAxis, TabPresentation, ToggleShellPicker, pane_header, title_bar_panel_controls,
+    NebulaWorkspace, NewWindow, OpenSettings, TabDrag, TabDragAxis, TabPresentation,
+    ToggleShellPicker, pane_header, title_bar_panel_controls,
 };
 
 /// 与顶部模式正文卡片的 `px_2` 左边距同源，让首个 tab 和终端左缘对齐。
@@ -152,7 +152,6 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.font_family.clone();
         let metadata_family = theme.mono_font_family.clone();
-        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let port_forward_w = if port_forward_button.is_some() { 32.0 } else { 0.0 };
         let tab_capacity_w =
@@ -187,11 +186,8 @@ impl NebulaWorkspace {
                 let TabPresentation {
                     title,
                     tooltip,
-                    is_settings,
                     activity,
-                    logo_image,
-                    logo_pending,
-                    program_glyph,
+                    icon,
                     shell_tag,
                     color,
                     renaming,
@@ -320,62 +316,11 @@ impl NebulaWorkspace {
                             cx,
                         ))
                     })
-                    // 图标优先级与侧栏同源：先身份（跟随聚焦 pane），分屏标记
-                    // 只在没有身份图标时补位。理由见 sidebar.rs 同处注释。
-                    .when(is_settings, |row| {
-                        row.child(
-                            div()
-                                .w(px(TAB_LABEL_ICON_W))
-                                .flex_shrink_0()
-                                .flex()
-                                .justify_center()
-                                .child(
-                                    Icon::new(IconName::Settings)
-                                        .small()
-                                        .text_color(if active { active_fg } else { muted }),
-                                ),
-                        )
-                    })
-                    .when_some(logo_image.clone(), |row, image| {
-                        row.child(
-                            img(image)
-                                .size(px(TAB_LABEL_ICON_SIZE))
-                                .flex_shrink_0()
-                                .object_fit(ObjectFit::Contain),
-                        )
-                    })
-                    .when_some(program_glyph.clone(), |row, glyph| {
-                        row.child(
-                            div()
-                                .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
-                                .flex_shrink_0()
-                                .font_family(symbol_family.clone())
-                                .text_size(px(label_px))
-                                .font_weight(FontWeight::NORMAL)
-                                .text_color(if active { active_fg } else { muted })
-                                .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
-                        )
-                    })
-                    .when(
-                        pane_count > 1
-                            && !is_settings
-                            && logo_image.is_none()
-                            && program_glyph.is_none(),
-                        |row| {
-                            row.child(
-                                div()
-                                    .w(px(TAB_LABEL_ICON_W))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(pane_header::split_glyph(
-                                        label_px * 0.78,
-                                        if active { active_fg } else { muted },
-                                )),
-                            )
-                        },
-                    )
+                    .child(icon.leading_slot(
+                        format!("top-tab-icon-{ix}").into(),
+                        if active { active_fg } else { muted },
+                        None,
+                    ))
                     .child(match renaming {
                         Some(input) => div()
                             .flex_1()
@@ -400,6 +345,7 @@ impl NebulaWorkspace {
                             )
                             .into_any_element(),
                         None => div()
+                            .debug_selector(move || format!("top-tab-title-{ix}"))
                             .flex_1()
                             .min_w_0()
                             .truncate()

@@ -240,7 +240,11 @@ pub(crate) fn ai_logo(program: &str) -> Option<AiLogo> {
 }
 
 pub(crate) fn program_icon(program: &str) -> &'static str {
-    match program {
+    recognized_program_icon(program).unwrap_or("\u{f04b}")
+}
+
+pub(crate) fn recognized_program_icon(program: &str) -> Option<&'static str> {
+    Some(match program {
         "claude" => "\u{f0ce5}",
         "codex" => "\u{f02d8}",
         "gemini" => "\u{f0ce6}",
@@ -258,8 +262,8 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
         "node" | "npm" | "pnpm" | "yarn" | "bun" | "deno" => "\u{e718}",
         "python" | "python3" | "pip" | "uv" => "\u{e73c}",
         "docker" | "podman" => "\u{e7b0}",
-        _ => "\u{f04b}",
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

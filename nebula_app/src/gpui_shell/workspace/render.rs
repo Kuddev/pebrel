@@ -279,7 +279,7 @@ impl Render for NebulaWorkspace {
                     .flex_1()
                     .min_h_0()
                     .when(!top_tabs && !settings_active && !reader_focus, |row| {
-                        row.child(self.render_sidebar_slot(window, cx))
+                        row.child(self.render_sidebar_slot(cx))
                     })
                     .child(
                         // 终端卡（一体化外壳）：唯一的结构分界。圆角、卡缝、投影、

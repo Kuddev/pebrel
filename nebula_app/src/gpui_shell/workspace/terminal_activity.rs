@@ -173,6 +173,7 @@ mod tests {
     mod session_failure;
 
     use super::*;
+    use crate::gpui_shell::prelude::IconName;
     use crate::gpui_shell::terminal::element::snapshot_probe::{self, PaintedSnapshot};
     use crate::gpui_shell::terminal::view::TerminalLaunch;
     use gpui::{Modifiers, TestAppContext, VisualTestContext, point};
@@ -382,24 +383,70 @@ mod tests {
 
     #[gpui::test]
     fn remote_host_icon_changes_the_existing_tab_presentation(cx: &mut TestAppContext) {
+        use crate::gpui_shell::workspace::tab_presentation::TabIcon;
+
         let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
         terminals[0].update(&mut window, |view, cx| {
             view.ssh_destination = Some("fixture-host".into());
             view.running_program = None;
             view.apply_ssh_host_icon(None, cx);
         });
-        let glyph = |window: &VisualTestContext| {
-            workspace.read_with(window, |workspace, cx| {
-                workspace.tab_presentation(0, cx, false).program_glyph.unwrap().to_string()
-            })
+        let icon = |window: &VisualTestContext| {
+            workspace
+                .read_with(window, |workspace, cx| workspace.tab_presentation(0, cx, false).icon)
         };
-        assert_eq!(glyph(&window), crate::display::ui::os_icons::resolve(None).glyph.to_string());
+        assert!(matches!(icon(&window), TabIcon::Symbol(IconName::Network)));
         terminals[0].update(&mut window, |view, cx| view.apply_ssh_host_icon(Some("ubuntu"), cx));
         draw(&mut window);
-        assert_eq!(
-            glyph(&window),
-            crate::display::ui::os_icons::resolve(Some("ubuntu")).glyph.to_string()
-        );
+        assert!(matches!(icon(&window), TabIcon::Glyph(glyph)
+            if glyph.chars().eq([crate::display::ui::os_icons::resolve(Some("ubuntu")).glyph])));
+    }
+
+    #[gpui::test]
+    fn tab_leading_slot_keeps_its_position_during_ssh_and_icon_changes(cx: &mut TestAppContext) {
+        use crate::gpui_shell::workspace::tab_presentation::TabIcon;
+        use nebula_settings::TabsPositionName::{Sidebar, Top};
+
+        let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
+        let artwork = crate::shell_detect::color_icon_svgz("pwsh").unwrap();
+        for (position, icon_id, title_id) in [
+            (Sidebar, "sidebar-tab-icon-0", "sidebar-tab-title-0"),
+            (Top, "top-tab-icon-0", "top-tab-title-0"),
+        ] {
+            window.simulate_resize(size(px(840.0), px(560.0)));
+            workspace.update(&mut window, |workspace, cx| {
+                workspace.tabs_position = position;
+                cx.notify();
+            });
+            terminals[0].update(&mut window, |view, cx| {
+                view.running_program = None;
+                view.progress = crate::taskbar::TaskProgress::None;
+                view.shell_artwork = Some(artwork);
+                cx.notify();
+            });
+            draw(&mut window);
+            let bounds = window.debug_bounds(icon_id).unwrap();
+            let title_left = window.debug_bounds(title_id).unwrap().left();
+            assert!(bounds.right() <= title_left);
+            for (program, shell_visible) in [("ssh", true), ("git", false)] {
+                terminals[0].update(&mut window, |view, cx| {
+                    view.running_program = Some(program.into());
+                    view.progress = crate::taskbar::TaskProgress::Indeterminate;
+                    cx.notify();
+                });
+                draw(&mut window);
+                assert_eq!(window.debug_bounds(icon_id), Some(bounds));
+                assert_eq!(window.debug_bounds(title_id).unwrap().left(), title_left);
+                workspace.read_with(&window, |workspace, cx| {
+                    let presentation = workspace.tab_presentation(0, cx, false);
+                    assert_eq!(presentation.activity, SidebarActivity::Running);
+                    assert_eq!(
+                        matches!(presentation.icon, TabIcon::Shell(bytes) if bytes == artwork),
+                        shell_visible
+                    );
+                });
+            }
+        }
     }
 
     #[gpui::test]

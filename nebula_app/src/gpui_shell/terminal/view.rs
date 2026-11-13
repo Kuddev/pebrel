@@ -401,6 +401,7 @@ pub struct TerminalView {
     pending_shell_command: Option<startup_command::PendingShellCommand>,
     recovery: startup_command::SessionRecovery,
     pub(crate) session_launch: crate::session::LaunchSession,
+    pub(in crate::gpui_shell) shell_artwork: Option<&'static [u8]>,
     /// OSC 1337 图片的串行后台解码队列和有界像素缓存。图片不进入字符网格，
     /// 只用事件携带的绝对行锚定到对应的 scrollback 位置。
     pub(super) inline_images: super::inline_image::InlineImageStore,

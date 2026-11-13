@@ -1,6 +1,8 @@
 use gpui::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 use nebula_settings::TabsPositionName;
 
+use crate::gpui_shell::prelude::IconName;
+
 use super::{
     NebulaWorkspace, SettingsPane, SettingsPaneEvent, SidebarActivity, TabPresentation,
     tab_reveal_instant,
@@ -177,11 +179,8 @@ impl NebulaWorkspace {
                 .text(crate::i18n::Message::CommonSettings)
                 .into(),
             tooltip: None,
-            is_settings: true,
             activity: SidebarActivity::Idle,
-            logo_image: None,
-            logo_pending: false,
-            program_glyph: None,
+            icon: super::tab_presentation::TabIcon::Symbol(IconName::Settings),
             shell_tag: None,
             color: None,
             renaming: None,
