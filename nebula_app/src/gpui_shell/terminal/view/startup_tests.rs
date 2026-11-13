@@ -1802,6 +1802,7 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
             let text = blocked.message(lang);
             assert!(text.contains("Claude Code"), "missing agent name: {text}");
             assert!(!text.contains(secret_marker), "leaked marker in invalid message: {text}");
+            assert!(!text.contains('→'), "unshipped settings subpage referenced: {text}");
         }
 
         view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
@@ -1838,6 +1839,7 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
                 "missing agent or shell in message: {text}"
             );
             assert!(!text.contains(secret_marker), "leaked marker in cmd message: {text}");
+            assert!(!text.contains('→'), "unshipped settings subpage referenced: {text}");
         }
     });
     assert_eq!(notices.borrow().len(), 2);
