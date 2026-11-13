@@ -38,7 +38,8 @@ and I/O contract:
    gated by `has_utf8_replacement_corruption` so intact links pay zero allocations and zero grid
    reads. When a local `file:` URI contains `U+FFFD`, `display::hint` computes an in-memory repair
    candidate from the hyperlinked cell text (extending across single-row unlinked `' '` margin gaps
-   for hard-wrapped TUI links, never across prose or blank lines). `HintMatch::text` preserves the
+   for hard-wrapped TUI links only when both segments share the same explicit OSC 8 `id=` identity via
+   `Hyperlink::explicit_id`, never across distinct explicit IDs, prose, or blank lines). `HintMatch::text` preserves the
    original raw `Hyperlink::uri()` so `HintInternalAction::Copy` and custom hint commands continue
    to receive the exact terminal match; `HintMatch::effective_hyperlink_uri` feeds zero-I/O hover
    previews, and `HintMatch::repaired_hyperlink_uri` passes a revalidated candidate to default-open

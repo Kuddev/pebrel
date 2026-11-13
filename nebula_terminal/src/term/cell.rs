@@ -56,6 +56,11 @@ impl Hyperlink {
         &self.inner.id
     }
 
+    /// Explicit `id=` parameter from OSC 8, or `None` when synthesized internally.
+    pub fn explicit_id(&self) -> Option<&str> {
+        self.inner.has_explicit_id.then_some(self.inner.id.as_str())
+    }
+
     pub fn uri(&self) -> &str {
         &self.inner.uri
     }
@@ -69,32 +74,55 @@ impl From<VteHyperlink> for Hyperlink {
 
 impl From<Hyperlink> for VteHyperlink {
     fn from(val: Hyperlink) -> Self {
-        VteHyperlink { id: Some(val.id().to_owned()), uri: val.uri().to_owned() }
+        VteHyperlink { id: val.explicit_id().map(str::to_owned), uri: val.uri().to_owned() }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(from = "SerializedHyperlinkInner"))]
 struct HyperlinkInner {
     /// Identifier for the given hyperlink.
     id: String,
 
     /// Resource identifier of the hyperlink.
     uri: String,
+
+    /// Whether `id` came from an explicit OSC 8 `id=` parameter.
+    #[cfg_attr(feature = "serde", serde(skip_serializing))]
+    has_explicit_id: bool,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Deserialize)]
+struct SerializedHyperlinkInner {
+    id: String,
+    uri: String,
+    has_explicit_id: Option<bool>,
+}
+
+#[cfg(feature = "serde")]
+impl From<SerializedHyperlinkInner> for HyperlinkInner {
+    fn from(raw: SerializedHyperlinkInner) -> Self {
+        let has_explicit_id = raw.has_explicit_id.unwrap_or_else(|| {
+            raw.id.strip_suffix("_nebula").and_then(|prefix| prefix.parse::<u32>().ok()).is_none()
+        });
+        Self { id: raw.id, uri: raw.uri, has_explicit_id }
+    }
 }
 
 impl HyperlinkInner {
     pub fn new<T: ToString>(id: Option<T>, uri: String) -> Self {
-        let id = match id {
-            Some(id) => id.to_string(),
+        let (id, has_explicit_id) = match id {
+            Some(id) => (id.to_string(), true),
             None => {
                 let mut id = HYPERLINK_ID_SUFFIX.fetch_add(1, Ordering::Relaxed).to_string();
                 id.push_str("_nebula");
-                id
+                (id, false)
             },
         };
 
-        Self { id, uri }
+        Self { id, uri, has_explicit_id }
     }
 }
 

@@ -626,18 +626,20 @@ fn repair_hyperlink_uri_in_term<T>(
 
 /// Join adjacent hard-wrapped segments of the same `hyperlink` separated only by unlinked `' '`
 /// padding across a single row break (e.g. TUI left/right margin spaces).
+///
+/// Segments must share both URI and explicit OSC 8 `id=` identity (`None` matches `None`, and
+/// `Some(a)` matches only `Some(a)`), preserving boundaries between distinct explicit IDs.
 fn wrapped_hyperlink_span_text<T>(
     term: &Term<T>,
     bounds: &Match,
     hyperlink: &Hyperlink,
 ) -> Option<String> {
     const MAX_WRAPPED_NEIGHBOR_LINES: usize = 3;
-    let target_uri = hyperlink.uri();
 
     let mut prefixes = Vec::new();
     let mut start = *bounds.start();
     while prefixes.len() < MAX_WRAPPED_NEIGHBOR_LINES
-        && let Some(seg) = adjacent_wrapped_segment(term, start, target_uri, false)
+        && let Some(seg) = adjacent_wrapped_segment(term, start, hyperlink, false)
     {
         start = *seg.start();
         prefixes.push(seg);
@@ -646,7 +648,7 @@ fn wrapped_hyperlink_span_text<T>(
     let mut suffixes = Vec::new();
     let mut end = *bounds.end();
     while suffixes.len() < MAX_WRAPPED_NEIGHBOR_LINES
-        && let Some(seg) = adjacent_wrapped_segment(term, end, target_uri, true)
+        && let Some(seg) = adjacent_wrapped_segment(term, end, hyperlink, true)
     {
         end = *seg.end();
         suffixes.push(seg);
@@ -670,7 +672,7 @@ fn wrapped_hyperlink_span_text<T>(
 fn adjacent_wrapped_segment<T>(
     term: &Term<T>,
     edge: Point,
-    target_uri: &str,
+    target: &Hyperlink,
     forward: bool,
 ) -> Option<Match> {
     let grid = term.grid();
@@ -692,7 +694,8 @@ fn adjacent_wrapped_segment<T>(
             continue;
         }
         if let Some(link) = cell.hyperlink()
-            && link.uri() == target_uri
+            && link.uri() == target.uri()
+            && link.explicit_id() == target.explicit_id()
             && cell.point.line == expected_line
         {
             hit = Some((cell.point, link));
@@ -1361,6 +1364,91 @@ mod tests {
             assert_eq!(hit.text(&term).as_deref(), Some(raw_expected));
             assert_eq!(hit.effective_hyperlink_uri(), Some(repaired_expected));
             assert_eq!(hit.repaired_hyperlink_uri(&term).as_deref(), Some(repaired_expected));
+        }
+    }
+
+    #[test]
+    fn osc8_explicit_ids_preserve_boundaries_while_matching_id_hardwrap_recovers() {
+        use crate::file_uri::{LinkTargetKind, classify_osc8_link_target_with_cwd};
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::term::{Config, test::TermSize};
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let dir = tempfile::tempdir().unwrap();
+        let target_you = dir.path().join("report有.txt");
+        let target_zui = dir.path().join("report最.txt");
+        std::fs::write(&target_you, b"you").unwrap();
+        std::fs::write(&target_zui, b"zui").unwrap();
+        let missing = dir.path().join("report\u{FFFD}.txt");
+        let base =
+            dir.path().to_string_lossy().replace('\\', "/").trim_start_matches('/').to_owned();
+        let raw_uri = format!("file:/{base}/report\u{FFFD}.txt");
+        let repaired_you = format!("file:/{base}/report有.txt");
+        let config = UiConfig::default();
+
+        // 1. Distinct explicit OSC 8 IDs (`first` vs `second`, or explicit vs omitted) must
+        //    keep their boundary and stay `LocalMissing(report\u{FFFD}.txt)`.
+        for (first_params, second_params) in [
+            ("id=first", "id=second"),
+            ("id=first", ""),
+            ("", "id=second"),
+            ("id=0_nebula", "id=1_nebula"),
+        ] {
+            let mut term = Term::new(Config::default(), &TermSize::new(80, 4), VoidListener);
+            let stream = format!(
+                "\x1b]8;{first_params};{raw_uri}\x1b\\report\x1b]8;;\x1b\\\r\n  \
+                 \x1b]8;{second_params};{raw_uri}\x1b\\有.txt\x1b]8;;\x1b\\"
+            );
+            Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
+
+            for (line, col) in [(0, 1), (1, 2)] {
+                let hit = highlighted_at(
+                    &term,
+                    &config,
+                    Point::new(Line(line), Column(col)),
+                    ModifiersState::CONTROL,
+                )
+                .unwrap();
+                let raw = hit.text(&term).unwrap();
+                let repaired = hit.repaired_hyperlink_uri(&term);
+                assert_eq!(raw.as_ref(), raw_uri);
+                assert_eq!(hit.effective_hyperlink_uri(), Some(raw_uri.as_str()));
+                assert!(
+                    repaired.is_none(),
+                    "unexpected merge for ({first_params}, {second_params})"
+                );
+                assert_eq!(
+                    classify_osc8_link_target_with_cwd(&raw, repaired.as_deref(), Some(dir.path())),
+                    LinkTargetKind::LocalMissing(missing.clone())
+                );
+            }
+        }
+
+        // 2. Same explicit OSC 8 ID (`id=same`) hard-wrapped across lines still recovers
+        //    `LocalExisting(report有.txt)` even when sibling `report最.txt` exists.
+        let mut same_term = Term::new(Config::default(), &TermSize::new(80, 4), VoidListener);
+        let same_stream = format!(
+            "\x1b]8;id=same;{raw_uri}\x1b\\report\x1b]8;;\x1b\\\r\n  \
+             \x1b]8;id=same;{raw_uri}\x1b\\有.txt\x1b]8;;\x1b\\"
+        );
+        Processor::<StdSyncHandler>::default().advance(&mut same_term, same_stream.as_bytes());
+        for (line, col) in [(0, 1), (1, 2)] {
+            let hit = highlighted_at(
+                &same_term,
+                &config,
+                Point::new(Line(line), Column(col)),
+                ModifiersState::CONTROL,
+            )
+            .unwrap();
+            let raw = hit.text(&same_term).unwrap();
+            let repaired = hit.repaired_hyperlink_uri(&same_term);
+            assert_eq!(raw.as_ref(), raw_uri);
+            assert_eq!(hit.effective_hyperlink_uri(), Some(repaired_you.as_str()));
+            assert_eq!(repaired.as_deref(), Some(repaired_you.as_str()));
+            assert_eq!(
+                classify_osc8_link_target_with_cwd(&raw, repaired.as_deref(), Some(dir.path())),
+                LinkTargetKind::LocalExisting(target_you.clone())
+            );
         }
     }
 }
