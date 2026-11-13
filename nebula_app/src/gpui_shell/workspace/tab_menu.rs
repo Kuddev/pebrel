@@ -111,10 +111,12 @@ fn file_manager_directory(
     // A WSL path must never fall through to the host's current drive or default distro.
     if let Some(distro) = view.exec_context.as_ref().and_then(|context| context.wsl_distribution())
     {
-        let located = crate::shell_detect::WslCwd {
-            distro: distro?.to_owned(),
-            guest: crate::shell_detect::wsl_guest_cwd(cwd)?.to_owned(),
-        };
+        // Keep the reported path verbatim: a POSIX name may end with a space,
+        // and trimming here would open a different directory. `working_directory`
+        // has already rejected non-absolute paths and control characters.
+        let guest = cwd.starts_with('/').then_some(cwd)?;
+        let located =
+            crate::shell_detect::WslCwd { distro: distro?.to_owned(), guest: guest.to_owned() };
         return crate::shell_detect::wsl_host_path(&located);
     }
     let path = std::path::Path::new(cwd);
@@ -157,7 +159,7 @@ fn open_working_directory_item(
                             if !path.is_dir() {
                                 return Err(OpenDirectoryError::Unavailable);
                             }
-                            crate::platform::file_manager::open(&path)
+                            crate::platform::file_manager::open_directory(&path)
                                 .map_err(OpenDirectoryError::Open)
                         })
                         .await;
@@ -640,6 +642,16 @@ mod cwd_copy_tests {
                 file_manager_directory(view),
                 Some(std::path::PathBuf::from(
                     r"\\wsl.localhost\pebrel-test-not-default-distro\home\guest\project"
+                ))
+            );
+
+            // A trailing space is part of the reported POSIX name; trimming
+            // it would check and open the wrong directory.
+            view.cwd = "/home/guest/project ".into();
+            assert_eq!(
+                file_manager_directory(view),
+                Some(std::path::PathBuf::from(
+                    "\\\\wsl.localhost\\pebrel-test-not-default-distro\\home\\guest\\project "
                 ))
             );
 

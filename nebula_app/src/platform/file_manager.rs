@@ -3,20 +3,20 @@ use std::process::{Command, Stdio};
 
 use super::Platform;
 
-/// How an "open" request is dispatched. Windows must go through the Shell's
-/// default `open` verb so the user's configured folder handler is honored;
-/// spawning `explorer.exe` would bypass that choice.
+/// How a directory-open request is dispatched. Windows must go through the
+/// Shell's default `open` verb so the user's configured folder handler is
+/// honored; spawning `explorer.exe` would bypass that choice.
 enum OpenLaunch {
     DefaultHandler,
     Command(Command),
 }
 
-/// Open a path with the platform's default handler.
+/// Open a path with the platform's default handler by spawning its helper.
 ///
-/// On Windows this synchronously asks the Shell, which may wait for a shell
-/// extension or a slow network path; UI callers should run it on a worker.
+/// This stays non-blocking: existing UI callers (terminal links, editor
+/// "open externally", command palette) invoke it from their callbacks.
 pub fn open(path: &Path) -> std::io::Result<()> {
-    let res = open_launch(Platform::current(), path).run(path);
+    let res = open_command(Platform::current(), path).spawn().map(|_| ());
     #[cfg(target_os = "linux")]
     if res.is_err() {
         if command("gio").arg("open").arg(path).spawn().is_ok() {
@@ -26,7 +26,17 @@ pub fn open(path: &Path) -> std::io::Result<()> {
     res
 }
 
-fn open_launch(platform: Platform, path: &Path) -> OpenLaunch {
+/// Open a directory with the platform's default file manager.
+///
+/// On Windows this synchronously asks the Shell (`ShellExecuteExW` with the
+/// `open` verb), which may wait for a shell extension or a slow network path;
+/// UI callers must run it on a worker. The tab menu's open-folder action is
+/// the only such caller today; other existing open paths keep using [`open`].
+pub fn open_directory(path: &Path) -> std::io::Result<()> {
+    open_directory_launch(Platform::current(), path).run(path)
+}
+
+fn open_directory_launch(platform: Platform, path: &Path) -> OpenLaunch {
     match platform {
         Platform::Windows => OpenLaunch::DefaultHandler,
         Platform::MacOS | Platform::Linux => OpenLaunch::Command(open_command(platform, path)),
@@ -173,9 +183,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn open_uses_the_shell_default_handler_on_windows() {
+    fn open_still_spawns_the_platform_helper_on_every_platform() {
+        let path = Path::new("project with spaces").join("file.txt");
+        for (platform, program) in [
+            (Platform::Windows, "explorer.exe"),
+            (Platform::MacOS, "open"),
+            (Platform::Linux, "xdg-open"),
+        ] {
+            let command = open_command(platform, &path);
+            assert_eq!(command.get_program(), program);
+            assert_eq!(command.get_args().collect::<Vec<_>>(), [path.as_os_str()]);
+        }
+    }
+
+    #[test]
+    fn open_directory_uses_the_shell_default_handler_on_windows() {
         let path = Path::new("project with spaces");
-        assert!(matches!(open_launch(Platform::Windows, path), OpenLaunch::DefaultHandler));
+        assert!(matches!(
+            open_directory_launch(Platform::Windows, path),
+            OpenLaunch::DefaultHandler
+        ));
     }
 
     #[test]
@@ -188,10 +215,10 @@ mod tests {
     }
 
     #[test]
-    fn open_keeps_the_path_as_one_argument_off_windows() {
+    fn open_directory_keeps_the_path_as_one_argument_off_windows() {
         let path = Path::new("project with spaces").join("file.txt");
         for (platform, program) in [(Platform::MacOS, "open"), (Platform::Linux, "xdg-open")] {
-            let OpenLaunch::Command(command) = open_launch(platform, &path) else {
+            let OpenLaunch::Command(command) = open_directory_launch(platform, &path) else {
                 panic!("expected a command launch outside Windows");
             };
             assert_eq!(command.get_program(), program);

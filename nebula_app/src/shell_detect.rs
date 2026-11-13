@@ -1003,8 +1003,10 @@ pub fn wsl_host_path(located: &WslCwd) -> Option<std::path::PathBuf> {
     if located.distro.is_empty() || located.distro.chars().any(char::is_control) {
         return None;
     }
-    let guest = wsl_guest_cwd(&located.guest)?;
-    if guest.chars().any(char::is_control) {
+    // Keep the reported path verbatim: POSIX names may start or end with
+    // spaces, and trimming would map to a different directory.
+    let guest = located.guest.as_str();
+    if guest.is_empty() || !guest.starts_with('/') || guest.chars().any(char::is_control) {
         return None;
     }
     wsl_mounted_host_path(guest).or_else(|| Some(wsl_unc_path(&located.distro, guest)))
@@ -1015,7 +1017,7 @@ pub fn wsl_host_path(located: &WslCwd) -> Option<std::path::PathBuf> {
 /// 先做严格形态门控很重要：Windows 会把 POSIX `/` 当成当前盘根目录；若先
 /// 交给通用路径转换，WSL `/` 就会被误显示成 Nebula 当前所在的 `D:\`。
 pub fn wsl_mounted_host_cwd(located: &WslCwd) -> Option<std::path::PathBuf> {
-    let suffix = located.guest.trim().strip_prefix("/mnt/")?;
+    let suffix = located.guest.strip_prefix("/mnt/")?;
     let bytes = suffix.as_bytes();
     if bytes.len() > 1 && bytes[1] != b'/' || !bytes.first().is_some_and(u8::is_ascii_alphabetic) {
         return None;
@@ -1456,6 +1458,28 @@ mod tests {
             let invalid = super::WslCwd { distro: distro.into(), guest: guest.into() };
             assert_eq!(super::wsl_host_path(&invalid), None, "{distro:?} {guest:?}");
         }
+    }
+
+    #[test]
+    fn wsl_host_path_preserves_whitespace_inside_the_guest_path() {
+        // POSIX names may contain trailing/embedded spaces. Trimming would
+        // silently point at a different directory when both exist, and the
+        // post-activation is_dir check cannot tell the difference.
+        let trailing = super::WslCwd { distro: "Ubuntu".into(), guest: "/home/me/project ".into() };
+        assert_eq!(
+            super::wsl_host_path(&trailing),
+            Some(std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\project "))
+        );
+
+        let embedded = super::WslCwd { distro: "Ubuntu".into(), guest: "/home/me/ project".into() };
+        assert_eq!(
+            super::wsl_host_path(&embedded),
+            Some(std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\ project"))
+        );
+
+        // Whitespace outside the path is not part of a guest absolute path.
+        let padded = super::WslCwd { distro: "Ubuntu".into(), guest: " /home/me/project".into() };
+        assert_eq!(super::wsl_host_path(&padded), None);
     }
 
     fn detected(id: &str, program: &str, args: &[&str]) -> super::DetectedShell {
