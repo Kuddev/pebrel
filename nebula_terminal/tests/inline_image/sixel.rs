@@ -171,6 +171,36 @@ fn opaque_sixel_captures_background_override_at_synchronized_replay() {
 }
 
 #[test]
+fn opaque_sixel_fills_unpainted_pixels_with_the_effective_reverse_video_background() {
+    use nebula_terminal::inline_image::ImageData;
+    use nebula_terminal::vte::ansi::{Color, Rgb};
+
+    let (mut term, mut stream, listener) = setup();
+    // The red image occupies half the declared raster; the other half fills
+    // with the background of an adjacent cell in the same pen state.
+    stream.feed(
+        &mut term,
+        &listener,
+        b"\x1b[?2026h\x1b[38;2;10;20;30;48;2;70;80;90;7mX\x1bP9;0q\"1;1;2;6#1;2;100;0;0~\x1b\\\x1b[27m\x1b[?2026l",
+    );
+    let expected = Rgb { r: 10, g: 20, b: 30 };
+    assert_eq!(snap(&term).bg_runs[0].color, Color::Spec(expected));
+    let events = listener.0.lock().unwrap();
+    let image = events
+        .iter()
+        .find_map(|event| match event {
+            Event::InlineImage { data: ImageData::Sixel(image), .. } => Some(image),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(image.background_color(), Some(Color::Spec(expected)));
+    assert_eq!(
+        image.decode_rgba_with_background([expected.r, expected.g, expected.b]).unwrap(),
+        [255, 0, 0, 255, 10, 20, 30, 255].repeat(6),
+    );
+}
+
+#[test]
 fn clean_grid_sixel_is_visible_and_pending_wrap_never_overwrites_text() {
     let (mut term, mut stream, listener) = setup();
     stream.feed(&mut term, &listener, sixel().as_bytes());

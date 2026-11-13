@@ -159,7 +159,9 @@ impl<T: EventListener> Term<T> {
                 if let ImageData::Sixel(sixel) = data {
                     let mut sixel = (**sixel).clone();
                     if !sixel.transparent {
-                        let color = self.grid.cursor.template.bg;
+                        let pen = &self.grid.cursor.template;
+                        let color =
+                            if pen.flags.contains(Flags::INVERSE) { pen.fg } else { pen.bg };
                         let override_rgb = match color {
                             Color::Named(named) => self.colors[named],
                             Color::Indexed(index) => self.colors[index as usize],
