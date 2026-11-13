@@ -117,6 +117,22 @@ impl AiSession {
 
 const REGISTRY_VERSION: u32 = 1;
 const REGISTRY_LIMIT: usize = 256;
+/// AI clients emit a hook event per tool call, and most only refresh
+/// `last_seen`. Rewriting and fsyncing the index is the expensive part, so a
+/// row that changed nothing else is rewritten at most this often; the resume
+/// list stays minute-accurate.
+const REGISTRY_WRITE_INTERVAL_SECS: u64 = 60;
+
+/// Whether updating `session` would change nothing but `last_seen`, and it was
+/// persisted less than [`REGISTRY_WRITE_INTERVAL_SECS`] ago. Empty incoming
+/// fields keep the stored value, so they never count as a change.
+fn unchanged_within_interval(session: &RegistrySession, cwd: &str, title: &str, now: u64) -> bool {
+    let cwd_unchanged = cwd.is_empty() || cwd == session.cwd;
+    let title_unchanged = title.is_empty() || title == session.title;
+    cwd_unchanged
+        && title_unchanged
+        && now.saturating_sub(session.last_seen) < REGISTRY_WRITE_INTERVAL_SECS
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct SessionRegistry {
@@ -187,15 +203,21 @@ fn record_hook_session_at(
     };
     let mut registry = load_registry(path);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let cwd = cwd.trim();
     let title = title.map(truncate_title).unwrap_or_default();
     if let Some(existing) = registry
         .sessions
         .iter_mut()
         .find(|session| session.source == agent.slug() && session.id == id)
     {
+        if unchanged_within_interval(existing, cwd, &title, now) {
+            // Nothing but `last_seen` would move, and the writer would just
+            // fsync the same bytes again. Keep the previous timestamp.
+            return Ok(());
+        }
         existing.last_seen = now;
-        if !cwd.trim().is_empty() {
-            existing.cwd = cwd.trim().to_owned();
+        if !cwd.is_empty() {
+            existing.cwd = cwd.to_owned();
         }
         if !title.is_empty() {
             existing.title = title;
@@ -205,7 +227,7 @@ fn record_hook_session_at(
             source: agent.slug().to_owned(),
             id: id.to_owned(),
             title,
-            cwd: cwd.trim().to_owned(),
+            cwd: cwd.to_owned(),
             last_seen: now,
         });
     }
@@ -646,5 +668,77 @@ mod tests {
         assert!(title.starts_with("第一行 第二行"));
         assert!(title.ends_with('…'));
         assert!(title.chars().count() <= TITLE_STORAGE_CHARS + 1);
+    }
+
+    #[test]
+    fn the_rewrite_interval_is_pure() {
+        let session = RegistrySession {
+            source: "opencode".into(),
+            id: "session-1".into(),
+            title: "标题".into(),
+            cwd: r"D:\repo".into(),
+            last_seen: 1_000,
+        };
+        // 未变化的身份在窗口内可跳过；空字段表示保留旧值。
+        assert!(unchanged_within_interval(&session, r"D:\repo", "标题", 1_059));
+        assert!(unchanged_within_interval(&session, "", "", 1_010));
+        // 到达窗口边界或字段变化必须落盘。
+        assert!(!unchanged_within_interval(&session, r"D:\repo", "标题", 1_060));
+        assert!(!unchanged_within_interval(&session, r"D:\other", "标题", 1_010));
+        assert!(!unchanged_within_interval(&session, r"D:\repo", "别的标题", 1_010));
+    }
+
+    /// 未知字段会被 serde 忽略而原样保留；用它观察是否发生了重写。
+    fn write_sentinel_registry(path: &Path, id: &str, last_seen: u64) {
+        let json = format!(
+            r#"{{"version":1,"sentinel":true,"sessions":[{{"source":"opencode","id":"{id}","cwd":"D:\\repo","last_seen":{last_seen}}}]}}"#
+        );
+        std::fs::write(path, json).unwrap();
+    }
+
+    #[test]
+    fn unchanged_events_within_a_minute_skip_the_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_sessions.json");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        write_sentinel_registry(&path, "session-2", now);
+        record_hook_session_at(&path, "opencode", "session-2", r"D:\repo", None).unwrap();
+        // 同 cwd、无新标题且 last_seen 在 60s 内：不重写，哨兵字段仍在。
+        assert!(std::fs::read_to_string(&path).unwrap().contains("sentinel"));
+    }
+
+    #[test]
+    fn changed_cwd_or_title_still_rewrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_sessions.json");
+        record_hook_session_at(&path, "opencode", "session-3", r"D:\repo", Some("旧标题")).unwrap();
+        record_hook_session_at(&path, "opencode", "session-3", r"D:\repo\worktree", None).unwrap();
+        let registry = load_registry(&path);
+        assert_eq!(registry.sessions[0].cwd, r"D:\repo\worktree");
+        // 本次没给标题，旧标题保留。
+        assert_eq!(registry.sessions[0].title, "旧标题");
+        record_hook_session_at(&path, "opencode", "session-3", r"D:\repo\worktree", Some("新标题"))
+            .unwrap();
+        assert_eq!(load_registry(&path).sessions[0].title, "新标题");
+    }
+
+    #[test]
+    fn events_after_the_interval_still_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_sessions.json");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        write_sentinel_registry(&path, "session-4", now - REGISTRY_WRITE_INTERVAL_SECS);
+        record_hook_session_at(&path, "opencode", "session-4", r"D:\repo", None).unwrap();
+        // 到了窗口边界必须重写：哨兵消失且 last_seen 前移。
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("sentinel"));
+        assert!(load_registry(&path).sessions[0].last_seen >= now);
+    }
+
+    #[test]
+    fn new_sessions_still_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_sessions.json");
+        record_hook_session_at(&path, "opencode", "session-5", r"D:\repo", None).unwrap();
+        assert_eq!(load_registry(&path).sessions.len(), 1);
     }
 }
