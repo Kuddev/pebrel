@@ -686,29 +686,41 @@ impl LayoutBuilder<'_> {
     ) -> Result<Geometry, MathError> {
         let base_plan = self.plans[base.0 as usize];
         let pixel_size = self.pixel_size(index)?;
+        let label_width = [subscript, superscript]
+            .into_iter()
+            .flatten()
+            .map(|node| self.plans[node.0 as usize].metrics.width)
+            .fold(0.0, f32::max);
+        let arrow_start = self.glyphs.len();
+        let arrow = self.stretch_annotated_arrow(base, label_width)?;
+        let base_metrics = arrow.unwrap_or(base_plan.metrics);
         let lower_glyph_start = self.glyphs.len();
         let stretched_lower = match subscript {
-            Some(node) => self.stretch_lower_decoration(node, base_plan.metrics.width)?,
+            Some(node) => self.stretch_lower_decoration(node, base_metrics.width)?,
             None => None,
         };
         let lower =
             subscript.map(|node| stretched_lower.unwrap_or(self.plans[node.0 as usize].metrics));
-        let mut width = base_plan.metrics.width;
+        let mut width = base_metrics.width;
         if let Some(lower) = lower {
             width = width.max(lower.width);
         }
         if let Some(node) = superscript {
             width = width.max(self.plans[node.0 as usize].metrics.width);
         }
-        let base_x = (width - base_plan.metrics.width) * 0.5;
+        let base_x = (width - base_metrics.width) * 0.5;
         let mut metrics = self.empty_metrics(index)?;
-        self.place(base, base_x, 0.0);
-        include_child(&mut metrics, base_plan.metrics, base_x, 0.0);
+        if arrow.is_some() {
+            offset_glyphs(&mut self.glyphs[arrow_start..lower_glyph_start], base_x, 0.0);
+        } else {
+            self.place(base, base_x, 0.0);
+        }
+        include_child(&mut metrics, base_metrics, base_x, 0.0);
         if let Some(superscript) = superscript {
             let plan = self.plans[superscript.0 as usize];
             let gap = self.constant(MathConstant::UpperLimitGapMin, pixel_size)?;
             let rise = self.constant(MathConstant::UpperLimitBaselineRiseMin, pixel_size)?;
-            let shift = (base_plan.metrics.height + gap + plan.metrics.depth).max(rise);
+            let shift = (base_metrics.height + gap + plan.metrics.depth).max(rise);
             let x = (width - plan.metrics.width) * 0.5 + base_plan.italic_correction * 0.5;
             self.place(superscript, x, -shift);
             include_child(&mut metrics, plan.metrics, x, -shift);
@@ -716,7 +728,7 @@ impl LayoutBuilder<'_> {
         if let (Some(subscript), Some(lower)) = (subscript, lower) {
             let gap = self.constant(MathConstant::LowerLimitGapMin, pixel_size)?;
             let drop = self.constant(MathConstant::LowerLimitBaselineDropMin, pixel_size)?;
-            let shift = (base_plan.metrics.depth + gap + lower.height).max(drop);
+            let shift = (base_metrics.depth + gap + lower.height).max(drop);
             let x = ((width - lower.width) * 0.5 - base_plan.italic_correction * 0.5).max(0.0);
             if stretched_lower.is_some() {
                 self.shift_glyphs(lower_glyph_start, x, shift);
@@ -727,6 +739,35 @@ impl LayoutBuilder<'_> {
         }
         metrics.width = metrics.width.max(width);
         Ok(Geometry { metrics, class: base_plan.class, italic_correction: 0.0 })
+    }
+
+    fn stretch_annotated_arrow(
+        &mut self,
+        base: NodeId,
+        label_width: f32,
+    ) -> Result<Option<MathMetrics>, MathError> {
+        let MathNode::Glyph {
+            character: character @ ('←' | '→'),
+            class: AtomClass::Rel,
+            variant,
+            ..
+        } = *self.formula.arena.node(base)
+        else {
+            return Ok(None);
+        };
+        if label_width == 0.0 {
+            return Ok(None);
+        }
+        let index = base.0 as usize;
+        let pixel_size = self.pixel_size(index)?;
+        // Leave a quarter em at each end. The font extends the shaft at
+        // the original glyph size, preserving the arrowhead and baseline.
+        let target = label_width + pixel_size * 0.5;
+        if target <= self.plans[index].metrics.width {
+            return Ok(None);
+        }
+        let Ok(glyph) = self.font.styled_glyph(character, variant) else { return Ok(None) };
+        Ok(Some(self.horizontal_glyph_box(glyph, target, pixel_size)?.metrics))
     }
 
     fn stretch_lower_decoration(
@@ -1270,10 +1311,7 @@ impl LayoutBuilder<'_> {
     }
 
     fn shift_glyphs(&mut self, start: usize, x: f32, baseline_y: f32) {
-        for glyph in &mut self.glyphs[start..] {
-            glyph.x += x;
-            glyph.baseline_y += baseline_y;
-        }
+        offset_glyphs(&mut self.glyphs[start..], x, baseline_y);
     }
 
     fn shift_recent_rule(&mut self, x: f32) {
@@ -1295,6 +1333,13 @@ impl LayoutBuilder<'_> {
         geometry.metrics.depth = (geometry.metrics.depth + baseline_shift).max(0.0);
         geometry.metrics.axis = axis;
         geometry
+    }
+}
+
+fn offset_glyphs(glyphs: &mut [LocalGlyph], x: f32, baseline_y: f32) {
+    for glyph in glyphs {
+        glyph.x += x;
+        glyph.baseline_y += baseline_y;
     }
 }
 
@@ -1433,6 +1478,45 @@ mod tests {
         let (left, right) = ink_bounds(&label, false);
         let (label_left, label_right) = ink_bounds(&label, true);
         assert!(label_right - label_left < (right - left) * 0.1);
+    }
+
+    #[test]
+    fn annotated_arrows_span_their_labels_on_either_side() {
+        fn ink_bounds(layout: &MathLayout, include: impl Fn(f32) -> bool) -> (f32, f32) {
+            layout
+                .glyphs
+                .iter()
+                .filter(|op| include(op.baseline_y))
+                .map(|op| {
+                    let ink = MathFont.glyph_metrics(GlyphId(op.glyph_id), op.pixel_size).unwrap();
+                    (op.x + ink.x_min, op.x + ink.x_max)
+                })
+                .reduce(|(left, right), (x_min, x_max)| (left.min(x_min), right.max(x_max)))
+                .unwrap()
+        }
+
+        for source in [
+            r"\xrightarrow{\text{Prompting pipeline}}",
+            r"\xleftarrow[\text{An even longer lower label}]{a}",
+        ] {
+            let layout = layout_formula(&formula(source, true), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+            let (arrow_left, arrow_right) = ink_bounds(&layout, |y| y == 0.0);
+            let (label_left, label_right) = ink_bounds(&layout, |y| y != 0.0);
+            assert!(
+                arrow_left < label_left && arrow_right > label_right,
+                "{source}: arrow ink {arrow_left:.1}..{arrow_right:.1} is inside label ink {label_left:.1}..{label_right:.1}",
+            );
+        }
+    }
+
+    #[test]
+    fn an_arrow_with_a_side_script_keeps_its_natural_glyph() {
+        let arrow = MathFont.glyph_id('→').unwrap();
+        let layout =
+            layout_formula(&formula(r"\to^{\text{side label}}", false), 20.0, 1.0, DEFAULT_LIMITS)
+                .unwrap();
+        assert_eq!(layout.glyphs.iter().filter(|op| op.baseline_y == 0.0).count(), 1);
+        assert!(layout.glyphs.iter().any(|op| op.baseline_y == 0.0 && op.glyph_id == arrow.0));
     }
 
     #[test]
