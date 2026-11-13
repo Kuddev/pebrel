@@ -1541,8 +1541,8 @@
     "restore_failed": "This AI conversation could not be restored. Its saved target is preserved. Use Retry recovery in the tab menu, or locate it in session history.",
     "restore_choose_codex": "The saved Codex conversation is unavailable. Choose a conversation in Codex to continue.",
     "restore_ambiguous": "More than one native session file matches this conversation. The saved target is preserved; choose the exact conversation from session history.",
-    "restore_rule_incompatible": "{agent} resume rule ({rule}) cannot be passed safely in {shell}. Disable it in Settings → Agents, or continue once without applying the rule.",
-    "restore_rule_invalid": "{agent} resume rule ({rule}) has invalid syntax. Fix or disable it in Settings → Agents, or continue once without applying the rule.",
+    "restore_rule_incompatible": "{agent} resume rule cannot be passed safely in {shell}. Edit or disable it in Settings → Agents, or continue once without applying the rule.",
+    "restore_rule_invalid": "{agent} resume rule has invalid syntax. Edit or disable it in Settings → Agents, or continue once without applying the rule.",
     "retry": "Retry session recovery",
     "retry_without_rule": "Continue without rule"
   },

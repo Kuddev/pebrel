@@ -96,11 +96,19 @@ impl TerminalView {
                 event.source == "pi" && event.kind != AiHookKind::SessionEnd,
             );
         }
-        if let Some(target) = target {
-            let previous = self.recovery.target.clone();
-            self.recovery.confirm(target);
-            if previous != self.recovery.target {
-                cx.emit(TerminalViewEvent::SessionIdentityChanged);
+        if event.kind != AiHookKind::SessionEnd {
+            if let Some(target) = target {
+                let previous = self.recovery.target.clone();
+                self.recovery.confirm(target);
+                if previous != self.recovery.target {
+                    cx.emit(TerminalViewEvent::SessionIdentityChanged);
+                }
+            } else {
+                let previous = self.recovery.target.clone();
+                self.recovery.supersede_if_inactive();
+                if previous != self.recovery.target {
+                    cx.emit(TerminalViewEvent::SessionIdentityChanged);
+                }
             }
         }
 

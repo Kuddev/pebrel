@@ -3,12 +3,13 @@
 use super::*;
 
 pub(super) struct BlockedResumeRule {
+    attempt: u64,
     base_command: String,
     source: String,
-    rule: String,
     error: crate::agent_resume::AppendError,
     shell_name: String,
     choosing_session: bool,
+    for_recovery: bool,
 }
 
 impl BlockedResumeRule {
@@ -20,18 +21,18 @@ impl BlockedResumeRule {
         match self.error {
             crate::agent_resume::AppendError::IncompatibleShell(_) => lang.format(
                 crate::i18n::Message::SessionRestoreRuleIncompatible,
-                &[("agent", agent), ("rule", &self.rule), ("shell", &self.shell_name)],
+                &[("agent", agent), ("shell", &self.shell_name)],
             ),
-            crate::agent_resume::AppendError::InvalidSyntax => lang.format(
-                crate::i18n::Message::SessionRestoreRuleInvalid,
-                &[("agent", agent), ("rule", &self.rule)],
-            ),
+            crate::agent_resume::AppendError::InvalidSyntax => {
+                lang.format(crate::i18n::Message::SessionRestoreRuleInvalid, &[("agent", agent)])
+            },
         }
     }
 }
 
 #[derive(Default)]
 pub(super) struct SessionRecovery {
+    attempt: u64,
     pub(super) target: Option<crate::session::AgentSession>,
     pub(super) awaiting_confirmation: bool,
     resolving: bool,
@@ -42,6 +43,33 @@ pub(super) struct SessionRecovery {
 }
 
 impl SessionRecovery {
+    pub(super) fn begin(
+        &mut self,
+        target: Option<crate::session::AgentSession>,
+        awaiting_confirmation: bool,
+    ) {
+        self.attempt = self.attempt.wrapping_add(1);
+        self.target = target;
+        self.awaiting_confirmation = awaiting_confirmation;
+        self.resolving = false;
+        self.submitted = false;
+        self.failed = false;
+        self.choosing_session = false;
+        self.blocked_rule = None;
+    }
+
+    pub(super) fn supersede(&mut self) {
+        self.begin(None, false);
+    }
+
+    pub(super) fn supersede_if_inactive(&mut self) {
+        if self.blocked_rule.is_some()
+            || (self.awaiting_confirmation && !self.submitted && self.failed)
+        {
+            self.supersede();
+        }
+    }
+
     pub(super) fn preparing(&self) -> bool {
         self.resolving || (self.awaiting_confirmation && !self.submitted && !self.failed)
     }
@@ -56,6 +84,7 @@ impl SessionRecovery {
 
     pub(super) fn accepts(&self, target: &crate::session::AgentSession) -> bool {
         !(self.awaiting_confirmation
+            && !self.failed
             && self.target.as_ref().is_some_and(|expected| {
                 expected.source != target.source
                     || (!self.choosing_session
@@ -79,8 +108,10 @@ impl SessionRecovery {
         {
             target.session_file = previous.session_file.clone();
         }
+        self.attempt = self.attempt.wrapping_add(1);
         self.target = Some(target);
         self.awaiting_confirmation = false;
+        self.submitted = false;
         self.failed = false;
         self.choosing_session = false;
         self.blocked_rule = None;
@@ -91,6 +122,7 @@ impl SessionRecovery {
         if !self.awaiting_confirmation {
             self.target = None;
         } else if self.submitted {
+            self.submitted = false;
             self.failed = true;
         }
     }
@@ -98,6 +130,7 @@ impl SessionRecovery {
 
 pub(super) struct PendingShellCommand {
     pub(super) text: String,
+    for_recovery: bool,
 }
 
 impl TerminalView {
@@ -127,11 +160,13 @@ impl TerminalView {
     pub(super) fn choose_codex_recovery_session(&mut self, cx: &mut Context<Self>) {
         // Keep the old target until the user's choice receives a native
         // acknowledgement. Directory similarity cannot recover a missing ID.
+        self.recovery.attempt = self.recovery.attempt.wrapping_add(1);
         self.recovery.choosing_session = true;
         self.recovery.submitted = false;
         self.recovery.failed = false;
+        self.recovery.blocked_rule = None;
         self.last_command_failed = false;
-        if self.submit_with_resume_rule("codex resume".into(), "codex", true, cx) {
+        if self.submit_with_resume_rule("codex resume".into(), "codex", true, true, cx) {
             cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
                 body: ui_language()
                     .text(crate::i18n::Message::SessionRestoreChooseCodex)
@@ -182,21 +217,33 @@ impl TerminalView {
         })
     }
 
-    pub fn run_command(&mut self, text: String, cx: &mut Context<Self>) {
+    fn queue_shell_command(&mut self, text: String, for_recovery: bool, cx: &mut Context<Self>) {
         if text.is_empty() || self.exited.is_some() {
             return;
         }
         self.recovery.blocked_rule = None;
-        self.pending_shell_command = Some(PendingShellCommand { text });
+        self.pending_shell_command = Some(PendingShellCommand { text, for_recovery });
         self.flush_pending_shell_command(cx);
     }
 
+    pub fn run_command(&mut self, text: String, cx: &mut Context<Self>) {
+        if text.is_empty() || self.exited.is_some() {
+            return;
+        }
+        self.recovery.supersede();
+        self.queue_shell_command(text, false, cx);
+    }
+
     pub(crate) fn run_agent_session_command(&mut self, command: String, cx: &mut Context<Self>) {
+        if command.is_empty() || self.exited.is_some() {
+            return;
+        }
+        self.recovery.supersede();
         let Some(kind) = crate::ai_agents::AgentKind::parse_command(&command) else {
-            self.run_command(command, cx);
+            self.queue_shell_command(command, false, cx);
             return;
         };
-        let _ = self.submit_with_resume_rule(command, kind.slug(), false, cx);
+        let _ = self.submit_with_resume_rule(command, kind.slug(), false, false, cx);
     }
 
     fn shell_program_for_rule(&self) -> Option<&str> {
@@ -219,6 +266,7 @@ impl TerminalView {
         base_command: String,
         source: &str,
         choosing_session: bool,
+        for_recovery: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         let rule = cx
@@ -228,7 +276,7 @@ impl TerminalView {
         let program = self.shell_program_for_rule();
         match crate::agent_resume::append(base_command.clone(), &rule, self.path_quote(), program) {
             Ok(decorated) => {
-                self.run_command(decorated, cx);
+                self.queue_shell_command(decorated, for_recovery, cx);
                 true
             },
             Err(error) => {
@@ -239,12 +287,13 @@ impl TerminalView {
                     crate::agent_resume::AppendError::InvalidSyntax => String::new(),
                 };
                 let blocked = BlockedResumeRule {
+                    attempt: self.recovery.attempt,
                     base_command,
                     source: source.to_owned(),
-                    rule,
                     error,
                     shell_name,
                     choosing_session,
+                    for_recovery,
                 };
                 let body = blocked.message(ui_language());
                 self.recovery.choosing_session = false;
@@ -286,15 +335,17 @@ impl TerminalView {
         if self.pending_shell_command.is_some()
             || self.running_program.as_deref() == Some(source.as_str())
         {
-            self.recovery = SessionRecovery {
-                target: Some(crate::session::AgentSession {
+            if let Some(pending) = &mut self.pending_shell_command {
+                pending.for_recovery = true;
+            }
+            self.recovery.begin(
+                Some(crate::session::AgentSession {
                     source,
                     session_id: Some(session_id),
                     session_file: None,
                 }),
-                awaiting_confirmation: true,
-                ..SessionRecovery::default()
-            };
+                true,
+            );
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
         }
@@ -306,14 +357,10 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         agent.normalize_identity();
-        self.recovery = SessionRecovery {
-            target: Some(agent.clone()),
-            awaiting_confirmation: true,
-            ..SessionRecovery::default()
-        };
+        self.recovery.begin(Some(agent.clone()), true);
         if agent.source != "pi" || self.ssh_destination.is_some() {
             if let Some(command) = agent.resume_command() {
-                let _ = self.submit_with_resume_rule(command, &agent.source, false, cx);
+                let _ = self.submit_with_resume_rule(command, &agent.source, false, true, cx);
             } else {
                 self.recovery.failed = true;
                 cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
@@ -357,7 +404,7 @@ impl TerminalView {
                         });
                         view.recovery.target = Some(target);
                         if let Some(command) = base_command {
-                            let _ = view.submit_with_resume_rule(command, "pi", false, cx);
+                            let _ = view.submit_with_resume_rule(command, "pi", false, true, cx);
                         } else {
                             view.recovery.failed = true;
                             cx.emit(TerminalViewEvent::Notification(
@@ -418,12 +465,19 @@ impl TerminalView {
         )
     }
 
+    fn shell_idle_for_recovery_retry(&self) -> bool {
+        !self.recovery.resolving
+            && self.running_program.is_none()
+            && !(self.command_running && !self.command_running_disproved)
+            && self.pending_shell_command.is_none()
+            && self.pending_runtime_submit.is_none()
+            && self.ai_session.is_none()
+    }
+
     pub(crate) fn can_retry_recovery(&self) -> bool {
         self.recovery.failed
-            && !self.recovery.resolving
             && self.recovery.target.is_some()
-            && self.running_program.is_none()
-            && self.pending_shell_command.is_none()
+            && self.shell_idle_for_recovery_retry()
     }
 
     pub(crate) fn retry_recovery(&mut self, cx: &mut Context<Self>) {
@@ -435,10 +489,12 @@ impl TerminalView {
     }
 
     pub(crate) fn can_retry_without_rule(&self) -> bool {
-        self.recovery.blocked_rule.is_some()
-            && !self.recovery.resolving
-            && self.running_program.is_none()
-            && self.pending_shell_command.is_none()
+        self.recovery.failed
+            && self.recovery.blocked_rule.as_ref().is_some_and(|blocked| {
+                blocked.attempt == self.recovery.attempt
+                    && (!blocked.for_recovery || self.recovery.target.is_some())
+            })
+            && self.shell_idle_for_recovery_retry()
     }
 
     pub(crate) fn retry_without_rule(&mut self, cx: &mut Context<Self>) {
@@ -452,7 +508,7 @@ impl TerminalView {
             self.recovery.choosing_session = true;
             self.recovery.submitted = false;
         }
-        self.run_command(blocked.base_command, cx);
+        self.queue_shell_command(blocked.base_command, blocked.for_recovery, cx);
         if blocked.choosing_session {
             cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
                 body: ui_language()
@@ -496,12 +552,14 @@ impl TerminalView {
         let submission = self
             .prediction_startup_command(&pending.text, cx)
             .unwrap_or_else(|| pending.text.clone());
+        let was_submitted = self.recovery.submitted;
+        self.recovery.submitted = pending.for_recovery && self.recovery.awaiting_confirmation;
         if let Err(error) = self.runtime_prompt(submission, true, cx) {
             log::warn!("Could not submit startup command: {error:?}");
+            self.recovery.submitted = was_submitted;
             self.pending_shell_command = Some(pending);
             return;
         }
-        self.recovery.submitted = self.recovery.awaiting_confirmation;
         if let Some(kind) = kind {
             self.running_program = Some(kind.slug().to_owned());
             // Submission is not a provider acknowledgement. Keep the recovery

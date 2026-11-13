@@ -71,7 +71,9 @@ fn open_at(
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
+        let mut settings = Settings::load(nebula_settings::ThemeName::Nord);
+        settings.agent_resume_args = Default::default();
+        cx.set_global(settings);
     });
     let mut result = None;
     let (_, window) = cx.add_window_view(|window, cx| {
@@ -1760,8 +1762,8 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
         );
     });
 
-    // Incompatible `cmd.exe` rule points out the offending rule + shell and lets the user
-    // explicitly retry once without the rule while keeping persisted settings intact.
+    // Blocked notifications and banners report agent, shell, and failure reason without
+    // echoing the raw rule text (which may hold credentials or private paths).
     let notices = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let notices_sink = notices.clone();
     cx.update(crate::gpui_shell::scientific_render::init);
@@ -1777,9 +1779,31 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
         .detach();
         Root::new(view.clone(), window, cx)
     });
-    let raw_rule = r#"["--config","model_provider=\"custom\""]"#;
+    let secret_marker = "secret-marker-965";
+    let invalid_rule = format!("--token={secret_marker}; echo bad");
+    let raw_rule = format!(r#"["--config","api_token=\"{secret_marker}\""]"#);
     view.update(painted_window, |view, cx| {
         view.pending_shell_command = None;
+        cx.global_mut::<Settings>().agent_resume_args = nebula_settings::AgentResumeArgs::from_raw(
+            &nebula_settings::RawSettings::from_text(&format!(
+                "agent_resume_args_claude={invalid_rule}\nagent_resume_enabled_claude=1\n"
+            )),
+        );
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "claude".into(),
+                session_id: Some("session-invalid-secret".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        let blocked = view.recovery.blocked_rule.as_ref().expect("blocked invalid rule");
+        for lang in [crate::display::UiLanguage::EnUs, crate::display::UiLanguage::ZhCn] {
+            let text = blocked.message(lang);
+            assert!(text.contains("Claude Code"), "missing agent name: {text}");
+            assert!(!text.contains(secret_marker), "leaked marker in invalid message: {text}");
+        }
+
         view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
             &nebula_terminal::tty::Options {
                 shell: Some(nebula_terminal::tty::Shell::new("cmd.exe".into(), vec![])),
@@ -1806,12 +1830,24 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
         assert!(view.pending_shell_command.is_none());
         assert!(view.recovery.failed);
         assert!(view.can_retry_without_rule());
+        let blocked = view.recovery.blocked_rule.as_ref().expect("blocked cmd rule");
+        for lang in [crate::display::UiLanguage::EnUs, crate::display::UiLanguage::ZhCn] {
+            let text = blocked.message(lang);
+            assert!(
+                text.contains("Codex") && text.contains("cmd.exe"),
+                "missing agent or shell in message: {text}"
+            );
+            assert!(!text.contains(secret_marker), "leaked marker in cmd message: {text}");
+        }
     });
+    assert_eq!(notices.borrow().len(), 2);
+    for notice in notices.borrow().iter() {
+        assert!(!notice.contains(secret_marker), "leaked marker in notification: {notice}");
+        assert!(!notice.contains("api_token"), "leaked rule body in notification: {notice}");
+    }
     let last_notice = notices.borrow().last().cloned().unwrap_or_default();
     assert!(
-        last_notice.contains("Codex")
-            && last_notice.contains(raw_rule)
-            && last_notice.contains("cmd.exe"),
+        last_notice.contains("Codex") && last_notice.contains("cmd.exe"),
         "unexpected notice: {last_notice}"
     );
     painted_window.simulate_resize(size(px(800.0), px(600.0)));
@@ -1832,5 +1868,110 @@ fn agent_resume_and_fork_rules_append_quoted_arguments_and_respect_enabled_toggl
             Some("codex resume session-cmd")
         );
         assert_eq!(cx.global::<Settings>().agent_resume_args.get("codex"), raw_rule);
+    });
+}
+
+#[gpui::test]
+fn agent_resume_blocked_recovery_yields_to_manual_sessions_and_running_commands(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+            &nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new("/bin/zsh".into(), vec![])),
+                ..Default::default()
+            },
+        ));
+        view.session_launch = crate::session::LaunchSession::Shell {
+            name: "zsh".into(),
+            program: "/bin/zsh".into(),
+            args: Vec::new(),
+        };
+        cx.global_mut::<Settings>().agent_resume_args = nebula_settings::AgentResumeArgs::from_raw(
+            &nebula_settings::RawSettings::from_text(
+                "agent_resume_args_codex=--yolo; echo bad\nagent_resume_enabled_codex=1\n",
+            ),
+        );
+
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "codex".into(),
+                session_id: Some("session-old".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        assert!(view.can_retry_without_rule());
+        assert_eq!(
+            view.session_agent().and_then(|agent| agent.session_id),
+            Some("session-old".into())
+        );
+
+        // Retry is suppressed while a foreground command is running, even before
+        // its program name is identified.
+        view.command_running = true;
+        assert!(view.running_program.is_none());
+        assert!(!view.can_retry_without_rule());
+        assert!(!view.can_retry_recovery());
+        view.retry_without_rule(cx);
+        assert!(view.pending_shell_command.is_none());
+        view.command_running = false;
+        assert!(view.can_retry_without_rule());
+
+        // User manually opens another session in the same pane without a prior
+        // shell CommandStart: the new session registers and replaces the old recovery.
+        let manual_start = crate::ai_hook::parse_remote_envelope(
+            b"nebula-hook/1 source=claude\n{\"hook_event_name\":\"SessionStart\",\"session_id\":\"session-manual\"}",
+            Some(view.pane_id),
+        )
+        .unwrap();
+        assert!(view.handle_ai_hook(&manual_start, cx));
+        assert_eq!(
+            view.ai_session.as_ref().map(|session| (session.source.as_str(), session.session_id.as_str())),
+            Some(("claude", "session-manual"))
+        );
+        assert_eq!(
+            view.session_agent(),
+            Some(crate::session::AgentSession {
+                source: "claude".into(),
+                session_id: Some("session-manual".into()),
+                session_file: None,
+            })
+        );
+        assert!(!view.can_retry_without_rule());
+        assert!(view.recovery.blocked_rule.is_none());
+
+        let manual_end = crate::ai_hook::parse_remote_envelope(
+            b"nebula-hook/1 source=claude\n{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"session-manual\"}",
+            Some(view.pane_id),
+        )
+        .unwrap();
+        assert!(view.handle_ai_hook(&manual_end, cx));
+        assert!(view.ai_session.is_none());
+        assert!(view.session_agent().is_none());
+        assert!(!view.can_retry_without_rule());
+        assert!(!view.can_retry_recovery());
+        view.retry_without_rule(cx);
+        assert!(view.pending_shell_command.is_none());
+
+        // Explicit shell command execution also supersedes a blocked recovery immediately.
+        view.restore_agent(
+            crate::session::AgentSession {
+                source: "codex".into(),
+                session_id: Some("session-old-2".into()),
+                session_file: None,
+            },
+            cx,
+        );
+        assert!(view.can_retry_without_rule());
+        view.suggest.last_committed = "echo manual-command".into();
+        view.process_event(Event::CommandStart, cx);
+        assert!(!view.can_retry_without_rule());
+        assert!(view.recovery.blocked_rule.is_none());
+        assert!(view.recovery.target.is_none());
+        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        assert!(!view.can_retry_without_rule());
+        assert!(!view.can_retry_recovery());
     });
 }
