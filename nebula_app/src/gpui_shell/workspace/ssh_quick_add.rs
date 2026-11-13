@@ -268,6 +268,20 @@ impl NebulaWorkspace {
         }
     }
 
+    /// Esc / 取消按钮 / 点遮罩三条取消路径：收起浮层并把焦点交回活动
+    /// 窗格。浮层开着时按键全被它吞掉，不还焦点的话，用户取消后接着敲
+    /// 的命令会落进虚空，得先点一下终端才能输入。
+    pub(super) fn cancel_ssh_quick_add(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.ssh_quick_add.take().is_some() {
+            self.focus_active(window, cx);
+            cx.notify();
+        }
+    }
+
     /// 把浮层里的草稿写进主机库并保存密码；成功返回规范化 destination。
     /// 目的地已保存时原样复用既有 profile（不写库、不动凭据），同样返回
     /// destination 供连接。与连接分开，测试可以只验证落盘而不真的建 SSH 会话。
@@ -506,12 +520,12 @@ impl NebulaWorkspace {
                 .bg(theme.overlay)
                 .on_mouse_down(
                     gpui::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.close_ssh_quick_add(cx)),
+                    cx.listener(|this, _, window, cx| this.cancel_ssh_quick_add(window, cx)),
                 )
                 .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     match event.keystroke.key.as_str() {
                         "escape" => {
-                            this.close_ssh_quick_add(cx);
+                            this.cancel_ssh_quick_add(window, cx);
                             cx.stop_propagation();
                         },
                         "enter" if !event.keystroke.modifiers.shift => {
@@ -562,8 +576,8 @@ impl NebulaWorkspace {
                                                 .label(language.text(Message::CommonCancel))
                                                 .ghost()
                                                 .small()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.close_ssh_quick_add(cx)
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.cancel_ssh_quick_add(window, cx)
                                                 })),
                                         )
                                         .child(

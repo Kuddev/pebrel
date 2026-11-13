@@ -353,6 +353,124 @@ fn quick_add_commit_failure_without_a_password_write_keeps_the_existing_credenti
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// 工作区级键盘回归（审查实测的路径）：终端聚焦时打开「添加并连接」，
+/// Esc 取消后焦点必须回到终端，接着敲的命令要进终端。构建复用终端夹具
+/// （open_painted_workspace 同款的最小形态）：一个终端 pane，shell 指向
+/// 不存在的可执行文件（没有真实 PTY 输出），会话换成 test_session——键
+/// 入以 `Msg::Input` 落到通道接收端，「终端收到输入」可以字面断言。
+#[gpui::test]
+fn quick_add_cancel_returns_focus_and_the_next_command_reaches_the_terminal(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        crate::gpui_shell::init(cx, Default::default());
+        crate::gpui_shell::workspace::windowing::initialize(
+            cx,
+            crate::runtime_api::RuntimeHub::new(),
+        );
+        cx.set_reduce_motion(true);
+    });
+    let mut workspace_entity = None;
+    let mut receiver = None;
+    let mut terminal_focus = None;
+    let (_, mut window) = cx.add_window_view(|window, cx| {
+        let entity = cx.new(|cx| {
+            let mut workspace = NebulaWorkspace::new(
+                window,
+                None,
+                None,
+                1,
+                crate::runtime_api::RuntimeHub::new(),
+                crate::gpui_shell::workspace::windowing::WorkspaceStartup::Empty,
+                crate::gpui_shell::workspace::windowing::WindowRole::Regular,
+                cx,
+            );
+            let pane = workspace.new_pane(
+                (80, 24),
+                crate::gpui_shell::terminal::view::TerminalLaunch::Local {
+                    cwd: None,
+                    shell: Some(nebula_terminal::tty::Shell::new(
+                        "pebrel-test-missing-shell-executable".into(),
+                        vec![],
+                    )),
+                    shell_name: None,
+                },
+                None,
+                window,
+                cx,
+            );
+            receiver = Some(pane.view.update(cx, |view, _| view.install_completion_test_session()));
+            let pane_id = pane.id;
+            workspace.tabs.push(crate::gpui_shell::workspace::WorkspaceTab::Terminal {
+                panes: vec![pane],
+                tree: nebula_split::SplitTree::Leaf(pane_id),
+                focused: pane_id,
+                zoomed: false,
+                broadcast: false,
+            });
+            workspace.tab_meta.push(crate::gpui_shell::workspace::TabMeta::default());
+            let focus = workspace.tabs[0]
+                .focused_view()
+                .expect("terminal pane")
+                .read(cx)
+                .focus_handle
+                .clone();
+            window.focus(&focus, cx);
+            terminal_focus = Some(focus);
+            workspace
+        });
+        workspace_entity = Some(entity.clone());
+        gpui_component::Root::new(entity, window, cx)
+    });
+    let workspace_entity = workspace_entity.expect("workspace built");
+    window.update(|window, _| window.activate_window());
+    window.run_until_parked();
+
+    // 用户正在终端里，启动器搜索未命中回车 → 浮层打开，焦点进地址框。
+    window.update(|window, cx| {
+        workspace_entity.update(cx, |workspace, cx| {
+            workspace.open_ssh_quick_add("core.example.cn".to_owned(), window, cx);
+        });
+    });
+    window.update(|window, _| {
+        assert!(
+            !terminal_focus.as_ref().expect("terminal focus").is_focused(window),
+            "浮层打开后焦点应在表单地址框"
+        );
+    });
+
+    // Esc 取消：浮层收起，焦点交回活动窗格的终端。
+    window.simulate_keystrokes("escape");
+    draw(&mut window);
+    window.update(|window, _| {
+        assert!(
+            terminal_focus.as_ref().expect("terminal focus").is_focused(window),
+            "Esc 取消后焦点必须回到终端"
+        );
+    });
+
+    // 不点鼠标直接敲命令：终端必须收到这次输入（空格是 keystroke 分隔符，
+    // 字面空格要用 space 键名）。
+    window.simulate_keystrokes("echo space hi");
+    let mut input = Vec::new();
+    while let Ok(message) = receiver.as_ref().expect("test session").try_recv() {
+        if let nebula_terminal::event_loop::Msg::Input(bytes) = message {
+            input.extend_from_slice(&bytes);
+        }
+    }
+    assert!(
+        input.windows("echo hi".len()).any(|chunk| chunk == b"echo hi"),
+        "取消后键入的命令必须到达终端: {input:?}"
+    );
+}
+
+fn draw(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+}
+
 fn init_and_build<'a>(
     destination: &str,
     cx: &'a mut gpui::TestAppContext,
