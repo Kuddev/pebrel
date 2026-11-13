@@ -5,9 +5,11 @@
 //! actually installed, in a stable, familiar order:
 //! PowerShell 7 → Windows PowerShell → CMD → Git Bash → Zsh → Nushell → WSL distros.
 //!
-//! Detection touches the filesystem and the registry, so callers run it ONCE
-//! per process (at first menu open) and cache the result — see
-//! `Display::nebula_detected_shells`.
+//! Detection touches the filesystem and the registry, so [`detect_shells`]
+//! keeps one process-wide snapshot: repeated callers (startup, session
+//! restore, every new pane) reuse it. Shell pickers call
+//! [`refresh_detection`] when they open, which is also when a shell installed
+//! while Pebrel is running becomes visible.
 //!
 //! Every entry also carries a stable `id` for the "default shell" setting
 //! (`shell=<id>` in nebula_settings.txt): ids re-resolve to fresh paths on
@@ -216,8 +218,64 @@ fn env_path(var: &str) -> Option<PathBuf> {
     std::env::var_os(var).map(PathBuf::from)
 }
 
+/// Process-wide detection snapshot. The registry and PATH only change when the
+/// user installs or removes a shell, so a reader that finds the snapshot skips
+/// the filesystem walk entirely; [`refresh_detection`] is the explicit boundary
+/// where discovery may run again.
+struct ShellDetection {
+    shells: std::sync::RwLock<Option<Vec<DetectedShell>>>,
+}
+
+impl ShellDetection {
+    const fn new() -> Self {
+        Self { shells: std::sync::RwLock::new(None) }
+    }
+
+    fn snapshot(&self) -> Vec<DetectedShell> {
+        if let Some(shells) = self.read() {
+            return shells;
+        }
+        // Holding the write lock across detection also keeps concurrent first
+        // calls from running the whole scan twice.
+        let mut slot = self.shells.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.get_or_insert_with(detect_uncached).clone()
+    }
+
+    fn replace(&self, shells: Vec<DetectedShell>) {
+        *self.shells.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shells);
+    }
+
+    fn read(&self) -> Option<Vec<DetectedShell>> {
+        self.shells.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+}
+
+static SHELL_DETECTION: std::sync::OnceLock<ShellDetection> = std::sync::OnceLock::new();
+
+fn detection_cache() -> &'static ShellDetection {
+    SHELL_DETECTION.get_or_init(ShellDetection::new)
+}
+
 /// Detect every installed shell, menu order.
+///
+/// The result is a process-wide snapshot; repeated calls do not touch the
+/// registry or PATH again. Call [`refresh_detection`] when a picker opens.
 pub fn detect_shells() -> Vec<DetectedShell> {
+    detection_cache().snapshot()
+}
+
+/// Re-run discovery, replace the process-wide snapshot and return it, so a
+/// shell installed after startup shows up in the next picker that opens. This
+/// is the only path that intentionally repeats the scan.
+pub fn refresh_detection() -> Vec<DetectedShell> {
+    let shells = detect_uncached();
+    detection_cache().replace(shells.clone());
+    shells
+}
+
+fn detect_uncached() -> Vec<DetectedShell> {
+    #[cfg(test)]
+    detection_probe::record();
     #[cfg(windows)]
     {
         detect_windows()
@@ -225,6 +283,33 @@ pub fn detect_shells() -> Vec<DetectedShell> {
     #[cfg(not(windows))]
     {
         detect_unix()
+    }
+}
+
+#[cfg(test)]
+mod detection_probe {
+    use std::cell::Cell;
+
+    // Per-thread so parallel tests and their unrelated detection cannot skew
+    // the count. Only [`start`] enables counting, and only on this thread.
+    thread_local! {
+        static DETECTIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn start() {
+        DETECTIONS.with(|count| count.set(Some(0)));
+    }
+
+    pub(super) fn record() {
+        DETECTIONS.with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + 1));
+            }
+        });
+    }
+
+    pub(super) fn stop() -> usize {
+        DETECTIONS.with(|count| count.replace(None).unwrap_or(0))
     }
 }
 
@@ -1595,6 +1680,37 @@ test "$token" = "$__pebrel_shell_token" || exit 96
         assert_eq!(launched.args().first().map(String::as_str), Some("-NoLogo"));
         assert!(launched.args().iter().any(|arg| arg == "-Command"));
         assert!(!launched.args().iter().any(|arg| arg.eq_ignore_ascii_case("-NoProfile")));
+    }
+
+    /// The process snapshot is what production callers pay for: one scan until
+    /// a picker explicitly asks for fresh results.
+    #[test]
+    fn detection_is_cached_until_an_explicit_refresh() {
+        detection_probe::start();
+        refresh_detection();
+        let first = detect_shells();
+        let second = detect_shells();
+        assert_eq!(first, second);
+        assert_eq!(
+            detection_probe::stop(),
+            1,
+            "repeated detect_shells calls must reuse the process snapshot"
+        );
+
+        detection_probe::start();
+        refresh_detection();
+        assert_eq!(detect_shells(), first);
+        assert_eq!(detection_probe::stop(), 1, "refresh must re-run discovery once");
+    }
+
+    /// The cache must not turn an unknown explicit id into the default shell.
+    #[test]
+    fn resolve_id_keeps_unknown_ids_unresolved() {
+        assert_eq!(resolve_id("no-such-shell-is-installed"), None);
+        assert_eq!(resolve_id("  "), None);
+        // An unregistered WSL distro is still unknown here; `resolve_shell_id`
+        // may synthesize a `wsl.exe -d` launch, but `resolve_id` must not.
+        assert_eq!(resolve_id("wsl:definitely-not-registered"), None);
     }
 
     #[test]

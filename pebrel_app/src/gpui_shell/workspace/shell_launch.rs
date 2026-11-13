@@ -78,7 +78,7 @@ pub(super) fn configured_directory() -> Option<std::path::PathBuf> {
     }
     crate::platform::launch_directory::validate(
         directory.into(),
-        crate::platform::launch_directory::is_wsl(startup_shell(settings.shell.clone()).as_ref()),
+        settings.shell.as_deref().is_some_and(is_wsl_shell_id),
     )
 }
 
@@ -214,6 +214,28 @@ pub(super) fn profile_launch_session(
     }
 }
 
+/// Whether `wsl` / `wsl:<发行版>` names a WSL launch on this host, from the id
+/// alone. Startup paths (`--shell`, the `shell` setting, session restore) use
+/// this before the first pane exists, so it must not run shell detection. The
+/// executable check keeps the old behavior when WSL is not installed: such an
+/// id resolves to the default shell, so its directory is a host directory.
+pub(crate) fn is_wsl_shell_id(shell_id: &str) -> bool {
+    crate::platform::shell::wsl_executable().is_some() && wsl_launch_args(shell_id).is_some()
+}
+
+/// Whether a startup request targets WSL: `-e` names a WSL program, otherwise
+/// `--shell` / the `shell` setting names `wsl` or `wsl:<发行版>`. Pure — it
+/// never resolves the shell through detection.
+pub(crate) fn requests_wsl(
+    command: Option<&crate::config::ui_config::Program>,
+    shell_id: Option<&str>,
+) -> bool {
+    match command {
+        Some(command) => crate::platform::launch_directory::is_wsl_program(command.program()),
+        None => shell_id.is_some_and(is_wsl_shell_id),
+    }
+}
+
 /// `wsl:<发行版>` / 裸 `wsl` 的 id 语义：显示名与 argv 尾部。
 ///
 /// 与可执行文件的查找分开，好让 id 语义能脱离"本机装没装 WSL"来测。
@@ -235,6 +257,13 @@ fn wsl_launch_args(shell_id: &str) -> Option<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+
+    /// 显式请求的未知 id 必须报错：进程缓存不能把它变成默认 shell。
+    #[test]
+    fn unknown_explicit_shell_ids_stay_errors() {
+        assert!(super::resolve_shell_id("no-such-shell-is-installed").is_err());
+        assert!(super::resolve_shell_id("  ").is_err());
+    }
 
     #[test]
     fn profile_ids_preserve_case_sensitive_directory_identity() {

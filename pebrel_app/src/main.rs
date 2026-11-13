@@ -234,13 +234,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         // `--shell <id>`（右键菜单「在 Pebrel 中打开（Ubuntu）」用它）一路带到
         // 首个标签；缺省仍然用设置里的默认 shell。
         let shell_id = terminal_options.shell_id();
-        let requested_shell = terminal_options.command().map(Into::into).or_else(|| {
-            crate::gpui_shell::workspace::shell_launch::startup_shell(shell_id.clone())
-        });
+        // Which directory policy applies depends only on the request: a WSL
+        // program or id, never on resolving the shell (that scan is expensive
+        // and its result is not needed before the window opens).
+        let requested_shell_id =
+            shell_id.clone().or_else(|| pebrel_settings::RuntimeSettings::load().shell);
         let initial_cwd = terminal_options.resolved_working_directory().and_then(|path| {
             platform::launch_directory::validate(
                 path,
-                platform::launch_directory::is_wsl(requested_shell.as_ref()),
+                crate::gpui_shell::workspace::shell_launch::requests_wsl(
+                    terminal_options.command().as_ref(),
+                    requested_shell_id.as_deref(),
+                ),
             )
         });
         platform::startup::prepare_gui();
@@ -613,17 +618,18 @@ fn resident_launch_directory(
     settings: &pebrel_settings::RuntimeSettings,
 ) -> Option<std::path::PathBuf> {
     #[cfg(feature = "gpui-shell")]
-    let shell = options.command().map(Into::into).or_else(|| {
-        crate::gpui_shell::workspace::shell_launch::startup_shell(
-            options.shell_id().or_else(|| settings.shell.clone()),
-        )
-    });
+    let wsl = crate::gpui_shell::workspace::shell_launch::requests_wsl(
+        options.command().as_ref(),
+        options.shell_id().or_else(|| settings.shell.clone()).as_deref(),
+    );
     #[cfg(not(feature = "gpui-shell"))]
-    let shell = options.command().map(Into::into);
+    let wsl = options
+        .command()
+        .is_some_and(|command| platform::launch_directory::is_wsl_program(command.program()));
     platform::startup::resident_launch_directory(
         options.resolved_working_directory(),
         settings,
-        platform::launch_directory::is_wsl(shell.as_ref()),
+        wsl,
     )
 }
 

@@ -21,9 +21,10 @@ impl NebulaWorkspace {
     /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
     /// 同一合同，设置页「启动目录」优先，未设置或失效时才继承进程启动目录。
     pub(super) fn cold_start_cwd() -> Option<std::path::PathBuf> {
-        let wsl = crate::platform::launch_directory::is_wsl(
-            super::shell_launch::startup_shell(None).as_ref(),
-        );
+        let wsl = pebrel_settings::RuntimeSettings::load()
+            .shell
+            .as_deref()
+            .is_some_and(super::shell_launch::is_wsl_shell_id);
         cold_start_cwd(
             Self::startup_directory(),
             (!wsl).then(|| std::env::current_dir().ok()).flatten(),

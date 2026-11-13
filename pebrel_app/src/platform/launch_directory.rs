@@ -4,10 +4,6 @@ use std::path::{Path, PathBuf};
 
 use pebrel_terminal::tty::{Options, Shell};
 
-pub(crate) fn is_wsl(shell: Option<&Shell>) -> bool {
-    shell.is_some_and(|shell| is_wsl_program(shell.program()))
-}
-
 pub(crate) fn is_wsl_program(program: &str) -> bool {
     cfg!(windows) && crate::shell_detect::is_wsl_launcher(program)
 }
