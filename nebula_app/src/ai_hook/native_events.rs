@@ -1,5 +1,5 @@
 //! Native lifecycle hooks that carry their event in the helper argv.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{LazyLock, Mutex, mpsc};
@@ -41,7 +41,52 @@ enum BrainScan {
 
 static ANTIGRAVITY_CONVERSATIONS: LazyLock<Mutex<VecDeque<(PathBuf, CachedConversation)>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
+static ACTIVE_ANTIGRAVITY_FOREGROUND: LazyLock<Mutex<HashMap<String, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static PROBE_WORKER: LazyLock<ProbeWorker> = LazyLock::new(ProbeWorker::new);
+
+#[derive(Debug)]
+pub(in crate::ai_hook) struct AntigravityForegroundLease {
+    session_id: String,
+}
+
+impl AntigravityForegroundLease {
+    pub(in crate::ai_hook) fn acquire(session_id: &str) -> Self {
+        let mut active =
+            ACTIVE_ANTIGRAVITY_FOREGROUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *active.entry(session_id.to_owned()).or_insert(0) += 1;
+        Self { session_id: session_id.to_owned() }
+    }
+}
+
+impl Clone for AntigravityForegroundLease {
+    fn clone(&self) -> Self {
+        Self::acquire(&self.session_id)
+    }
+}
+
+impl Drop for AntigravityForegroundLease {
+    fn drop(&mut self) {
+        let mut active =
+            ACTIVE_ANTIGRAVITY_FOREGROUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = active.get_mut(&self.session_id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                active.remove(&self.session_id);
+            }
+        }
+    }
+}
+
+fn is_confirmed_antigravity_foreground(session_id: &str) -> bool {
+    ACTIVE_ANTIGRAVITY_FOREGROUND
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(session_id)
+        .copied()
+        .unwrap_or(0)
+        > 0
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -219,6 +264,7 @@ fn classify_antigravity_envelope_with_worker(
             .collect::<Vec<_>>();
         (step_zero_ok, parents)
     };
+    let confirmed_foreground = is_confirmed_antigravity_foreground(&id);
     let deadline = Instant::now() + timeout;
     worker
         .run(timeout, move || {
@@ -228,6 +274,7 @@ fn classify_antigravity_envelope_with_worker(
                 &id,
                 step_zero_non_system,
                 &known_parent_ids,
+                confirmed_foreground,
                 deadline,
             )
         })
@@ -240,6 +287,7 @@ fn probe_antigravity_conversation_on_disk(
     id: &str,
     step_zero_non_system: bool,
     known_parent_ids: &[String],
+    confirmed_foreground: bool,
     deadline: Instant,
 ) -> AntigravityVerdict {
     if !is_dir_and_ancestors_no_symlink(brain_root) || !is_dir_no_symlink(&conversation_dir) {
@@ -261,7 +309,13 @@ fn probe_antigravity_conversation_on_disk(
     if Instant::now() >= deadline {
         return AntigravityVerdict::Unverified;
     }
-    match subagent_registered_in_brain(brain_root, id, known_parent_ids, deadline) {
+    match subagent_registered_in_brain(
+        brain_root,
+        id,
+        known_parent_ids,
+        confirmed_foreground,
+        deadline,
+    ) {
         BrainScan::RegisteredSubagent => {
             remember_antigravity_conversation(conversation_dir, CachedConversation::Subagent);
             AntigravityVerdict::Subagent
@@ -275,6 +329,7 @@ fn subagent_registered_in_brain(
     brain_root: &Path,
     id: &str,
     known_parent_ids: &[String],
+    confirmed_foreground: bool,
     deadline: Instant,
 ) -> BrainScan {
     let record_name = format!("{id}.json");
@@ -288,6 +343,9 @@ fn subagent_registered_in_brain(
             RegularProbe::NotFound => {},
             RegularProbe::InvalidOrError => saw_indeterminate = true,
         }
+    }
+    if confirmed_foreground {
+        return if saw_indeterminate { BrainScan::Incomplete } else { BrainScan::NotFoundComplete };
     }
     let Ok(entries) = std::fs::read_dir(brain_root) else {
         return BrainScan::Incomplete;

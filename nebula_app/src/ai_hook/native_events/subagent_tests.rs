@@ -3,6 +3,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use serde_json::json;
 
 use super::*;
+use crate::ai_agents::AgentStatus;
+use crate::ai_hook::lifecycle::AgentActivity;
 use crate::ai_hook::{AiHookEvent, parse_envelope, parse_remote_envelope};
 
 static TEST_PROBE_MUTEX: Mutex<()> = Mutex::new(());
@@ -54,11 +56,47 @@ fn write_subagent_record(brain: &Path, parent_id: &str, child_id: &str) {
     .unwrap();
 }
 
+fn parse_antigravity_hook(
+    event: &str,
+    id: &str,
+    transcript: &Path,
+    pid: Option<u32>,
+    extra: Value,
+) -> Option<AiHookEvent> {
+    let mut body = json!({
+        "conversationId": id,
+        "transcriptPath": transcript.to_str().unwrap(),
+    });
+    if let Some(obj) = extra.as_object() {
+        for (k, v) in obj {
+            body[k] = v.clone();
+        }
+    }
+    let wire = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
+    parse_envelope(wire.as_bytes()).map(|mut parsed| {
+        parsed.agent_pid = pid;
+        parsed
+    })
+}
+
+fn route_antigravity_hook(
+    activity: &mut AgentActivity,
+    active_session: &mut Option<String>,
+    maybe_event: Option<AiHookEvent>,
+) -> bool {
+    let Some(event) = maybe_event else { return false };
+    if activity.apply_hook(&event) {
+        if let Some(id) = event.session_id {
+            *active_session = Some(id);
+        }
+        true
+    } else {
+        false
+    }
+}
+
 #[test]
 fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() {
-    use crate::ai_agents::AgentStatus;
-    use crate::ai_hook::lifecycle::AgentActivity;
-
     let (_temp, brain) = temp_brain_root();
 
     let root_id = "11111111-1111-4111-8111-111111111111";
@@ -77,46 +115,22 @@ fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() 
 
     with_trusted_brain_root(&brain, || {
         let send = |event: &str, id: &str, transcript: &Path, extra: Value| {
-            let mut body = json!({
-                "conversationId": id,
-                "transcriptPath": transcript.to_str().unwrap(),
-            });
-            if let Some(extra_obj) = extra.as_object() {
-                for (k, v) in extra_obj {
-                    body[k] = v.clone();
-                }
-            }
-            let wire = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
-            parse_envelope(wire.as_bytes()).map(|mut parsed| {
-                parsed.agent_pid = Some(4242);
-                parsed
-            })
+            parse_antigravity_hook(event, id, transcript, Some(4242), extra)
         };
-
         let mut activity = AgentActivity::default();
         let mut active_session = None;
-        fn accept(
-            activity: &mut AgentActivity,
-            active_session: &mut Option<String>,
-            event: AiHookEvent,
-        ) {
-            assert!(activity.apply_hook(&event));
-            if let Some(id) = event.session_id {
-                *active_session = Some(id);
-            }
-        }
 
-        accept(
+        assert!(route_antigravity_hook(
             &mut activity,
             &mut active_session,
-            send("session-start", root_id, &root_transcript, json!({})).unwrap(),
-        );
+            send("session-start", root_id, &root_transcript, json!({})),
+        ));
         assert_eq!(activity.status(), AgentStatus::Idle);
-        accept(
+        assert!(route_antigravity_hook(
             &mut activity,
             &mut active_session,
-            send("tool-complete", root_id, &root_transcript, json!({})).unwrap(),
-        );
+            send("tool-complete", root_id, &root_transcript, json!({})),
+        ));
         assert_eq!(activity.status(), AgentStatus::Working);
         assert_eq!(active_session.as_deref(), Some(root_id));
 
@@ -136,12 +150,12 @@ fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() 
         assert_eq!(activity.status(), AgentStatus::Working);
         assert_eq!(active_session.as_deref(), Some(root_id));
 
-        accept(
+        assert!(route_antigravity_hook(
             &mut activity,
             &mut active_session,
-            send("tool-complete", root_id, &root_transcript, json!({})).unwrap(),
-        );
-        accept(
+            send("tool-complete", root_id, &root_transcript, json!({})),
+        ));
+        assert!(route_antigravity_hook(
             &mut activity,
             &mut active_session,
             send(
@@ -149,9 +163,8 @@ fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() 
                 root_id,
                 &root_transcript,
                 json!({"terminationReason": "model_stop", "fullyIdle": true}),
-            )
-            .unwrap(),
-        );
+            ),
+        ));
         assert_eq!(activity.status(), AgentStatus::Done);
         assert_eq!(active_session.as_deref(), Some(root_id));
 
@@ -165,11 +178,11 @@ fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() 
             Some("agy --conversation 11111111-1111-4111-8111-111111111111")
         );
 
-        accept(
+        assert!(route_antigravity_hook(
             &mut activity,
             &mut active_session,
-            send("session-start", next_root_id, &next_root_transcript, json!({})).unwrap(),
-        );
+            send("session-start", next_root_id, &next_root_transcript, json!({})),
+        ));
         assert_eq!(activity.status(), AgentStatus::Idle);
         assert_eq!(active_session.as_deref(), Some(next_root_id));
     });
@@ -194,12 +207,7 @@ fn antigravity_forked_subagents_are_rejected_on_cold_start_and_after_parent_evic
 
     with_trusted_brain_root(&brain, || {
         let send = |event: &str, id: &str, transcript: &Path| {
-            let body = json!({
-                "conversationId": id,
-                "transcriptPath": transcript.to_str().unwrap(),
-            });
-            let wire = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
-            parse_envelope(wire.as_bytes())
+            parse_antigravity_hook(event, id, transcript, None, json!({}))
         };
 
         // Cold start / reconnect: child arrives before parent has ever entered memory cache.
@@ -432,9 +440,6 @@ fn antigravity_probe_enforces_regular_files_and_ancestor_link_policy() {
 
 #[test]
 fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_identity() {
-    use crate::ai_agents::AgentStatus;
-    use crate::ai_hook::lifecycle::AgentActivity;
-
     let (_temp, brain) = temp_brain_root();
     let root_id = "root-primary-0001";
     let stalled_fork_id = "child-stalled-0002";
@@ -454,34 +459,22 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
 
     with_trusted_brain_root(&brain, || {
         let send = |event: &str, id: &str, transcript: &Path| {
-            let body = json!({
-                "conversationId": id,
-                "transcriptPath": transcript.to_str().unwrap(),
-            });
-            let wire = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
-            parse_envelope(wire.as_bytes()).map(|mut parsed| {
-                parsed.agent_pid = Some(9001);
-                parsed
-            })
+            parse_antigravity_hook(event, id, transcript, Some(9001), json!({}))
         };
 
         let mut activity = AgentActivity::default();
         let mut active_session = None;
-        fn route(
-            activity: &mut AgentActivity,
-            active_session: &mut Option<String>,
-            maybe_event: Option<AiHookEvent>,
-        ) {
-            if let Some(event) = maybe_event
-                && activity.apply_hook(&event)
-                && let Some(id) = event.session_id
-            {
-                *active_session = Some(id);
-            }
-        }
 
-        route(&mut activity, &mut active_session, send("session-start", root_id, &root_transcript));
-        route(&mut activity, &mut active_session, send("tool-complete", root_id, &root_transcript));
+        route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send("session-start", root_id, &root_transcript),
+        );
+        route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send("tool-complete", root_id, &root_transcript),
+        );
         assert_eq!(activity.status(), AgentStatus::Working);
         assert_eq!(active_session.as_deref(), Some(root_id));
 
@@ -522,7 +515,7 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
             "probe timeout must stay Unverified instead of routing child SessionStart"
         );
         assert!(elapsed >= Duration::from_millis(150) && elapsed < Duration::from_secs(2));
-        route(&mut activity, &mut active_session, timed_out);
+        route_antigravity_hook(&mut activity, &mut active_session, timed_out);
         assert_eq!(activity.status(), AgentStatus::Working);
         assert_eq!(active_session.as_deref(), Some(root_id));
 
@@ -542,7 +535,7 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
         let queue_full = send("session-start", queued_fork_id, &queued_fork_transcript);
         assert!(queue_full.is_none(), "full probe queue must not route unverified SessionStart");
         assert!(full_started.elapsed() < Duration::from_millis(100));
-        route(&mut activity, &mut active_session, queue_full);
+        route_antigravity_hook(&mut activity, &mut active_session, queue_full);
         assert_eq!(active_session.as_deref(), Some(root_id));
 
         drop(release);
@@ -557,11 +550,17 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
             .unwrap();
         drained_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
-        // Once the worker drains, legitimate new root conversations verify and switch cleanly,
-        // while the forked children remain rejected.
+        // Once the worker drains, the active root turn can finish and legitimate `/new` root
+        // conversations verify and switch cleanly, while the forked children remain rejected.
         assert!(send("session-start", stalled_fork_id, &stalled_fork_transcript).is_none());
         assert!(send("session-start", queued_fork_id, &queued_fork_transcript).is_none());
-        route(
+        route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send("done", root_id, &root_transcript),
+        );
+        assert_eq!(active_session.as_deref(), Some(root_id));
+        route_antigravity_hook(
             &mut activity,
             &mut active_session,
             send("session-start", next_root_id, &next_root_transcript),
@@ -592,38 +591,138 @@ fn antigravity_delayed_parent_subagent_record_rechecks_and_blocks_later_events()
     let (_temp, brain) = temp_brain_root();
     let parent_id = "parent-visible-later-0001";
     let child_id = "child-visible-later-0002";
+    let next_root_id = "next-root-after-done-0003";
 
-    let _parent_transcript =
+    let parent_transcript =
         write_antigravity_transcript(&brain, parent_id, "USER_EXPLICIT", "USER_INPUT");
     let child_transcript =
         write_antigravity_transcript(&brain, child_id, "USER_EXPLICIT", "USER_INPUT");
+    let next_root_transcript =
+        write_antigravity_transcript(&brain, next_root_id, "USER_EXPLICIT", "USER_INPUT");
 
     with_trusted_brain_root(&brain, || {
-        let send = |event: &str, extra: Value| {
-            let mut body = json!({
-                "conversationId": child_id,
-                "transcriptPath": child_transcript.to_str().unwrap(),
-            });
-            if let Some(obj) = extra.as_object() {
-                for (k, v) in obj {
-                    body[k] = v.clone();
-                }
-            }
-            let wire = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
-            parse_envelope(wire.as_bytes())
+        let send = |event: &str, id: &str, transcript: &Path, extra: Value| {
+            parse_antigravity_hook(event, id, transcript, Some(7788), extra)
         };
+        let mut activity = AgentActivity::default();
+        let mut active_session = None;
 
-        // First probe runs before the parent subagent record is visible on disk.
-        assert!(send("session-start", json!({})).is_some());
+        assert!(route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send("session-start", parent_id, &parent_transcript, json!({})),
+        ));
+        assert!(route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send("tool-complete", parent_id, &parent_transcript, json!({})),
+        ));
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(activity.primary_session(), Some(parent_id));
+        assert_eq!(active_session.as_deref(), Some(parent_id));
 
-        // Parent registration record now becomes readable; negative caching must not mask it
-        // on subsequent `done`, `tool-complete`, or `session-start` events.
+        // Child arrives with inherited step 0 before the parent subagent record is readable on
+        // disk: `parse_envelope` cannot prove subagent status yet, so `AgentActivity` must keep
+        // the active `Working` foreground session instead of letting child `SessionStart` take over.
+        let early_child_start =
+            send("session-start", child_id, &child_transcript, json!({})).unwrap();
+        assert!(!route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            Some(early_child_start)
+        ));
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(activity.primary_session(), Some(parent_id));
+        assert_eq!(active_session.as_deref(), Some(parent_id));
+
+        // Parent registration record now lands on disk; negative caching must not mask it.
         write_subagent_record(&brain, parent_id, child_id);
         assert!(
-            send("done", json!({"terminationReason": "model_stop", "fullyIdle": true})).is_none(),
+            send(
+                "done",
+                child_id,
+                &child_transcript,
+                json!({"terminationReason": "model_stop", "fullyIdle": true}),
+            )
+            .is_none(),
             "later `done` must re-check parent subagent records and reject the subagent"
         );
-        assert!(send("tool-complete", json!({})).is_none());
-        assert!(send("session-start", json!({})).is_none());
+        assert!(send("tool-complete", child_id, &child_transcript, json!({})).is_none());
+        assert!(send("session-start", child_id, &child_transcript, json!({})).is_none());
+
+        // Primary session's own completion event is accepted and finishes the turn cleanly.
+        assert!(route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send(
+                "done",
+                parent_id,
+                &parent_transcript,
+                json!({"terminationReason": "model_stop", "fullyIdle": true}),
+            ),
+        ));
+        assert_eq!(activity.status(), AgentStatus::Done);
+        assert_eq!(activity.primary_session(), Some(parent_id));
+        assert_eq!(active_session.as_deref(), Some(parent_id));
+
+        // Control: once the turn has ended, a real `/new` in the same CLI process switches cleanly.
+        activity.submitted_text("antigravity", "/new");
+        assert!(route_antigravity_hook(
+            &mut activity,
+            &mut active_session,
+            send("session-start", next_root_id, &next_root_transcript, json!({})),
+        ));
+        assert_eq!(activity.status(), AgentStatus::Idle);
+        assert_eq!(activity.primary_session(), Some(next_root_id));
+        assert_eq!(active_session.as_deref(), Some(next_root_id));
+    });
+}
+
+#[test]
+fn antigravity_confirmed_foreground_finishes_after_brain_exceeds_scan_limit() {
+    let (_temp, brain) = temp_brain_root();
+    let root_id = "confirmed-foreground-0001";
+    let unknown_id = "unconfirmed-session-0002";
+
+    let root_transcript =
+        write_antigravity_transcript(&brain, root_id, "USER_EXPLICIT", "USER_INPUT");
+
+    with_trusted_brain_root(&brain, || {
+        let send = |event: &str, id: &str, transcript: &Path, extra: Value| {
+            parse_antigravity_hook(event, id, transcript, Some(8899), extra)
+        };
+
+        let mut activity = AgentActivity::default();
+        assert!(
+            activity
+                .apply_hook(&send("session-start", root_id, &root_transcript, json!({})).unwrap())
+        );
+        assert!(
+            activity
+                .apply_hook(&send("tool-complete", root_id, &root_transcript, json!({})).unwrap())
+        );
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert_eq!(activity.primary_session(), Some(root_id));
+
+        for idx in 0..=MAX_BRAIN_SCAN_DIRS {
+            std::fs::create_dir(brain.join(format!("history-{idx:04}"))).unwrap();
+        }
+        let unknown_transcript =
+            write_antigravity_transcript(&brain, unknown_id, "USER_EXPLICIT", "USER_INPUT");
+
+        // Scan budget and fail-closed protection remain enforced for unknown conversations.
+        assert!(send("session-start", unknown_id, &unknown_transcript, json!({})).is_none());
+
+        // Already-confirmed foreground conversation still completes its own turn promptly.
+        let done = send(
+            "done",
+            root_id,
+            &root_transcript,
+            json!({"terminationReason": "model_stop", "fullyIdle": true}),
+        )
+        .expect("confirmed foreground session must not drop its own completion at scan limit");
+        assert!(activity.apply_hook(&done));
+        assert_eq!(activity.status(), AgentStatus::Done);
+        assert_eq!(activity.primary_session(), Some(root_id));
     });
 }

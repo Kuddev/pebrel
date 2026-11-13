@@ -63,6 +63,15 @@ Gate Antigravity envelopes in
   conversations, cache only the immutable step-`0` check while re-verifying parent subagent
   records on subsequent hooks so delayed or previously unreadable parent records still
   upgrade the conversation to `Subagent`.
+- Guard mid-turn foreground ownership in
+  [`AgentActivity::accepts_hook`](../../../../nebula_app/src/ai_hook/lifecycle.rs): while an
+  Antigravity turn is active (`Working` or `Blocked`), a same-PID `SessionStart` carrying a
+  different `session_id` cannot replace `owner.session` even if its parent subagent record is
+  not yet readable on disk; `/new` switches remain allowed once the turn ends (`Idle`/`Done`).
+- Hold an RAII `AntigravityForegroundLease` on accepted local Antigravity `Owner`s so an
+  already-confirmed foreground conversation validates known parent records without re-scanning
+  `read_dir(brain_root)`, allowing its subsequent `done` hooks to succeed even after `brain`
+  grows past `4,096` directories while keeping unknown conversations bounded and fail-closed.
 
 ## Rejected alternatives
 
