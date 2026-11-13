@@ -32,6 +32,14 @@ reported by the form after the profile file had already changed.
   interleave as A loads the library, B saves profile and password, A writes
   its password, then A's `profiles.save()` fails on the changed file — the
   library keeps B's profile while A has already overwritten B's credential.
+- Review reproduction on PR #869 (2026-11-13, second round): with the
+  rollback keyed on `prior` alone, a save that never writes a password
+  (auto auth, or password auth with the field left empty) shared the
+  `prior = None` shape with "wrote, nothing existed" — a failing commit
+  then called the delete path on a credential this transaction never
+  touched. Reproduced on Linux with a pre-seeded credential, an existing
+  lock file and a read-only directory: both no-write saves errored on the
+  commit and deleted the pre-existing password.
 
 ## Decision
 
@@ -47,8 +55,9 @@ reported by the form after the profile file had already changed.
   Within the transaction the credential write still precedes the commit, so
   a credential-storage failure leaves the host library untouched. When the
   commit itself fails (a lease-bypassing writer changed the file, or the
-  disk errored), the credential is rolled back to its pre-transaction state
-  — the prior password is restored, or the just-written one is deleted.
+  disk errored), only a password this transaction actually wrote is rolled
+  back — the prior password is restored, or the just-written one is deleted;
+  a save that wrote no password leaves an existing credential untouched.
 
 ## Rejected alternatives
 
@@ -92,6 +101,11 @@ reported by the form after the profile file had already changed.
 - `quick_add_commit_failure_rolls_the_password_back`: an out-of-band writer
   makes the commit fail; with no prior password the typed one is deleted,
   with a prior one it is restored.
+- `quick_add_commit_failure_without_a_password_write_keeps_the_existing_credential`:
+  auto auth and empty-password saves with a pre-existing credential fail the
+  commit through a read-only directory (existing lock file keeps the lease
+  working) and record zero credential operations — the pre-existing password
+  survives.
 - `persist_quick_add_with` takes the credential operations as a parameter
   (`CredentialOp`), mirroring the closure-injected tests of
   `platform::credentials`, so tests never touch the user keychain.

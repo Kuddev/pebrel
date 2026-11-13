@@ -203,16 +203,19 @@ fn persist_quick_add_with(
         return Ok(destination);
     }
     let wants_password = auth == crate::ssh_profiles::SshAuthMode::Password && !password.is_empty();
-    let prior = if wants_password {
+    // 本次事务对凭据的写入记录：None = 没写过密码（自动认证或密码留空），
+    // Some(prior) = 写过，prior 是事务前的旧值（None = 原本没有）。回滚只
+    // 针对本次真正写入的凭据——目的地原有的密码不是这次写的，提交失败时
+    // 把它删掉是替用户清库。
+    let mut written_password: Option<Option<Vec<u8>>> = None;
+    if wants_password {
         let prior = credential(CredentialOp::Prior(&destination))
             .map_err(|error| QuickAddError::Io(error.to_string()))?;
         // 密码仍先于主机库提交：凭据写失败时表单报错，主机库文件还没动。
         credential(CredentialOp::Store(&destination, password.as_bytes()))
             .map_err(|error| QuickAddError::Io(error.to_string()))?;
-        prior
-    } else {
-        None
-    };
+        written_password = Some(prior);
+    }
     profiles.upsert(crate::ssh_profiles::SshProfileAuth {
         destination: destination.clone(),
         auth,
@@ -223,16 +226,23 @@ fn persist_quick_add_with(
     });
     if let Err(error) = profiles.save_leased(path, &lease) {
         // 提交失败：文件只会被绕过保存 API 的写入方改掉（或磁盘出错）。
-        // `save_leased` 在租约内比对过快照，按事务语义回滚凭据。
-        let restore = match prior {
-            Some(prior) => credential(CredentialOp::Restore(&destination, &prior)),
-            None => credential(CredentialOp::Forget(&destination)),
-        };
-        return Err(match restore {
-            Ok(_) => QuickAddError::Io(error.to_string()),
-            Err(restore_error) => QuickAddError::Io(format!(
-                "{error}; rolling the password back failed too: {restore_error}"
-            )),
+        // `save_leased` 在租约内比对过快照，按事务语义处理凭据——本次写过
+        // 密码的，有旧值恢复旧值、没有旧值删掉本次写入；本次没写过的不碰
+        // 凭据，只报提交错误。
+        return Err(match written_password {
+            Some(prior) => {
+                let restore = match prior {
+                    Some(prior) => credential(CredentialOp::Restore(&destination, &prior)),
+                    None => credential(CredentialOp::Forget(&destination)),
+                };
+                match restore {
+                    Ok(_) => QuickAddError::Io(error.to_string()),
+                    Err(restore_error) => QuickAddError::Io(format!(
+                        "{error}; rolling the password back failed too: {restore_error}"
+                    )),
+                }
+            },
+            None => QuickAddError::Io(error.to_string()),
         });
     }
     Ok(destination)

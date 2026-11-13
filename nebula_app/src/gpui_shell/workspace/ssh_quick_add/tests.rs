@@ -269,6 +269,80 @@ fn quick_add_commit_failure_rolls_the_password_back(cx: &mut gpui::TestAppContex
     }
 }
 
+/// 提交失败但本次没写过密码：自动认证与密码留空的保存不得碰凭据——
+/// 目的地原有的密码不是这次写的，回滚删除就是替用户清库。提交失败用
+/// 维护者的注入方式复现：预置锁文件后目录只读，租约照常取得，落盘的
+/// 临时文件建不出来。目录权限在 Windows 上不拦截建文件，这条只在
+/// Unix 上跑。
+#[cfg(unix)]
+#[gpui::test]
+fn quick_add_commit_failure_without_a_password_write_keeps_the_existing_credential(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (mut state, cx) = init_and_build("core.example.cn", cx);
+    let directory = temp_profile_dir("rollback-no-write");
+    let path = directory.join("ssh_profiles.json");
+    // 库里先有另一台主机，目的地原有的密码只存在凭据库里。
+    let mut seeded = crate::ssh_profiles::SshProfiles::default();
+    seeded.upsert(crate::ssh_profiles::SshProfileAuth {
+        destination: "other@box.example".to_owned(),
+        auth: crate::ssh_profiles::SshAuthMode::Password,
+        private_keys: Vec::new(),
+        label: Some("Other box".to_owned()),
+        icon: None,
+        connection: crate::ssh_profiles::SshConnectionOptions::default(),
+    });
+    seeded.save(&path).unwrap();
+    // 预置锁文件：目录只读后，已有锁文件仍能打开加锁，落盘才会败在
+    // 建临时文件这一步——正好是提交失败，而不是取租约失败。
+    std::fs::write(path.with_extension("json.nebula-lock"), b"0").unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    // 「本次没写密码」的两种保存：自动认证、密码认证但密码留空。
+    for (name, auth) in [
+        ("auto", crate::ssh_profiles::SshAuthMode::Auto),
+        ("empty-password", crate::ssh_profiles::SshAuthMode::Password),
+    ] {
+        cx.update(|window, cx| {
+            state.auth = auth;
+            state.password.update(cx, |input, cx| input.set_value("", window, cx));
+        });
+        let mut credentials = FakeCredentials::new();
+        credentials.secrets.insert("root@core.example.cn".to_owned(), b"pre-existing".to_vec());
+        let mut ops = Vec::new();
+        cx.update(|_, cx| {
+            let error = persist_quick_add_with(
+                &state,
+                &path,
+                |op| {
+                    ops.push(match op {
+                        CredentialOp::Prior(_) => "prior",
+                        CredentialOp::Store(..) => "store",
+                        CredentialOp::Restore(..) => "restore",
+                        CredentialOp::Forget(_) => "forget",
+                    });
+                    credentials.call(op)
+                },
+                cx,
+            )
+            .unwrap_err();
+            assert!(matches!(error, QuickAddError::Io(_)), "{name}: expected the commit error");
+        });
+        assert!(
+            ops.is_empty(),
+            "{name}: a save that writes no password must not touch credentials: {ops:?}"
+        );
+        assert_eq!(
+            credentials.secrets.get("root@core.example.cn").map(Vec::as_slice),
+            Some(b"pre-existing".as_slice()),
+            "{name}: the existing credential must survive a failed commit it did not write"
+        );
+    }
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 fn init_and_build<'a>(
     destination: &str,
     cx: &'a mut gpui::TestAppContext,
