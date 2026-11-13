@@ -529,6 +529,8 @@ fn nebula(mut options: Options) -> Result<(), Box<dyn Error>> {
     #[cfg(windows)]
     tray::shutdown();
 
+    directory_history::shutdown();
+
     // `Processor` must be dropped before calling `FreeConsole`.
     //
     // This is needed for ConPTY backend. Otherwise a deadlock can occur.
