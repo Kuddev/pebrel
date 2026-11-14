@@ -873,7 +873,7 @@
     "image_paste_failed": "无法粘贴图片：{error}",
     "image_paste_busy": "上一张图片仍在处理。",
     "image_paste_expired": "当前输入状态已改变，已取消图片粘贴。",
-    "image_paste_limit": "当前标签页的临时图片已达到上限。",
+    "image_paste_limit": "加入此图片会超过窗格 128 MiB 的暂存上限，请等当前任务结束、文件清理后重试。",
     "image_paste_disconnected": "请先连接 SSH 会话再粘贴图片。",
     "sent_to": "已发送到 {target}",
     "yes": "是",
