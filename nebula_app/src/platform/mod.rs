@@ -44,6 +44,7 @@ pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod quick_window;
+pub(crate) mod regular_file;
 pub(crate) mod serial_port;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod session_end;
