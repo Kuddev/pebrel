@@ -60,14 +60,13 @@ impl TerminalView {
                 .map(|agent| agent.slug().to_owned())
                 .or_else(|| crate::display::extract_program(&self.suggest.last_committed));
             self.invalidate_ai_session_probe();
-            let previous_ssh_label = self.manual_ssh_label.clone();
             let program_changed = identity != self.running_program;
             if program_changed {
                 self.running_program = identity;
                 self.ai_session = None;
             }
-            self.refresh_manual_ssh_label();
-            if program_changed || self.manual_ssh_label != previous_ssh_label {
+            let ssh_label_changed = self.refresh_manual_ssh_label();
+            if program_changed || ssh_label_changed {
                 cx.emit(TerminalViewEvent::TitleChanged);
             }
             let agent = self
@@ -149,7 +148,6 @@ impl TerminalView {
         self.recovery.command_ended();
         self.answers.close();
         let program_changed = self.running_program.take().is_some();
-        self.manual_ssh_label = None;
         let title_changed = self.ai_session.take().is_some() || program_changed;
         if title_changed {
             // A later agent must not inherit the preceding task before its

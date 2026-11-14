@@ -921,12 +921,35 @@ fn typed_ssh_names_a_local_tab_only_while_ssh_runs(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.process_event(Event::CwdReport("/home/test/project".into()), cx);
-        view.suggest.last_committed = "ssh -p 2201 deploy@192.0.2.44".into();
+        view.process_event(
+            Event::UserVar { name: "pebrel_shell".into(), value: "local:parent".into() },
+            cx,
+        );
+        view.suggest.line_buf = "ssh -p 2201 deploy@192.0.2.44".into();
+        super::super::suggest::commit_line(&mut view.suggest);
         view.on_command_start(cx);
         assert_eq!(view.tab_label(), "deploy@192.0.2.44:2201");
-        // A remote prompt's directory report must not rename the tab.
+        // The remote shell returns to its prompt while the local SSH client
+        // remains connected. Neither its directory nor OSC 133;D ends the host.
+        view.process_event(
+            Event::UserVar { name: "pebrel_shell".into(), value: "remote:child".into() },
+            cx,
+        );
         view.process_event(Event::CwdReport("/srv/remote".into()), cx);
         assert_eq!(view.tab_label(), "deploy@192.0.2.44:2201");
+        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        assert_eq!(view.tab_label(), "deploy@192.0.2.44:2201");
+        view.suggest.line_buf = "uptime".into();
+        super::super::suggest::commit_line(&mut view.suggest);
+        view.on_command_start(cx);
+        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        assert_eq!(view.tab_label(), "deploy@192.0.2.44:2201");
+
+        // The enclosing shell reports its own identity after SSH actually exits.
+        view.process_event(
+            Event::UserVar { name: "pebrel_shell".into(), value: "local:parent".into() },
+            cx,
+        );
         view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
         view.process_event(Event::CwdReport("/home/test/project".into()), cx);
         assert_eq!(view.tab_label(), "project");
@@ -941,6 +964,36 @@ fn typed_ssh_names_a_local_tab_only_while_ssh_runs(cx: &mut TestAppContext) {
         view.suggest.last_committed = "ssh deploy@192.0.2.44".into();
         view.on_command_start(cx);
         assert_eq!(view.tab_label(), "root@192.0.2.10");
+    });
+}
+
+#[gpui::test]
+fn typed_ssh_replays_openssh_output_through_the_terminal_parser(cx: &mut TestAppContext) {
+    let recording: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/typed_ssh_pty.json")).unwrap();
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        let (session, _input, mut events, proxy) = session::test_session_with_events();
+        view.session = Some(session);
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        let mut stream = nebula_terminal::event_loop::StreamProcessor::default();
+        // Captured from an actual loopback OpenSSH PTY. The local ssh.exe was
+        // still alive after the connected phase's remote OSC 133;D. Only after
+        // the server disconnected did connection.ps1 emit the parent identity.
+        for (phase, expected) in
+            [("connected", recording["destination"].as_str().unwrap()), ("disconnected", "project")]
+        {
+            for chunk in recording[phase].as_str().unwrap().as_bytes().chunks(7) {
+                stream.feed(&mut view.session.as_ref().unwrap().term.lock(), &proxy, chunk);
+            }
+            let mut command_ends = 0;
+            while let Ok(event) = events.try_recv() {
+                command_ends += usize::from(matches!(event, Event::CommandDone { .. }));
+                view.process_event(event, cx);
+            }
+            assert_eq!(command_ends, 1, "{phase}");
+            assert_eq!(view.tab_label(), expected, "{phase}");
+        }
     });
 }
 

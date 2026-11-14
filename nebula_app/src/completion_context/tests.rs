@@ -50,6 +50,7 @@ fn pane(env: SuggestEnv, token: &str) -> NebulaPaneState {
 fn typed_ssh_never_uses_local_history_and_only_parent_identity_restores_it() {
     let mut state = pane(SuggestEnv::Local, "pwsh:parent");
     state.completion_submitted("ssh user@box");
+    assert_eq!(state.completion_context.ssh_destination(), Some("user@box"));
     let remote = state.suggest_env.history_scope();
     assert!(matches!(remote, HistoryScope::Ssh(_)));
     // A plain fish shell keeps using its remote history until the enclosing
@@ -57,9 +58,11 @@ fn typed_ssh_never_uses_local_history_and_only_parent_identity_restores_it() {
     state.completion_submitted("set -gx FISH_VAR value");
     state.completion_submitted("exit");
     assert_eq!(state.suggest_env.history_scope(), remote);
+    assert_eq!(state.completion_context.ssh_destination(), Some("user@box"));
     state.completion_shell_report(SHELL_VAR, "pwsh:parent");
     assert_eq!(state.suggest_env.history_scope(), HistoryScope::Local);
     assert_eq!(state.cwd, "/parent");
+    assert_eq!(state.completion_context.ssh_destination(), None);
 }
 
 #[test]
@@ -74,6 +77,7 @@ fn reported_nested_shells_restore_their_own_ancestors() {
     state.completion_submitted("ssh inner");
     state.completion_shell_report(SHELL_VAR, "zsh:inner");
     assert_ne!(state.suggest_env, bastion);
+    assert_eq!(state.completion_context.ssh_destination(), Some("bastion"));
     state.completion_submitted("exit");
     assert_ne!(state.suggest_env, bastion);
     state.completion_shell_report(SHELL_VAR, "bash:bastion");
@@ -81,6 +85,7 @@ fn reported_nested_shells_restore_their_own_ancestors() {
     assert_eq!(state.cwd, "/bastion");
     state.completion_shell_report(SHELL_VAR, "pwsh:parent");
     assert_eq!(state.suggest_env, SuggestEnv::Local);
+    assert_eq!(state.completion_context.ssh_destination(), None);
 }
 
 #[test]
@@ -163,6 +168,7 @@ fn execution_arguments_separate_variable_targets_and_restore_before_next_command
     let mut state = pane(SuggestEnv::Local, "pwsh:parent");
     state.completion_submitted("ssh $targetHost");
     state.completion_shell_report(ARGV_VAR, "pwsh:parent\nssh\0one.example");
+    assert_eq!(state.completion_context.ssh_destination(), Some("one.example"));
     let first = state.suggest_env.clone();
     state.completion_shell_report(SHELL_VAR, "pwsh:parent");
     assert_eq!(state.suggest_env, SuggestEnv::Local);

@@ -22,6 +22,7 @@
 - Windows 回收站调用的消息重入与后台 COM 生命周期见 [`file_operations`](../architecture/notes/nebula_app/display/file_operations/2026-11-11-recycle-bin-reentrancy.md)。
 - Runtime 地址发现与隔离实例的生命周期边界见 [`runtime_api`](../architecture/notes/nebula_app/runtime_api/)。
 - 补齐数据源选择和请求快照归 `completion.rs`，界面仅拥有任务与交互；边界依据见 [`completion`](../architecture/notes/nebula_app/completion/)。
+- 手动 SSH 标签复用连接上下文的生命周期，见 [`completion_context`](../architecture/notes/nebula_app/completion_context/)。
 - 旧渲染入口的窗口动画状态归 `display/animations.rs`；迁移及显式 legacy 验证依据见 [`display`](../architecture/notes/nebula_app/display/)。
 - 旧壳逐步退役时，保留共享规则的单一实现；首个滚动条边界切片见 [`scrollbar`](../architecture/notes/nebula_app/scrollbar/)。
 - 新终端代理保持选定协议，不把 SOCKS 改写成 HTTP。见 [`terminal proxy scheme`](../architecture/notes/nebula_app/ssh_proxy/2026-09-29-terminal-proxy-scheme.md)。
