@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_working">Working…</string>
+    <string name="chat_tool_running">Running</string>
+    <string name="chat_tool_waiting">Waiting for you</string>
+    <string name="chat_tool_done">Done</string>
+    <string name="chat_tool_failed">Failed</string>
+    <string name="chat_tool_input">Input</string>
+    <string name="chat_tool_output">Result</string>
+    <string name="chat_tool_result">Tool result</string>
+    <string name="chat_show_all">Show all %1$d lines</string>
+    <string name="chat_show_less">Show less</string>
+    <string name="chat_question">Question</string>
+    <string name="chat_question_answered">Answered</string>
+    <string name="chat_question_terminal">Answer in terminal</string>
+    <string name="chat_multiple_choice">Choose one or more</string>
+    <string name="chat_interrupt">Interrupt</string>
+    <string name="chat_elapsed_seconds">%1$d s</string>
+    <string name="chat_elapsed_minutes">%1$d:%2$02d</string>
+    <string name="chat_latest">Jump to latest messages</string>
+    <string name="chat_new_messages">New messages</string>
+    <string name="chat_rich_hint">Formulas and diagrams appear here as source.</string>
+    <string name="chat_rich_reader">Open in reader</string>
+    <string name="chat_immersive">Immersive reading</string>
+    <string name="chat_exit_immersive">Exit immersive reading</string>
+    <string name="chat_python_missing">Conversation view needs python3 on the server.</string>
+    <string name="chat_terminal_unknown">This connection\'s terminal could not be identified on the server.</string>
+    <plurals name="chat_files_changed">
+        <item quantity="one">%1$d file changed</item>
+        <item quantity="other">%1$d files changed</item>
+    </plurals>
+</resources>
