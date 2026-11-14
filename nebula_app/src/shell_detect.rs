@@ -204,6 +204,7 @@ pub fn display_name_for_id(id: &str) -> String {
         "fish" => "Fish".into(),
         "zellij" => "Zellij".into(),
         "nu" => "Nushell".into(),
+        "niu" => "Niu".into(),
         _ => trimmed.to_owned(),
     }
 }
