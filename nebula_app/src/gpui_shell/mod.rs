@@ -306,6 +306,7 @@ fn init(cx: &mut App, startup_window: config::StartupWindow) {
     gpui_component::set_locale(settings.ui_language.gpui_component_locale());
     cx.set_global(settings);
     cx.set_global(startup_window);
+    completion_history::init(cx);
     theme::apply_chrome_theme(cx);
     terminal::init(cx);
     workspace::init(cx);

@@ -1053,6 +1053,9 @@ pub struct RuntimeSettings {
     pub ghost: bool,
     pub accept: AcceptKeyName,
     pub completion_style: CompletionStyleName,
+    /// Append submitted commands to `pebrel_history*.jsonl`. Off keeps new commands
+    /// in memory only; saved history still loads. Open terminals follow at once.
+    pub command_history_persist: bool,
     pub prompt_suggestions: PromptSuggestions,
     /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗）。
     pub cjk_bold_regular: bool,
@@ -1247,6 +1250,7 @@ impl RuntimeSettings {
                 .value("completion_style")
                 .and_then(CompletionStyleName::from_settings)
                 .unwrap_or_default(),
+            command_history_persist: raw.bool_on("command_history_persist").unwrap_or(true),
             prompt_suggestions: PromptSuggestions::from_raw(raw),
             cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
             tabs_position: raw

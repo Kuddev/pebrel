@@ -12,6 +12,18 @@ pub(crate) enum ClearState {
 
 impl Global for ClearState {}
 
+/// Keeps the history write gate equal to the current settings before any terminal
+/// starts. Every settings update replaces this global, so open terminals follow
+/// the switch at once; history files already on disk stay untouched.
+pub(crate) fn init(cx: &mut App) {
+    let apply = |cx: &mut App| {
+        let persist = cx.global::<super::config::Settings>().command_history_persist;
+        crate::nebula_history::set_persistence(persist);
+    };
+    apply(cx);
+    cx.observe_global::<super::config::Settings>(apply).detach();
+}
+
 pub(crate) fn running(cx: &App) -> bool {
     matches!(cx.try_global::<ClearState>(), Some(ClearState::Running))
 }
