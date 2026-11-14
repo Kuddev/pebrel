@@ -19,38 +19,42 @@ pub(crate) fn open_initial_window(
                 "failed to reopen updated workspace"
             );
         }
-        return;
-    }
-    let startup = if shell_id.is_some() {
-        match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
-            Ok(startup) => startup,
-            Err(error) => {
-                log::error!("Could not resolve requested shell: {error:?}");
-                return;
-            },
-        }
     } else {
-        initial_startup(
-            initial_cwd,
-            initial_command,
-            crate::platform::elevation::requires_isolation(),
+        let startup = if shell_id.is_some() {
+            match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
+                Ok(startup) => startup,
+                Err(error) => {
+                    log::error!("Could not resolve requested shell: {error:?}");
+                    return;
+                },
+            }
+        } else {
+            initial_startup(
+                initial_cwd,
+                initial_command,
+                crate::platform::elevation::requires_isolation(),
+            )
+        };
+        let start_hidden = initial_window_hidden(
+            &startup,
+            &nebula_settings::RuntimeSettings::load(),
+            launched_at_login,
+        );
+        open_workspace_window_with_visibility(
+            cx,
+            startup,
+            Some(ai_events),
+            Some(shell_events),
+            true,
+            WindowRole::Regular,
+            start_hidden,
         )
-    };
-    let start_hidden = initial_window_hidden(
-        &startup,
-        &nebula_settings::RuntimeSettings::load(),
-        launched_at_login,
-    );
-    open_workspace_window_with_visibility(
-        cx,
-        startup,
-        Some(ai_events),
-        Some(shell_events),
-        true,
-        WindowRole::Regular,
-        start_hidden,
-    )
-    .expect("failed to open Pebrel GPUI window");
+        .expect("failed to open Pebrel GPUI window");
+    }
+
+    // The Runtime can accept subscriptions during boot. Publish once after
+    // all initial windows are registered, including when startup stays quiet.
+    publish_runtime_snapshot(cx);
 }
 
 fn initial_window_hidden(
@@ -167,6 +171,41 @@ mod startup_tests {
         ] {
             assert!(!initial_window_hidden(&startup, &settings, true));
         }
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn initial_window_reaches_a_subscriber_without_a_snapshot_request(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let hub = crate::runtime_api::RuntimeHub::new();
+        let subscriber = hub.test_snapshot_receiver();
+        let (_ai_sender, ai_events) = std::sync::mpsc::channel();
+        let (_shell_sender, shell_events) = std::sync::mpsc::channel();
+        let pane = cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            crate::gpui_shell::file_editor::init(cx);
+            super::super::super::init(cx);
+            initialize(cx, hub);
+            open_initial_window(
+                cx,
+                ai_events,
+                shell_events,
+                None,
+                Some(crate::config::ui_config::Program::Just(
+                    "pebrel-test-missing-shell-executable".into(),
+                )),
+                None,
+                false,
+            );
+            let workspace = cx.global::<WindowRegistry>().entries[0].workspace.upgrade().unwrap();
+            workspace.read(cx).active_terminal_pane_id().unwrap()
+        });
+        let first = subscriber.try_recv().expect("initial window should publish its session");
+        assert_eq!(first.windows.len(), 1);
+        assert_eq!(first.windows[0].focused_pane_id, Some(pane));
+        assert_eq!(first.windows[0].tabs[0].panes[0].id, pane);
     }
 
     #[cfg(feature = "gpui-test-support")]

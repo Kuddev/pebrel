@@ -2,6 +2,8 @@
 use super::*;
 use gpui_component::button::ButtonCustomVariant;
 
+pub(super) const TOOLBAR_HEIGHT: f32 = 38.0;
+
 impl NativeResult {
     pub(super) fn toolbar_element(
         &self,
@@ -96,7 +98,7 @@ impl NativeResult {
         let top = if self.visible_top > 0.0 {
             self.visible_top
         } else {
-            -self.viewport_top.max(0.0).min(38.0)
+            -self.viewport_top.max(0.0).min(TOOLBAR_HEIGHT)
         };
         let mut right: f32 = if self.viewport_top + top < 40.0 && self.available_width <= px(900.0)
         {
@@ -136,6 +138,7 @@ impl NativeResult {
                 tools
                     .child(
                         Button::new("native-stdout")
+                            .debug_selector(|| "native-result-stdout".into())
                             .label("stdout")
                             .ghost()
                             .small()
@@ -147,6 +150,7 @@ impl NativeResult {
                     )
                     .child(
                         Button::new("native-stderr")
+                            .debug_selector(|| "native-result-stderr".into())
                             .label("stderr")
                             .ghost()
                             .small()
@@ -196,7 +200,7 @@ impl NativeResult {
                     .px(px(8.0))
                     .rounded(px(5.0))
                     .custom(variant())
-                    .disabled(self.status == Status::Evicted)
+                    .disabled(!self.can_copy_source())
                     .tooltip(language.text(if copied {
                         Message::NativeResultCopied
                     } else {

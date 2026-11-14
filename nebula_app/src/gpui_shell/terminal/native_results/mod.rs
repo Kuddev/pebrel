@@ -398,17 +398,31 @@ impl NativeResult {
         }));
     }
 
-    fn raw_element(&self, _: &mut Context<'_, Self>) -> AnyElement {
+    fn raw_element(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let raw = self.selected_raw();
+        let body = div().debug_selector(|| "native-result-raw-content".into()).relative().w_full();
+        if raw.text.is_empty() && self.status != Status::Evicted {
+            let language = crate::gpui_shell::config::ui_language(cx);
+            let message = if self.status == Status::Receiving {
+                Message::NativeResultReceiving
+            } else {
+                Message::NativeResultNoOutput
+            };
+            // An empty stream still needs a body so the stream switcher can be reached.
+            return body
+                .min_h(self.row_height.max(px(tools::TOOLBAR_HEIGHT)))
+                .px_2()
+                .flex()
+                .items_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(language.text(message))
+                .into_any_element();
+        }
         let first = (self.visible_top / self.row_height.as_f32()).floor() as usize;
         let last = ((self.visible_top + self.visible_height) / self.row_height.as_f32()).ceil()
             as usize
             + 2;
-        div()
-            .debug_selector(|| "native-result-raw-content".into())
-            .relative()
-            .w_full()
-            .h(self.row_height * raw.lines.len() as f32)
+        body.h(self.row_height * raw.lines.len() as f32)
             .children((first.saturating_sub(2)..last.min(raw.lines.len())).map(|index| {
                 div()
                     .absolute()
@@ -426,8 +440,12 @@ impl NativeResult {
         if self.raw_stderr { &self.stderr } else { &self.raw }
     }
 
+    fn can_copy_source(&self) -> bool {
+        self.status != Status::Evicted && !self.selected_raw().text.is_empty()
+    }
+
     fn copy_source(&mut self, cx: &mut Context<'_, Self>) {
-        if self.status == Status::Evicted {
+        if !self.can_copy_source() {
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(self.selected_raw().text.clone()));
