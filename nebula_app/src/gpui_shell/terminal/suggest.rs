@@ -53,10 +53,12 @@ impl Drop for Pending {
 /// Enter 提交：命令进共享历史（与旧壳 `nebula_commit_line` 同一落点），
 /// pane 状态清空等下一行。空行只清不记。
 pub fn commit_line(state: &mut NebulaPaneState) {
-    let line = state.screen_line.trim().to_owned();
+    let raw = state.screen_line.clone();
+    let line = raw.trim().to_owned();
     let committed = if line.is_empty() { state.line_buf.trim().to_owned() } else { line.clone() };
     if !line.is_empty() {
-        state.record_submitted_command(&line);
+        // History needs the untrimmed line to honor a leading-space opt-out.
+        state.record_submitted_command(&raw);
         state.completion_submitted(&line);
     } else {
         state.completion_submitted(&state.line_buf.clone());
@@ -114,6 +116,24 @@ mod tests {
             },
         ];
         state
+    }
+
+    #[test]
+    fn enter_skips_history_only_for_a_leading_space() {
+        use crate::display::SuggestEnv;
+        use crate::nebula_history::HistoryScope;
+        let scope = HistoryScope::Ssh(format!("commit-leading-space-{}", std::process::id()));
+        let mut state = NebulaPaneState::default();
+        state.suggest_env = SuggestEnv::Shell { scope: scope.clone() };
+        state.screen_line = " echo commit-hidden".into();
+        super::commit_line(&mut state);
+        // The tab icon still needs the submitted program.
+        assert_eq!(state.last_committed, "echo commit-hidden");
+        state.screen_line = "echo commit-shown ".into();
+        super::commit_line(&mut state);
+        let hint = |prefix| crate::completion::history_hint_for_test(&scope, prefix);
+        assert!(hint("echo commit-h").is_none());
+        assert_eq!(hint("echo commit-s").as_deref(), Some("hown"));
     }
 
     #[test]

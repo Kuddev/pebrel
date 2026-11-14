@@ -348,6 +348,9 @@ fn prompt_line_snapshot(
         && let Some((head, input)) = text.split_once('>')
         && cmd_path_prompt(head)
     {
+        // A `$P$G ` prompt leaves its separator before the input. Like the arrow
+        // prompt, drop one space so history does not read it as a leading-space opt-out.
+        let input = input.strip_prefix(' ').unwrap_or(input);
         return Some(PromptLineSnapshot { prompt: format!("{head}>"), input: input.to_owned() });
     }
     if typed_tail.is_empty() || !text.ends_with(typed_tail) {
@@ -605,6 +608,9 @@ mod tests {
             input_after_prompt(r"D:\temp_build\nebula>git st", "git st", &env, false),
             Some("git st".to_owned())
         );
+        // Without an OSC 133;B boundary, a `$P$G ` prompt must not turn every
+        // command into a leading-space history opt-out.
+        assert_eq!(input_after_prompt(r"C:\work> dir", "dir", &env, false), Some("dir".to_owned()));
         assert_eq!(input_after_prompt("Password: secret", "secret", &env, false), None);
     }
 
