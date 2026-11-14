@@ -85,6 +85,7 @@ internal fun ComposerIconButton(
     Box(
         modifier
             .size(48.dp)
+            .pressFeedback(interactions, enabled)
             .clip(shape)
             .background(animatedFill)
             .then(if (focused && enabled) Modifier.border(1.dp, colors.primary.copy(alpha = .48f), shape) else Modifier)
@@ -124,8 +125,7 @@ internal fun ComposerToolbar(
     Row(
         Modifier.fillMaxWidth().testTag("composer-direct")
             .heightIn(min = 52.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(colors.surfaceVariant.copy(alpha = .22f))
+            .glass(RoundedCornerShape(16.dp), GlassTier.Heavy, GlassLift.Raised)
             .padding(horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -140,8 +140,8 @@ internal fun ComposerToolbar(
         } else {
             Spacer(Modifier.weight(1f))
         }
-        Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp)
-            .background(colors.outlineVariant.copy(alpha = .45f)))
+        Box(Modifier.padding(horizontal = 4.dp).width(GlassHairline).height(24.dp)
+            .background(glassPalette().hairline))
         onEditShortcuts?.let { edit ->
             ComposerIconButton(R.drawable.ic_command, stringResourceCompat(R.string.custom_shortcuts), onClick = edit)
         }
@@ -183,6 +183,9 @@ internal fun ComposerShortcutRow(
     var moreOpen by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(14.dp)
+    // Edges fade into the surface actually behind the keys: the glass fill, or the light tint.
+    val fadeColor = if (surface) colors.surfaceVariant.copy(alpha = .22f).compositeOver(colors.background)
+        else glassPalette().heavySolid.compositeOver(colors.background)
     Row(
         modifier.fillMaxWidth()
             .heightIn(min = if (surface) 52.dp else 48.dp)
@@ -192,8 +195,6 @@ internal fun ComposerShortcutRow(
     ) {
         Box(Modifier.weight(1f).clipToBounds().drawWithContent {
                 drawContent()
-                val fadeColor = colors.surfaceVariant.copy(alpha = .22f)
-                    .compositeOver(colors.background)
                 val edge = 24.dp.toPx().coerceAtMost(size.width / 3f)
                 if (scroll.canScrollBackward && edge > 0f) {
                     drawRect(
@@ -234,6 +235,7 @@ internal fun ComposerShortcutRow(
                 }
                 Box(
                     Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp)
+                        .pressFeedback(interactions, enabled)
                         .clip(RoundedCornerShape(11.dp))
                         .background(fill)
                         .then(if (focused && enabled) Modifier.border(1.dp, colors.primary.copy(alpha = .48f), RoundedCornerShape(11.dp)) else Modifier)

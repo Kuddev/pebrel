@@ -28,6 +28,8 @@ __pebrel_pointer_supported() {
     [ "${__pebrel_editor_ready:-0}" = 1 ] || return 1
     local bindings digit
     if [ -n "${BASH_VERSION-}" ]; then
+        # Bash 5.2 added READLINE_ARGUMENT for numeric bind -x callbacks.
+        (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 2) )) || return 1
         [[ -o emacs ]] || return 1
         bindings=$(bind -X 2>/dev/null)
         [[ $bindings == *'"\e[45~": "__pebrel_editor_report"'* ]] || return 1
@@ -46,8 +48,9 @@ __pebrel_pointer_supported() {
 
 __pebrel_pointer_ready_report() {
     unset __pebrel_pointer_line __pebrel_pointer_point __pebrel_pointer_anchor
+    # The input boundary belongs to the plain editor query too.
+    if [ -n "${BASH_VERSION-}" ]; then __pebrel_pointer_prompt; fi
     if __pebrel_pointer_supported; then
-        if [ -n "${BASH_VERSION-}" ]; then __pebrel_pointer_prompt; fi
         printf '\033]1337;SetUserVar=pebrel_pointer_ready=%s\007' "$__pebrel_shell_token"
     fi
 }
