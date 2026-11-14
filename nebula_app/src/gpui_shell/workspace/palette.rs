@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests;
+
 const PALETTE_SEARCH_HEIGHT: f32 = 48.0;
 
 /// 命令面板 / Shell 选择弹窗里图标轨的逻辑边长。品牌贴图、Nerd Font 字形
@@ -158,7 +161,10 @@ impl NebulaWorkspace {
                     WorkspacePaletteRow {
                         group_order,
                         group,
-                        label: item.label.to_owned(),
+                        label: crate::display::command_palette::localized_item_label(
+                            item, language,
+                        )
+                        .to_owned(),
                         hint: item.hint.to_owned(),
                         hint_style: WorkspacePaletteHintStyle::Shortcut,
                         search: item.search.to_owned(),
