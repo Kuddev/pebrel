@@ -1175,6 +1175,7 @@ impl TerminalView {
     /// 上一条命令的失败标记与「刚完成」的对勾也在这里作废：新命令一起跑，旧结果
     /// 就不再是这个 pane 的现状。
     pub(super) fn mark_command_running(&mut self) {
+        self.recovery.supersede_if_inactive();
         self.consume_native_prompt();
         if !self.command_running {
             self.prompt_process_probe = None;
