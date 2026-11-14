@@ -70,6 +70,7 @@ config.ui = {
     theme = 'Nord',
     font_size = 16,           -- logical pixels, unlike config.font.size in points
     ui_font_size = 13,
+    text_antialiasing = 'grayscale',
     tabs_position = 'sidebar',
     sidebar_width = 230,
     pane_card_radius = 10,
@@ -100,6 +101,23 @@ rendering and Settings saves do not execute Luau.
 For Luau entries, customized `font`, `colors`, and `mouse` sections also reach the
 native presentation adapter. Window dimensions keep their existing startup-only
 semantics. The typed parser and `config check` are shared with other formats.
+
+### Text antialiasing
+
+Set `config.ui.text_antialiasing` in `pebrel.luau` and restart Pebrel. The mode
+applies to both desktop interface and terminal text and keeps the selected fonts,
+fallbacks, ligatures, and color emoji.
+
+| Value | Behavior |
+| --- | --- |
+| `'grayscale'` | Default. Smooths glyph edges with the same coverage in all three color channels. |
+| `'subpixel'` | Uses separate RGB coverage, like ClearType. Requires an opaque window and platform support; otherwise uses grayscale. |
+| `'system'` | Uses the platform renderer's preferred mode. |
+
+在 `pebrel.luau` 的 `config.ui` 下设置 `text_antialiasing`，重启后应用于桌面
+界面和终端。默认 `'grayscale'` 使用灰度抗锯齿；`'subpixel'` 在平台支持且窗口
+不透明时使用类似 ClearType 的子像素抗锯齿，否则使用灰度；`'system'` 采用平台
+渲染器的选择。字体、回退、连字及彩色 Emoji 保持原样。
 
 ## Shader Configuration
 

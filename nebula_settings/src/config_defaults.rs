@@ -73,6 +73,7 @@ pub fn ui_value_kind(key: &str) -> Option<UiValueKind> {
         | "ui_font_family"
         | "scrollbar_visibility"
         | "ligatures"
+        | crate::TextAntialiasing::KEY
         | "cursor_shape"
         | "cursor_motion"
         | "accept"

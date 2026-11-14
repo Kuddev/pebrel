@@ -279,10 +279,12 @@ pub fn run_shell(
 
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
 fn init(cx: &mut App, startup_window: config::StartupWindow) {
+    // Keep the renderer and chrome on the same startup preferences.
+    let runtime = nebula_settings::RuntimeSettings::load();
     crate::platform::acrylic::init(cx);
     // 图标字库独立注册，系统正文无需为提示符和界面图标加载完整 Maple。
     register_bundled_fonts(cx);
-    typography::init(cx);
+    typography::init(cx, runtime.text_antialiasing);
 
     // 组件库必须只初始化一次，否则全局 action、菜单和主题状态会重复注册。
     gpui_component::init(cx);
@@ -296,7 +298,6 @@ fn init(cx: &mut App, startup_window: config::StartupWindow) {
     // Read one runtime snapshot before installing any renderer. The resolved
     // custom theme, terminal palette and chrome therefore start from the same
     // immutable value and cannot diverge during bootstrap.
-    let runtime = nebula_settings::RuntimeSettings::load();
     let theme = theme::resolve_theme_name(
         runtime.theme,
         runtime.follow_system_theme,

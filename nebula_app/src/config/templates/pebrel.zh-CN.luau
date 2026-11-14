@@ -70,6 +70,7 @@ config.scrolling = {
 --     theme = 'Nord',
 --     font_size = 16,
 --     ui_font_size = 13,
+--     text_antialiasing = 'grayscale', -- 灰度为默认；可选 'subpixel' 或 'system'，重启生效。
 --     tabs_position = 'sidebar',
 --     sidebar_width = 230,
 --     density = 'compact',

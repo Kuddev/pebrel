@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use gpui::{App, Font, FontFallbacks, Global, TextRenderingMode, font};
 use gpui_component::ActiveTheme as _;
+use nebula_settings::TextAntialiasing;
 
 pub(super) const UI_FONT_FAMILY: &str = "Geist";
 const UI_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/GeistVF.ttf");
@@ -11,9 +12,12 @@ const UI_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/GeistVF.ttf")
 struct UiCjkFallbacks(Option<FontFallbacks>);
 impl Global for UiCjkFallbacks {}
 
-pub(super) fn init(cx: &mut App) {
-    // Keep text coverage independent of RGB subpixels as window materials and displays change.
-    cx.set_text_rendering_mode(TextRenderingMode::Grayscale);
+pub(super) fn init(cx: &mut App, antialiasing: TextAntialiasing) {
+    cx.set_text_rendering_mode(match antialiasing {
+        TextAntialiasing::Grayscale => TextRenderingMode::Grayscale,
+        TextAntialiasing::Subpixel => TextRenderingMode::Subpixel,
+        TextAntialiasing::System => TextRenderingMode::PlatformDefault,
+    });
     if let Err(error) = cx.text_system().add_fonts(vec![Cow::Borrowed(UI_FONT_BYTES)]) {
         super::try_write_stderr(format_args!("[pebrel:gpui] cannot register Geist: {error}"));
     }

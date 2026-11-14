@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use nebula_config_derive::SerdeReplace;
-use nebula_settings::{RawSettings, UiValueKind, ui_value_kind};
+use nebula_settings::{RawSettings, TextAntialiasing, UiValueKind, ui_value_kind};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 #[derive(Serialize, SerdeReplace, Default, Clone, Debug, PartialEq)]
@@ -28,6 +28,14 @@ impl<'de> Deserialize<'de> for DesktopUi {
             };
             if !valid {
                 return Err(D::Error::custom(format!("ui.{key} requires a {kind:?} value")));
+            }
+            if key == TextAntialiasing::KEY
+                && value.as_str().and_then(TextAntialiasing::from_settings).is_none()
+            {
+                return Err(D::Error::custom(format!(
+                    "ui.{key} must be one of: {}",
+                    TextAntialiasing::VALUES.join(", ")
+                )));
             }
         }
         if values.contains_key("sidebar_width") && values.contains_key("sidebar_w") {

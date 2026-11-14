@@ -42,6 +42,8 @@ pub use custom_theme::{
 mod language;
 mod ligatures;
 pub use ligatures::Ligatures;
+mod text_antialiasing;
+pub use text_antialiasing::TextAntialiasing;
 mod notifications;
 pub use notifications::NotificationDuration;
 mod prompt_suggestions;
@@ -1021,6 +1023,7 @@ pub struct RuntimeSettings {
     pub ctrl_wheel_font_zoom: bool,
     /// Enabled by default; explicit theme mode follows the selected theme.
     pub ligatures: Ligatures,
+    pub text_antialiasing: TextAntialiasing,
     pub cursor_shape: Option<CursorShapeName>,
     pub cursor_blink: Option<bool>,
     pub cursor_motion: CursorMotion,
@@ -1220,6 +1223,10 @@ impl RuntimeSettings {
             ligatures: raw
                 .value("ligatures")
                 .and_then(Ligatures::from_settings)
+                .unwrap_or_default(),
+            text_antialiasing: raw
+                .value(TextAntialiasing::KEY)
+                .and_then(TextAntialiasing::from_settings)
                 .unwrap_or_default(),
             cursor_shape: raw.value("cursor_shape").and_then(CursorShapeName::from_settings),
             cursor_blink: raw.bool_on("cursor_blink"),

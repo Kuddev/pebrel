@@ -70,6 +70,7 @@ config.scrolling = {
 --     theme = 'Nord',
 --     font_size = 16,
 --     ui_font_size = 13,
+--     text_antialiasing = 'grayscale', -- Also accepts 'subpixel' and 'system'; restart to apply.
 --     tabs_position = 'sidebar',
 --     sidebar_width = 230,
 --     density = 'compact',
