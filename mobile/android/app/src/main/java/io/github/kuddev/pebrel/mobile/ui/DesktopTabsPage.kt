@@ -43,8 +43,7 @@ fun DesktopTabsPage(desktop: DesktopWorkspace?, repository: SessionRepository, o
         value = directory.orEmpty().let { if (kind == "file" && it.isNotBlank()) it.trimEnd('/', '\\') + "/" else it }
         adding = kind
     }
-    Column(Modifier.fillMaxSize()) {
-        PageHeader(stringResource(R.string.computer_tabs), onBack) {
+    GlassPage(topBar = { PageHeader(stringResource(R.string.computer_tabs), onBack) {
             Box {
                 GlyphButton(R.drawable.ic_plus, stringResource(R.string.tab_new), { addMenu = true }, enabled)
                 DropdownMenu(addMenu, { addMenu = false }) {
@@ -61,8 +60,9 @@ fun DesktopTabsPage(desktop: DesktopWorkspace?, repository: SessionRepository, o
                     })
                 }
             }
-        }
-        DesktopScreen(desktop, onPane, onRetry, onTab = onTab, onCloseTab = { closing = it }, onDisconnect = onDisconnect)
+        } }) { padding, source ->
+        DesktopScreen(desktop, onPane, onRetry, onTab = onTab, onCloseTab = { closing = it }, onDisconnect = onDisconnect,
+            modifier = Modifier.then(source), top = padding.calculateTopPadding())
     }
     changingAddress?.let { profile ->
         ComputerAddressDialog(profile, { changingAddress = null }) { replacement ->

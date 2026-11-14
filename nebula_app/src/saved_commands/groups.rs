@@ -42,16 +42,39 @@ impl SavedCommands {
     }
 
     fn add_group(&mut self, name: &str) -> io::Result<String> {
-        let (name, _) = normalize_fields(name, "group")?;
-        if self.groups().len() >= MAX_GROUPS || self.groups().iter().any(|g| g.name == name) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "duplicate name or group limit reached",
-            ));
+        let name = self.normalized_group_name(name, None)?;
+        if self.groups().len() >= MAX_GROUPS {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "group limit reached"));
         }
         let id = new_id(&name, "group");
         self.organization.groups.push(CommandGroup { id: id.clone(), name });
         Ok(id)
+    }
+
+    fn normalized_group_name(&self, name: &str, except_id: Option<&str>) -> io::Result<String> {
+        let (name, _) = normalize_fields(name, "group")?;
+        if self
+            .groups()
+            .iter()
+            .any(|group| Some(group.id.as_str()) != except_id && group.name == name)
+        {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "duplicate group name"));
+        }
+        Ok(name)
+    }
+
+    pub(crate) fn rename_group(&mut self, group_id: &str, name: &str) -> io::Result<()> {
+        let (next, ()) = mutate_store(&self.path, |store| {
+            let name = store.normalized_group_name(name, Some(group_id))?;
+            let Some(group) = store.organization.groups.iter_mut().find(|g| g.id == group_id)
+            else {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "group no longer exists"));
+            };
+            group.name = name;
+            Ok(())
+        })?;
+        *self = next;
+        Ok(())
     }
 
     pub(crate) fn move_to_group(
@@ -136,6 +159,92 @@ impl SavedCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renaming_preserves_group_identity_membership_and_order_after_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        let mut saved = SavedCommands::load_from(&path).unwrap();
+        saved.create_group("Work").unwrap();
+        saved.create_group("Servers").unwrap();
+        let group = saved.groups()[0].id.clone();
+        saved.insert_in_group("Build", "cargo build", false, Some(&group)).unwrap();
+        saved.insert_in_group("Test", "cargo test", true, Some(&group)).unwrap();
+        saved.move_to_group("builtin:docker_ps", Some(&group)).unwrap();
+        let mut expected = saved.clone();
+        expected.organization.groups[0].name = "项目".into();
+        saved.rename_group(&group, "  项目  ").unwrap();
+        assert_eq!(saved, expected);
+        assert_eq!(SavedCommands::load_from(&path).unwrap(), expected);
+        saved.rename_group(&group, "项目").unwrap();
+        assert_eq!(saved, expected, "saving an unchanged name is valid");
+    }
+
+    #[test]
+    fn rename_rejects_invalid_names_and_fixed_or_missing_groups_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        let mut saved = SavedCommands::load_from(&path).unwrap();
+        saved.create_group("Work").unwrap();
+        saved.create_group("Servers").unwrap();
+        let group = saved.groups()[0].id.clone();
+        let before = saved.clone();
+        let bytes = std::fs::read(&path).unwrap();
+        for name in ["", "  ", " Servers ", "two\nlines", "a\0b", &"字".repeat(MAX_NAME_CHARS + 1)]
+        {
+            assert_eq!(
+                saved.rename_group(&group, name).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert_eq!(saved, before);
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        for id in [BUILTIN_GROUP_ID, "", "missing"] {
+            assert_eq!(
+                saved.rename_group(id, "New name").unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+            assert_eq!(saved, before);
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn rename_reloads_other_windows_changes_and_rejects_stale_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        let mut saved = SavedCommands::load_from(&path).unwrap();
+        saved.create_group("Work").unwrap();
+        let group = saved.groups()[0].id.clone();
+        let mut other = saved.clone();
+        other.create_group("Servers").unwrap();
+        other.insert_in_group("Build", "cargo build", false, Some(&group)).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(saved.rename_group(&group, "Servers").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        saved.rename_group(&group, "Project").unwrap();
+        other.organization.groups[0].name = "Project".into();
+        assert_eq!(saved, other);
+        other.remove_group(&group).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(saved.rename_group(&group, "Gone").unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn rename_remains_available_at_the_group_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        let mut saved = SavedCommands::load_from(&path).unwrap();
+        for index in 0..MAX_GROUPS {
+            saved.create_group(&format!("Group {index}")).unwrap();
+        }
+        assert!(saved.create_group("Overflow").is_err());
+        let group = saved.groups()[0].id.clone();
+        saved.rename_group(&group, "Renamed").unwrap();
+        assert_eq!(saved.groups().len(), MAX_GROUPS);
+        assert_eq!(saved.groups()[0].name, "Renamed");
+    }
 
     #[test]
     fn inserting_inside_a_folder_is_atomic_and_rejects_a_deleted_folder() {
