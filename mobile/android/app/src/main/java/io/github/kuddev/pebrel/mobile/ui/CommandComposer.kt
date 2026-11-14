@@ -1,7 +1,8 @@
 package io.github.kuddev.pebrel.mobile.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -16,9 +17,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -168,16 +169,20 @@ fun CommandComposer(
                         (coordinates.positionInWindow().y.toInt() - topInset).coerceAtLeast(0).toDp()
                     } - 8.dp
                 }) {
+                    val editorShape = if (conversation) MaterialTheme.shapes.large else RoundedCornerShape(26.dp)
+                    // The accent outline confirms where typing goes; it fades rather than snapping.
+                    val outline by animateColorAsState(if (editorFocused && enabled) colors.primary else Color.Transparent,
+                        motion.tweenOrSnap(140), label = "composer-focus")
                     Column(
                         Modifier.fillMaxWidth().testTag("composer-editor")
                             .animateContentSize(motion.contentSizeSpec())
-                            .clip(if (conversation) MaterialTheme.shapes.large else RoundedCornerShape(26.dp))
-                            .background(colors.surfaceVariant.copy(alpha = .42f))
+                            .glass(editorShape, GlassTier.Heavy, if (conversation) GlassLift.Floating else GlassLift.Raised)
+                            .border(2.dp, outline, editorShape)
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
                         Box(
                             Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp, max = if (editorExpanded) 208.dp else 96.dp),
+                                .heightIn(min = 56.dp, max = if (editorExpanded) 208.dp else 96.dp),
                         ) {
                             BasicTextField(
                                 value = draft,
@@ -200,7 +205,8 @@ fun CommandComposer(
                                     autoCorrectEnabled = false,
                                 ),
                                 decorationBox = { inner ->
-                                    if (draft.isEmpty()) HelperText(stringResource(if (conversation) R.string.chat_compose else R.string.composer_placeholder))
+                                    if (draft.isEmpty()) Text(stringResource(if (conversation) R.string.chat_compose else R.string.composer_placeholder),
+                                        style = MaterialTheme.typography.bodyLarge, color = glassPalette().textTertiary)
                                     inner()
                                 },
                             )
