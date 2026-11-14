@@ -201,6 +201,11 @@ impl SettingsPane {
                                             current: env!("CARGO_PKG_VERSION").into(),
                                             latest: asset.version.clone(),
                                             update_available: true,
+                                            release_page:
+                                                crate::update_check::release_notes::from_download(
+                                                    &asset.download_url,
+                                                    &asset.version,
+                                                ),
                                             asset: Some(asset.clone()),
                                         },
                                         window,
