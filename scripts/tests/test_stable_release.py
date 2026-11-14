@@ -411,6 +411,37 @@ class StableReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(StableReleaseError, "GitHub links"):
                 validate_notes(source, VERSION)
 
+    def test_new_notes_require_the_category_verb_in_each_english_entry(self) -> None:
+        version = "2.5.0"
+        body = notes().replace(VERSION, version, 1).replace(
+            "### Added\n- A stable package set.",
+            "- Desktop downloads are Preview builds.\n\n"
+            "### Added\n- Added a package set.\n  - Includes a portable ZIP.\n\n"
+            "### Fixed\n- Fixed startup.\n- Fixed file imports.\n\n"
+            "### Improved\n- Improved terminal completion.",
+        ).replace(
+            "- 稳定版安装包集合。",
+            "- 新增安装包集合。\n\n### 修复\n- 修复启动和文件导入。\n\n"
+            "### 改进\n- 改进终端补全。",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "v2.5.0.md"
+            source.write_text(body, encoding="utf-8")
+            self.assertEqual(validate_notes(source, version), body)
+            invalid_entries = (
+                ("Added a package set.", "A package set.", "Added"),
+                ("Fixed file imports.", "Added file imports.", "Fixed"),
+                ("Improved terminal completion.", "Improvedness of completion.", "Improved"),
+            )
+            for before, after, verb in invalid_entries:
+                with self.subTest(verb=verb):
+                    source.write_text(body.replace(before, after), encoding="utf-8")
+                    with self.assertRaisesRegex(StableReleaseError, f"start with {verb}"):
+                        validate_notes(source, version)
+            source.write_text(body.replace("- Improved terminal completion.", ""), encoding="utf-8")
+            with self.assertRaisesRegex(StableReleaseError, "top-level list under Improved"):
+                validate_notes(source, version)
+
     def test_notes_allow_no_pr_contributors_but_keep_section_contracts(self) -> None:
         before, rest = notes().split("## Contributors\n", 1)
         contributor_body, after = rest.split("## SHA256\n", 1)
