@@ -79,6 +79,8 @@ pub struct Settings {
     pub notification_duration: nebula_settings::NotificationDuration,
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
+    /// 标签标题固定为目录名（关 = 跟随 AI 任务标题，上游默认）。
+    pub static_tab_titles: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
     /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
     /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
@@ -126,6 +128,11 @@ pub(crate) fn ctrl_wheel_font_zoom(cx: &App) -> bool {
 
 pub(crate) fn ai_toasts_enabled(cx: &App) -> bool {
     cx.try_global::<Settings>().is_none_or(|settings| settings.ai_toasts)
+}
+
+/// 标签标题固定在目录/主机名上：只读内存快照，渲染路径不做磁盘 I/O。
+pub(crate) fn static_tab_titles(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.static_tab_titles)
 }
 
 #[inline]
@@ -295,6 +302,7 @@ impl Settings {
             ai_toasts: runtime.ai_toasts,
             notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
+            static_tab_titles: runtime.static_tab_titles,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,
             prompt_suggestions_enabled: runtime.prompt_suggestions.enabled,

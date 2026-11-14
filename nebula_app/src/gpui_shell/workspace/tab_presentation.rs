@@ -68,7 +68,7 @@ impl NebulaWorkspace {
                 // custom_name 整条顶掉。计数改由 TabPresentation::pane_count
                 // 决定是否显示布局缩略图，见 sidebar/top_tabs 的渲染。
                 match tab.focused_view() {
-                    Some(view) => view.read(cx).tab_label().into(),
+                    Some(view) => view.read(cx).tab_label(cx).into(),
                     None => SharedString::from("shell"),
                 }
             },

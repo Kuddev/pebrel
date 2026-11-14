@@ -129,6 +129,9 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             language.text(crate::i18n::Message::SettingsHelpChoosesWhetherTheSidebarShows),
             Some(language.text(crate::i18n::Message::SettingsHelpAutoDetectChecksForGit)),
         ),
+        "static_tab_titles" => {
+            (language.text(crate::i18n::Message::SettingsHelpTabTitlesStayOnTheDirectory), None)
+        },
         "keep_session" => (
             language.text(crate::i18n::Message::SettingsHelpKeepsTerminalsRunningAfterClosing),
             Some(language.text(crate::i18n::Message::SettingsHelpWhenDisabledClosingTheWindow)),
@@ -188,6 +191,7 @@ mod tests {
             "new_tab_position",
             "windowing_behavior",
             "vcs_display",
+            "static_tab_titles",
             "keep_session",
             "restore_session",
             "resume_ai",

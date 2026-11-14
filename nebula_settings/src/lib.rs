@@ -1038,6 +1038,8 @@ pub struct RuntimeSettings {
     pub multiline_paste_confirm: bool,
     /// 标签页关闭按钮（叉号）是否渲染：关 = 不渲染，仍可用中键关闭。
     pub tab_close_visible: bool,
+    /// 标签标题固定为目录名（忽略 AI 上报的任务标题）；关 = 跟随，上游默认。
+    pub static_tab_titles: bool,
     /// 新建本地终端是否把 Windows 系统代理写入代理环境变量。自定义代理地址
     /// 不看这个开关：网络页填了地址就会写入新终端。默认关。已打开的会话不改。
     pub terminal_proxy: bool,
@@ -1236,6 +1238,7 @@ impl RuntimeSettings {
             dim_inactive_panes: raw.bool_on("dim_inactive_panes").unwrap_or(true),
             multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
             tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
+            static_tab_titles: raw.bool_on("static_tab_titles").unwrap_or(false),
             terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
             refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
             powerline: raw.bool_on("powerline").unwrap_or(true),
@@ -1541,6 +1544,7 @@ mod tests {
              copy_on_select=1\n\
              multiline_paste_confirm=0\n\
              tab_close_visible=0\n\
+             static_tab_titles=1\n\
              bell=audible\n\
              cjk_bold_regular=1\n\
              tabs_position=top\n\
@@ -1582,6 +1586,7 @@ mod tests {
         assert!(settings.copy_on_select);
         assert!(!settings.multiline_paste_confirm);
         assert!(!settings.tab_close_visible);
+        assert!(settings.static_tab_titles, "static_tab_titles=1 固定标签标题为目录名");
         assert_eq!(settings.bell, BellModeName::Audible);
         assert!(!settings.powerline);
         assert_eq!(settings.shell.as_deref(), Some("pwsh"));
@@ -1626,6 +1631,7 @@ mod tests {
         assert!(!settings.copy_on_select);
         assert!(settings.multiline_paste_confirm, "多行粘贴确认默认开（上游兼容）");
         assert!(settings.tab_close_visible, "标签关闭按钮默认可见（上游兼容）");
+        assert!(!settings.static_tab_titles, "标签标题默认跟随 AI 任务标题（上游行为）");
         assert!(!settings.terminal_proxy, "终端网络代理上游默认关（兼容）");
         assert!(settings.powerline);
         assert!(settings.ghost);
