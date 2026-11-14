@@ -212,7 +212,7 @@
     <string name="chat_terminal_question">Answer this interaction in the terminal</string>
     <string name="chat_update_desktop">Update the computer app to use conversation view.</string>
     <string name="chat_replaced">This Agent session ended or changed. Return to the terminal and reopen its conversation.</string>
-    <string name="chat_unavailable">Waiting for a Codex or Claude Code conversation file reported by this pane. Continue in the terminal while it is being identified.</string>
+    <string name="chat_unavailable">Waiting for a Codex, Claude Code, or Antigravity conversation file reported by this pane. Continue in the terminal while it is being identified.</string>
     <string name="chat_refreshing">The conversation is updating. Refreshing its current messages.</string>
     <string name="chat_history_limit">The recent-history cache is full. View older history in the terminal.</string>
     <string name="chat_prompt_changed">The question changed. Review its current options before answering.</string>

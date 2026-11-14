@@ -3,6 +3,7 @@ package io.github.kuddev.pebrel.mobile.session
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import io.github.kuddev.pebrel.mobile.connection.*
+import io.github.kuddev.pebrel.mobile.supportsConversationView
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -64,6 +65,30 @@ class DesktopRecoveryTest {
         available = "conversation_identity_changed"
         assertTrue(runCatching { client.key("Esc") }.exceptionOrNull() is DesktopRpcFailure)
         assertEquals(listOf("Ctrl+C"), sent)
+    }
+
+    @Test fun antigravityConversationIdentityParticipatesInConversationViewAndRpc() = runTest {
+        assertTrue(supportsConversationView("codex"))
+        assertTrue(supportsConversationView("claude"))
+        assertTrue(supportsConversationView("antigravity"))
+        assertFalse(supportsConversationView("aider"))
+        assertFalse(supportsConversationView(""))
+
+        val sent = mutableListOf<JSONObject>()
+        val client = DesktopConversation(ConversationIdentity("antigravity", "conv-01"), "agy-view", ConversationCache(),
+            request = { method, params ->
+                sent += JSONObject().put("method", method).put("params", params)
+                if (method == "conversation.read") JSONObject("""{"identity":{"kind":"antigravity","session_id":"conv-01","epoch":5},"messages":[{"id":"0","role":"user","text":"检查配置","complete":true,"truncated":false},{"id":"1:text","role":"assistant","text":"已处理","complete":true,"truncated":false}],"unchanged":false,"revision":"r1","before":null,"can_send":true,"state":"finished","prompt":null,"cwd":"/project"}""")
+                else JSONObject().put("accepted", true)
+            }, availability = { null })
+        client.refresh()
+        assertEquals(2, client.state.value.messages.size)
+        assertEquals("检查配置", client.state.value.messages[0].text)
+        client.send("继续")
+        val sendIdentity = sent.last().getJSONObject("params").getJSONObject("identity")
+        assertEquals("antigravity", sendIdentity.getString("kind"))
+        assertEquals("conv-01", sendIdentity.getString("session_id"))
+        assertEquals(5L, sendIdentity.getLong("epoch"))
     }
 
     private class Link(private val autoSnapshot: Boolean = true, private val scrollSupported: Boolean = false, private val historySupported: Boolean = false,

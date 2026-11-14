@@ -212,7 +212,7 @@
     <string name="chat_terminal_question">在终端中处理当前交互</string>
     <string name="chat_update_desktop">更新电脑端后即可使用对话视图。</string>
     <string name="chat_replaced">Agent 会话已结束或更换，请返回终端重新打开对话。</string>
-    <string name="chat_unavailable">等待当前终端报告 Codex 或 Claude Code 的会话文件。识别期间可继续使用终端。</string>
+    <string name="chat_unavailable">等待当前终端报告 Codex、Claude Code 或 Antigravity 的会话文件。识别期间可继续使用终端。</string>
     <string name="chat_refreshing">会话正在更新，正在重新读取当前消息。</string>
     <string name="chat_history_limit">最近消息缓存已满，可在终端查看更早记录。</string>
     <string name="chat_prompt_changed">题目已变化，请阅读当前选项后重新选择。</string>

@@ -58,6 +58,27 @@ fn conversation_mutations_require_current_identity_and_read_cannot_smuggle_input
         ))
         .is_err()
     );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.read",
+            json!({"identity":{"kind":"antigravity","session_id":"conv-1"}})
+        ))
+        .is_ok()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.send",
+            json!({"text":"继续", "identity":{"kind":"antigravity","session_id":"conv-1","epoch":3}})
+        ))
+        .is_ok()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.read",
+            json!({"identity":{"kind":"aider","session_id":"conv-1"}})
+        ))
+        .is_err()
+    );
 }
 
 #[test]
