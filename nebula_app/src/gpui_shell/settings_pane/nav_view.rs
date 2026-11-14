@@ -1,6 +1,6 @@
 //! 设置导航：组名 + 当前大类原地展开子项。
 //!
-//! 导航与正文共用底色。选中项用独立的浮起面，hover 一律中性；
+//! 导航沿用正文的主题底色，并使用实色保证文字对比度。选中项用独立的浮起面，hover 一律中性；
 //! 强调色用于选中项的图标和子项指示条。
 //! 子项只在其大类处于选中状态时展开，同一时间最多一棵；搜索时收起全部子项
 //! 并隐去组名，结果按命中顺序平铺。
@@ -27,13 +27,16 @@ impl SettingsPane {
         let raised_shadow = crate::gpui_shell::theme::raised_shadow(cx);
         let guide = crate::gpui_shell::theme::settings_hairline(cx);
         let radius = crate::gpui_shell::theme::card_radius(cx);
+        // Keep navigation text on the theme panel color over any desktop or wallpaper.
+        let background = crate::gpui_shell::theme::settings_panel_bg(cx)
+            .blend(crate::gpui_shell::theme::settings_canvas_tint(cx));
         // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
         let nav = v_flex()
             .w(px(SETTINGS_NAV_WIDTH))
             .h_full()
             .min_h_0()
             .flex_shrink_0()
-            .bg(crate::gpui_shell::theme::settings_canvas_tint(cx))
+            .bg(background)
             .rounded_l(radius)
             .px(px(NAV_PAD_X))
             .pt(px(12.0))
