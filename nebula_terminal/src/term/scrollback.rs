@@ -1,0 +1,136 @@
+use std::mem::size_of;
+
+use super::{Cell, Column, Dimensions, Line, Term, TermMode};
+use crate::grid::GridCell as _;
+
+/// A compact, in-memory copy of terminal output for a replacement PTY.
+/// Each row stores just the prefix through its last non-default cell.
+pub struct Scrollback {
+    columns: usize,
+    rows: Vec<Vec<Cell>>,
+    truncated: bool,
+}
+
+impl Scrollback {
+    pub fn was_truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+impl<T> Term<T> {
+    /// Capture the most recent output, excluding the live prompt and transient
+    /// image/reader data. Exceeding the budget omits older rows.
+    pub fn capture_scrollback(&self, max_bytes: usize) -> Option<Scrollback> {
+        let prompt = self.nebula_prompt_input_point()?;
+        if self.mode.intersects(TermMode::ALT_SCREEN | TermMode::VI) {
+            return None;
+        }
+        let input_cursor = &self.grid.cursor;
+        let insertion_column = if input_cursor.input_needs_wrap {
+            self.columns()
+        } else {
+            input_cursor.point.column.0
+        };
+        if input_cursor.point.line != prompt.line || insertion_column != prompt.column.0 {
+            return None;
+        }
+        // Moving the cursor back to the start of an unsubmitted buffer does not
+        // make it empty. Refuse any visible input to the right of the boundary.
+        if self.grid[prompt.line][Column(prompt.column.0.min(self.columns()))..]
+            .iter()
+            .any(|cell| cell.c != ' ' || cell.zerowidth().is_some())
+        {
+            return None;
+        }
+        let top = self.grid.topmost_line().0;
+        let last_prompt = self.reading.prompt_marks.back().copied()?;
+        let before_prompt = i32::try_from(
+            last_prompt as i64 - self.grid.scrolled_out() as i64 - self.grid.history_size() as i64,
+        )
+        .ok()?;
+        if before_prompt > prompt.line.0 || before_prompt < top {
+            return None;
+        }
+        let mut rows = Vec::new();
+        let mut used = 0usize;
+        let mut truncated = false;
+        let blank = Cell::default();
+        for line in (top..before_prompt).rev() {
+            let row = &self.grid[Line(line)][..];
+            let length = row.iter().rposition(|cell| *cell != blank).map_or(0, |i| i + 1);
+            let mut bytes = size_of::<Vec<Cell>>() + length * size_of::<Cell>();
+            for cell in &row[..length] {
+                bytes = bytes.saturating_add(
+                    cell.zerowidth().map_or(0, |chars| size_of::<char>() * chars.len()),
+                );
+                if let Some(link) = cell.hyperlink() {
+                    bytes = bytes.saturating_add(link.id().len() + link.uri().len());
+                }
+            }
+            if bytes > max_bytes.saturating_sub(used) {
+                truncated = true;
+                break;
+            }
+            used += bytes;
+            let mut cells = row[..length].to_vec();
+            for cell in &mut cells {
+                cell.discard();
+            }
+            rows.push(cells);
+        }
+        rows.reverse();
+        Some(Scrollback { columns: self.columns(), rows, truncated })
+    }
+
+    /// Install output into a fresh Term before its event loop reads any data.
+    pub fn seed_scrollback(&mut self, scrollback: Scrollback) {
+        self.grid.seed_scrollback(scrollback.columns, scrollback.rows);
+        self.mark_fully_damaged();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::event::VoidListener;
+    use crate::index::Point;
+    use crate::term::{Config, test::TermSize};
+    use crate::vte::ansi::{Processor, StdSyncHandler};
+
+    use super::*;
+
+    #[test]
+    fn snapshot_preserves_output_and_leaves_a_fresh_pty_screen() {
+        let mut source = Term::new(Config::default(), &TermSize::new(28, 4), VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::default();
+        parser.advance(&mut source, "an older line\r\n\x1b[31m中文 🙂\x1b[0m\r\n".as_bytes());
+        source.nebula_add_prompt_mark();
+        parser.advance(&mut source, b"shell> ");
+        source.nebula_mark_prompt_input();
+        let snapshot = source.capture_scrollback(1024 * 1024).unwrap();
+        let mut resumed = Term::new(Config::default(), &TermSize::new(28, 5), VoidListener);
+        resumed.seed_scrollback(snapshot);
+        parser.advance(&mut resumed, b"new shell> ");
+
+        assert_eq!(resumed.history_size(), 2);
+        assert_eq!(resumed.grid.cursor.point, Point::new(Line(0), Column(11)));
+        let history = resumed
+            .bounds_to_string(Point::new(Line(-2), Column(0)), Point::new(Line(-1), Column(27)));
+        assert_eq!(history, "an older line\n中文 🙂");
+        assert_ne!(resumed.grid[Line(-1)][Column(0)].fg, Cell::default().fg);
+    }
+
+    #[test]
+    fn empty_budget_and_unsubmitted_input_do_not_copy_terminal_state() {
+        let mut source = Term::new(Config::default(), &TermSize::new(28, 4), VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::default();
+        parser.advance(&mut source, b"visible history\r\n");
+        source.nebula_add_prompt_mark();
+        parser.advance(&mut source, b"shell> ");
+        source.nebula_mark_prompt_input();
+        let snapshot = source.capture_scrollback(0).unwrap();
+        assert!(snapshot.rows.is_empty());
+        assert!(snapshot.was_truncated());
+        parser.advance(&mut source, b"draft\x1b[5D");
+        assert!(source.capture_scrollback(1024 * 1024).is_none());
+    }
+}

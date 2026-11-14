@@ -4,6 +4,10 @@ use super::*;
 use crate::index::{Column, Line, Point};
 use crate::inline_image::{ImageCell, ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement};
 
+#[path = "scrollback.rs"]
+mod scrollback;
+pub use scrollback::Scrollback;
+
 impl<T> Term<T> {
     /// Mutable access to the raw grid data structure.
     pub fn grid_mut(&mut self) -> &mut Grid<Cell> {

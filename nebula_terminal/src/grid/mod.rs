@@ -12,6 +12,7 @@ use crate::vte::ansi::{CharsetIndex, StandardCharset};
 
 pub mod resize;
 mod row;
+mod scrollback;
 mod storage;
 #[cfg(test)]
 mod tests;

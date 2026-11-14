@@ -29,7 +29,7 @@ pub mod cell;
 mod clear;
 pub mod color;
 mod damage;
-mod grid_content;
+pub mod grid_content;
 mod inline_image;
 mod sixel;
 pub(crate) use inline_image::PendingImage;
