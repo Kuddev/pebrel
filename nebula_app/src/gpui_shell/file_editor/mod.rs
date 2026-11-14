@@ -340,7 +340,11 @@ impl TextFileView {
     }
 
     fn source_slice(&self, range: std::ops::Range<usize>, cx: &App) -> Option<String> {
-        self.input.read(cx).text().try_slice(range).ok().map(|slice| slice.to_string())
+        let source = self.input.read(cx).text();
+        if !source_range_in_bounds(source, &range) {
+            return None;
+        }
+        source.try_slice(range).ok().map(|slice| slice.to_string())
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -569,14 +573,22 @@ impl TextFileView {
     }
 
     fn apply_outline(&mut self, outline: Outline, cx: &mut Context<Self>) {
+        self.apply_outline_at(outline, self.scroll.logical_scroll_top(), cx);
+    }
+
+    fn apply_outline_at(
+        &mut self,
+        outline: Outline,
+        top: gpui::ListOffset,
+        cx: &mut Context<Self>,
+    ) {
         self.link_hover = None;
         self.link_hide_task = None;
         self.preview_stale = false;
         self.preview_code_languages.clear();
         self.inline_views.borrow_mut().clear();
-        let top = self.scroll.logical_scroll_top();
         self.blocks = Rc::new(RefCell::new(vec![None; outline.blocks.len()]));
-        self.scroll.reset(outline.blocks.len().max(usize::from(self.live_mode)));
+        self.scroll.reset(outline.blocks.len().max(usize::from(self.live_mode && !self.loading)));
         if !outline.blocks.is_empty() {
             self.scroll.scroll_to(gpui::ListOffset {
                 item_ix: top.item_ix.min(outline.blocks.len() - 1),
@@ -638,6 +650,11 @@ impl TextFileView {
         }
         cx.notify();
     }
+}
+
+fn source_range_in_bounds(source: &gpui_component::Rope, range: &std::ops::Range<usize>) -> bool {
+    // Ropey's try_slice checks UTF-8 boundaries before reporting bounds errors.
+    range.start <= range.end && range.end <= source.len()
 }
 
 impl Render for TextFileView {

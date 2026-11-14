@@ -195,7 +195,8 @@ def send(source, native, mode, payload, token, owner=None, route=None, deadline=
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"
-        write_terminal(osc, source, route, deadline, owner=owner)
+        exit_owner = owner if source == "claude" and payload.get("hook_event_name") == "SessionEnd" else None
+        write_terminal(osc, source, route, deadline, owner=owner, exit_owner=exit_owner)
 
 
 def _proc_snapshot(proc_fd):
@@ -286,7 +287,36 @@ def owner_tty(source, owner):
     return None
 
 
-def write_terminal(osc, source=None, route=None, deadline=None, owner=None):
+def open_claude_exit_terminal(owner, flags):
+    """A detached SessionEnd can still reach Claude's verified Linux terminal."""
+    if sys.platform != "linux" or not owner:
+        return None
+    pid, _, epoch = owner.partition(":")
+    proc = Path("/proc") / pid
+    stdin = proc / "fd/0"
+    try:
+        tty = stdin.readlink()
+        if not re.fullmatch(r"/dev/pts/[0-9]+", str(tty)):
+            return None
+        fd = os.open(tty, flags | os.O_NOCTTY)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        raw = (proc / "stat").read_text(encoding="utf-8")
+        fields = raw[raw.rfind(")") + 2:].split()
+        if (stat.S_ISCHR(info.st_mode) and info.st_uid == os.geteuid()
+                and fields[19] == epoch and int(fields[2]) > 0 and fields[2] == fields[5]
+                and info.st_rdev == (int(fields[4]) & 0xffffffff)
+                and os.path.samestat(info, stdin.stat())):
+            return fd
+    except (OSError, ValueError, IndexError):
+        pass
+    os.close(fd)
+    return None
+
+
+def write_terminal(osc, source=None, route=None, deadline=None, owner=None, *, exit_owner=None):
     try:
         fd = os.open(route["tty"] if route else "/dev/tty",
                      os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
@@ -295,6 +325,11 @@ def write_terminal(osc, source=None, route=None, deadline=None, owner=None):
             raise
         if source in ("codex", "claude"):
             fd = owner_tty(source, owner)
+            if fd is None and source == "claude" and exit_owner:
+                # SessionEnd may outlive its ancestor chain. Preserve upstream's
+                # verified detached-exit delivery after the pinned-owner path.
+                flags = os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                fd = open_claude_exit_terminal(exit_owner, flags)
             if fd is None:
                 if source != "claude":
                     raise
