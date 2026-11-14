@@ -45,8 +45,8 @@ use gpui::{
 use crate::gpui_shell::prelude::*;
 use crate::i18n::Message;
 use crate::ssh_sftp::{
-    SftpBrowseSession, SftpConflictPolicy, SftpController, SftpEntry, SftpEntryKind, SftpPhase,
-    SftpSnapshot, SftpTransferOptions,
+    SftpBrowseMode, SftpBrowseSession, SftpConflictPolicy, SftpController, SftpEntry,
+    SftpEntryKind, SftpPhase, SftpSnapshot, SftpTransferOptions,
 };
 
 use super::{NebulaWorkspace, workspace_ui_language};
@@ -143,6 +143,10 @@ impl RemoteBrowser {
     /// 抽屉此刻是否应该画远端内容。
     pub(super) fn active(&self) -> bool {
         self.pane.is_some()
+    }
+
+    fn displayed_path(&self) -> &str {
+        if self.path.is_empty() { self.retry_path.as_deref().unwrap_or("") } else { &self.path }
     }
 
     fn park_active(&mut self) {
@@ -400,6 +404,15 @@ impl NebulaWorkspace {
 
     /// 列出一个远端目录并显示它。
     pub(super) fn navigate_remote(&mut self, path: String, cx: &mut Context<'_, Self>) {
+        self.navigate_remote_with_mode(path, SftpBrowseMode::Exact, cx);
+    }
+
+    fn navigate_remote_with_mode(
+        &mut self,
+        path: String,
+        mode: SftpBrowseMode,
+        cx: &mut Context<'_, Self>,
+    ) {
         self.remote_browser.last_outcome = None;
         self.remote_browser.following_cwd = false;
         let Some(pane) = self.remote_browser.pane else { return };
@@ -420,7 +433,8 @@ impl NebulaWorkspace {
 
         let target = path.clone();
         self.remote_browser.navigation = Some(cx.spawn(async move |this, cx| {
-            let listed = remote_call(|| async move { session.list_dir(&target).await }).await;
+            let listed =
+                remote_call(move || async move { session.list_dir(&target, mode).await }).await;
             let _ = this.update(cx, |workspace, cx| {
                 // 世代号和 pane 都要对：前者防乱序，后者防用户在等待期间切到
                 // 别的 pane（那时这份结果属于另一台机器）。
@@ -433,10 +447,10 @@ impl NebulaWorkspace {
                 workspace.remote_browser.pending_path = None;
                 workspace.remote_browser.following_cwd = false;
                 match listed {
-                    Some(Ok(entries)) => {
-                        let same_directory = workspace.remote_browser.path == path;
+                    Some(Ok((resolved, entries))) => {
+                        let same_directory = workspace.remote_browser.path == resolved;
                         workspace.remote_browser.entries = entries;
-                        workspace.remote_browser.path = path.clone();
+                        workspace.remote_browser.path = resolved;
                         workspace.remote_browser.error = None;
                         if same_directory {
                             let rows = workspace.remote_rows();
@@ -470,18 +484,23 @@ impl NebulaWorkspace {
 
     /// 回到上一级。
     fn remote_parent(&mut self, cx: &mut Context<'_, Self>) {
-        let parent = crate::ssh_sftp::normalize_remote_path(&self.remote_browser.path, "..");
-        self.navigate_remote(parent, cx);
+        let path = self.remote_browser.displayed_path();
+        if !matches!(path, "" | "/") {
+            let parent = crate::ssh_sftp::normalize_remote_path(path, "..");
+            self.navigate_remote_with_mode(parent, SftpBrowseMode::RecoverMissing, cx);
+        }
     }
 
     /// 重新列当前目录。
     fn remote_refresh(&mut self, cx: &mut Context<'_, Self>) {
         let path = self
             .remote_browser
-            .retry_path
-            .clone()
+            .pending_path
+            .as_ref()
+            .or(self.remote_browser.retry_path.as_ref())
+            .cloned()
             .unwrap_or_else(|| self.remote_browser.path.clone());
-        self.navigate_remote(path, cx);
+        self.navigate_remote_with_mode(path, SftpBrowseMode::RecoverMissing, cx);
     }
 
     fn selected_remote_entries(&self) -> Vec<SftpEntry> {
@@ -495,10 +514,11 @@ impl NebulaWorkspace {
 
     fn remote_rows(&self) -> Vec<SftpEntry> {
         let mut rows = Vec::with_capacity(self.remote_browser.entries.len() + 1);
-        if self.remote_browser.path != "/" {
+        let path = self.remote_browser.displayed_path();
+        if !matches!(path, "" | "/") {
             rows.push(SftpEntry {
                 name: "..".to_owned(),
-                path: crate::ssh_sftp::normalize_remote_path(&self.remote_browser.path, ".."),
+                path: crate::ssh_sftp::normalize_remote_path(path, ".."),
                 kind: SftpEntryKind::Directory,
                 size: 0,
                 modified: 0,
@@ -519,7 +539,11 @@ impl NebulaWorkspace {
         cx: &mut Context<'_, Self>,
     ) {
         if open && matches!(row.kind, SftpEntryKind::Directory | SftpEntryKind::Symlink) {
-            self.navigate_remote(row.path, cx);
+            if row.is_parent {
+                self.remote_parent(cx);
+            } else {
+                self.navigate_remote(row.path, cx);
+            }
             return;
         }
         if open && row.kind == SftpEntryKind::File {
@@ -593,13 +617,14 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let location_background = theme.background.darken(0.035);
         let rows = self.remote_rows();
-        let path = if self.remote_browser.path.is_empty() {
+        let displayed_path = self.remote_browser.displayed_path();
+        let path = if displayed_path.is_empty() {
             language.text(Message::RemoteLocating).to_owned()
         } else {
-            self.remote_browser.path.clone()
+            displayed_path.to_owned()
         };
         let location_tip = format!("{} · {}", self.remote_browser.destination, path);
-        let at_root = self.remote_browser.path == "/" || self.remote_browser.path.is_empty();
+        let at_root = matches!(displayed_path, "" | "/");
 
         v_flex()
             .id("remote-files-panel")
@@ -640,6 +665,7 @@ impl NebulaWorkspace {
                             IconName::ArrowUp,
                             language.text(Message::RemoteParent),
                         )
+                        .debug_selector(|| "remote-files-up".into())
                         .w(px(28.0))
                         .h(px(28.0))
                         .disabled(at_root || self.remote_browser.loading)
@@ -651,6 +677,7 @@ impl NebulaWorkspace {
                             IconName::Redo2,
                             language.text(Message::RemoteReread),
                         )
+                        .debug_selector(|| "remote-files-refresh".into())
                         .w(px(28.0))
                         .h(px(28.0))
                         .on_click(cx.listener(|this, _, _, cx| this.remote_refresh(cx))),

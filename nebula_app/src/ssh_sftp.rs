@@ -24,7 +24,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::{FileType, OpenFlags};
+use russh_sftp::client::error::Error as SftpClientError;
+use russh_sftp::protocol::{FileType, OpenFlags, StatusCode};
 use tokio::io::AsyncWriteExt;
 
 use transaction::FileStamp;
@@ -146,6 +147,14 @@ pub struct SftpController {
 pub(crate) struct SftpBrowseSession {
     destination: Arc<str>,
     session: Arc<tokio::sync::Mutex<Option<SftpSession>>>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    test_sessions: Option<Arc<Mutex<std::collections::VecDeque<SftpSession>>>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SftpBrowseMode {
+    Exact,
+    RecoverMissing,
 }
 
 #[derive(Clone)]
@@ -450,10 +459,15 @@ impl SftpController {
 
 impl SftpBrowseSession {
     #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) fn from_test_session(destination: String, session: SftpSession) -> Self {
+    pub(crate) fn from_test_sessions(
+        destination: String,
+        sessions: impl IntoIterator<Item = SftpSession>,
+    ) -> Self {
+        let mut sessions: std::collections::VecDeque<_> = sessions.into_iter().collect();
         Self {
             destination: Arc::from(destination),
-            session: Arc::new(tokio::sync::Mutex::new(Some(session))),
+            session: Arc::new(tokio::sync::Mutex::new(sessions.pop_front())),
+            test_sessions: Some(Arc::new(Mutex::new(sessions))),
         }
     }
 
@@ -461,6 +475,8 @@ impl SftpBrowseSession {
         Self {
             destination: Arc::from(destination.into()),
             session: Arc::new(tokio::sync::Mutex::new(None)),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            test_sessions: None,
         }
     }
 
@@ -472,25 +488,45 @@ impl SftpBrowseSession {
     /// already come from an absolute cwd, a returned entry, or normalized `..`;
     /// calling `canonicalize` before every `readdir` adds a full network RTT
     /// without changing the result.
-    pub(crate) async fn list_dir(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
-        let path = normalize_remote_path("/", path);
+    pub(crate) async fn list_dir(
+        &self,
+        path: &str,
+        mode: SftpBrowseMode,
+    ) -> Result<(String, Vec<SftpEntry>), String> {
+        let mut path = normalize_remote_path("/", path);
         let mut slot = self.session.lock().await;
-        // russh-sftp 的 read_dir 只在正常结束时关闭目录句柄。将会话暂时移出
-        // 缓存，使导航取消也能关闭子通道；否则句柄和未完成请求会留在复用会话里。
-        let session = match slot.take() {
-            Some(session) => session,
-            None => crate::ssh_session::open_sftp(&self.destination)
-                .await
-                .map_err(|err| format!("无法连接 {}：{err}", self.destination))?,
-        };
-        let result = read_remote_dir(&session, &path)
-            .await
-            .map_err(|err| format!("无法读取目录 {path}：{err}"));
-        if result.is_ok() {
-            // 正常读取仍复用 SFTP 子通道；取消或失败仅回收它，不关闭共享 SSH 连接。
-            *slot = Some(session);
+        loop {
+            // read_dir may leave a handle open if it fails or is cancelled.
+            // Each failed attempt retires its subsystem, including during recovery.
+            let session = match slot.take() {
+                Some(session) => session,
+                None => self.open_session().await?,
+            };
+            match read_remote_dir(&session, &path).await {
+                Ok(entries) => {
+                    *slot = Some(session);
+                    return Ok((path, entries));
+                },
+                Err(SftpClientError::Status(status))
+                    if status.status_code == StatusCode::NoSuchFile
+                        && mode == SftpBrowseMode::RecoverMissing
+                        && path != "/" =>
+                {
+                    path = normalize_remote_path(&path, "..");
+                },
+                Err(error) => return Err(format!("无法读取目录 {path}：{error}")),
+            }
         }
-        result
+    }
+
+    async fn open_session(&self) -> Result<SftpSession, String> {
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        if let Some(sessions) = &self.test_sessions {
+            return lock(sessions).pop_front().ok_or_else(|| "No test SFTP session left".into());
+        }
+        crate::ssh_session::open_sftp(&self.destination)
+            .await
+            .map_err(|error| format!("无法连接 {}：{error}", self.destination))
     }
 }
 
@@ -675,7 +711,10 @@ pub fn sort_entries(entries: &mut [SftpEntry]) {
     });
 }
 
-async fn read_remote_dir(sftp: &SftpSession, path: &str) -> SftpResult<Vec<SftpEntry>> {
+async fn read_remote_dir(
+    sftp: &SftpSession,
+    path: &str,
+) -> Result<Vec<SftpEntry>, SftpClientError> {
     let mut entries = Vec::new();
     for entry in sftp.read_dir(path.to_owned()).await? {
         let metadata = entry.metadata();
@@ -1178,7 +1217,7 @@ async fn build_download_plan(
         let listings = transfer::map_bounded(
             &to_list,
             limits::DIRECTORY_LISTING_CONCURRENCY,
-            |(remote, _, _)| async move { read_remote_dir(sftp, remote).await },
+            |(remote, _, _)| async move { Ok(read_remote_dir(sftp, remote).await?) },
         )
         .await?;
         for ((_, local, root), children) in to_list.iter().zip(listings) {
@@ -1474,9 +1513,8 @@ mod tests {
 
     #[test]
     fn cancelled_browser_listing_retires_the_subsystem() {
-        use super::SftpBrowseSession;
+        use super::{SftpBrowseMode, SftpBrowseSession};
         use russh_sftp::protocol::{Handle, Name, Status, StatusCode};
-        use std::sync::Arc;
         use std::time::Duration;
         use tokio::sync::oneshot;
 
@@ -1533,17 +1571,17 @@ mod tests {
                 )
                 .await;
                 let session = russh_sftp::client::SftpSession::new(client).await.unwrap();
-                let browser = SftpBrowseSession {
-                    destination: Arc::from("fixture@unused.invalid"),
-                    session: Arc::new(tokio::sync::Mutex::new(Some(session))),
-                };
-                browser.list_dir("/ready").await.unwrap();
+                let browser = SftpBrowseSession::new("fixture@unused.invalid");
+                *browser.session.lock().await = Some(session);
+                browser.list_dir("/ready", SftpBrowseMode::Exact).await.unwrap();
                 assert!(
                     browser.session.lock().await.is_some(),
                     "successful reads reuse the channel"
                 );
                 let reader = browser.clone();
-                let listing = tokio::spawn(async move { reader.list_dir("/blocked").await });
+                let listing = tokio::spawn(async move {
+                    reader.list_dir("/blocked", SftpBrowseMode::Exact).await
+                });
                 tokio::time::timeout(Duration::from_secs(2), waiting).await.unwrap().unwrap();
                 listing.abort();
                 assert!(listing.await.unwrap_err().is_cancelled());

@@ -71,6 +71,7 @@ struct Store {
     requested: Vec<String>,
     gates: HashMap<String, Arc<tokio::sync::Semaphore>>,
     denied_once: HashSet<String>,
+    missing: HashSet<String>,
 }
 
 struct Peer {
@@ -91,6 +92,9 @@ impl russh_sftp::server::Handler for Peer {
             store.requested.push(path.clone());
             if store.denied_once.remove(&path) {
                 return Err(StatusCode::PermissionDenied);
+            }
+            if store.missing.contains(&path) {
+                return Err(StatusCode::NoSuchFile);
             }
             store.gates.get(&path).cloned()
         };
@@ -124,21 +128,27 @@ fn browser_session(destination: &str) -> (SftpBrowseSession, Arc<Mutex<Store>>) 
 }
 
 fn browser_session_with_store(destination: &str, store: Arc<Mutex<Store>>) -> SftpBrowseSession {
-    let state = store.clone();
-    let session = crate::ssh_session::runtime().unwrap().block_on(async move {
-        let (client, server) = tokio::io::duplex(16 * 1024);
-        tokio::spawn(russh_sftp::server::run(
-            server,
-            Peer { store: state, listed: HashSet::new() },
-        ));
-        russh_sftp::client::SftpSession::new_with_config(
-            client,
-            crate::ssh_sftp::limits::session_config(),
-        )
-        .await
-        .unwrap()
+    let sessions = crate::ssh_session::runtime().unwrap().block_on(async move {
+        let mut sessions = Vec::new();
+        // Only owned peers may be used after a listing retires its subsystem.
+        for _ in 0..4 {
+            let (client, server) = tokio::io::duplex(16 * 1024);
+            tokio::spawn(russh_sftp::server::run(
+                server,
+                Peer { store: store.clone(), listed: HashSet::new() },
+            ));
+            sessions.push(
+                russh_sftp::client::SftpSession::new_with_config(
+                    client,
+                    crate::ssh_sftp::limits::session_config(),
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        sessions
     });
-    SftpBrowseSession::from_test_session(destination.into(), session)
+    SftpBrowseSession::from_test_sessions(destination.into(), sessions)
 }
 
 struct Fixture {
@@ -295,6 +305,11 @@ fn focus(fixture: &mut Fixture, tab: usize) {
     fixture.window.run_until_parked();
 }
 
+fn click(fixture: &mut Fixture, id: &'static str) {
+    let bounds = fixture.window.debug_bounds(id).expect("remote toolbar button bounds");
+    fixture.window.simulate_click(bounds.center(), gpui::Modifiers::default());
+}
+
 #[gpui::test]
 fn opening_remote_files_and_shell_cwd_events_use_the_focused_pane(cx: &mut TestAppContext) {
     let mut fixture = open(cx);
@@ -428,18 +443,70 @@ fn failed_follow_keeps_the_old_listing_and_refresh_retries_the_failed_target(
         "failed follow must not retry on every prompt"
     );
 
-    // A failed subsystem is retired by the real browser adapter. Reconnect to
-    // another owned SFTP peer before testing the explicit UI retry; no fixture
-    // ever falls through to SSH authentication or the user's saved credentials.
-    let (session, store) = browser_session("fixture@same-host.invalid");
-    fixture.stores[0] = store;
-    fixture.workspace.update(&mut fixture.window, |workspace, cx| {
-        workspace
-            .remote_browser
-            .browse_sessions
-            .insert(workspace.remote_browser.pane.unwrap(), session);
-        workspace.remote_refresh(cx);
-    });
+    click(&mut fixture, "remote-files-refresh");
     listed(&mut fixture, "/denied");
-    assert_eq!(fixture.stores[0].lock().unwrap().requested, ["/denied"]);
+    assert_eq!(
+        fixture.stores[0].lock().unwrap().requested,
+        ["/srv/Alpha 中", "/denied", "/denied"]
+    );
+}
+
+#[gpui::test]
+fn refresh_of_deleted_directory_recovers_to_the_nearest_existing_ancestor(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    let child = "/srv/Alpha 中/child";
+    listed(&mut fixture, "/srv/Alpha 中");
+    report(&mut fixture, 0, Event::CwdReport(child.into()));
+    listed(&mut fixture, child);
+    fixture.stores[0].lock().unwrap().missing.extend([child.into(), "/srv/Alpha 中".into()]);
+    click(&mut fixture, "remote-files-refresh");
+    listed(&mut fixture, "/srv");
+    assert_eq!(
+        fixture.stores[0].lock().unwrap().requested,
+        ["/srv/Alpha 中", child, child, "/srv/Alpha 中", "/srv"]
+    );
+    report(&mut fixture, 0, Event::CwdReport(child.into()));
+    listed(&mut fixture, "/srv");
+    assert_eq!(fixture.stores[0].lock().unwrap().requested.len(), 5);
+}
+
+#[gpui::test]
+fn parent_button_works_after_the_first_listing_reports_a_deleted_directory(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = open(cx);
+    listed(&mut fixture, "/srv/Alpha 中");
+    fixture.stores[1].lock().unwrap().missing.insert("/srv/Beta".into());
+    focus(&mut fixture, 1);
+    wait(&mut fixture, |fixture| {
+        fixture.workspace.read_with(&fixture.window, |workspace, _| {
+            !workspace.remote_browser.loading && workspace.remote_browser.error.is_some()
+        })
+    });
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert!(workspace.remote_browser.path.is_empty());
+        assert_eq!(workspace.remote_browser.retry_path.as_deref(), Some("/srv/Beta"));
+    });
+    click(&mut fixture, "remote-files-up");
+    listed(&mut fixture, "/srv");
+    assert_eq!(fixture.stores[1].lock().unwrap().requested, ["/srv/Beta", "/srv"]);
+}
+
+#[gpui::test]
+fn refresh_keeps_the_visible_directory_when_sftp_denies_access(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    let path = "/srv/Alpha 中";
+    listed(&mut fixture, path);
+    fixture.stores[0].lock().unwrap().denied_once.insert(path.into());
+    click(&mut fixture, "remote-files-refresh");
+    wait(&mut fixture, |fixture| {
+        fixture.workspace.read_with(&fixture.window, |workspace, _| {
+            !workspace.remote_browser.loading && workspace.remote_browser.error.is_some()
+        })
+    });
+    fixture.workspace.read_with(&fixture.window, |workspace, _| {
+        assert_eq!(workspace.remote_browser.path, path);
+        assert_eq!(workspace.remote_browser.retry_path.as_deref(), Some(path));
+    });
+    assert_eq!(fixture.stores[0].lock().unwrap().requested, [path, path]);
 }
