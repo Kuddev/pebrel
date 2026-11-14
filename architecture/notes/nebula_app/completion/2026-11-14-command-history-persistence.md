@@ -15,8 +15,9 @@ without leaving a plaintext record behind.
 ## Evidence
 
 [`nebula_history.rs`](../../../../nebula_app/src/nebula_history.rs) writes history
-in one place, `append`, called from `NebulaHistory::record`. Loading, ranking and
-clearing never write a history file. The clear operation from
+in one place, `append`, called from `NebulaHistory::record`. Both entry points,
+`completion::record_command` and `record_completion_command`, reach it there.
+Loading, ranking and clearing never write a history file. The clear operation from
 [2026-10-23](2026-10-23-command-history-clear.md) already owns deletion.
 
 ## Decision
@@ -48,15 +49,22 @@ One switch covers local, WSL and SSH history.
 
 The settings file gains one boolean key. Missing or invalid values keep writing
 history, and reset restores it. The legacy renderer never applies the setting and
-keeps writing history. Opt-in debug logging (`PEBREL_DEBUG_LOG`) still records
-commands in `pebrel_debug.log`; it is a diagnostic channel outside this setting.
+keeps writing history. Hand edits to the settings file apply at the next start,
+like other settings, because the gate follows the in-app settings global.
+
+The switch covers command text only. `directory_history.json` still stores the
+working directories of local terminals for directory suggestions; remote SSH
+directories never reach it. Opt-in debug logging (`PEBREL_DEBUG_LOG`) still
+records commands in `pebrel_debug.log`; it is a diagnostic channel outside this
+setting.
 
 ## Validation
 
 Settings tests cover defaults, invalid values, round trips and reset. A history
 test turns the flag off and checks that a recorded command stays in memory and
-does not reach the history file. A GPUI test clicks the visible switch twice and
-checks the saved value and the settings global.
+does not reach the history file. A GPUI test runs the startup observer, clicks the
+visible switch twice and checks the saved value, the settings global and the
+write gate. Tests that flip the process-wide gate share a lock.
 
 ## Supersedes
 

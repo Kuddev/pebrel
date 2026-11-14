@@ -307,6 +307,15 @@ pub(crate) fn set_persistence(enabled: bool) {
     PERSIST.store(enabled, Ordering::Relaxed);
 }
 
+#[cfg(test)]
+pub(crate) fn persistence_enabled() -> bool {
+    PERSIST.load(Ordering::Relaxed)
+}
+
+/// Serializes tests that flip the process-wide gate so they cannot observe each other.
+#[cfg(test)]
+pub(crate) static PERSISTENCE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
     if !PERSIST.load(Ordering::Relaxed) {
         return;
@@ -627,6 +636,7 @@ mod tests {
                 super::set_persistence(true);
             }
         }
+        let _lock = super::PERSISTENCE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let _restore = Restore;
         super::set_persistence(false);
         let marker = format!("echo memory-only-{}", std::process::id());
