@@ -1,6 +1,13 @@
 use super::*;
 
 impl SettingsPane {
+    pub(crate) fn show_application_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.active_section = 0;
+        self.about_sponsor_open = false;
+        self.settings_search_input.update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
     pub(super) fn about_action_row(
         id: &'static str,
         icon: IconName,
