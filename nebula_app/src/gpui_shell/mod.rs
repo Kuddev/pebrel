@@ -275,6 +275,7 @@ pub fn run_shell(
     });
     crate::tray::shutdown();
     crate::ai_hook::shutdown();
+    crate::directory_history::shutdown();
 }
 
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
