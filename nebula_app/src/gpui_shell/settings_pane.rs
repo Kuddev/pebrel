@@ -780,6 +780,7 @@ impl SettingsPane {
             "dim_inactive_panes" => flag!(dim_inactive_panes),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
+            "reverse_selection" => flag!(reverse_selection),
             "terminal_proxy" => flag!(terminal_proxy),
             "refresh_environment" => flag!(refresh_environment),
             "powerline" => flag!(powerline),
@@ -1369,6 +1370,13 @@ impl SettingsPane {
                         language.pick("选中即复制", "Copy on select"),
                         help("copy_on_select", language),
                         self.runtime.copy_on_select,
+                        cx,
+                    ))
+                    .child(self.switch_row(
+                        "reverse_selection",
+                        language.pick("反色选区", "Inverse selection"),
+                        help("reverse_selection", language),
+                        self.runtime.reverse_selection,
                         cx,
                     ))
                     .child(self.switch_row(

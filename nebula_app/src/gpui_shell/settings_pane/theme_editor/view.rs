@@ -1158,11 +1158,17 @@ impl SettingsPane {
         };
         let pane = cx.entity().downgrade();
         advanced
-            .render(colors, cx.theme().danger, editor.save_busy, move |checked, _, cx| {
-                let _ = pane.update(cx, |this, cx| {
-                    this.set_theme_advanced_shadow(*checked, cx);
-                });
-            })
+            .render(
+                colors,
+                cx.theme().danger,
+                editor.save_busy,
+                crate::gpui_shell::config::reverse_selection(cx),
+                move |checked, _, cx| {
+                    let _ = pane.update(cx, |this, cx| {
+                        this.set_theme_advanced_shadow(*checked, cx);
+                    });
+                },
+            )
             .into_any_element()
     }
 }

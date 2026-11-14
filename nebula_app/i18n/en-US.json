@@ -674,7 +674,8 @@
       "restores_tabs_layout_and_directories": "Restores tabs, layout and directories, not the original processes.",
       "restored_tabs_start_new_shells": "Restored tabs start new shells; terminated programs are not resumed.",
       "continues_the_previous_conversation_when": "Continues the previous conversation when restoring an AI tab.",
-      "shows_ai_session_status_in": "Shows AI session status in the notification area."
+      "shows_ai_session_status_in": "Shows AI session status in the notification area.",
+      "selection_fills_with_each_cell_foreground": "Fills each selected cell with its own colour, so text stays readable in every theme."
     },
     "pane": {
       "restore_default": "Restore default",
@@ -1387,7 +1388,8 @@
     "image_fit": "Image fit",
     "image_alignment": "Image alignment",
     "image_cover": "Extend image into the title bar and sidebar",
-    "window_blur": "Window blur / material"
+    "window_blur": "Window blur / material",
+    "selection_overridden": "Not used while inverse selection is on."
   },
   "theme_picker": {
     "title": "Choose a theme",

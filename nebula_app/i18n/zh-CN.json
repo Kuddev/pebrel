@@ -674,7 +674,8 @@
       "restores_tabs_layout_and_directories": "恢复标签、布局和目录，不恢复原进程。",
       "restored_tabs_start_new_shells": "恢复的标签会启动新的 Shell，不会让已结束的程序继续运行。",
       "continues_the_previous_conversation_when": "恢复 AI 标签时，继续上次的对话。",
-      "shows_ai_session_status_in": "在通知区域查看 AI 会话状态。"
+      "shows_ai_session_status_in": "在通知区域查看 AI 会话状态。",
+      "selection_fills_with_each_cell_foreground": "用每格自身颜色铺底，任何主题下选中文字都清晰可辨。"
     },
     "pane": {
       "restore_default": "还原为默认值",
@@ -1387,7 +1388,8 @@
     "image_fit": "图片适配",
     "image_alignment": "图片对齐",
     "image_cover": "将图片扩展到标题栏和侧边栏",
-    "window_blur": "窗口模糊／材质"
+    "window_blur": "窗口模糊／材质",
+    "selection_overridden": "开启反色选区时不使用此项。"
   },
   "theme_picker": {
     "title": "选择主题",
