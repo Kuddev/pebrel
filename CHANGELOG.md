@@ -4,19 +4,21 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.5.8 - Unreleased
+## 2.5.8 - 2026-11-14
 
-- `Pebrel-v2.5.8-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-linux-x64-preview.deb`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-windows-x64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-windows-x64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-windows-arm64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-android-universal-preview.apk`: `PENDING FINAL BUILD`
-- `Pebrel-v2.5.8-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+```text
+547389aa667e09dd2bca05ce28f775f2094feb9c26710d772b477934a4460603  Pebrel-v2.5.8-android-universal-preview.apk
+ef562584dc6d305d7eddbbcede98c9d1e93819e3f7a4e7495640ba60b371f039  Pebrel-v2.5.8-linux-x64-preview.AppImage
+ea2f40da780daa1e2163a7b1c70953c166ddfff7873a5b5de0a6e564cb808c32  Pebrel-v2.5.8-linux-x64-preview.deb
+9cea897873640953a4617369433ffcd839bd633109cdc23da8f7cea6a3f40c33  Pebrel-v2.5.8-linux-x64-preview.tar.gz
+43e386f17c7cf5b56af478ea0bd93491ac3d5c77482c92636d1456f8385932f2  Pebrel-v2.5.8-macos-arm64-preview.dmg
+b1f5b4aa3b7d23b54969c5f499b9a2850a4f2fd5f6a328b3ae04b21f927ce5d8  Pebrel-v2.5.8-macos-x64-preview.dmg
+4e0f22a190012fe3c13b7bde1d03890a977f2f68d21f5ad6c39724bb0ba63cb8  Pebrel-v2.5.8-relay-manual.tar.gz
+be8227525e65a8e7b9fc7115972970cff8cce4fe64796f1a50b003e9608efa30  Pebrel-v2.5.8-windows-arm64-setup.exe
+babff4e96dfff7ccbc2021b2e49464574ed046d72c878f6ff75acd34ce2d6e30  Pebrel-v2.5.8-windows-arm64.zip
+20f67a7d3e51504228903bd74d24a52dc6079dfd72631788fae8f55f6742eb16  Pebrel-v2.5.8-windows-x64-setup.exe
+6df0f0203357de4403d013c802446326f0938bc29d575fc869d295b1c7ff806e  Pebrel-v2.5.8-windows-x64.zip
+```
 
 ### English
 
