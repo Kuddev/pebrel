@@ -132,7 +132,7 @@ private fun gitPathName(path: String): String = path.replace('\\', '/').trimEnd(
 @Composable
 private fun GitHeader(title: String, subtitle: String, onBack: () -> Unit, onRefresh: () -> Unit,
                       canRefresh: Boolean, onDetails: () -> Unit) {
-    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).heightIn(min = 58.dp)
+    Row(Modifier.fillMaxWidth().glassBar().heightIn(min = 58.dp)
         .padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
         Column(Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp)) {

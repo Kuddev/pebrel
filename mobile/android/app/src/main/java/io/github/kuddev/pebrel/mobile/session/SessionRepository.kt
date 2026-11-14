@@ -32,6 +32,7 @@ data class LocalSession(
     val files: SftpClient? = null,
     val attachment: RemoteAttachment? = null, val remote: RemoteInventory? = null,
     val discovering: Boolean = false, val discoveryFailed: Boolean = false,
+    val foreground: SshForeground? = null,
 )
 data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null,
                             val hasConnected: Boolean = false, val relayProfile: RelayProfile? = null,
@@ -85,6 +86,7 @@ class SessionRepository(private val context: Context,
     private val discoveryJobs = mutableMapOf<String, Job>()
     private val tmuxControls = mutableMapOf<String, TmuxSessionControl>()
     private val tmuxCheckpoints = mutableMapOf<String, Job>()
+    private val sshForegroundJobs = mutableMapOf<String, Job>()
     private val pendingTrust = java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Boolean>>()
     private var readJob: Job? = null
     private var readGeneration = 0L
@@ -141,7 +143,8 @@ class SessionRepository(private val context: Context,
         }
     }
 
-    private fun probeSshOnResume(session: LocalSession) {
+    /** Reconnects only when the old connection fails a round trip; [always] also acts in the background. */
+    private fun probeSshOnResume(session: LocalSession, always: Boolean = false) {
         val connection = sshConnections[session.id] ?: return
         resumeChecks[session.id] = scope.launch(Dispatchers.Main.immediate) {
             // The JNI query is blocking. Await it separately so the deadline can close a dead socket.
@@ -150,7 +153,7 @@ class SessionRepository(private val context: Context,
             catch (failure: Exception) {
                 if (failure is CancellationException && failure !is TimeoutCancellationException) throw failure
                 val transient = failure is TimeoutCancellationException || SshReconnect.retryable(classifySshFailure(failure))
-                if (foreground && transient && sshConnections[session.id] === connection &&
+                if ((foreground || always) && transient && sshConnections[session.id] === connection &&
                     live.value.any { it.id == session.id && it.terminal === session.terminal && it.status == "ready" }) {
                     session.terminal.finishIfRunning()
                     update(session.id) { it.copy(status = "reconnecting", failure = SshFailureKind.NETWORK) }
@@ -166,18 +169,19 @@ class SessionRepository(private val context: Context,
     }
 
     internal fun networkChanged() {
-        // Route changes invalidate the old TCP connection, including background SSH tabs.
+        // A new default network often leaves the old route working (VPN, Wi-Fi roaming, a second SIM).
+        // Probe each SSH tab and reconnect only those whose connection no longer answers.
         for (session in live.value.filter { it.host != null && it.hasConnected &&
             it.status in setOf("ready", "reconnecting") }) {
             if (session.status == "ready") {
-                session.terminal.finishIfRunning()
-                update(session.id) { it.copy(status = "reconnecting", failure = SshFailureKind.NETWORK) }
-            }
-            sshReconnect.schedule(session.id, immediate = true)
+                resumeChecks.remove(session.id)?.cancel()
+                probeSshOnResume(session, always = true)
+            } else sshReconnect.schedule(session.id, immediate = true)
         }
         if (!foreground) return
-        resumeChecks.values.forEach(Job::cancel)
-        resumeChecks.clear()
+        // Desktop checks are replaced below; the SSH probes just started must keep running.
+        val sshTabs = live.value.map { it.id }.toSet()
+        resumeChecks.keys.filter { it !in sshTabs }.forEach { resumeChecks.remove(it)?.cancel() }
         for (desktop in computers.value.filter {
             it.hasConnected && it.relayProfile != null && it.status != "approval" && DesktopReconnect.retryable(it.failure)
         }) {
@@ -505,6 +509,7 @@ class SessionRepository(private val context: Context,
         }, active = { live.value.any { it.id == id && it.status == "ready" } && sshConnections.containsKey(id) })
         discoveryJobs.remove(id)?.cancel()
         tmuxCheckpoints.remove(id)?.cancel()
+        sshForegroundJobs.remove(id)?.cancel()
         tmuxControls.remove(id)
         val detectShell = host.sessionMode == SshSessionMode.SHELL && attachment?.session?.kind != "herdr"
         val control = if (detectShell || attachment?.session?.kind == "tmux" || (attachment == null && host.sessionMode == SshSessionMode.TMUX))
@@ -608,6 +613,7 @@ class SessionRepository(private val context: Context,
                 sshReconnect.forget(id)
                 update(id) { it.copy(status = "ready", hasConnected = true, failure = null) }
                 refreshRemoteSessions(id)
+                if (host != null) watchSshForeground(id)
                 tmuxControls[id]?.let { control ->
                     tmuxCheckpoints.remove(id)?.cancel()
                     tmuxCheckpoints[id] = scope.launch {
@@ -622,6 +628,7 @@ class SessionRepository(private val context: Context,
                 if (!current(session)) return
                 sshConnections.remove(id)
                 tmuxCheckpoints.remove(id)?.cancel()
+                sshForegroundJobs.remove(id)?.cancel()
                 tmuxControls.remove(id)
                 discoveryJobs.remove(id)?.cancel()
                 cancelTrust(id)
@@ -654,6 +661,7 @@ class SessionRepository(private val context: Context,
         sshRetryJobs.remove(id)?.cancel()
         liveCredentials.forget(id)
         tmuxCheckpoints.remove(id)?.cancel()
+        sshForegroundJobs.remove(id)?.cancel()
         tmuxControls.remove(id)
         discoveryJobs.remove(id)?.cancel()
         sshConnections.remove(id)
@@ -992,11 +1000,61 @@ class SessionRepository(private val context: Context,
         }
     }
     private fun target(pane: DesktopPane) = JSONObject().put("window_id", pane.window).put("pane_id", pane.id)
+
+    private val sshChatScript by lazy {
+        context.resources.openRawResource(io.github.kuddev.pebrel.mobile.R.raw.ssh_agent_chat).use { it.readBytes() }
+    }
+    private val sshChats = mutableMapOf<SshConnection, SshAgentChat>()
+
+    private fun sshChat(id: String): SshAgentChat? {
+        val connection = sshConnections[id] ?: return null
+        return synchronized(sshChats) {
+            sshChats.keys.retainAll(sshConnections.values.toSet())
+            sshChats.getOrPut(connection) {
+                SshAgentChat(sshChatScript) { command ->
+                    withContext(Dispatchers.IO) {
+                        check(sshConnections[id] === connection) { "SSH connection replaced" }
+                        connection.query(command)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Polled only while the app is visible: often for the tab on screen, rarely for the others. */
+    private fun watchSshForeground(id: String) {
+        sshForegroundJobs.remove(id)?.cancel()
+        val chat = sshChat(id) ?: return
+        sshForegroundJobs[id] = scope.launch {
+            suspend fun show(seen: SshForeground?) = withContext(Dispatchers.Main) {
+                update(id) { if (it.status == "ready") it.copy(foreground = seen) else it }
+            }
+            while (isActive) {
+                if (foreground) try {
+                    show(chat.foreground())
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (failure: DesktopRpcFailure) {
+                    // Without python3, or without one terminal for this connection, the tab stays a plain terminal.
+                    if (failure.code in setOf("python_missing", "terminal_unknown")) show(null)
+                    if (failure.code == "python_missing") return@launch
+                } catch (_: Exception) {
+                    // A lost query keeps the last answer for one more round.
+                }
+                delay(when { !foreground -> 5_000L; renderOwner == id -> 3_000L; else -> 15_000L })
+            }
+        }
+    }
+
+    fun sshConversation(id: String, kind: String): ConversationSource? {
+        val chat = sshChat(id) ?: return null
+        return SshConversation(kind, chat) { live.value.find { it.id == id && it.status == "ready" }?.terminal }
+    }
     fun closeAll() {
         sshReconnect.clear()
         sshRetryJobs.values.forEach(Job::cancel); sshRetryJobs.clear()
         liveCredentials.clear()
         tmuxCheckpoints.values.forEach(Job::cancel); tmuxCheckpoints.clear()
+        sshForegroundJobs.values.forEach(Job::cancel); sshForegroundJobs.clear()
         tmuxControls.clear()
         discoveryJobs.values.forEach(Job::cancel); discoveryJobs.clear()
         sshConnections.clear()
