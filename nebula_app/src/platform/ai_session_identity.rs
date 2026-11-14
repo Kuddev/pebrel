@@ -1,9 +1,9 @@
 //! Find the current Codex conversation when no session ID was reported by its hook.
 //!
-//! Codex keeps the active rollout open, and its process environment carries
-//! the pane ID supplied by the PTY launcher. This links a pane to its rollout
-//! without relying on working-directory matches or file modification
-//! time. Only the first metadata record is read, without conversation content.
+//! Inspect rollouts held open by a process belonging to the pane. In Linux and
+//! WSL the PTY launcher supplies the pane ID, and the process must still have a
+//! controlling terminal. Linux also verifies the shell's terminal and session.
+//! Only the first metadata record is read, without conversation content.
 //! The lookup is bounded and is only called by a background
 //! task; UI code must never scan `/proc` or start `wsl.exe` synchronously.
 
@@ -11,6 +11,9 @@ use std::io::{self, Read, Seek as _};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use super::process_snapshot::is_codex_process_name;
 
 #[cfg(any(target_os = "macos", test))]
 mod macos;
@@ -70,6 +73,12 @@ for proc in /proc/[0-9]*; do
     fi
     process_id=$(printf '%s\n' "$environment" | sed -n "s/^PEBREL_PROCESS_ID=//p" | head -n 1)
     [ "$pane_id" = "$pane" ] && [ "$process_id" = "$instance" ] || continue
+    # A shared backend can keep the pane's environment after leaving its PTY.
+    IFS= read -r stat < "$proc/stat" 2>/dev/null || continue
+    IFS=' ' read -r state ppid pgrp sid tty rest <<EOF
+${stat##*) }
+EOF
+    [ "${tty:-0}" -ne 0 ] 2>/dev/null || continue
     codex_root=$(printf '%s\n' "$environment" | sed -n "s/^CODEX_HOME=//p" | head -n 1)
     if [ -z "$codex_root" ]; then
         guest_home=$(printf '%s\n' "$environment" | sed -n "s/^HOME=//p" | head -n 1)
@@ -131,10 +140,7 @@ pub(crate) fn probe_codex_session(
     }
 
     #[cfg(target_os = "linux")]
-    {
-        let _ = shell_pid;
-        return probe_local_proc(&pane_id, instance);
-    }
+    return probe_local_proc(&pane_id, instance, shell_pid?);
     #[cfg(target_os = "macos")]
     {
         let _ = (pane_id, instance);
@@ -145,6 +151,27 @@ pub(crate) fn probe_codex_session(
         let _ = (pane_id, instance);
         windows::probe(shell_pid?)
     }
+}
+
+/// A local hook can use the usual process lookup unless its platform requires
+/// affirmative terminal ownership. An error means the event must not route.
+#[cfg(unix)]
+pub(crate) fn local_hook_agent_pid(_source: &str, client_pid: u32) -> Result<Option<u32>, ()> {
+    #[cfg(target_os = "linux")]
+    if _source == "codex" {
+        // The helper may have its own session. Stop at the closest Codex
+        // ancestor, even if it is a daemon with no controlling terminal.
+        let owner = crate::process_tree::nearest_ancestor(client_pid, |pid| {
+            let process = super::process_snapshot::linux_process(pid)?;
+            let matched = process.name.as_deref().is_some_and(is_codex_process_name);
+            Some((process.parent, matched.then_some((pid, process.terminal))))
+        });
+        return owner
+            .filter(|(_, terminal)| terminal.is_attached())
+            .map(|(pid, _)| Some(pid))
+            .ok_or(());
+    }
+    Ok(crate::process_tree::nearest_agent_ancestor(client_pid).map(|(pid, _)| pid))
 }
 
 fn parse_probe_context(output: &str) -> Option<CodexSession> {
@@ -306,7 +333,13 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "linux")]
-fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
+fn probe_local_proc(pane_id: &str, instance: &str, shell_pid: u32) -> Option<CodexSession> {
+    use super::process_snapshot::linux_process;
+
+    let terminal = linux_process(shell_pid)?.terminal;
+    if !terminal.is_attached() {
+        return None;
+    }
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut output = String::new();
     let mut records = 0;
@@ -334,6 +367,9 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             crate::agent_env::PROCESS_ENV.as_bytes(),
             instance.as_bytes(),
         ) {
+            continue;
+        }
+        if linux_process(pid).is_none_or(|process| process.terminal != terminal) {
             continue;
         }
         let Some(codex_home) = codex_home_from_environment(&environment) else {
@@ -364,11 +400,6 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
         }
     }
     parse_probe_context(&output)
-}
-
-#[cfg(unix)]
-fn is_codex_process_name(name: &str) -> bool {
-    matches!(name, "codex" | "codex.exe") || name.starts_with("codex-")
 }
 
 #[cfg(unix)]
@@ -550,6 +581,7 @@ mod tests {
     fn proc_probes_resolve_session_symlinks_and_preserve_ownership_boundaries() {
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::symlink;
+        use std::os::unix::process::CommandExt as _;
 
         struct OwnedChild(std::process::Child);
         impl Drop for OwnedChild {
@@ -584,6 +616,47 @@ mod tests {
         let fixture_cwd = root.path().canonicalize().unwrap();
         let fixture_rollout = rollout.canonicalize().unwrap();
         let first_line = metadata.to_string();
+        // A daemon started from this pane can hold a valid CLI rollout for a
+        // different pane. Keep it open through both the positive and no-match cases.
+        let other_rollout = sessions.join(format!("rollout-x-{GUARDIAN_ID}.jsonl"));
+        let other_meta = serde_json::json!({"type":"session_meta", "payload": {
+            "id": GUARDIAN_ID, "source": "cli", "thread_source": "user",
+        }})
+        .to_string();
+        std::fs::write(&other_rollout, format!("{other_meta}\n")).unwrap();
+        let mut daemon = Command::new(&program);
+        daemon
+            .args(["-c", "read -r _"])
+            .current_dir(root.path())
+            .env_clear()
+            .env("HOME", &home)
+            .env("PEBREL_PANE_ID", pane)
+            .env("NEBULA_PANE_ID", pane)
+            .env(crate::agent_env::PROCESS_ENV, &instance)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::open(&other_rollout).unwrap());
+        // SAFETY: a fresh process session reproduces the shared daemon's detach.
+        unsafe {
+            daemon.pre_exec(|| {
+                (libc::setsid() >= 0).then_some(()).ok_or_else(io::Error::last_os_error)
+            });
+        }
+        let mut daemon = OwnedChild(daemon.spawn().unwrap());
+        proc_fixture::wait_for_child(
+            &mut daemon.0,
+            &proc_fixture::Expected {
+                pane,
+                instance: &instance,
+                home: &home,
+                codex_home: None,
+                cwd: &fixture_cwd,
+                rollout: &other_rollout,
+                first_line: &other_meta,
+            },
+        )
+        .unwrap();
+
         for (case, (codex_home, expected)) in [
             (Some(physical.clone()), true),
             (Some(home.join(".codex")), true),
@@ -610,6 +683,8 @@ mod tests {
             if let Some(value) = &codex_home {
                 command.env("CODEX_HOME", value);
             }
+            let _master =
+                crate::platform::process_snapshot::test_pty::attach(&mut command).unwrap();
             let mut child = OwnedChild(command.spawn().unwrap());
             // stdin 管道维持样本存活；父进程退出时 EOF 也能结束样本，不遗留休眠进程。
             let mut ready = child.0.stdout.take().unwrap();
@@ -654,7 +729,7 @@ mod tests {
                 // Assert immediately after each single probe. An eager array
                 // erased which implementation failed in the original CI log.
                 let started = Instant::now();
-                let found = probe_local_proc(query_pane, query_instance);
+                let found = probe_local_proc(query_pane, query_instance, child.0.id());
                 assert_found("local_proc", found, started.elapsed());
 
                 let mut guest = Command::new("/bin/sh");

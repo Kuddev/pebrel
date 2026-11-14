@@ -87,6 +87,8 @@ x11-clipboard = { git = "https://github.com/quininer/x11-clipboard.git", rev = "
 # 488c036a's Windows 11 mixed-DPI positioning fix. The upstream revision has
 # since moved to a different EventLoop API and cannot be used directly here.
 winit = { path = "third_party/winit-0.30.13" }
+# Backport the UTF-8 control symbol fix onto the published 0.7.1 API.
+pulldown-latex = { git = "https://github.com/Carlosted/pulldown-latex.git", rev = "07a0aacc2ad943e650ed235266585e7cd6d8fe9e" }
 
 # ---- GPUI v1.16.1 固定基线 ------------------------------------------------
 #
