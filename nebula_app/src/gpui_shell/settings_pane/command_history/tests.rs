@@ -66,6 +66,34 @@ fn command_history_clear_confirmation_cancel_busy_and_failure_feedback(cx: &mut 
 }
 
 #[gpui::test]
+fn command_history_persistence_switch_saves_and_updates_settings(cx: &mut TestAppContext) {
+    let _lock = crate::gpui_shell::settings_fixture::lock_theme_studio();
+    let _settings = crate::gpui_shell::settings_fixture::SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("command_history_persist", "1".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, _| pane.active_section = 2);
+        let surface = cx.new(|_| HistorySurface(pane));
+        gpui_component::Root::new(surface, window, cx)
+    });
+    window.simulate_resize(size(px(1150.0), px(1100.0)));
+    for enabled in [false, true] {
+        click(window, "nebula-switch-command_history_persist");
+        assert_eq!(RuntimeSettings::load().command_history_persist, enabled);
+        // `completion_history::init` mirrors this global into the history write gate.
+        let cached = window.update(|_, cx| {
+            cx.global::<crate::gpui_shell::config::Settings>().command_history_persist
+        });
+        assert_eq!(cached, enabled);
+    }
+}
+
+#[gpui::test]
 fn command_history_clear_completes_after_origin_window_closes(cx: &mut TestAppContext) {
     let (sender, receiver) = futures::channel::oneshot::channel();
     let receiver = Arc::new(Mutex::new(Some(receiver)));

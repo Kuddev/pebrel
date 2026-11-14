@@ -202,7 +202,7 @@
       "terms": {
         "application": "application app update version github support",
         "appearance": "appearance ligatures theme custom template import export font opacity background blur language shader wgsl glsl terminal effects effect video gif cursor smooth motion icon dim inactive panes scrollback scrolling speed history ctrl wheel zoom",
-        "profiles": "profiles shell terminal completion command history clear startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
+        "profiles": "profiles shell terminal completion command history clear disk save persist startup environment refresh path ai message notifications toast alerts bell duration timeout persistent auto-dismiss",
         "providers": "providers provider ai api prediction prompt suggestions",
         "ssh": "ssh host remote connection",
         "network": "network proxy connectivity",
@@ -228,7 +228,9 @@
         "clearing": "Clearing…",
         "confirm": "Clear all command history recorded by Pebrel for local, WSL and SSH terminals? This cannot be undone. Saved commands and your shells' own history are kept.",
         "cleared": "Pebrel command history cleared.",
-        "failed": "Some history could not be cleared: {error}"
+        "failed": "Some history could not be cleared: {error}",
+        "persist": "Save command history to disk",
+        "persist_description": "Write commands to Pebrel's history files so suggestions survive a restart. Turn off to keep new commands in memory until Pebrel closes. Saved history stays and is still suggested; Clear history deletes it. Open terminals follow the change."
       },
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",

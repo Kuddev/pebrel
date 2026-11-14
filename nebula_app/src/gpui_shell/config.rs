@@ -85,6 +85,8 @@ pub struct Settings {
     pub ghost: bool,
     pub prompt_suggestions_enabled: bool,
     pub completion_style: crate::display::CompletionStyle,
+    /// Mirrored into the history write gate by `completion_history::init`.
+    pub command_history_persist: bool,
     /// 单元格宽度取整方式；同一窗口宽度下必须与旧壳得到相同列数。
     pub cell_width_mode: nebula_settings::CellWidthModeName,
     /// 全宽字形（CJK 等）的 bold run 用 Regular 字形栅格（粗体只提亮不加粗，
@@ -299,6 +301,7 @@ impl Settings {
             ghost: runtime.ghost,
             prompt_suggestions_enabled: runtime.prompt_suggestions.enabled,
             completion_style: runtime.completion_style,
+            command_history_persist: runtime.command_history_persist,
             cell_width_mode: runtime.cell_width_mode,
             cjk_bold_regular: runtime.cjk_bold_regular,
             shell_id: runtime.shell.clone(),

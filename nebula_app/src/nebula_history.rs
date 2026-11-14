@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const HISTORY_MAX: usize = 5_000;
 pub(crate) const LOCAL_HISTORY_FILE: &str = "pebrel_history.jsonl";
@@ -296,7 +297,20 @@ fn history_debug_log(message: impl AsRef<str>) {
     }
 }
 
+/// Mirrors `command_history_persist`. It starts on so a shell that has not applied
+/// settings yet keeps the historical behavior.
+static PERSIST: AtomicBool = AtomicBool::new(true);
+
+/// Off keeps new commands in memory only. Existing files stay readable and are not
+/// rewritten, so turning it back on resumes appending after them.
+pub(crate) fn set_persistence(enabled: bool) {
+    PERSIST.store(enabled, Ordering::Relaxed);
+}
+
 fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
+    if !PERSIST.load(Ordering::Relaxed) {
+        return;
+    }
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -432,6 +446,25 @@ mod tests {
             pool.insert((*command).to_owned());
         }
         history
+    }
+
+    #[test]
+    fn disabled_persistence_keeps_new_commands_in_memory_only() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                super::set_persistence(true);
+            }
+        }
+        let _restore = Restore;
+        super::set_persistence(false);
+        let marker = format!("echo memory-only-{}", std::process::id());
+        let scope = HistoryScope::Ssh("memory-only-qa".into());
+        let mut history = NebulaHistory::default();
+        history.record(&scope, &marker, "/");
+        assert!(history.hint(&scope, "echo memory-only-").is_some());
+        let saved = std::fs::read_to_string(super::history_path(SSH_HISTORY_FILE));
+        assert!(!saved.unwrap_or_default().contains(&marker));
     }
 
     #[test]
