@@ -37,8 +37,9 @@ pub fn handle(
                 return reply(stream, 400, &serde_json::json!({"error":"duplicate_authorization"}));
             }
             authorization_seen = true;
-            authorized = !service.token.is_empty()
-                && value.strip_prefix("Bearer ") == Some(service.token.as_str());
+            // An empty service token fails closed inside `matches`.
+            authorized =
+                crate::bearer_token::matches(&service.token, value.strip_prefix("Bearer "));
         } else if name.eq_ignore_ascii_case("content-length") {
             let parsed = value.parse::<usize>().ok();
             if length.is_some() || parsed.is_none() {
