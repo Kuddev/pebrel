@@ -33,6 +33,7 @@ impl Render for NebulaWorkspace {
         self.clear_stale_reader_focus(cx);
         self.sync_document_activity(window, cx);
         self.sync_terminal_activity(cx);
+        self.sync_automatic_tab_sleep(window, cx);
         self.sync_document_details(cx);
         if !self.sidebar_collapsed {
             self.sidebar_closing_width = None;
@@ -43,6 +44,7 @@ impl Render for NebulaWorkspace {
                 .map(|(view, _)| gpui::IntoElement::into_any_element(view.clone()))
         } else {
             match self.tabs.get(self.active) {
+                Some(WorkspaceTab::Sleeping(saved)) => Some(self.render_sleeping_tab(saved, cx)),
                 Some(WorkspaceTab::Terminal { .. }) => {
                     Some(self.render_terminal_tab(self.active, cx))
                 },

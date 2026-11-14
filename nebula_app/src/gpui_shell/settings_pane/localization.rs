@@ -7,6 +7,19 @@ pub(super) fn localized_select_labels(
     values: &[&'static str],
     language: crate::display::UiLanguage,
 ) -> Vec<SharedString> {
+    if key == "tab_sleep_minutes" {
+        use crate::i18n::Message;
+        return values
+            .iter()
+            .map(|&value| {
+                if value == "0" {
+                    language.text(Message::TabSleepOff).into()
+                } else {
+                    language.format(Message::TabSleepAfterMinutes, &[("minutes", value)]).into()
+                }
+            })
+            .collect();
+    }
     if key == "scrollback_lines" {
         return values
             .iter()

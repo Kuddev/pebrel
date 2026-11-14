@@ -207,6 +207,34 @@ impl NebulaWorkspace {
         true
     }
 
+    /// 导出整个窗口为工作区文件（旧壳 `export_workspace(None)`）。
+    pub(super) fn export_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let export = self.snapshot_session(cx);
+        if export.tabs.is_empty() {
+            return;
+        }
+        self.prompt_save_workspace(export, "workspace", window, cx);
+    }
+
+    /// 导出单个标签为工作区文件（旧壳 `export_workspace(Some(ix))` 同合同：
+    /// 只导出可恢复的终端标签，文件名取标签名，扩展名 `.nebula-workspace.json`，
+    /// 落盘走共享 v4 schema）。
+    pub(super) fn export_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let session = self.snapshot_session(cx);
+        // snapshot 只收终端标签，所以下标要按「第几个可导出标签」重算。
+        let exportable_before = self.tabs.iter().take(ix).filter(|tab| tab.is_terminal()).count();
+        let Some(tab) = session.tabs.get(exportable_before).cloned() else { return };
+        let stem = tab
+            .custom_name
+            .clone()
+            .or_else(|| {
+                tab.cwd.rsplit(['/', '\\']).find(|part| !part.is_empty()).map(str::to_owned)
+            })
+            .unwrap_or_else(|| "tab".to_owned());
+        let export = crate::session::Session::new(0, vec![tab]);
+        self.prompt_save_workspace(export, &stem, window, cx);
+    }
+
     /// 当前工作区 → 共享 v4 快照。设置/文档/图片 tab 不进会话（旧壳同
     /// 合同）；AI 会话身份优先取 hook 直报的精确 id，退而取可解析的前台
     /// 程序名（claude 无 id 恢复成 `--continue`，安全判定在 schema 层）。
@@ -223,6 +251,13 @@ impl NebulaWorkspace {
         let mut tabs = Vec::new();
         let mut active_out = 0usize;
         for (ix, tab) in self.tabs.iter().enumerate() {
+            if let WorkspaceTab::Sleeping(saved) = tab {
+                if ix == self.active {
+                    active_out = tabs.len();
+                }
+                tabs.push(saved.session(self.meta(ix)));
+                continue;
+            }
             let WorkspaceTab::Terminal { panes, tree, focused, .. } = tab else { continue };
             if ix == self.active {
                 active_out = tabs.len();

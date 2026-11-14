@@ -28,6 +28,7 @@ impl NebulaWorkspace {
                 Some(view) => view.read(cx).focus_handle(cx),
                 None => return,
             },
+            Some(WorkspaceTab::Sleeping(saved)) => saved.focus.clone(),
             Some(WorkspaceTab::Settings { view, .. }) => view.read(cx).focus_handle(cx),
             Some(WorkspaceTab::Document { view, .. }) => view.read(cx).focus_handle(cx),
             Some(WorkspaceTab::Code { view, .. }) => view.read(cx).focus_handle(cx),
@@ -41,6 +42,16 @@ impl NebulaWorkspace {
         if ix >= self.tabs.len() {
             return;
         }
+        self.select_tab_without_waking(ix, window, cx);
+        self.wake_tab(ix, window, cx);
+    }
+
+    pub(super) fn select_tab_without_waking(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.leave_settings(window, cx);
         if ix < self.tabs.len() && ix != self.active {
             self.cancel_pane_drag(cx);

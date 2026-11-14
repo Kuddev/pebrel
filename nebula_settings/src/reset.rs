@@ -55,6 +55,7 @@ const RESET_KEYS: &[&str] = &[
     "auto_check_updates",
     "auto_download_updates",
     "keep_session",
+    "tab_sleep_minutes",
     "restore_session",
     "resume_ai",
     "tray",
@@ -164,6 +165,14 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_turns_off_automatic_tab_sleep() {
+        let text = default_settings_text("tab_sleep_minutes=15\ncustom=keep\n");
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&text));
+        assert_eq!(runtime.tab_sleep, crate::TabSleep::Off);
+        assert!(text.contains("custom=keep"));
+    }
 
     #[test]
     fn reset_restores_auto_scrollbar_visibility() {

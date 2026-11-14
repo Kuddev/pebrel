@@ -793,6 +793,7 @@ impl SettingsPane {
             "cjk_bold_regular" => flag!(cjk_bold_regular),
             "fetch" => flag!(fetch),
             "keep_session" => flag!(keep_session),
+            "tab_sleep_minutes" => pick!(tab_sleep),
             "restore_session" => flag!(restore_session),
             "resume_ai" => flag!(resume_ai),
             "tray" => flag!(tray),
@@ -1467,6 +1468,12 @@ impl SettingsPane {
                     cx,
                 ))
             })
+            .child(self.select_row(
+                "tab_sleep_minutes",
+                language.text(crate::i18n::Message::TabSleepAutomatic),
+                language.text(crate::i18n::Message::TabSleepAutomaticHelp),
+                cx,
+            ))
             .child(self.switch_row(
                 "restore_session",
                 language.pick("启动时恢复上次标签", "Restore previous tabs at startup"),

@@ -31,6 +31,17 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::start(pane_id, spawn_grid, launch, None, window, cx)
+    }
+
+    pub(in crate::gpui_shell) fn start(
+        pane_id: u64,
+        spawn_grid: (u16, u16),
+        launch: TerminalLaunch,
+        scrollback: Option<&mut Option<nebula_terminal::term::grid_content::Scrollback>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         crate::gpui_shell::font_loading::ensure_selected(cx);
         // 字体、调色板与终端启动配置来自用户配置（nebula.toml +
         // nebula_settings.txt，bootstrap 时装载为全局 Settings）。
@@ -123,7 +134,7 @@ impl TerminalView {
                 // 显式 launch（会话恢复/创建时冻结）优先；只有旧会话没有
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
                 let effective = launch_shell.or(shell);
-                startup_intro = accepts_startup_intro(effective.as_ref());
+                startup_intro = scrollback.is_none() && accepts_startup_intro(effective.as_ref());
                 let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
                 // The WSL distribution is resolved once, at spawn, and pinned into
                 // the spawn while `session_launch` stays as configured.
@@ -162,7 +173,8 @@ impl TerminalView {
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
-                let spawned = session::spawn(initial, term_config, options);
+                let spawned =
+                    session::spawn_with_scrollback(initial, term_config, options, scrollback);
                 if spawned.is_ok()
                     && let Some(cwd) = history_cwd
                 {
@@ -421,6 +433,9 @@ impl TerminalView {
             cursor_pane_focused,
             output_visible: true,
             last_output_frame: None,
+            sleep_idle_since: std::time::Instant::now(),
+            #[cfg(windows)]
+            power_shell_sleep_epoch: None,
             output_trailing_frame: None,
             _cursor_blink_subscriptions: cursor_blink_subscriptions,
             default_cursor_style,

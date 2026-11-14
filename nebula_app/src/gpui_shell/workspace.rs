@@ -48,6 +48,7 @@ use nebula_split::{DIVIDER_GAP, HIT_SLOP, RemoveOutcome, SplitDirection, SplitNa
 mod agents;
 mod closing;
 mod command_manager;
+mod hibernation;
 mod keyboard_bindings;
 mod render;
 #[cfg(test)]
@@ -204,6 +205,7 @@ struct TerminalPane {
 }
 
 enum WorkspaceTab {
+    Sleeping(Box<hibernation::SleepingTab>),
     Terminal {
         /// pane 实体属主（无序存储，按 id 查找）。见模块头的生命周期合同。
         panes: Vec<TerminalPane>,
@@ -252,7 +254,7 @@ impl WorkspaceTab {
     }
 
     fn is_terminal(&self) -> bool {
-        matches!(self, Self::Terminal { .. })
+        matches!(self, Self::Terminal { .. } | Self::Sleeping(_))
     }
 
     /// 聚焦 pane 的视图（Terminal tab）；其余 tab 类型返回 None。
@@ -545,6 +547,7 @@ pub struct NebulaWorkspace {
     tabs: Vec<WorkspaceTab>,
     /// 与 `tabs` 同下标的用户元数据，见 [`TabMeta`]。
     tab_meta: Vec<TabMeta>,
+    tab_sleep: hibernation::TabSleepState,
     /// 正在行内重命名的标签，见 [`TabRename`]。
     tab_rename: Option<TabRename>,
     pane_rename: Option<PaneRename>,
@@ -834,6 +837,7 @@ impl NebulaWorkspace {
         let mut this = Self {
             tabs: Vec::new(),
             tab_meta: Vec::new(),
+            tab_sleep: hibernation::TabSleepState::default(),
             tab_rename: None,
             pane_rename: None,
             // 首窗仍从 1 起，保持既有 runtime/测试身份；后续窗口用高 32 位
@@ -1557,6 +1561,9 @@ impl NebulaWorkspace {
         if let Some(located) = self.active_wsl_cwd(cx) {
             return crate::shell_detect::wsl_host_cwd(&located);
         }
+        if let Some(WorkspaceTab::Sleeping(saved)) = self.tabs.get(self.active) {
+            return Some(saved.cwd.clone());
+        }
         let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?;
         view.read(cx).local_cwd()
     }
@@ -2003,39 +2010,6 @@ impl NebulaWorkspace {
             meta.color = color;
             cx.notify();
         }
-    }
-
-    /// 导出整个窗口为工作区文件（旧壳 `export_workspace(None)`）。
-    fn export_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let export = self.snapshot_session(cx);
-        if export.tabs.is_empty() {
-            return;
-        }
-        self.prompt_save_workspace(export, "workspace", window, cx);
-    }
-
-    /// 导出单个标签为工作区文件（旧壳 `export_workspace(Some(ix))` 同合同：
-    /// 只导出可恢复的终端标签，文件名取标签名，扩展名 `.nebula-workspace.json`，
-    /// 落盘走共享 v4 schema）。
-    fn export_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let session = self.snapshot_session(cx);
-        // snapshot 只收终端标签，所以下标要按「第几个可导出标签」重算。
-        let exportable_before = self
-            .tabs
-            .iter()
-            .take(ix)
-            .filter(|tab| matches!(tab, WorkspaceTab::Terminal { .. }))
-            .count();
-        let Some(tab) = session.tabs.get(exportable_before).cloned() else { return };
-        let stem = tab
-            .custom_name
-            .clone()
-            .or_else(|| {
-                tab.cwd.rsplit(['/', '\\']).find(|part| !part.is_empty()).map(str::to_owned)
-            })
-            .unwrap_or_else(|| "tab".to_owned());
-        let export = crate::session::Session::new(0, vec![tab]);
-        self.prompt_save_workspace(export, &stem, window, cx);
     }
 
     /// Terminal tab 的内容区：单叶直渲、缩放态聚焦 pane 满卡，否则按

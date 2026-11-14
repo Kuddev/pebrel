@@ -151,6 +151,13 @@ impl SettingsPane {
             cx,
         );
         add_select(
+            "tab_sleep_minutes",
+            nebula_settings::TabSleep::VALUES,
+            runtime.tab_sleep.settings_value(),
+            window,
+            cx,
+        );
+        add_select(
             "vcs_display",
             &["auto", "git", "svn"],
             runtime.vcs_display.settings_value(),

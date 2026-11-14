@@ -798,6 +798,15 @@ if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) {
         } catch {}
 
         Start-PebrelPointerReadLine
+        # PowerShell jobs may run in this process (Start-ThreadJob); an OS
+        # process-tree check cannot see them. Jobs with unread results also
+        # need their original session for Receive-Job.
+        try {
+            $jobs = @(Microsoft.PowerShell.Core\Get-Job -ErrorAction Stop)
+            if ($jobs.Count -eq 0 -and $global:PebrelShellToken) {
+                [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_sleep_ready=$global:PebrelShellToken$([char]7)")
+            }
+        } catch {}
         $line = $null
         if ($global:NebulaPreviousPSConsoleHostReadLine -and -not $global:NebulaPreviousReadLineRunning) {
             $global:NebulaPreviousReadLineRunning = $true

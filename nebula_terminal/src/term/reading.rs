@@ -108,6 +108,7 @@ struct CommandRecord {
 pub(super) struct ReadingState {
     /// OSC 133;A 的主屏绝对行号，严格递增；prompt 模块按保留历史惰性清理。
     pub(super) prompt_marks: VecDeque<usize>,
+    pub(super) prompt_edited: bool,
     /// 原有补全/输入边界状态；查询接口不改变这些状态或终端模式。
     pub(super) prompt_active: bool,
     pub(super) prompt_input: Option<(usize, Column)>,

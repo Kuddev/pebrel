@@ -80,6 +80,7 @@ pub struct Settings {
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
+    pub tab_sleep: nebula_settings::TabSleep,
     /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
     /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
     pub ghost: bool,
@@ -296,6 +297,7 @@ impl Settings {
             notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
             tab_reveal: runtime.tab_reveal,
+            tab_sleep: runtime.tab_sleep,
             ghost: runtime.ghost,
             prompt_suggestions_enabled: runtime.prompt_suggestions.enabled,
             completion_style: runtime.completion_style,

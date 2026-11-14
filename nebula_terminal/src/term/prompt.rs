@@ -41,6 +41,11 @@ impl<T> Term<T> {
         self.reading.prompt_input = None;
     }
 
+    /// Even an invisible or whitespace-only edit can belong to a live shell buffer.
+    pub fn note_prompt_input(&mut self, submitted_or_interrupted: bool) {
+        self.reading.prompt_edited = !submitted_or_interrupted;
+    }
+
     pub fn nebula_end_prompt(&mut self) {
         self.reading.prompt_active = false;
         self.reading.prompt_input = None;

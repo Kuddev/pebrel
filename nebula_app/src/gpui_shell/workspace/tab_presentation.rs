@@ -146,6 +146,7 @@ impl NebulaWorkspace {
             return custom.into();
         }
         match &self.tabs[ix] {
+            WorkspaceTab::Sleeping(saved) => saved.title.clone(),
             WorkspaceTab::Settings { .. } => crate::gpui_shell::config::ui_language(cx)
                 .text(crate::i18n::Message::CommonSettings)
                 .into(),
@@ -187,6 +188,7 @@ impl NebulaWorkspace {
             meta.has_bell,
         );
         let icon = match tab {
+            WorkspaceTab::Sleeping(_) => TabIcon::Symbol(IconName::Pause),
             WorkspaceTab::Settings { .. } => TabIcon::Symbol(IconName::Settings),
             WorkspaceTab::Document { .. } => TabIcon::Glyph('\u{eb1d}'),
             WorkspaceTab::Code { view, .. } => {
@@ -199,7 +201,7 @@ impl NebulaWorkspace {
         };
         // The leading icon follows the focused pane. On split tabs, leave the
         // trailing space for the layout miniature and title.
-        let shell_tag = (tab.is_terminal() && activity == SidebarActivity::Idle && pane_count <= 1)
+        let shell_tag = (pane_count == 1 && activity == SidebarActivity::Idle)
             .then_some(meta.shell_tag)
             .flatten()
             .filter(|tag| !tag.is_empty());
@@ -208,7 +210,13 @@ impl NebulaWorkspace {
             .as_ref()
             .filter(|rename| rename.ix == ix)
             .map(|rename| rename.input.clone());
-        let tooltip = view.map(|view| view.tab_tooltip(&title).into());
+        let tooltip = if let WorkspaceTab::Sleeping(saved) = tab {
+            let status = crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::TabSleepStatus);
+            Some(format!("{title} · {status}\n{}", saved.cwd.display()).into())
+        } else {
+            view.map(|view| view.tab_tooltip(&title).into())
+        };
         TabPresentation {
             title,
             tooltip,

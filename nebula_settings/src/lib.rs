@@ -54,6 +54,8 @@ pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
     SCROLL_SPEED_STEP, SCROLLBACK_VALUES, ScrollbarVisibility, normalize_scroll_speed,
 };
+mod tab_sleep;
+pub use tab_sleep::TabSleep;
 mod themes;
 pub use language::{LanguageInfo, LanguagePref};
 pub use quick_terminal::{QuickTerminalMode, QuickTerminalSize};
@@ -1082,6 +1084,7 @@ pub struct RuntimeSettings {
     /// Optional background package download; never grants install permission.
     pub auto_download_updates: bool,
     pub keep_session: bool,
+    pub tab_sleep: TabSleep,
     /// Start the first window hidden when a system tray is available and enabled.
     pub silent_start: bool,
     pub restore_session: bool,
@@ -1291,6 +1294,7 @@ impl RuntimeSettings {
             auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
             auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
             keep_session: raw.bool_on("keep_session").unwrap_or(false),
+            tab_sleep: TabSleep::from_raw(raw),
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),

@@ -202,8 +202,28 @@ pub fn new(config: &Options, window_size: WindowSize, window_id: u64) -> Result<
     from_fd(config, window_id, master, slave)
 }
 
+/// Resume in the exact directory or report the chdir error to the caller.
+pub fn new_with_required_directory(
+    config: &Options,
+    window_size: WindowSize,
+    window_id: u64,
+) -> Result<Pty> {
+    let pty = openpty(None, Some(&window_size.to_winsize()))?;
+    spawn_from_fd(config, window_id, pty.controller, pty.user, true)
+}
+
 /// Create a new TTY from a PTY's file descriptors.
 pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd) -> Result<Pty> {
+    spawn_from_fd(config, window_id, master, slave, false)
+}
+
+fn spawn_from_fd(
+    config: &Options,
+    window_id: u64,
+    master: OwnedFd,
+    slave: OwnedFd,
+    require_directory: bool,
+) -> Result<Pty> {
     let master_fd = master.as_raw_fd();
     let slave_fd = slave.as_raw_fd();
 
@@ -249,6 +269,9 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
         .as_ref()
         .and_then(|path| CString::new(path.as_os_str().as_bytes()).ok());
 
+    if require_directory && working_directory.is_none() {
+        return Err(Error::new(ErrorKind::InvalidInput, "a valid working directory is required"));
+    }
     unsafe {
         builder.pre_exec(move || {
             // Create a new process group.
@@ -257,9 +280,11 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
                 return Err(Error::last_os_error());
             }
 
-            // Set working directory, ignoring invalid paths.
-            if let Some(working_directory) = working_directory.as_ref() {
-                libc::chdir(working_directory.as_ptr());
+            if let Some(directory) = working_directory.as_ref()
+                && libc::chdir(directory.as_ptr()) != 0
+                && require_directory
+            {
+                return Err(Error::last_os_error());
             }
 
             set_controlling_terminal(slave_fd)?;

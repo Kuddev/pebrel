@@ -151,6 +151,9 @@ pebrel ctl subscribe --since <REVISION>
 一次性命令输出一个完整响应 Envelope。`subscribe` 输出 JSON Lines：第一行是订阅确认，随后
 每行是一个 `runtime.snapshot` 事件。语义内容未变化时不增加 revision，也不发送重复事件。
 
+休眠中的本地标签仍保有 `tab_id`，快照的 `kind` 为 `sleeping`，且 `panes` 为空。
+唤醒后会以新的 Pane ID 启动 Shell；旧 Pane ID 不会复用。
+
 Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多个 Window 时，应同时传
 `window_id` 与 `pane_id`；省略 Window 且目标不唯一会得到 `ambiguous_target`，不会猜测。
 

@@ -306,6 +306,7 @@ impl StreamProcessor {
                     terminal.acknowledge_program_status_results();
                     self.command_capture.start(terminal, self.parser.sync_bytes_count() == 0);
                     terminal.reading_shell_marker(b'C', None, self.parser.sync_bytes_count() == 0);
+                    terminal.note_prompt_input(true);
                     terminal.nebula_end_prompt();
                     event_proxy.send_event(Event::CommandStart);
                 },

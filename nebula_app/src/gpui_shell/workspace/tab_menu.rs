@@ -102,8 +102,12 @@ impl NebulaWorkspace {
         if ix >= self.tabs.len() {
             return;
         }
-        self.activate_tab(ix, window, cx);
-        let terminal = self.tabs.get(ix).is_some_and(WorkspaceTab::is_terminal);
+        self.select_tab_without_waking(ix, window, cx);
+        let terminal = matches!(self.tabs.get(ix), Some(WorkspaceTab::Terminal { .. }));
+        let sleeping = matches!(self.tabs.get(ix), Some(WorkspaceTab::Sleeping(_)));
+        let can_sleep = self.can_sleep_tab(ix, cx);
+        let sleep_in_progress = self.tab_sleep.is_pending();
+        let tab_id = self.meta(ix).runtime_id;
         let language = crate::gpui_shell::config::ui_language(cx);
         let ai_fork = tab_ai_fork_enabled(self, ix, cx);
         let color = self.meta(ix).color;
@@ -135,6 +139,31 @@ impl NebulaWorkspace {
             }
             if let Some(copy_cwd) = copy_cwd {
                 menu = menu.item(copy_cwd).separator();
+            }
+            if can_sleep || sleeping {
+                let target = workspace.clone();
+                let action = if sleeping { Message::TabSleepWake } else { Message::TabSleepAction };
+                menu = menu
+                    .item(
+                        PopupMenuItem::new(language.text(action))
+                            .disabled(!sleeping && sleep_in_progress)
+                            .on_click(move |_, window, cx| {
+                                let _ = target.update(cx, |this, cx| {
+                                    if sleeping {
+                                        if let Some(ix) = this
+                                            .tab_meta
+                                            .iter()
+                                            .position(|meta| meta.runtime_id == tab_id)
+                                        {
+                                            this.wake_tab(ix, window, cx);
+                                        }
+                                    } else {
+                                        this.sleep_tab(tab_id.clone(), true, window, cx);
+                                    }
+                                });
+                            }),
+                    )
+                    .separator();
             }
             Self::tab_popup_menu(menu, workspace, ix, terminal, ai_fork, color, language)
         });

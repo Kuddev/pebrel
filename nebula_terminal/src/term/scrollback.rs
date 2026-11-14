@@ -18,9 +18,11 @@ impl Scrollback {
 }
 
 impl<T> Term<T> {
-    /// Capture the most recent output, excluding the live prompt and transient
-    /// image/reader data. Exceeding the budget omits older rows.
-    pub fn capture_scrollback(&self, max_bytes: usize) -> Option<Scrollback> {
+    /// The start of the live prompt is the last row excluded from the snapshot.
+    fn scrollback_cutoff(&self) -> Option<i32> {
+        if self.reading.prompt_edited {
+            return None;
+        }
         let prompt = self.nebula_prompt_input_point()?;
         if self.mode.intersects(TermMode::ALT_SCREEN | TermMode::VI) {
             return None;
@@ -51,6 +53,18 @@ impl<T> Term<T> {
         if before_prompt > prompt.line.0 || before_prompt < top {
             return None;
         }
+        Some(before_prompt)
+    }
+
+    pub fn at_unedited_prompt(&self) -> bool {
+        self.scrollback_cutoff().is_some()
+    }
+
+    /// Capture the most recent output, excluding the live prompt and transient
+    /// image/reader data. Exceeding the budget omits older rows.
+    pub fn capture_scrollback(&self, max_bytes: usize) -> Option<Scrollback> {
+        let before_prompt = self.scrollback_cutoff()?;
+        let top = self.grid.topmost_line().0;
         let mut rows = Vec::new();
         let mut used = 0usize;
         let mut truncated = false;
@@ -127,6 +141,12 @@ mod tests {
         source.nebula_add_prompt_mark();
         parser.advance(&mut source, b"shell> ");
         source.nebula_mark_prompt_input();
+        source.note_prompt_input(false);
+        // Windows line editors can keep an edited buffer while drawing a new prompt.
+        source.nebula_add_prompt_mark();
+        source.nebula_mark_prompt_input();
+        assert!(source.capture_scrollback(1024 * 1024).is_none());
+        source.note_prompt_input(true);
         let snapshot = source.capture_scrollback(0).unwrap();
         assert!(snapshot.rows.is_empty());
         assert!(snapshot.was_truncated());

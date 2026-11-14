@@ -391,8 +391,8 @@ impl NebulaWorkspace {
 
     fn dock_allowed(&self, source: usize) -> bool {
         source != self.active
-            && self.tabs.get(source).is_some_and(WorkspaceTab::is_terminal)
-            && self.tabs.get(self.active).is_some_and(WorkspaceTab::is_terminal)
+            && matches!(self.tabs.get(source), Some(WorkspaceTab::Terminal { .. }))
+            && matches!(self.tabs.get(self.active), Some(WorkspaceTab::Terminal { .. }))
     }
 
     pub(super) fn active_terminal_area(&self) -> Option<nebula_split::Rect> {

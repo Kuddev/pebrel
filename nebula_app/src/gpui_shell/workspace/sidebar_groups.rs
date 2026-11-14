@@ -201,11 +201,30 @@ impl SidebarTabRows {
     }
 }
 
+fn local_tab_directory_group(cwd: &str, distro: Option<&str>) -> Option<TabGroup> {
+    let cwd = cwd.trim();
+    if cwd.is_empty() || cwd.chars().any(char::is_control) {
+        return None;
+    }
+    let path = cwd.trim_end_matches(['/', '\\']);
+    Some(TabGroup::Directory {
+        path: if path.is_empty() { cwd } else { path }.to_owned(),
+        distro: distro.map(str::to_owned),
+    })
+}
+
 impl NebulaWorkspace {
     fn sidebar_tab_group(&self, ix: usize, cx: &App) -> TabGroup {
         let tab = &self.tabs[ix];
         if tab.is_settings() {
             return TabGroup::Settings;
+        }
+        if let WorkspaceTab::Sleeping(saved) = tab {
+            if self.sidebar_tab_layout.grouping == SidebarGrouping::Project {
+                return local_tab_directory_group(&saved.cwd.to_string_lossy(), None)
+                    .unwrap_or(TabGroup::Terminal);
+            }
+            return self.sidebar_shell_group(ix);
         }
         let Some(terminal) = tab.focused_view() else { return TabGroup::Files };
         let terminal = terminal.read(cx);
@@ -213,13 +232,8 @@ impl NebulaWorkspace {
             if let Some(host) = terminal.ssh_destination.as_ref() {
                 return TabGroup::Host(host.clone());
             }
-            let cwd = terminal.cwd.trim();
-            if !cwd.is_empty() && !cwd.chars().any(char::is_control) {
-                let path = cwd.trim_end_matches(['/', '\\']);
-                return TabGroup::Directory {
-                    path: if path.is_empty() { cwd } else { path }.to_owned(),
-                    distro: terminal.wsl_distro().map(str::to_owned),
-                };
+            if let Some(group) = local_tab_directory_group(&terminal.cwd, terminal.wsl_distro()) {
+                return group;
             }
         } else {
             let agent = terminal
@@ -231,13 +245,17 @@ impl NebulaWorkspace {
             if agent.is_some() {
                 return TabGroup::Agents;
             }
-            if let Some(shell) = self.tab_meta[ix].shell_tag.as_deref()
-                && !shell.is_empty()
-            {
-                return TabGroup::Shell(shell.to_uppercase());
-            }
+            return self.sidebar_shell_group(ix);
         }
         TabGroup::Terminal
+    }
+
+    fn sidebar_shell_group(&self, ix: usize) -> TabGroup {
+        self.tab_meta[ix]
+            .shell_tag
+            .as_deref()
+            .filter(|shell| !shell.is_empty())
+            .map_or(TabGroup::Terminal, |shell| TabGroup::Shell(shell.to_uppercase()))
     }
 
     fn sidebar_order_matches_storage(&self) -> bool {

@@ -228,6 +228,15 @@ pub fn spawn(
     term_config: Config,
     options: tty::Options,
 ) -> std::io::Result<SpawnedSession> {
+    spawn_with_scrollback(window_size, term_config, options, None)
+}
+
+pub(super) fn spawn_with_scrollback(
+    window_size: WindowSize,
+    term_config: Config,
+    options: tty::Options,
+    scrollback: Option<&mut Option<nebula_terminal::term::grid_content::Scrollback>>,
+) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
     let proxy = EventProxy {
@@ -246,7 +255,15 @@ pub fn spawn(
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
 
     tty::setup_env();
-    let pty = tty::new(&options, window_size, 0)?;
+    let pty = if scrollback.is_some() {
+        #[cfg(unix)]
+        let pty = tty::new_with_required_directory(&options, window_size, 0)?;
+        #[cfg(windows)]
+        let pty = tty::new(&options, window_size, 0)?;
+        pty
+    } else {
+        tty::new(&options, window_size, 0)?
+    };
     let shell_pid = pty.child_pid().unwrap_or(0);
 
     // NEBULA_PTY_RECORD=1 复用 ref_test 的 conout 录制（./nebula.recording），
@@ -256,6 +273,9 @@ pub fn spawn(
     let remote_connection = proxy.remote_connection.clone();
     let mut event_loop =
         EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
+    if let Some(scrollback) = scrollback.and_then(Option::take) {
+        term.lock().seed_scrollback(scrollback);
+    }
     if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
         event_loop.set_remote_hook_token(token.clone());
     }

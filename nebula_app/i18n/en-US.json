@@ -1625,6 +1625,18 @@
   "files.path_choose": "Choose a directory",
   "files.path_open": "Open directory",
   "files.path_failed": "Could not open this directory: {error}",
+  "tab_sleep": {
+    "action": "Sleep tab",
+    "automatic": "Sleep inactive tabs",
+    "automatic_help": "Release the shell of an inactive local tab after the idle period. Tabs with running jobs or pending input stay open.",
+    "off": "Off",
+    "after_minutes": "After {minutes} min",
+    "status": "Tab sleeping",
+    "wake": "Wake tab",
+    "busy": "Sleep is only available at a fresh shell prompt with no running jobs.",
+    "history_truncated": "The tab is sleeping. Only its most recent output could be kept.",
+    "wake_failed": "Could not start the shell in its original directory. The tab is still sleeping."
+  },
   "tab_menu": {
     "fork_ai_session": "Fork AI session",
     "move_to_new_window": "Move to new window",

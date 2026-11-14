@@ -947,6 +947,7 @@ impl NebulaWorkspace {
                             runtime_panes,
                         )
                     },
+                    WorkspaceTab::Sleeping(_) => ("sleeping", None, None, None, Vec::new()),
                     WorkspaceTab::Settings { .. } => ("settings", None, None, None, Vec::new()),
                     WorkspaceTab::Image { .. } => ("image", None, None, None, Vec::new()),
                     WorkspaceTab::Document { .. } => ("document", None, None, None, Vec::new()),
@@ -984,7 +985,11 @@ impl NebulaWorkspace {
         )
     }
 
-    fn publish_runtime_snapshot(&self, window: &Window, cx: &mut App) -> RuntimeSnapshot {
+    pub(super) fn publish_runtime_snapshot(
+        &self,
+        window: &Window,
+        cx: &mut App,
+    ) -> RuntimeSnapshot {
         let (hidden, current) = self.runtime_window_snapshot(window, cx);
         crate::gpui_shell::workspace::windowing::publish_runtime_snapshot_with_current(
             hidden, current, cx,

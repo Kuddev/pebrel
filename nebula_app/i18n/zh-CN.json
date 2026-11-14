@@ -1625,6 +1625,18 @@
   "files.path_choose": "选择目录",
   "files.path_open": "打开目录",
   "files.path_failed": "无法打开这个目录：{error}",
+  "tab_sleep": {
+    "action": "休眠标签",
+    "automatic": "自动休眠后台标签",
+    "automatic_help": "本地后台标签空闲到指定时长后释放 Shell。仍有运行任务或未提交输入的标签会保持运行。",
+    "off": "关闭",
+    "after_minutes": "{minutes} 分钟后",
+    "status": "标签已休眠",
+    "wake": "唤醒标签",
+    "busy": "请让 Shell 回到新的空提示符并结束所有任务，再休眠此标签。",
+    "history_truncated": "标签已休眠，仅保留最近的终端输出。",
+    "wake_failed": "无法在原目录启动 Shell，标签仍处于休眠状态。"
+  },
   "tab_menu": {
     "fork_ai_session": "分叉 AI 会话",
     "move_to_new_window": "移到新窗口",
