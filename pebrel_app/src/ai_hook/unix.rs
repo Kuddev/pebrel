@@ -145,10 +145,17 @@ fn start(
                         event.client_pid = Some(client_pid);
                         #[cfg(test)]
                         record("ancestor-start");
-                        event.agent_pid = crate::process_tree::nearest_agent_ancestor(client_pid)
-                            .map(|(pid, _)| pid);
+                        let owner = crate::platform::ai_session_identity::local_hook_agent_pid(
+                            &event.source,
+                            client_pid,
+                        );
                         #[cfg(test)]
                         record("ancestor-returned");
+                        let Ok(agent_pid) = owner else {
+                            acknowledge(&mut stream);
+                            continue;
+                        };
+                        event.agent_pid = agent_pid;
                         match tx.try_send(event) {
                             Ok(()) => {
                                 #[cfg(test)]
@@ -169,8 +176,7 @@ fn start(
                         // helper 等待确认后才退出，确保父进程身份取自仍存活的连接。
                         #[cfg(test)]
                         record("ack-start");
-                        let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
-                        let _ = stream.write_all(b"\n");
+                        acknowledge(&mut stream);
                         #[cfg(test)]
                         record("ack-returned");
                     }
@@ -201,6 +207,11 @@ fn start(
         #[cfg(test)]
         trace,
     })
+}
+
+fn acknowledge(stream: &mut UnixStream) {
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+    let _ = stream.write_all(b"\n");
 }
 
 /// 在 `accept` 返回 `WouldBlock` 后等待监听 fd 可读；accept 本身仍是非阻塞的。
@@ -454,3 +465,7 @@ mod tests {
         assert!(!directory.exists());
     }
 }
+
+#[cfg(test)]
+#[path = "../platform/ai_session_identity/linux_hook_socket_tests.rs"]
+mod linux_hook_socket_tests;

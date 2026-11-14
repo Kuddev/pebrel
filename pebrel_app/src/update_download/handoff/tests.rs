@@ -6,7 +6,19 @@ fn update_restore_tickets_cover_success_rollback_and_acknowledgement() {
     // test runner would race unrelated tests and could touch real user settings.
     if std::env::var_os("PEBREL_RESTORE_TEST_CHILD").is_none() {
         let root = tempfile::tempdir().unwrap();
-        let result = std::process::Command::new(std::env::current_exe().unwrap())
+        let executable = std::env::current_exe().unwrap();
+        let fixture = if crate::platform::Platform::current() == crate::platform::Platform::Windows
+        {
+            let installation = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();
+            let app = installation.path().join("pebrel.exe");
+            std::fs::hard_link(&executable, &app).unwrap();
+            std::fs::write(installation.path().join("unins000.exe"), b"fixture").unwrap();
+            Some((installation, app))
+        } else {
+            None
+        };
+        let launched = fixture.as_ref().map_or(&executable, |(_, app)| app);
+        let result = std::process::Command::new(launched)
             .args(["--exact", "update_download::handoff::tests::update_restore_tickets_cover_success_rollback_and_acknowledgement", "--nocapture"])
             .env("PEBREL_RESTORE_TEST_CHILD", "1")
             .env("PEBREL_CONFIG_DIR", root.path())

@@ -168,7 +168,13 @@ impl Views {
         self.entities.is_empty()
     }
 
-    pub fn sync(&mut self, term: &mut Term<EventProxy>, screen: usize, cx: &gpui::App) {
+    pub fn sync(
+        &mut self,
+        term: &mut Term<EventProxy>,
+        screen: usize,
+        automatic_command_views: bool,
+        cx: &gpui::App,
+    ) {
         let floor = (term.grid().scrolled_out() + term.history_size()) as i64;
         let first = term.grid().scrolled_out() as i64;
         let enabled =
@@ -240,7 +246,8 @@ impl Views {
             (start <= projection.top && projection.top < start + slot.height)
                 .then_some((slot.id, projection.top - start))
         });
-        let follow = projection.slots.is_empty()
+        let had_slots = !projection.slots.is_empty();
+        let follow = !had_slots
             || projection.visual(projection.bottom as f64)
                 - projection.screen as f64
                 - projection.top
@@ -252,6 +259,9 @@ impl Views {
             .iter()
             .filter_map(|(source, _, start)| {
                 let source = source.upgrade()?;
+                if !automatic_command_views && source.has_grid_source() {
+                    return None;
+                }
                 let rows = source.rows();
                 if super::fold::is_fold(&source) {
                     if usize::from(rows) <= super::fold::KEEP * 2 {
@@ -293,11 +303,14 @@ impl Views {
         projection.active = !projection.slots.is_empty();
         if !projection.active {
             term.set_presentation_origin(None);
+            if had_slots && follow && !external_scroll {
+                term.scroll_display(pebrel_terminal::grid::Scroll::Bottom);
+            }
             return;
         }
         projection.top = if let Some(anchor) = self.fold_anchor.take() {
             projection.visual(anchor)
-        } else if external_scroll {
+        } else if external_scroll || !had_slots {
             if term.grid().display_offset() == 0 {
                 projection.visual(projection.bottom as f64) - screen as f64
             } else {

@@ -14,6 +14,45 @@ fn sidebar_grip_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppCont
     exercise_drag(cx, pebrel_settings::TabsPositionName::Sidebar);
 }
 
+#[gpui::test]
+fn directional_focus_from_zoom_uses_the_neighbour_in_the_split_layout(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let (workspace, mut window, ids) =
+        open_split_fixture(cx, pebrel_settings::TabsPositionName::Top, directory.path());
+    window.update(|window, cx| {
+        workspace.update(cx, |this, cx| {
+            let WorkspaceTab::Terminal { tree, .. } = &mut this.tabs[0] else { panic!() };
+            *tree = SplitTree::leaf(ids[0]);
+            assert!(tree.split_leaf(ids[0], ids[1], SplitDirection::LeftRight, 0.2));
+            assert!(tree.split_leaf(ids[1], ids[2], SplitDirection::LeftRight, 0.35));
+            this.focus_pane(0, ids[0], window, cx);
+        });
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+
+    window.simulate_keystrokes("ctrl-shift-enter");
+    window.run_until_parked();
+    window.update(|window, cx| {
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+    workspace.read_with(&window, |this, _| {
+        assert!(matches!(&this.tabs[0], WorkspaceTab::Terminal { zoomed: true, .. }));
+        let bounds = this.pane_bounds.borrow();
+        // The expanded left pane's centre is now to the right of its neighbour.
+        assert!(bounds.get(&ids[0]).unwrap().center().x > bounds.get(&ids[1]).unwrap().center().x);
+    });
+
+    window.simulate_keystrokes("ctrl-alt-right");
+    window.run_until_parked();
+    workspace.read_with(&window, |this, _| {
+        let WorkspaceTab::Terminal { focused, zoomed, .. } = &this.tabs[0] else { panic!() };
+        assert!(!*zoomed);
+        assert_eq!(*focused, ids[1], "focus must not skip the middle pane");
+    });
+}
+
 fn hover(window: &mut gpui::VisualTestContext, position: gpui::Point<gpui::Pixels>) {
     window.simulate_mouse_move(position, None, Modifiers::default());
     window.update(|window, cx| {
@@ -22,9 +61,12 @@ fn hover(window: &mut gpui::VisualTestContext, position: gpui::Point<gpui::Pixel
     });
 }
 
-fn exercise_drag(cx: &mut TestAppContext, mode: pebrel_settings::TabsPositionName) {
-    let directory = tempfile::tempdir().unwrap();
-    let program = directory.path().join("missing-test-shell");
+fn open_split_fixture(
+    cx: &mut TestAppContext,
+    mode: pebrel_settings::TabsPositionName,
+    directory: &std::path::Path,
+) -> (Entity<NebulaWorkspace>, gpui::VisualTestContext, [u64; 3]) {
+    let program = directory.join("missing-test-shell");
     let hub = crate::runtime_api::RuntimeHub::new();
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -55,7 +97,7 @@ fn exercise_drag(cx: &mut TestAppContext, mode: pebrel_settings::TabsPositionNam
                     workspace.new_pane(
                         (80, 24),
                         TerminalLaunch::Local {
-                            cwd: Some(directory.path().into()),
+                            cwd: Some(directory.into()),
                             shell: Some(pebrel_terminal::tty::Shell::new(
                                 program.to_string_lossy().into_owned(),
                                 vec![],
@@ -118,6 +160,12 @@ fn exercise_drag(cx: &mut TestAppContext, mode: pebrel_settings::TabsPositionNam
         window.refresh();
         let _ = window.draw(cx);
     });
+    (workspace, window, ids)
+}
+
+fn exercise_drag(cx: &mut TestAppContext, mode: pebrel_settings::TabsPositionName) {
+    let directory = tempfile::tempdir().unwrap();
+    let (workspace, mut window, ids) = open_split_fixture(cx, mode, directory.path());
     let source_selector = &*Box::leak(format!("pane-header-grip-{}", ids[0]).into_boxed_str());
     let source = workspace.read_with(&window, |workspace, _| {
         let bounds = *workspace.pane_bounds.borrow().get(&ids[0]).unwrap();

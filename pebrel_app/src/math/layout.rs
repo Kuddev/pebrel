@@ -686,9 +686,16 @@ impl LayoutBuilder<'_> {
     ) -> Result<Geometry, MathError> {
         let base_plan = self.plans[base.0 as usize];
         let pixel_size = self.pixel_size(index)?;
+        let lower_glyph_start = self.glyphs.len();
+        let stretched_lower = match subscript {
+            Some(node) => self.stretch_lower_decoration(node, base_plan.metrics.width)?,
+            None => None,
+        };
+        let lower =
+            subscript.map(|node| stretched_lower.unwrap_or(self.plans[node.0 as usize].metrics));
         let mut width = base_plan.metrics.width;
-        if let Some(node) = subscript {
-            width = width.max(self.plans[node.0 as usize].metrics.width);
+        if let Some(lower) = lower {
+            width = width.max(lower.width);
         }
         if let Some(node) = superscript {
             width = width.max(self.plans[node.0 as usize].metrics.width);
@@ -706,17 +713,39 @@ impl LayoutBuilder<'_> {
             self.place(superscript, x, -shift);
             include_child(&mut metrics, plan.metrics, x, -shift);
         }
-        if let Some(subscript) = subscript {
-            let plan = self.plans[subscript.0 as usize];
+        if let (Some(subscript), Some(lower)) = (subscript, lower) {
             let gap = self.constant(MathConstant::LowerLimitGapMin, pixel_size)?;
             let drop = self.constant(MathConstant::LowerLimitBaselineDropMin, pixel_size)?;
-            let shift = (base_plan.metrics.depth + gap + plan.metrics.height).max(drop);
-            let x = (width - plan.metrics.width) * 0.5 - base_plan.italic_correction * 0.5;
-            self.place(subscript, x.max(0.0), shift);
-            include_child(&mut metrics, plan.metrics, x.max(0.0), shift);
+            let shift = (base_plan.metrics.depth + gap + lower.height).max(drop);
+            let x = ((width - lower.width) * 0.5 - base_plan.italic_correction * 0.5).max(0.0);
+            if stretched_lower.is_some() {
+                self.shift_glyphs(lower_glyph_start, x, shift);
+            } else {
+                self.place(subscript, x, shift);
+            }
+            include_child(&mut metrics, lower, x, shift);
         }
         metrics.width = metrics.width.max(width);
         Ok(Geometry { metrics, class: base_plan.class, italic_correction: 0.0 })
+    }
+
+    fn stretch_lower_decoration(
+        &mut self,
+        node: NodeId,
+        width: f32,
+    ) -> Result<Option<MathMetrics>, MathError> {
+        let index = node.0 as usize;
+        // Only parser-marked glyphs (such as underbraces) follow the body's width.
+        let MathNode::Glyph { character, variant, stretchy: true, .. } =
+            *self.formula.arena.node(node)
+        else {
+            return Ok(None);
+        };
+        if self.plans[index].metrics.width >= width {
+            return Ok(None);
+        }
+        let Ok(glyph) = self.font.styled_glyph(character, variant) else { return Ok(None) };
+        Ok(Some(self.horizontal_glyph_box(glyph, width, self.pixel_size(index)?)?.metrics))
     }
 
     fn layout_radical(
@@ -1369,6 +1398,41 @@ mod tests {
         let styles = effective_styles(&formula).unwrap();
         assert_eq!(glyph_style(&formula, &styles, 'x'), MathStyle::Display);
         assert_eq!(glyph_style(&formula, &styles, 'y'), MathStyle::Script);
+    }
+
+    #[test]
+    fn underbrace_ink_spans_the_expression_without_stretching_lower_text() {
+        fn ink_bounds(layout: &MathLayout, below: bool) -> (f32, f32) {
+            layout
+                .glyphs
+                .iter()
+                .filter(|op| (op.baseline_y > 0.0) == below)
+                .map(|op| {
+                    let ink = MathFont.glyph_metrics(GlyphId(op.glyph_id), op.pixel_size).unwrap();
+                    (op.x + ink.x_min, op.x + ink.x_max)
+                })
+                .reduce(|(left, right), (x_min, x_max)| (left.min(x_min), right.max(x_max)))
+                .unwrap()
+        }
+
+        for (body, lower) in
+            [("x", r"\underbrace{x}"), ("a+b+c+d+e+f", r"\underbrace{a+b+c+d+e+f}")]
+        {
+            let layout = layout_formula(&formula(lower, true), 20.0, 1.0, DEFAULT_LIMITS).unwrap();
+            let (left, right) = ink_bounds(&layout, false);
+            let (brace_left, brace_right) = ink_bounds(&layout, true);
+            assert!(
+                brace_left <= left + 1.0 && brace_right >= right - 1.0,
+                "{body}: brace ink {brace_left:.1}..{brace_right:.1} misses body {left:.1}..{right:.1}",
+            );
+        }
+
+        let label =
+            layout_formula(&formula(r"\underset{x}{a+b+c+d+e+f}", true), 20.0, 1.0, DEFAULT_LIMITS)
+                .unwrap();
+        let (left, right) = ink_bounds(&label, false);
+        let (label_left, label_right) = ink_bounds(&label, true);
+        assert!(label_right - label_left < (right - left) * 0.1);
     }
 
     #[test]

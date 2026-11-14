@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
+import subprocess
 import unittest
 
 from scripts.tests import test_completion_editor
@@ -18,11 +20,41 @@ class ShellPointerTests(unittest.TestCase):
         self.editor.setUp()
         self.addCleanup(self.editor.doCleanups)
 
-    def start(self, shell: str, setup: str = ""):
+    def start(self, shell: str, setup: str = "", *, requires_pointer: bool = True):
+        if requires_pointer and not self.has_numeric_pointer(shell):
+            self.skipTest("numeric Readline callbacks require Bash 5.2")
         session = self.editor.start(shell, setup)
         adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
         session.command(f"source {shlex.quote(str(adapter))}", b"\x1b]133;A\x07")
         return session
+
+    def bash_version(self) -> tuple[int, int]:
+        program = shutil.which("bash")
+        if not program:
+            self.skipTest("Bash is not installed")
+        major, minor = subprocess.check_output(
+            [program, "--noprofile", "--norc", "-c",
+             'printf "%s %s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"'],
+            text=True,
+        ).split()
+        return int(major), int(minor)
+
+    def has_numeric_pointer(self, shell: str) -> bool:
+        return shell != "bash" or self.bash_version() >= (5, 2)
+
+    def test_ssh_bash_advertises_numeric_pointer_only_when_supported(self) -> None:
+        version = self.bash_version()
+        if version < (4, 0):
+            self.skipTest("Bash 3 has no native completion query")
+        session = self.editor.start_bootstrap("bash", "ssh")
+        adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
+        boundary = b"\x1b]133;B\x07"
+        session.command(f"source {shlex.quote(str(adapter))}", boundary)
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertEqual(b"SetUserVar=pebrel_pointer_ready=" in session.output, version >= (5, 2))
+        line = "echo 中文"
+        os.write(session.master, line.encode())
+        self.assertEqual(self.editor.snapshot(session)[1:], (len(line.encode()), line))
 
     def action(self, session, argument: int) -> None:
         encoded = b"".join(b"\x1b" + digit.encode() for digit in str(argument))
@@ -120,7 +152,9 @@ class ShellPointerTests(unittest.TestCase):
         setup = "PROMPT_COMMAND='PS1=\"dynamic> \"'\n" if shell == "bash" else (
             "user_prompt() { PS1='dynamic> '; }; precmd_functions=(user_prompt)\n"
         )
-        session = self.start(shell, setup)
+        if shell == "bash" and self.bash_version() < (4, 0):
+            self.skipTest("Bash 3 has no native completion query")
+        session = self.start(shell, setup, requires_pointer=False)
         boundary = b"dynamic> \x1b]133;B\x07"
         if boundary not in session.output:
             session.wait(boundary)
@@ -131,9 +165,12 @@ class ShellPointerTests(unittest.TestCase):
         output = session.command(":", boundary)
         self.assertEqual(output.count(b"\x1b]133;B\x07"), 1, output)
         os.write(session.master, "echo 中文".encode())
-        self.assertEqual(self.query(session), (11, "echo 中文"))
-        self.action(session, 1 + 5)
-        self.assertEqual(self.editor.snapshot(session)[1:], (5, "echo 中文"))
+        if self.has_numeric_pointer(shell):
+            self.assertEqual(self.query(session), (11, "echo 中文"))
+            self.action(session, 1 + 5)
+            self.assertEqual(self.editor.snapshot(session)[1:], (5, "echo 中文"))
+        else:
+            self.assertEqual(self.editor.snapshot(session)[1:], (11, "echo 中文"))
 
     def test_bash_marks_input_after_dynamic_prompt_without_duplicate_markers(self) -> None:
         self.check_prompt_boundary("bash")

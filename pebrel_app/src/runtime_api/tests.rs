@@ -1,6 +1,13 @@
 use super::command::wait_state_matches;
 use super::*;
 
+#[cfg(feature = "gpui-test-support")]
+impl RuntimeHub {
+    pub(crate) fn test_snapshot_receiver(&self) -> Receiver<RuntimeSnapshot> {
+        self.subscribe().2
+    }
+}
+
 #[test]
 fn conversation_mutations_require_current_identity_and_read_cannot_smuggle_input() {
     let identity = json!({"kind":"codex","session_id":"thread","epoch":3});

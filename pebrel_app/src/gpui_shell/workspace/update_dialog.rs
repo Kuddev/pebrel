@@ -25,13 +25,13 @@ pub(crate) fn show_update_notification(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let cached_status = result.asset.as_ref().map(crate::update_download::status);
+    let cached_status = result.asset().map(crate::update_download::status);
     if matches!(cached_status, Some(DownloadStatus::InstallFailed(_))) {
         show_download_outcome_notification(result, cached_status.unwrap(), window, cx);
         return;
     }
     if pebrel_settings::RuntimeSettings::load().auto_download_updates
-        && result.asset.as_ref().is_some_and(|asset| asset.sha256.is_some())
+        && result.asset().is_some_and(|asset| asset.sha256.is_some())
     {
         start_update_download(result.clone(), window, cx);
     }
@@ -73,8 +73,8 @@ fn start_update_download(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(asset) = result.asset.clone() else {
-        cx.open_url(crate::update_check::RELEASES_PAGE);
+    let Some(asset) = result.asset().cloned() else {
+        cx.open_url(result.manual_download_url());
         return;
     };
     let job = match crate::update_download::begin(&asset) {
@@ -127,11 +127,8 @@ fn show_download_outcome_notification(
     cx: &mut App,
 ) {
     let language = workspace_ui_language();
-    let downloaded_version = result
-        .asset
-        .as_ref()
-        .map_or(result.latest.as_str(), |asset| asset.version.as_str())
-        .to_owned();
+    let downloaded_version =
+        result.asset().map_or(result.latest.as_str(), |asset| asset.version.as_str()).to_owned();
     let (title, message, action, success): (SharedString, SharedString, SharedString, bool) =
         match status {
             DownloadStatus::Ready { bytes, .. } => (
@@ -214,7 +211,7 @@ pub(crate) fn open_update_dialog(
         let latest_color = cx.theme().warning;
         let version_background = cx.theme().muted;
         let danger = cx.theme().danger;
-        let asset = dialog_result.asset.clone();
+        let asset = dialog_result.asset().cloned();
         let status = asset
             .as_ref()
             .map(crate::update_download::status)
@@ -247,6 +244,13 @@ pub(crate) fn open_update_dialog(
                     "Pebrel will download and verify the installer, then wait for your confirmation before installing.",
                 )
                 .into(),
+            _ if dialog_result.is_portable() => language.text(
+                if dialog_result.portable_zip_url().is_some() {
+                    Message::UpdatePortableHint
+                } else {
+                    Message::UpdatePortableMissingZip
+                },
+            ).into(),
             // Platforms without an installation adapter retain manual downloads.
             _ if !crate::platform::CAPABILITIES.self_update_install => language
                 .pick(
@@ -258,6 +262,9 @@ pub(crate) fn open_update_dialog(
         };
 
         let primary_text: SharedString = match status {
+            DownloadStatus::Idle if dialog_result.portable_zip_url().is_some() => {
+                language.text(Message::UpdateDownloadZip).into()
+            },
             DownloadStatus::Idle if verified_asset => {
                 language.pick("下载更新", "Download update").into()
             },
@@ -408,8 +415,8 @@ pub(crate) fn open_update_dialog(
             .footer(footer)
             .child(body)
             .on_ok(move |_, window, cx| {
-                let Some(asset) = action_result.asset.as_ref() else {
-                    cx.open_url(crate::update_check::RELEASES_PAGE);
+                let Some(asset) = action_result.asset() else {
+                    cx.open_url(action_result.manual_download_url());
                     return true;
                 };
                 match crate::update_download::status(asset) {
@@ -428,7 +435,7 @@ pub(crate) fn open_update_dialog(
                         false
                     },
                     _ => {
-                        cx.open_url(crate::update_check::RELEASES_PAGE);
+                        cx.open_url(action_result.manual_download_url());
                         true
                     },
                 }
