@@ -401,7 +401,7 @@ pub struct TerminalView {
     pending_shell_command: Option<startup_command::PendingShellCommand>,
     recovery: startup_command::SessionRecovery,
     pub(crate) session_launch: crate::session::LaunchSession,
-    pub(in crate::gpui_shell) shell_artwork: Option<&'static [u8]>,
+    pub(in crate::gpui_shell) shell_artwork: Option<crate::shell_detect::ShellArtwork>,
     /// OSC 1337 图片的串行后台解码队列和有界像素缓存。图片不进入字符网格，
     /// 只用事件携带的绝对行锚定到对应的 scrollback 位置。
     pub(super) inline_images: super::inline_image::InlineImageStore,
@@ -411,7 +411,7 @@ pub struct TerminalView {
     path_drop: path_drop::PathDropState,
     /// SSH 直连目的地（`user@host[:port]`）；本地会话为 None。
     pub ssh_destination: Option<String>,
-    ssh_host_glyph: Option<SharedString>,
+    ssh_host_icon: Option<&'static crate::display::ui::os_icons::OsIcon>,
     /// 本 pane 拥有的本地端口转发；pane 销毁即停止监听。
     pub(crate) port_forwards: Vec<crate::ssh_session::LocalForward>,
     pub(crate) port_forward_task: Option<gpui::Task<()>>,

@@ -1063,14 +1063,9 @@ impl SettingsPane {
         icon: &'static crate::display::ui::os_icons::OsIcon,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        const BASE_ICON_SIZE: f32 = 22.0;
-
         let theme = cx.theme();
         let open = self.ssh_icon_picker_open;
         let pane = cx.entity().downgrade();
-        let target_ink_width = SSH_EDITOR_AVATAR_H * 0.46;
-        let icon_size = BASE_ICON_SIZE
-            * crate::display::ui::os_icons::scale_for(icon, BASE_ICON_SIZE * 0.6, target_ink_width);
         div()
             .id("ssh-icon-avatar")
             .relative()
@@ -1086,18 +1081,9 @@ impl SettingsPane {
             .cursor_pointer()
             .hover(|avatar| avatar.bg(theme.list_hover))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // Nerd Font 的 advance 固定为 0.6em，墨迹却能宽到 1.2em；直接
-            // 居中文本盒会把溢出的那一半全留在右边。固定墨迹槽后，视觉中心
-            // 才不会随图标变化。
-            .child(
-                div()
-                    .w(px(target_ink_width))
-                    .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
-                    .text_size(px(icon_size))
-                    .child(crate::gpui_shell::widgets::terminal_glyph(
-                        icon.glyph.to_string(), target_ink_width,
-                    )),
-            )
+            .child(crate::gpui_shell::widgets::host_icon(
+                icon, SSH_EDITOR_AVATAR_H * 0.54, theme.foreground,
+            ))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_ssh_icon_picker(window, cx);
             }))
@@ -1172,13 +1158,9 @@ impl SettingsPane {
     /// 弹出的图标选择器：顶部搜索框 + 分组过的目录，锚在头像下方。
     /// 返回 `None` 表示收起态（或头像还没量到坐标）。
     fn ssh_icon_popup(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        use crate::display::ui::os_icons::{
-            AUTO_ID, CATALOG, PickerRow, picker_rows, resolve, scale_for,
-        };
+        use crate::display::ui::os_icons::{AUTO_ID, CATALOG, PickerRow, picker_rows, resolve};
 
         const PICKER_ICON_SLOT_W: f32 = 22.0;
-        const PICKER_ICON_INK_W: f32 = 16.0;
-        const PICKER_ICON_BASE_SIZE: f32 = 15.0;
 
         if !self.ssh_icon_picker_open {
             return None;
@@ -1189,7 +1171,7 @@ impl SettingsPane {
         let muted = theme.muted_foreground;
         let hover_bg = theme.list_hover;
         let selected_bg = theme.list_active;
-        let font_chain: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
+        let foreground = theme.foreground;
         let current = self
             .ssh_editor
             .as_ref()
@@ -1227,8 +1209,6 @@ impl SettingsPane {
                         // 同一张脸，避免挑选前后出现两枚不同的“终端”图标。
                         None => (resolve(None), language.pick("自动识别", "Auto detect"), None),
                     };
-                    let icon_size = PICKER_ICON_BASE_SIZE
-                        * scale_for(icon, PICKER_ICON_BASE_SIZE * 0.6, PICKER_ICON_INK_W);
                     let selected = match id {
                         Some(id) => current.as_deref() == Some(id),
                         None => current.is_none(),
@@ -1253,16 +1233,11 @@ impl SettingsPane {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(
-                                    div()
-                                        .w(px(PICKER_ICON_INK_W))
-                                        .font_family(font_chain.clone())
-                                        .text_size(px(icon_size))
-                                        .child(crate::gpui_shell::widgets::terminal_glyph(
-                                            icon.glyph.to_string(),
-                                            PICKER_ICON_INK_W,
-                                        )),
-                                ),
+                                .child(crate::gpui_shell::widgets::host_icon(
+                                    icon,
+                                    PICKER_ICON_SLOT_W,
+                                    foreground,
+                                )),
                         )
                         .child(div().flex_1().min_w_0().truncate().text_sm().child(name))
                         .on_click(cx.listener(move |this, _, window, cx| {

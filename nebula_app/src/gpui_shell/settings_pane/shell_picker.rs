@@ -1,11 +1,11 @@
 use super::*;
+use crate::gpui_shell::widgets::ShellIcon;
 
 #[derive(Clone)]
 pub(super) struct ShellSelectItem {
     pub(super) id: String,
     pub(super) name: SharedString,
-    pub(super) closed_image: Option<Arc<RenderImage>>,
-    pub(super) row_image: Option<Arc<RenderImage>>,
+    icon: Option<ShellIcon>,
 }
 
 /// 下拉首行那条「导入终端目录」动作行的哨兵 id。
@@ -18,16 +18,10 @@ pub(super) const SHELL_IMPORT_ACTION_ID: &str = "__nebula_import_terminal_dir__"
 /// 菜单行的逻辑边长（品牌贴图与图标槽同用）。
 pub(super) const SHELL_ROW_ICON_SIZE: f32 = 24.0;
 
-/// 回落字形的字号系数：见 `shell_detect::FALLBACK_ICON_SCALE`。
-const FALLBACK_ICON_SCALE: f32 = crate::shell_detect::FALLBACK_ICON_SCALE;
-
 impl ShellSelectItem {
-    pub(super) fn new(id: String, name: String, scale_factor: f32) -> Self {
-        // Select 的闭态和菜单行尺寸不同。分别生成与物理像素一一对应的纹理，
-        // 从同一份 SVG 按各自的逻辑尺寸和窗口 DPI 渲染。
-        let closed_image = crate::gpui_shell::widgets::shell_brand_image(&id, 20.0, scale_factor);
-        let row_image = crate::gpui_shell::widgets::shell_brand_image(&id, 24.0, scale_factor);
-        Self { id, name: name.into(), closed_image, row_image }
+    pub(super) fn new(id: String, name: String) -> Self {
+        let icon = Some(ShellIcon::new(&id));
+        Self { id, name: name.into(), icon }
     }
 
     /// 置顶的导入行。没有品牌贴图，[`Self::view`] 会给它文件夹图标。
@@ -35,8 +29,7 @@ impl ShellSelectItem {
         Self {
             id: SHELL_IMPORT_ACTION_ID.to_owned(),
             name: language.text(crate::i18n::Message::SettingsPaneImportTerminalDirectory).into(),
-            closed_image: None,
-            row_image: None,
+            icon: None,
         }
     }
 
@@ -44,27 +37,11 @@ impl ShellSelectItem {
         self.id == SHELL_IMPORT_ACTION_ID
     }
 
-    pub(super) fn view(&self, size: f32, image: Option<&Arc<RenderImage>>) -> gpui::AnyElement {
-        let icon: gpui::AnyElement = if let Some(image) = image {
-            gpui::StyledImage::object_fit(
-                img(image.clone()).size(px(size)).flex_shrink_0(),
-                gpui::ObjectFit::Contain,
-            )
-            .into_any_element()
-        } else if self.is_import_action() {
-            // 动作行与真实 shell 行必须一眼分得开：文件夹口 = 「去别处拿」。
-            Icon::new(IconName::FolderOpen).size(px(size * FALLBACK_ICON_SCALE)).into_any_element()
+    pub(super) fn view(&self, size: f32) -> gpui::AnyElement {
+        let icon = if let Some(icon) = self.icon {
+            icon.element(size, None).into_any_element()
         } else {
-            // 没有品牌贴图的 shell 沿用旧壳那张按 id 取字的 Nerd Font 表
-            // （`icon_for_id`，设置行/命令面板同一口径）。字号按回落字形的
-            // 墨迹比例配平：品牌图标的可见部分是自己边长的约 0.77（12%
-            // 安全边距），codicon terminal 的墨迹约 0.88 em——乘 0.88 之后
-            // 两种图标才真的同尺寸。
-            div()
-                .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
-                .text_size(px(size * FALLBACK_ICON_SCALE))
-                .child(crate::shell_detect::icon_for_id(&self.id))
-                .into_any_element()
+            Icon::new(IconName::FolderOpen).size(px(size)).into_any_element()
         };
         h_flex()
             .gap_2()
@@ -94,23 +71,19 @@ impl ShellSelectItem {
 /// 同一形状），品牌图标因此仍能按家族查到。
 pub(super) fn shell_select_items(
     current: &str,
-    scale_factor: f32,
     language: crate::display::UiLanguage,
 ) -> (Vec<ShellSelectItem>, usize) {
     let mut items: Vec<ShellSelectItem> = crate::shell_detect::detect_shells()
         .into_iter()
-        .map(|shell| ShellSelectItem::new(shell.id, shell.name, scale_factor))
+        .map(|shell| ShellSelectItem::new(shell.id, shell.name))
         .collect();
     if items.is_empty() {
         // 探测不到任何已安装 shell 时也要给出一行——用宿主默认 id，而不是
         // 写死的 PowerShell/Git Bash：没有安装探测结果的 Unix 机器（例如
         // `$SHELL` 与 `/etc/shells` 都读不到）默认是登录 shell，不是 PS。
         let id = crate::platform::shell::default_shell_id();
-        items = vec![ShellSelectItem::new(
-            id.clone(),
-            crate::shell_detect::display_name_for_id(&id),
-            scale_factor,
-        )];
+        items =
+            vec![ShellSelectItem::new(id.clone(), crate::shell_detect::display_name_for_id(&id))];
     }
     // 导入的终端目录：`merge_terminal_profiles` 已把它们并进配置的 profile
     // 列表，这里让设置页也能直接选为默认 Shell——否则导入完看不见结果。
@@ -120,7 +93,7 @@ pub(super) fn shell_select_items(
             if items.iter().any(|item| item.id == id) {
                 continue;
             }
-            items.push(ShellSelectItem::new(id, profile.name, scale_factor));
+            items.push(ShellSelectItem::new(id, profile.name));
         }
     }
     if !items.iter().any(|item| item.id == current) {
@@ -131,7 +104,6 @@ pub(super) fn shell_select_items(
             ShellSelectItem::new(
                 current.to_owned(),
                 crate::shell_detect::display_name_for_id(current).to_owned(),
-                scale_factor,
             ),
         );
     }
@@ -196,14 +168,14 @@ impl SelectItem for ShellSelectItem {
 
     fn display_title(&self) -> Option<gpui::AnyElement> {
         // 闭态留出 chevron 与上下内边距；20px 在 32px Select 内不会挤字。
-        Some(self.view(20.0, self.closed_image.as_ref()))
+        Some(self.view(20.0))
     }
 
     fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
         // List measures the first visible row, which changes after searching.
         // Every item must use the same content height; the component supplies
         // the surrounding row padding and selection background.
-        self.view(SHELL_ROW_ICON_SIZE, self.row_image.as_ref())
+        self.view(SHELL_ROW_ICON_SIZE)
     }
 
     fn value(&self) -> &Self::Value {

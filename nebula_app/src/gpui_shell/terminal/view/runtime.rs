@@ -102,8 +102,10 @@ impl TerminalView {
         self.last_ai_session_probe = None;
     }
 
-    pub(in crate::gpui_shell) fn ssh_host_glyph(&self) -> Option<SharedString> {
-        self.ssh_host_glyph.clone()
+    pub(in crate::gpui_shell) fn ssh_host_icon(
+        &self,
+    ) -> Option<&'static crate::display::ui::os_icons::OsIcon> {
+        self.ssh_host_icon
     }
 
     pub(in crate::gpui_shell) fn apply_ssh_host_icon(
@@ -114,10 +116,9 @@ impl TerminalView {
         if self.ssh_destination.is_none() {
             return;
         }
-        let glyph: SharedString =
-            crate::display::ui::os_icons::resolve(icon).glyph.to_string().into();
-        if self.ssh_host_glyph.as_ref() != Some(&glyph) {
-            self.ssh_host_glyph = Some(glyph);
+        let icon = crate::display::ui::os_icons::resolve(icon);
+        if self.ssh_host_icon.is_none_or(|old| old.id != icon.id) {
+            self.ssh_host_icon = Some(icon);
             cx.emit(TerminalViewEvent::HostIconChanged);
         }
     }

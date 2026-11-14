@@ -669,9 +669,9 @@ mod shell_row_geometry {
             ),
             (
                 "shell-probe-brand",
-                ShellSelectItem::new("pwsh".to_owned(), "PowerShell 7".to_owned(), 1.0),
+                ShellSelectItem::new("pwsh".to_owned(), "PowerShell 7".to_owned()),
             ),
-            ("shell-probe-glyph", ShellSelectItem::new("zsh".to_owned(), "Zsh".to_owned(), 1.0)),
+            ("shell-probe-glyph", ShellSelectItem::new("dash".to_owned(), "Dash".to_owned())),
         ];
         let (_, cx) = cx.add_window_view(|_, _| ShellRowProbe { rows });
         let heights: Vec<f32> = ["shell-probe-import", "shell-probe-brand", "shell-probe-glyph"]

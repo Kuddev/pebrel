@@ -476,13 +476,14 @@ struct WorkspacePaletteRow {
     hint_style: WorkspacePaletteHintStyle,
     search: String,
     action: WorkspacePaletteAction,
-    /// 行首的彩色品牌图标（只有 shell/配置档行有）。旧壳的 shell 菜单同样
-    /// 是「图标 + 名字 + 灰色命令行」三段式，光靠文字分不清 pwsh 与 5.1。
-    icon: Option<std::sync::Arc<gpui::RenderImage>>,
-    /// SSH 主机行用 Nerd Font 码位（旧壳 `os_icons`），不是品牌 PNG。
-    icon_glyph: Option<char>,
-    /// 通用名词行使用组件库的线性图标；与品牌图片、系统 Nerd Font 图标互斥。
-    icon_path: Option<SharedString>,
+    icon: Option<PaletteIcon>,
+}
+
+#[derive(Clone)]
+enum PaletteIcon {
+    Shell(crate::gpui_shell::widgets::ShellIcon),
+    Host(&'static crate::display::ui::os_icons::OsIcon),
+    Symbol(SharedString),
 }
 
 pub(super) fn open_in_file_manager(path: &Path) {
@@ -1752,7 +1753,6 @@ impl NebulaWorkspace {
             &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
             &default_shell_id,
             language,
-            window.scale_factor().max(0.5),
         );
         self.palette_override = Some(rows);
         self.shell_picker_open = true;

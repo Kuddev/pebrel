@@ -47,23 +47,19 @@ impl AiLogo {
     }
 
     pub(crate) fn render(self, ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
-        let size = size.clamp(1, 512);
         let source_ink = if matches!(self, Self::OpenCode) { [255; 3] } else { ink };
-        let mut pixels = rasterize_svg(self.svg(), source_ink, size * 4, false)?;
-        self.tint_pixels(&mut pixels, ink);
-        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
+        let (mut rgba, width, height) = render_identity_svg(self.svg(), source_ink, size)?;
+        self.tint_pixels(&mut rgba, ink);
+        Some((rgba, width, height))
     }
 
     pub(crate) fn render_brand(svg: &[u8], ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
         let size = size.clamp(1, 512);
-        let pixels = rasterize_svg(svg, ink, size * 4, false)?;
-        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
-    }
-
-    /// Fit shell artwork by its visible bounds so wide and tall marks share the same slot.
-    pub(crate) fn render_shell_brand(svg: &[u8], size: u32) -> Option<(Vec<u8>, u32, u32)> {
-        let size = size.clamp(1, 512);
-        let pixels = rasterize_svg(svg, [113, 132, 154], size * 4, true)?;
+        let tree = parse_svg(svg, ink)?;
+        let scale = (size * 4) as f32 / tree.size().width().max(tree.size().height());
+        let mut pixels =
+            rasterize_svg(&tree, size * 4, resvg::tiny_skia::Transform::from_scale(scale, scale))?;
+        unpremultiply(&mut pixels);
         Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
     }
 
@@ -121,34 +117,43 @@ impl AiLogo {
     }
 }
 
-/// 保留 SVG 的原色，currentColor 则由使用位置的主题文字色提供。
-fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32, fit_ink: bool) -> Option<Vec<u8>> {
+/// Use one foreground for the entire silhouette, including marks with baked-in colors.
+pub(crate) fn render_shell_artwork(
+    artwork: crate::shell_detect::ShellArtwork,
+    ink: [u8; 3],
+    size: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    use crate::shell_detect::ShellArtwork;
+
+    let (mut rgba, width, height) = render_identity_svg(artwork.svg(), ink, size)?;
+    if matches!(artwork, ShellArtwork::Monochrome(_)) {
+        for pixel in rgba.chunks_exact_mut(4).filter(|pixel| pixel[3] != 0) {
+            pixel[..3].copy_from_slice(&ink);
+        }
+    }
+    Some((rgba, width, height))
+}
+
+fn parse_svg(svg: &[u8], ink: [u8; 3]) -> Option<resvg::usvg::Tree> {
     let options = resvg::usvg::Options {
         default_size: resvg::usvg::Size::from_wh(24.0, 24.0)?,
         style_sheet: Some(format!("svg {{ color: rgb({}, {}, {}); }}", ink[0], ink[1], ink[2])),
         ..Default::default()
     };
-    let tree = resvg::usvg::Tree::from_data(svg, &options).ok()?;
+    resvg::usvg::Tree::from_data(svg, &options).ok()
+}
+
+fn rasterize_svg(
+    tree: &resvg::usvg::Tree,
+    size: u32,
+    transform: resvg::tiny_skia::Transform,
+) -> Option<Vec<u8>> {
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
-    let canvas = size as f32;
-    let transform = if fit_ink {
-        let bounds = tree.root().abs_layer_bounding_box();
-        let scale = canvas * 0.76 / bounds.width().max(bounds.height());
-        resvg::tiny_skia::Transform::from_row(
-            scale,
-            0.0,
-            0.0,
-            scale,
-            (canvas - bounds.width() * scale) * 0.5 - bounds.x() * scale,
-            (canvas - bounds.height() * scale) * 0.5 - bounds.y() * scale,
-        )
-    } else {
-        let scale = canvas / tree.size().width().max(tree.size().height());
-        resvg::tiny_skia::Transform::from_scale(scale, scale)
-    };
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-    let mut pixels = pixmap.data().to_vec();
-    // tiny-skia 使用预乘 alpha，纹理接口要求 straight RGBA。
+    resvg::render(tree, transform, &mut pixmap.as_mut());
+    Some(pixmap.take())
+}
+
+fn unpremultiply(pixels: &mut [u8]) {
     for pixel in pixels.chunks_exact_mut(4) {
         let alpha = u32::from(pixel[3]);
         if alpha > 0 {
@@ -157,7 +162,87 @@ fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32, fit_ink: bool) -> Option<V
             }
         }
     }
-    Some(pixels)
+}
+
+pub(crate) fn identity_icon_scale(width: f32, height: f32) -> f32 {
+    let longest = width.max(height);
+    // Compensate for squat or narrow marks without stretching their artwork.
+    let optical_span = (longest + (width * height).sqrt()) * 0.5;
+    (0.86 / optical_span).min(0.94 / longest)
+}
+
+/// Measure the visible ink once at a fixed resolution, then render the vector
+/// at the destination DPI. SVG view boxes and clipped layers can contain padding.
+fn render_identity_svg(svg: &[u8], ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
+    use resvg::tiny_skia::Transform;
+
+    const SAMPLE: u32 = 96;
+    let tree = parse_svg(svg, ink)?;
+    let bounds = tree.root().abs_layer_bounding_box();
+    let probe_scale = (SAMPLE - 4) as f32 / bounds.width().max(bounds.height());
+    let probe_x = (SAMPLE as f32 - bounds.width() * probe_scale) * 0.5 - bounds.x() * probe_scale;
+    let probe_y = (SAMPLE as f32 - bounds.height() * probe_scale) * 0.5 - bounds.y() * probe_scale;
+    let probe = rasterize_svg(
+        &tree,
+        SAMPLE,
+        Transform::from_row(probe_scale, 0.0, 0.0, probe_scale, probe_x, probe_y),
+    )?;
+    let (mut left, mut top, mut right, mut bottom) = (SAMPLE, SAMPLE, 0, 0);
+    let (mut mass, mut weighted_x, mut weighted_y) = (0.0, 0.0, 0.0);
+    for (i, pixel) in probe.chunks_exact(4).enumerate() {
+        if pixel[3] < 16 {
+            continue;
+        }
+        let (x, y) = (i as u32 % SAMPLE, i as u32 / SAMPLE);
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x + 1);
+        bottom = bottom.max(y + 1);
+        let alpha = f32::from(pixel[3]);
+        mass += alpha;
+        weighted_x += (x as f32 + 0.5) * alpha;
+        weighted_y += (y as f32 + 0.5) * alpha;
+    }
+    if mass == 0.0 {
+        return None;
+    }
+    let size = size.clamp(1, 512);
+    let oversampled = size * 4;
+    let canvas = oversampled as f32;
+    let width = (right - left) as f32;
+    let height = (bottom - top) as f32;
+    // Leave room for the antialiasing filter at the smallest tab size as well.
+    let edge = (canvas * 0.045).max(4.0).min(canvas * 0.2);
+    let scale = (canvas * identity_icon_scale(width, height))
+        .min((canvas - 2.0 * edge) / width.max(height));
+    let position = |min: u32, max: u32, centroid: f32| {
+        let middle = (min + max) as f32 * 0.5;
+        // A lopsided logo gets a nudge toward its visual mass while the
+        // outline keeps breathing room on both sides.
+        let center = middle + (centroid - middle) * 0.55;
+        let min_offset = edge - min as f32 * scale;
+        (canvas * 0.5 - center * scale)
+            .clamp(min_offset, (canvas - edge - max as f32 * scale).max(min_offset))
+    };
+    let final_scale = probe_scale * scale;
+    let pixels = rasterize_svg(
+        &tree,
+        oversampled,
+        Transform::from_row(
+            final_scale,
+            0.0,
+            0.0,
+            final_scale,
+            probe_x * scale + position(left, right, weighted_x / mass),
+            probe_y * scale + position(top, bottom, weighted_y / mass),
+        ),
+    )?;
+    let image = image::RgbaImage::from_raw(oversampled, oversampled, pixels)?;
+    let mut rgba =
+        image::imageops::resize(&image, size, size, image::imageops::FilterType::Lanczos3)
+            .into_raw();
+    unpremultiply(&mut rgba);
+    Some((rgba, size, size))
 }
 
 pub(crate) fn prepare_ai_logo_texture(
@@ -272,11 +357,16 @@ mod tests {
 
     #[test]
     fn shell_brand_artwork_renders_from_vectors_at_each_scale() {
+        use crate::shell_detect::{ShellArtwork, shell_artwork};
+
         let ids = [
             "pwsh",
             "powershell",
             "cmd",
             "git-bash",
+            "bash",
+            "fish",
+            "zsh",
             "nu",
             "wsl",
             "wsl:Ubuntu",
@@ -287,26 +377,59 @@ mod tests {
             "wsl:Alma",
             "wsl:Oracle",
             "wsl:Euler",
+            "wsl:archlinux",
+            "wsl:FedoraLinux-42",
+            "wsl:RockyLinux",
+            "wsl:SomeImportedDistro",
         ];
+        let dark_ink = [39, 47, 57];
+        let light_ink = [220, 226, 236];
         for id in ids {
-            let svg = crate::shell_detect::color_icon_svgz(id).expect(id);
-            assert!(svg.starts_with(&[0x1f, 0x8b]), "{id}");
-            for target in [22, 33, 44] {
-                let (rgba, width, height) = AiLogo::render_shell_brand(svg, target).expect(id);
+            let artwork = shell_artwork(id).expect(id);
+            let colored = matches!(id, "pwsh" | "powershell" | "cmd");
+            assert_eq!(colored, matches!(artwork, ShellArtwork::Color(_)));
+            for target in [15, 22, 23, 33, 44] {
+                let (rgba, width, height) = render_shell_artwork(artwork, dark_ink, target)
+                    .unwrap_or_else(|| panic!("{id} rendered blank at {target}px"));
+                let (inverted, ..) = render_shell_artwork(artwork, light_ink, target).unwrap();
                 assert_eq!((width, height), (target, target), "{id}");
                 let visible = rgba
                     .chunks_exact(4)
                     .enumerate()
                     .filter_map(|(i, p)| (p[3] >= 96).then_some(i as u32))
                     .collect::<Vec<_>>();
-                assert!(visible.len() > target as usize, "{id} is blank or undersized");
+                assert!(!visible.is_empty(), "{id} is blank at {target}px");
+                let span = |axis: fn(u32, u32) -> u32| {
+                    let range = visible.iter().map(|&i| axis(i, width));
+                    let lo = range.clone().min().unwrap();
+                    let hi = range.max().unwrap();
+                    assert!(lo > 0 && hi + 1 < width, "{id} reaches the edge at {target}px");
+                    assert!(
+                        (lo + hi + 1).abs_diff(width) <= (width / 5).max(2),
+                        "{id} drifts off center at {target}px"
+                    );
+                    hi + 1 - lo
+                };
+                let longest = span(|i, w| i % w).max(span(|i, w| i / w));
                 assert!(
-                    visible.iter().all(|i| {
-                        let (x, y) = (i % width, i / width);
-                        x > 0 && y > 0 && x + 1 < width && y + 1 < height
-                    }),
-                    "{id} is clipped at {target}px"
+                    (longest + 1) * 100 >= target * 77,
+                    "{id} is undersized at {target}px: {longest}"
                 );
+                if colored {
+                    assert_eq!(rgba, inverted, "{id} must keep its original color");
+                    assert!(visible.iter().any(|i| {
+                        let p = &rgba[*i as usize * 4..][..4];
+                        p[0].abs_diff(p[2]) > 20
+                    }));
+                } else {
+                    for (dark, light) in rgba.chunks_exact(4).zip(inverted.chunks_exact(4)) {
+                        assert_eq!(dark[3], light[3]);
+                        if dark[3] != 0 {
+                            assert_eq!(dark[..3], dark_ink);
+                            assert_eq!(light[..3], light_ink);
+                        }
+                    }
+                }
             }
         }
     }

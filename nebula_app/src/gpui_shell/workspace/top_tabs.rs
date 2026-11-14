@@ -359,6 +359,7 @@ impl NebulaWorkspace {
                         row.child(
                             div()
                                 .id(("top-pane-count", ix))
+                                .debug_selector(move || format!("top-pane-count-{ix}"))
                                 .size(px(28.0))
                                 .flex()
                                 .items_center()

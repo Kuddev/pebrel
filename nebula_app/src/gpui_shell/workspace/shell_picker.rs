@@ -1,19 +1,10 @@
 //! Shell/profile palette rows and their shared icon fallback.
 
 use super::{
-    WorkspacePaletteAction, WorkspacePaletteHintStyle, WorkspacePaletteRow, ssh_host_icon_ids,
+    PaletteIcon, WorkspacePaletteAction, WorkspacePaletteHintStyle, WorkspacePaletteRow,
+    ssh_host_icon_ids,
 };
-
-/// shell 行的回落字形：没有品牌贴图时用 `shell_detect::icon_for_id` 的
-/// id-keyed Nerd Font 字形（与设置页下拉、命令面板同一口径）。
-///
-/// `has_brand` 为真时返回 `None`——贴图已经画了，两个都留同行会出现两个图标。
-fn fallback_shell_glyph(id: &str, has_brand: bool) -> Option<char> {
-    if has_brand {
-        return None;
-    }
-    crate::shell_detect::icon_for_id(id).chars().next()
-}
+use crate::gpui_shell::widgets::ShellIcon;
 
 /// SSH 主机的展示名与次要信息，与旧壳 `SshRow` 同口径：
 ///
@@ -35,9 +26,7 @@ pub(super) fn shell_palette_rows(
     ssh_hosts: &crate::gpui_shell::ssh_hosts::SshHostLists,
     default_shell_id: &str,
     language: crate::display::UiLanguage,
-    scale_factor: f32,
 ) -> Vec<WorkspacePaletteRow> {
-    const SHELL_ICON_PX: f32 = 22.0;
     let recommended = language.pick("推荐", "Recommended");
     let all_shells = language.pick("所有 Shell", "All shells");
     let ssh_group = language.pick("SSH 主机", "SSH hosts");
@@ -45,14 +34,7 @@ pub(super) fn shell_palette_rows(
         .into_iter()
         .map(|shell| {
             let is_default = shell.id == default_shell_id;
-            let icon = crate::gpui_shell::widgets::shell_brand_image(
-                &shell.id,
-                SHELL_ICON_PX,
-                scale_factor,
-            );
-            // 没有品牌贴图的 shell（zsh、csh、ksh…）不能就这么空着：回落到
-            // 按 id 取字的 Nerd Font 字形，与设置页下拉同一口径。
-            let icon_glyph = fallback_shell_glyph(&shell.id, icon.is_some());
+            let icon = PaletteIcon::Shell(ShellIcon::new(&shell.id));
             WorkspacePaletteRow {
                 group_order: if is_default { 0 } else { 1 },
                 group: if is_default { recommended.to_owned() } else { all_shells.to_owned() },
@@ -60,9 +42,7 @@ pub(super) fn shell_palette_rows(
                 hint: shell.program.clone(),
                 hint_style: WorkspacePaletteHintStyle::Metadata,
                 search: format!("{} {} shell profile", shell.name, shell.id).to_lowercase(),
-                icon,
-                icon_glyph,
-                icon_path: None,
+                icon: Some(icon),
                 action: WorkspacePaletteAction::LaunchShell(shell),
             }
         })
@@ -71,10 +51,7 @@ pub(super) fn shell_palette_rows(
         let id = profile.settings_id()?;
         let is_default = id.eq_ignore_ascii_case(default_shell_id);
         let icon_id = profile.shell_id.as_deref().unwrap_or(&id);
-        let icon =
-            crate::gpui_shell::widgets::shell_brand_image(icon_id, SHELL_ICON_PX, scale_factor);
-        // 借用在 `profile` 被移进 action 之前结束。
-        let icon_glyph = fallback_shell_glyph(icon_id, icon.is_some());
+        let icon = PaletteIcon::Shell(ShellIcon::new(icon_id));
         let label = profile.name.clone();
         let hint = profile.command.clone();
         Some(WorkspacePaletteRow {
@@ -86,9 +63,7 @@ pub(super) fn shell_palette_rows(
             hint,
             hint_style: WorkspacePaletteHintStyle::Metadata,
             action: WorkspacePaletteAction::LaunchProfile(profile),
-            icon_glyph,
-            icon,
-            icon_path: None,
+            icon: Some(icon),
         })
     }));
     if let Some(position) = rows.iter().position(|row| row.group_order == 0) {
@@ -111,9 +86,8 @@ pub(super) fn ssh_palette_rows(
         .merged_with_labels()
         .into_iter()
         .map(|(host, label)| {
-            let glyph =
-                crate::display::ui::os_icons::resolve(ssh_icons.get(&host).map(String::as_str))
-                    .glyph;
+            let icon =
+                crate::display::ui::os_icons::resolve(ssh_icons.get(&host).map(String::as_str));
             // 空串 = 没起名：`ssh_host_display` 回落地址本身，hint 保持 "SSH"。
             let named = (!label.is_empty()).then_some(label.as_str());
             let (label, hint) = ssh_host_display(named, &host);
@@ -128,9 +102,7 @@ pub(super) fn ssh_palette_rows(
                 hint_style: WorkspacePaletteHintStyle::Metadata,
                 search,
                 action: WorkspacePaletteAction::LaunchSshHost(host),
-                icon: None,
-                icon_glyph: Some(glyph),
-                icon_path: None,
+                icon: Some(PaletteIcon::Host(icon)),
             }
         })
         .collect()

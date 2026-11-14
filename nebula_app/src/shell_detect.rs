@@ -112,50 +112,70 @@ pub fn icon_for_id(id: &str) -> &'static str {
     }
 }
 
-/// 回落字形相对图标槽边长的字号系数。
-///
-/// 品牌矢量图按 12% 安全边距光栅化，可见部分约为自身边长的
-/// 0.77；`icon_for_id` 返回的 codicon terminal 墨迹约 0.88 em。两者乘上这
-/// 个系数之后才在视觉上是同一个尺寸——不乘就会「有的图标大、有的小」。
-pub const FALLBACK_ICON_SCALE: f32 = 0.88;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShellArtwork {
+    Color(&'static [u8]),
+    Monochrome(&'static [u8]),
+}
 
-/// Compressed vector artwork for a shell id (see THIRD-PARTY-NOTICES).
-/// The picker renders it at the destination DPI. WSL distro ids map by distro
-/// name (`wsl:Ubuntu` → the Ubuntu roundel), falling back to the generic
-/// Tux for unknown distros. `None` = no brand asset; caller keeps the glyph.
-pub fn color_icon_svgz(id: &str) -> Option<&'static [u8]> {
+impl ShellArtwork {
+    pub(crate) fn svg(self) -> &'static [u8] {
+        match self {
+            Self::Color(svg) | Self::Monochrome(svg) => svg,
+        }
+    }
+}
+
+/// WSL registry names often contain the distribution's release or vendor name.
+/// The same marks are used for an SSH host's canonical distribution id.
+const LINUX_ARTWORK: &[(&str, &[u8])] = &[
+    ("ubuntu", include_bytes!("../../extra/shell-icons/ubuntu.svgz")),
+    ("debian", include_bytes!("../../extra/shell-icons/debian.svgz")),
+    ("kali", include_bytes!("../../extra/shell-icons/kali.svgz")),
+    ("alpine", include_bytes!("../../extra/shell-icons/alpine.svgz")),
+    ("suse", include_bytes!("../../extra/shell-icons/suse.svgz")),
+    ("alma", include_bytes!("../../extra/shell-icons/alma.svgz")),
+    ("oracle", include_bytes!("../../extra/shell-icons/oracle-linux.svgz")),
+    ("euler", include_bytes!("../../extra/shell-icons/open-euler.svgz")),
+    ("arch", include_bytes!("../../extra/shell-icons/arch.svgz")),
+    ("centos", include_bytes!("../../extra/shell-icons/centos.svgz")),
+    ("rhel", include_bytes!("../../extra/shell-icons/rhel.svgz")),
+    ("fedora", include_bytes!("../../extra/shell-icons/fedora.svgz")),
+    ("rocky", include_bytes!("../../extra/shell-icons/rocky.svgz")),
+    ("nixos", include_bytes!("../../extra/shell-icons/nixos.svgz")),
+    ("linux", ICON_LINUX),
+];
+
+pub(crate) fn linux_artwork(id: &str) -> Option<ShellArtwork> {
+    LINUX_ARTWORK
+        .iter()
+        .find(|(family, _)| *family == id)
+        .map(|(_, svg)| ShellArtwork::Monochrome(svg))
+}
+
+/// Only the native Windows shell marks retain their source colors.
+pub(crate) fn shell_artwork(id: &str) -> Option<ShellArtwork> {
+    use ShellArtwork::{Color, Monochrome};
+
     let lower = profile_shell_id(id).unwrap_or(id).to_ascii_lowercase();
     if let Some(distro) = lower.strip_prefix("wsl:") {
-        // Match the distro family in its name (registry names vary:
-        // "Ubuntu-22.04", "kali-linux", "openSUSE-Tumbleweed").
-        let asset = if distro.contains("ubuntu") {
-            ICON_UBUNTU
-        } else if distro.contains("debian") {
-            ICON_DEBIAN
-        } else if distro.contains("kali") {
-            ICON_KALI
-        } else if distro.contains("alpine") {
-            ICON_ALPINE
-        } else if distro.contains("suse") {
-            ICON_SUSE
-        } else if distro.contains("alma") {
-            ICON_ALMA
-        } else if distro.contains("oracle") {
-            ICON_ORACLE
-        } else if distro.contains("euler") {
-            ICON_EULER
-        } else {
-            ICON_LINUX
-        };
-        return Some(asset);
+        let svg = LINUX_ARTWORK
+            .iter()
+            .find(|(family, _)| distro.contains(family))
+            .map_or(ICON_LINUX, |(_, svg)| *svg);
+        return Some(Monochrome(svg));
     }
     Some(match lower.as_str() {
-        "pwsh" => ICON_PWSH,
-        "powershell" => ICON_POWERSHELL,
-        "cmd" => ICON_CMD,
-        "bash" | "git-bash" | "gitbash" => ICON_GIT_BASH,
-        "nu" => ICON_NUSHELL,
-        "wsl" => ICON_LINUX, // legacy id (no distro name)
+        "pwsh" => Color(include_bytes!("../../extra/shell-icons/powershell-core.svgz")),
+        "powershell" | "ps" => Color(include_bytes!("../../extra/shell-icons/powershell.svgz")),
+        "cmd" => Color(include_bytes!("../../extra/shell-icons/cmd.svgz")),
+        "bash" | "git-bash" | "gitbash" => {
+            Monochrome(include_bytes!("../../extra/shell-icons/git-bash.svgz"))
+        },
+        "fish" => Monochrome(include_bytes!("../../extra/shell-icons/fish.svgz")),
+        "zsh" => Monochrome(include_bytes!("../../extra/shell-icons/zsh.svgz")),
+        "nu" | "nushell" => Monochrome(include_bytes!("../../extra/shell-icons/nushell.svgz")),
+        "wsl" => Monochrome(ICON_LINUX),
         _ => return None,
     })
 }
@@ -169,20 +189,7 @@ fn profile_shell_id(id: &str) -> Option<&str> {
         .and_then(|value| value.split_once('|').map(|(shell, _)| shell))
 }
 
-const ICON_PWSH: &[u8] = include_bytes!("../../extra/shell-icons/powershell-core.svgz");
-const ICON_POWERSHELL: &[u8] = include_bytes!("../../extra/shell-icons/powershell.svgz");
-const ICON_CMD: &[u8] = include_bytes!("../../extra/shell-icons/cmd.svgz");
-const ICON_GIT_BASH: &[u8] = include_bytes!("../../extra/shell-icons/git-bash.svgz");
-const ICON_NUSHELL: &[u8] = include_bytes!("../../extra/shell-icons/nushell.svgz");
 const ICON_LINUX: &[u8] = include_bytes!("../../extra/shell-icons/linux.svgz");
-const ICON_UBUNTU: &[u8] = include_bytes!("../../extra/shell-icons/ubuntu.svgz");
-const ICON_DEBIAN: &[u8] = include_bytes!("../../extra/shell-icons/debian.svgz");
-const ICON_KALI: &[u8] = include_bytes!("../../extra/shell-icons/kali.svgz");
-const ICON_ALPINE: &[u8] = include_bytes!("../../extra/shell-icons/alpine.svgz");
-const ICON_SUSE: &[u8] = include_bytes!("../../extra/shell-icons/suse.svgz");
-const ICON_ALMA: &[u8] = include_bytes!("../../extra/shell-icons/alma.svgz");
-const ICON_ORACLE: &[u8] = include_bytes!("../../extra/shell-icons/oracle-linux.svgz");
-const ICON_EULER: &[u8] = include_bytes!("../../extra/shell-icons/open-euler.svgz");
 
 /// Human label for a saved shell id, without touching the filesystem — the
 /// settings row redraws every frame, so it can't afford `detect_shells`.
@@ -1627,7 +1634,7 @@ test "$token" = "$__pebrel_shell_token" || exit 96
     fn imported_profile_shell_keys_reuse_brand_assets() {
         let profile_key = "profile:pwsh|pwsh-1234";
         assert_eq!(icon_for_id(profile_key), icon_for_id("pwsh"));
-        assert!(color_icon_svgz(profile_key).is_some());
+        assert_eq!(shell_artwork(profile_key), shell_artwork("pwsh"));
     }
 
     /// 回归锁：没有品牌贴图的 shell 必须共用同一个字形码位。下拉把它们排在同

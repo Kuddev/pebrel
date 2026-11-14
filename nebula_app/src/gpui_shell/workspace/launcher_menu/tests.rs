@@ -54,7 +54,6 @@ fn open(cx: &mut TestAppContext) -> (Entity<NebulaWorkspace>, VisualTestContext)
                 &hosts,
                 "cmd",
                 workspace_ui_language(),
-                1.0,
             ));
             workspace.command_palette_open = true;
             workspace.shell_picker_open = true;

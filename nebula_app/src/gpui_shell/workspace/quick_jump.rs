@@ -26,7 +26,7 @@ pub(super) fn rows(workspace: &NebulaWorkspace, cx: &App) -> Vec<WorkspacePalett
                 row.group = format!("{ai_group} · {}", row.group);
                 // 统一星标表达「可恢复的 Agent 会话」，provider 留在文字
                 // 元数据中；这里不把 Claude/Codex 等 CLI 品牌误当成动作图标。
-                row.icon_path = Some(IconName::Star.path());
+                row.icon = Some(super::PaletteIcon::Symbol(IconName::Star.path()));
                 row
             }),
     );
@@ -71,9 +71,7 @@ fn tab_rows(
             hint_style: super::WorkspacePaletteHintStyle::Metadata,
             search: format!("{title} {kind} tab 标签 biaoqian {}", tab_ix + 1).to_lowercase(),
             action: WorkspacePaletteAction::FocusTab(tab_ix),
-            icon: None,
-            icon_glyph: None,
-            icon_path: Some(icon_path),
+            icon: Some(super::PaletteIcon::Symbol(icon_path)),
         });
 
         let WorkspaceTab::Terminal { panes, focused, .. } = tab else { continue };
@@ -102,9 +100,7 @@ fn tab_rows(
                 )
                 .to_lowercase(),
                 action: WorkspacePaletteAction::FocusPane { tab: tab_ix, pane: pane.id },
-                icon: None,
-                icon_glyph: None,
-                icon_path: Some(IconName::PanelRight.path()),
+                icon: Some(super::PaletteIcon::Symbol(IconName::PanelRight.path())),
             });
         }
     }
@@ -131,9 +127,7 @@ fn directory_rows(language: crate::display::UiLanguage) -> Vec<WorkspacePaletteR
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("{full} directory folder 常用目录 mulu wenjianjia").to_lowercase(),
                 action: WorkspacePaletteAction::OpenDirectory(path),
-                icon: None,
-                icon_glyph: None,
-                icon_path: Some(IconName::FolderOpen.path()),
+                icon: Some(super::PaletteIcon::Symbol(IconName::FolderOpen.path())),
             }
         })
         .collect()

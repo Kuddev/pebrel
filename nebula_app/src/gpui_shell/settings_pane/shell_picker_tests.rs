@@ -70,14 +70,13 @@ fn shell_popup_keeps_mixed_rows_separate_before_and_after_search(cx: &mut TestAp
     let (_, mut window) = cx.add_window_view(|window, cx| {
         let items = vec![
             ShellSelectItem::import_action(crate::display::UiLanguage::ZhCn),
-            ShellSelectItem::new("pwsh".into(), "PowerShell 7".into(), 1.0),
-            ShellSelectItem::new("powershell".into(), "PowerShell".into(), 1.0),
+            ShellSelectItem::new("pwsh".into(), "PowerShell 7".into()),
+            ShellSelectItem::new("powershell".into(), "PowerShell".into()),
             ShellSelectItem::new(
                 "wsl:Ubuntu".into(),
                 "WSL · Ubuntu · 长名称仍保持单行且不覆盖相邻选项".into(),
-                1.0,
             ),
-            ShellSelectItem::new("zsh".into(), "Zsh".into(), 1.0),
+            ShellSelectItem::new("zsh".into(), "Zsh".into()),
         ]
         .into_iter()
         .map(ProbeItem)

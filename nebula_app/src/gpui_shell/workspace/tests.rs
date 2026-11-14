@@ -623,7 +623,6 @@ fn shell_palette_puts_the_default_shell_first() {
         &palette_ssh_hosts(&[("box.example", "")]),
         "nu",
         language,
-        1.0,
     );
     assert_eq!(rows.len(), 5, "四台 shell + 一台 SSH");
     assert!(matches!(
@@ -647,8 +646,7 @@ fn shell_palette_puts_the_default_shell_first() {
     assert_eq!(rows[4].group, "SSH 主机");
 
     // 默认 id 没在检测结果里（WSL 发行版被卸载等）：不置顶也不 panic。
-    let rows =
-        shell_palette_rows(shells, Vec::new(), &Default::default(), "wsl:Ghost", language, 1.0);
+    let rows = shell_palette_rows(shells, Vec::new(), &Default::default(), "wsl:Ghost", language);
     assert!(matches!(
         &rows[0].action,
         WorkspacePaletteAction::LaunchShell(shell) if shell.id == "pwsh"
@@ -666,7 +664,6 @@ fn shell_palette_ssh_rows_show_the_configured_host_name() {
         &palette_ssh_hosts(&[("root@box.example", "生产机"), ("plain.example", "")]),
         "cmd",
         crate::display::UiLanguage::ZhCn,
-        1.0,
     );
     assert_eq!(rows.len(), 2);
 
@@ -689,50 +686,6 @@ fn shell_palette_ssh_rows_show_the_configured_host_name() {
     ));
 }
 
-/// 回归锁：新建终端弹窗里，没有品牌贴图的 shell 不能空着——必须回落到按 id
-/// 取字的 Nerd Font 字形。之前这一列只填了 `icon`，于是 zsh、csh、ksh 这些
-/// 整行左边什么都没有。
-#[test]
-fn shell_palette_falls_back_to_an_id_glyph_when_brand_art_is_absent() {
-    let shells = ["zsh", "csh", "ksh", "bash", "pwsh"]
-        .into_iter()
-        .map(|id| crate::shell_detect::DetectedShell {
-            name: crate::shell_detect::display_name_for_id(id),
-            id: id.to_owned(),
-            program: format!("/bin/{id}"),
-            args: Vec::new(),
-        })
-        .collect::<Vec<_>>();
-    let rows = shell_palette_rows(
-        shells,
-        Vec::new(),
-        &Default::default(),
-        "zsh",
-        crate::display::UiLanguage::ZhCn,
-        1.0,
-    );
-    let mut brandless = 0;
-    for row in &rows {
-        let WorkspacePaletteAction::LaunchShell(shell) = &row.action else { continue };
-        assert_eq!(
-            row.icon.is_none(),
-            row.icon_glyph.is_some(),
-            "`{}` 必须恰好有一种图标来源（品牌贴图或回落字形）",
-            shell.id
-        );
-        if row.icon.is_none() {
-            brandless += 1;
-            assert_eq!(
-                row.icon_glyph,
-                crate::shell_detect::icon_for_id(&shell.id).chars().next(),
-                "`{}` 的回落字形要与共享图标口径一致",
-                shell.id
-            );
-        }
-    }
-    assert!(brandless >= 3, "zsh/csh/ksh 都没有品牌贴图，都要有字形: {brandless}");
-}
-
 #[test]
 fn shell_palette_includes_imported_terminal_profiles() {
     let profile = crate::config::ui_config::Profile {
@@ -750,7 +703,6 @@ fn shell_palette_includes_imported_terminal_profiles() {
         &Default::default(),
         &id,
         crate::display::UiLanguage::ZhCn,
-        1.0,
     );
 
     assert_eq!(rows.len(), 1);

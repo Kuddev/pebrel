@@ -398,8 +398,7 @@ mod tests {
         assert!(matches!(icon(&window), TabIcon::Symbol(IconName::Network)));
         terminals[0].update(&mut window, |view, cx| view.apply_ssh_host_icon(Some("ubuntu"), cx));
         draw(&mut window);
-        assert!(matches!(icon(&window), TabIcon::Glyph(glyph)
-            if glyph.chars().eq([crate::display::ui::os_icons::resolve(Some("ubuntu")).glyph])));
+        assert!(matches!(icon(&window), TabIcon::Host(host) if host.id == "ubuntu"));
     }
 
     #[gpui::test]
@@ -408,7 +407,7 @@ mod tests {
         use nebula_settings::TabsPositionName::{Sidebar, Top};
 
         let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
-        let artwork = crate::shell_detect::color_icon_svgz("pwsh").unwrap();
+        let artwork = crate::shell_detect::shell_artwork("pwsh").unwrap();
         for (position, icon_id, title_id) in [
             (Sidebar, "sidebar-tab-icon-0", "sidebar-tab-title-0"),
             (Top, "top-tab-icon-0", "top-tab-title-0"),
@@ -441,12 +440,70 @@ mod tests {
                     let presentation = workspace.tab_presentation(0, cx, false);
                     assert_eq!(presentation.activity, SidebarActivity::Running);
                     assert_eq!(
-                        matches!(presentation.icon, TabIcon::Shell(bytes) if bytes == artwork),
+                        matches!(presentation.icon, TabIcon::Shell(icon) if icon == artwork),
                         shell_visible
                     );
                 });
             }
         }
+    }
+
+    #[gpui::test]
+    fn split_layout_control_updates_the_focused_shell_icon(cx: &mut TestAppContext) {
+        use crate::gpui_shell::workspace::tab_presentation::TabIcon;
+        use nebula_settings::TabsPositionName::{Sidebar, Top};
+
+        let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[2], cx);
+        let [bash, powershell] =
+            ["bash", "pwsh"].map(|id| crate::shell_detect::shell_artwork(id).unwrap());
+        for (terminal, artwork) in terminals.iter().zip([bash, powershell]) {
+            terminal.update(&mut window, |view, cx| {
+                view.running_program = None;
+                view.shell_artwork = Some(artwork);
+                cx.notify();
+            });
+        }
+        let icon = |window: &VisualTestContext| {
+            workspace.read_with(window, |workspace, cx| {
+                let presentation = workspace.tab_presentation(0, cx, false);
+                assert_eq!(presentation.pane_count, 2);
+                assert!(presentation.shell_tag.is_none());
+                presentation.icon
+            })
+        };
+        for (position, icon_id, layout_id) in [
+            (Sidebar, "sidebar-tab-icon-0", "sidebar-pane-count-0"),
+            (Top, "top-tab-icon-0", "top-pane-count-0"),
+        ] {
+            workspace.update(&mut window, |workspace, cx| {
+                workspace.tabs_position = position;
+                cx.notify();
+            });
+            draw(&mut window);
+            let slot = window.debug_bounds(icon_id).unwrap();
+            assert!(matches!(icon(&window), TabIcon::Shell(artwork) if artwork == bash));
+            for expected in [powershell, bash] {
+                let layout = window.debug_bounds(layout_id).unwrap().center();
+                window.simulate_mouse_down(layout, MouseButton::Left, Modifiers::default());
+                window.simulate_mouse_up(layout, MouseButton::Left, Modifiers::default());
+                draw(&mut window);
+                assert!(matches!(icon(&window), TabIcon::Shell(artwork) if artwork == expected));
+                assert_eq!(window.debug_bounds(icon_id), Some(slot));
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn sidebar_activity_shares_the_center_of_the_hover_close_button(cx: &mut TestAppContext) {
+        let (_, _, _receivers, mut window) = open_painted_workspace(&[1], cx);
+        let row = window.debug_bounds("sidebar-tab-0").unwrap();
+        let activity = window.debug_bounds("sidebar-tab-activity-0").unwrap();
+        window.simulate_mouse_move(row.center(), None, Modifiers::default());
+        draw(&mut window);
+        let close = window.debug_bounds("sidebar-close-tab-0").unwrap();
+        assert!((activity.center().x - close.center().x).abs() <= px(0.5));
+        assert!((activity.center().y - close.center().y).abs() <= px(0.5));
+        assert!((row.center().y - close.center().y).abs() <= px(0.5));
     }
 
     #[gpui::test]

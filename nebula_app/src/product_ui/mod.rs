@@ -33,7 +33,7 @@ pub(crate) mod keymap;
 #[path = "../display/network_proxy_model.rs"]
 mod network_proxy_model;
 #[path = "../display/program_identity.rs"]
-mod program_identity;
+pub(crate) mod program_identity;
 #[path = "../display/side_panel/mod.rs"]
 pub(crate) mod side_panel;
 #[path = "../display/size_info.rs"]

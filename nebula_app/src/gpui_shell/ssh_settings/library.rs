@@ -585,7 +585,7 @@ impl SettingsPane {
             .flex()
             .items_center()
             .justify_center()
-            .child(crate::gpui_shell::widgets::host_icon(os_icon.glyph, 22.0, muted));
+            .child(crate::gpui_shell::widgets::host_icon(os_icon, 22.0, muted));
         h_flex()
             .id(SharedString::from(format!("ssh-host-row-{ix}")))
             .debug_selector(move || format!("ssh-host-row-{ix}"))

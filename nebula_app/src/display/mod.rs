@@ -83,7 +83,7 @@ mod file_operations;
 pub mod markdown_view;
 mod message_queue_entry;
 mod network_proxy_model;
-mod program_identity;
+pub(crate) mod program_identity;
 mod proxy_editor;
 pub mod sftp_panel;
 pub mod side_panel;

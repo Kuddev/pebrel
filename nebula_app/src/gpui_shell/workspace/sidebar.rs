@@ -62,6 +62,19 @@ fn sidebar_status_slot() -> gpui::Div {
         .justify_end()
 }
 
+/// The activity and close glyphs share the center of the close hit target.
+/// Shell labels use the natural width and trailing edge of the outer slot.
+fn sidebar_status_glyph_lane() -> gpui::Div {
+    h_flex()
+        .absolute()
+        .right_0()
+        .top_0()
+        .bottom_0()
+        .w(px(SIDEBAR_TAB_CLOSE_SIDE))
+        .justify_center()
+        .items_center()
+}
+
 impl NebulaWorkspace {
     pub(super) fn shell_status_label(
         tag: SharedString,
@@ -468,6 +481,7 @@ impl NebulaWorkspace {
                     row.child(
                         div()
                             .id(("sidebar-pane-count", ix))
+                            .debug_selector(move || format!("sidebar-pane-count-{ix}"))
                             .size(px(28.0))
                             .flex()
                             .items_center()
@@ -491,19 +505,19 @@ impl NebulaWorkspace {
                 .when(resting_status.is_some() || tab_close_visible, |row| row.child(
                     sidebar_status_slot()
                         .when_some(resting_status, |slot, status| {
-                            slot.child(
-                                h_flex()
-                                    .min_w_0()
-                                    .max_w_full()
-                                    .when(tab_close_visible, |status| {
-                                        status.group_hover(hover_group.clone(), |item| item.invisible())
-                                    })
-                                    .child(status),
-                            )
+                            let lane = if activity == SidebarActivity::Idle {
+                                h_flex().min_w_0().max_w_full()
+                            } else {
+                                sidebar_status_glyph_lane()
+                                    .debug_selector(move || format!("sidebar-tab-activity-{ix}"))
+                            };
+                            slot.child(lane.when(tab_close_visible, |lane| {
+                                lane.group_hover(hover_group.clone(), |item| item.invisible())
+                            }).child(status))
                         })
                         .when(tab_close_visible, |slot| {
                             slot.child(
-                                div().absolute().right_0().top_0().bottom_0().flex().items_center()
+                                sidebar_status_glyph_lane()
                                     .invisible()
                                     .group_hover(hover_group, |slot| slot.visible())
                                     .child(

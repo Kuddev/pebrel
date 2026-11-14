@@ -111,19 +111,6 @@ pub(super) fn broadcast_targets(order: &[u64], source: u64) -> Vec<u64> {
     order.iter().copied().filter(|id| *id != source).collect()
 }
 
-/// 2×2 描边小方块：分屏 tab 的行首
-/// 图标。四个描边格是内容本身，不是给图标套的方框——与图标语言的"禁方盒"
-/// 不冲突。
-pub(super) fn split_glyph(size_px: f32, color: Hsla) -> impl IntoElement {
-    let cell = (size_px * 0.42).max(4.0);
-    let gap = (size_px * 0.14).max(1.5);
-    let radius = (cell * 0.28).max(1.0);
-    let square =
-        move || div().size(px(cell)).rounded(px(radius)).border(px(1.0)).border_color(color);
-    let row = move || h_flex().gap(px(gap)).child(square()).child(square());
-    v_flex().gap(px(gap)).child(row()).child(row())
-}
-
 /// A miniature of the committed split tree, with no surrounding badge or count.
 /// Reuse the split engine's geometry so all tab placements show the same layout.
 pub(super) fn split_layout_icon(tab: &WorkspaceTab, label_px: f32, ink: Hsla) -> impl IntoElement {

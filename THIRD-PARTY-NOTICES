@@ -37,12 +37,19 @@ The Windows installed-shell detection (registry lookup order and the
 shell brand icon artwork) derives from Tabby (github.com/Eugeny/tabby),
 distributed under the MIT License, whose text is reproduced below.
 
-The shell picker uses the original SVGs from revision
-467ce8ebfa467fb88cf6d154c9a5891e3d3647f0 of that upstream project.
+The shell picker uses SVGs from revision
+467ce8ebfa467fb88cf6d154c9a5891e3d3647f0 of that upstream project for
+PowerShell, PowerShell 7, CMD, Oracle Linux, openEuler and Kali Linux.
 The Windows mark is tinted blue.
-The Linux, Nushell and openSUSE marks use Simple Icons' SVG paths from revision
+
+The GNU Bash, Fish, Zsh, Nushell, Tux, AlmaLinux, Alpine Linux, Arch Linux,
+CentOS, Debian, Fedora, NixOS, openSUSE, Red Hat, Rocky Linux and
+Ubuntu marks use Simple Icons' SVG paths from revision
 cd796c98565fc466923fc1128b962e133fa3c612 (github.com/simple-icons/simple-icons),
-published under CC0 1.0. The paths are tinted for the shell picker.
+published under CC0 1.0. Shell and distribution marks outside the native
+Windows shells use the current theme's foreground.
+For small sizes, the Bash mark simplifies the original hexagon and prompt,
+and the Kali Linux mark uses a heavier outline.
 
 The Cursor and GitHub Copilot settings icons are adapted from LobeHub's
 @lobehub/icons-static-svg 1.95.0 (github.com/lobehub/lobe-icons),

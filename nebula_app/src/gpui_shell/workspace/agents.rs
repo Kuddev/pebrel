@@ -75,8 +75,6 @@ pub(super) fn ai_session_palette_rows(
                 search: format!("恢复 resume {search}"),
                 action: WorkspacePaletteAction::RunAiSession { command, cwd: cwd.clone() },
                 icon: None,
-                icon_glyph: None,
-                icon_path: None,
             });
         }
         if let Some(command) = session.fork_command() {
@@ -89,8 +87,6 @@ pub(super) fn ai_session_palette_rows(
                 search: format!("分叉 fork {search}"),
                 action: WorkspacePaletteAction::RunAiSession { command, cwd: cwd.clone() },
                 icon: None,
-                icon_glyph: None,
-                icon_path: None,
             });
         }
     }
