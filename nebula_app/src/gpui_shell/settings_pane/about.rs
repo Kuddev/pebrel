@@ -71,6 +71,7 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let distribution = crate::platform::distribution::current();
         let managed = distribution.externally_managed();
+        let portable = distribution == crate::platform::distribution::Distribution::Portable;
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let ink = theme.foreground;
@@ -197,12 +198,9 @@ impl SettingsPane {
                                 .label(language.text(crate::i18n::Message::UpdateViewDetails))
                                 .on_click(move |_, window, cx| {
                                     crate::gpui_shell::workspace::open_update_dialog(
-                                        crate::update_check::UpdateCheckResult {
-                                            current: env!("CARGO_PKG_VERSION").into(),
-                                            latest: asset.version.clone(),
-                                            update_available: true,
-                                            asset: Some(asset.clone()),
-                                        },
+                                        crate::update_check::UpdateCheckResult::from_cached(
+                                            asset.clone(),
+                                        ),
                                         window,
                                         cx,
                                     );
@@ -229,7 +227,8 @@ impl SettingsPane {
             ))
             .child(auto_update_switch);
         let predownload = crate::gpui_shell::widgets::NebulaSwitch::new("auto-download-updates")
-            .checked(self.runtime.auto_download_updates)
+            .checked(!portable && self.runtime.auto_download_updates)
+            .disabled(portable)
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.persist(&[("auto_download_updates", (*checked as u8).to_string())], cx);
             }));

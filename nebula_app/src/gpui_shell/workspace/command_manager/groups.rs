@@ -223,6 +223,7 @@ impl NebulaWorkspace {
         let muted = cx.theme().muted_foreground;
         let selected = index == self.command_manager_selection.cursor;
         let delete_id = Some(id.clone());
+        let rename_id = (id != BUILTIN_GROUP_ID).then(|| id.clone());
         let click_id = id.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
         h_flex()
@@ -285,6 +286,33 @@ impl NebulaWorkspace {
                         ),
                     ),
             )
+            .when_some(rename_id, |row, id| {
+                let key_id = id.clone();
+                row.child(
+                    Button::new(SharedString::from(format!("rename-command-group-{id}")))
+                        .size(px(32.0))
+                        .icon(custom_icon(crate::gpui_shell::assets::nav::PENCIL))
+                        .ghost()
+                        .xsmall()
+                        .cursor_pointer()
+                        .debug_selector({
+                            let id = id.clone();
+                            move || format!("rename-command-group-{id}")
+                        })
+                        .aria_label(language.text(Message::CommandsRenameGroup))
+                        .tooltip(language.text(Message::CommandsRenameGroup))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.stop_propagation();
+                                this.edit_command_group(Some(key_id.clone()), window, cx);
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.edit_command_group(Some(id.clone()), window, cx);
+                        })),
+                )
+            })
             .when_some(delete_id, |row, id| {
                 row.child(
                     Button::new(SharedString::from(format!("delete-command-group-{id}")))
@@ -380,32 +408,60 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.edit_command_group(None, window, cx);
+    }
+
+    fn edit_command_group(
+        &mut self,
+        group_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let initial_name = match group_id.as_deref() {
+            Some(id) => {
+                let Some(group) = self.saved_commands.groups().iter().find(|group| group.id == id)
+                else {
+                    return;
+                };
+                group.name.clone()
+            },
+            None => String::new(),
+        };
         let language = crate::gpui_shell::config::ui_language(cx);
+        let title = language.text(if group_id.is_some() {
+            Message::CommandsRenameGroup
+        } else {
+            Message::CommandsAddGroup
+        });
         let input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(language.text(Message::CommandsGroupName))
         });
+        input.update(cx, |input, cx| input.set_value(initial_name, window, cx));
         let dialog_input = input.clone();
         let workspace = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, window, _| {
             let save_input = dialog_input.clone();
             let save_workspace = workspace.clone();
             let close_workspace = workspace.clone();
+            let save_id = group_id.clone();
             center_modal_dialog(dialog, window, 220.0)
                 .close_button(false)
-                .title(language.text(Message::CommandsAddGroup))
-                .child(Input::new(&dialog_input).w_full())
+                .title(title)
+                .child(Input::new(&dialog_input).w_full().accessibility_id("command-group-name"))
                 .footer(
                     DialogFooter::new()
                         .child(div().flex_1())
                         .child(
                             DialogClose::new().child(
                                 Button::new("command-group-cancel")
+                                    .debug_selector(|| "command-group-cancel".into())
                                     .label(language.text(Message::CommonCancel)),
                             ),
                         )
                         .child(
                             DialogAction::new().child(
                                 Button::new("command-group-save")
+                                    .debug_selector(|| "command-group-save".into())
                                     .primary()
                                     .label(language.text(Message::CommonSave)),
                             ),
@@ -415,7 +471,10 @@ impl NebulaWorkspace {
                     let name = save_input.read(cx).value().to_string();
                     let Some(workspace) = save_workspace.upgrade() else { return true };
                     workspace.update(cx, |this, cx| {
-                        let result = this.saved_commands.create_group(&name);
+                        let result = match save_id.as_deref() {
+                            Some(id) => this.saved_commands.rename_group(id, &name),
+                            None => this.saved_commands.create_group(&name),
+                        };
                         this.finish_group_change(result, window, cx)
                     })
                 })

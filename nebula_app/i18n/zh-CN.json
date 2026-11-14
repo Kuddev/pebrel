@@ -26,6 +26,7 @@
     "fold_collapse": "收起中间 {count} 行",
     "view": "视图",
     "raw": "原文",
+    "no_output": "没有输出",
     "copy": "复制原文",
     "copied": "已复制",
     "filter": "筛选数据行…",
@@ -202,7 +203,7 @@
       "terms": {
         "application": "应用 更新 版本 支持",
         "appearance": "连字 外观 主题 自定义 模板 导入 导出 字体 透明度 背景 背景模糊 模糊 语言 显示语言 终端效果 着色器 视频 动图 光标 平滑 动画 图标 调暗非活动窗格 分屏变暗 回滚 滚动 速度 历史 滚轮 缩放",
-        "profiles": "配置文件 终端 补全 命令历史 清除历史 启动 环境变量 刷新 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 时长 秒 常驻 自动关闭",
+        "profiles": "配置文件 终端 补全 命令历史 清除历史 启动 环境变量 刷新 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 时长 秒 常驻 自动关闭 命令输出 命令输出视图 命令输出自动渲染 自动结果视图 结构化视图 原始颜色",
         "providers": "供应商 服务商 模型 补齐 预测",
         "ssh": "主机 远程 连接",
         "network": "网络 代理 连接",
@@ -237,6 +238,11 @@
       "hybrid": "混合补齐",
       "description": "选择补齐模式，决定建议的显示方式和接受键。",
       "details": "行内模式：Tab 接受光标后的建议。列表模式：随输入显示候选，方向键选择、Tab 填入。混合模式：右方向键接受行内建议；Tab 展开列表，方向键选择、Enter 填入。Esc 关闭列表。接受建议不会执行命令。切换后对已打开终端立即生效。"
+    },
+    "command_output": {
+      "title": "命令输出",
+      "automatic": "命令输出自动渲染",
+      "description": "将支持的命令输出自动显示为结构化视图。关闭后保留终端原有颜色和排版，手动打开的视图仍可使用。"
     },
     "environment": {
       "refresh": "新建终端时刷新系统环境变量",
@@ -980,6 +986,7 @@
     "back_to_root": "返回全部命令",
     "group_count": "{count} 条命令",
     "add_group": "新建分组",
+    "rename_group": "重命名分组",
     "group_name": "分组名称",
     "builtin_group": "内置命令",
     "ungrouped": "未分组",
@@ -1477,6 +1484,9 @@
     "managed_unknown": "尚未识别此安装的来源。请通过原安装渠道更新；此副本已停用普通安装器更新。",
     "downloading_hint": "正在后台下载并校验适用于此设备的更新安装包。",
     "no_verified_package": "此版本没有适用于此设备的可验证安装包，请打开发布页手动下载。",
+    "download_zip": "下载 ZIP",
+    "portable_hint": "便携版需手动更新。下载 ZIP 后退出 Pebrel，再将新版完整解压到新目录。",
+    "portable_missing_zip": "便携版需手动更新。请到发布页查找与此设备架构匹配的 ZIP。",
     "check_fallback_failed": "GitHub API 访问受限（HTTP {status}），备用发布页查询也失败了：{error}。请稍后重试或打开发布页。",
     "check_unrecognized_release": "官方发布页未返回可识别的稳定版本，请稍后重试或打开发布页。",
     "installation_failed": "更新安装失败",

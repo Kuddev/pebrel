@@ -310,7 +310,12 @@ impl StreamProcessor {
                     event_proxy.send_event(Event::CommandStart);
                 },
                 OscEvent::CommandDone { exit_code } => {
-                    self.command_capture.finish(terminal, &mut self.inline_content, exit_code);
+                    self.command_capture.finish(
+                        terminal,
+                        &mut self.inline_content,
+                        exit_code,
+                        event_proxy,
+                    );
                     self.inline_content.finish_pending();
                     terminal.reading_shell_marker(
                         b'D',
@@ -1244,6 +1249,55 @@ mod tests {
                 stream.feed(&mut term, &Lens, b"\x1bc");
                 assert!(lifetime.upgrade().is_none());
                 assert!(!term.grid().may_have_images());
+            }
+        }
+    }
+
+    #[test]
+    fn disabling_automatic_command_views_preserves_ansi_and_skips_capture() {
+        use crate::index::{Column, Line};
+        use crate::inline_content::CommandView;
+        use crate::vte::ansi::{Color, NamedColor};
+        use std::cell::Cell;
+
+        struct Lens(Cell<bool>, Cell<usize>);
+        impl EventListener for Lens {
+            fn automatic_command_views_enabled(&self) -> bool {
+                self.0.get()
+            }
+            fn command_view(&self, _: &str, _: &str) -> Option<CommandView> {
+                self.1.set(self.1.get() + 1);
+                Some(CommandView { mime: "text/x-git-output".into(), title: "git status".into() })
+            }
+        }
+
+        for (start_enabled, end_enabled) in [(false, false), (false, true), (true, false)] {
+            let host = Lens(Cell::new(start_enabled), Cell::new(0));
+            let mut term = Term::new(
+                Config::default(),
+                &TermSize::new(80, 24),
+                Lens(Cell::new(true), Cell::new(0)),
+            );
+            let mut stream = StreamProcessor::default();
+            stream.feed(
+                &mut term,
+                &host,
+                b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmdpdCBzdGF0dXM=\x07\x1b]133;C\x07\x1b[32mstaged\x1b[0m\r\n\x1b[31mchanged\x1b[0m\r\n",
+            );
+            host.0.set(end_enabled);
+            stream.feed(&mut term, &host, b"\x1b]133;D;0\x07prompt>");
+
+            assert_eq!(host.1.get(), usize::from(start_enabled));
+            for (line, text, color) in
+                [(Line(0), "staged", NamedColor::Green), (Line(1), "changed", NamedColor::Red)]
+            {
+                assert_eq!(
+                    term.line_to_string(line, Column(0)..term.last_column(), false).trim(),
+                    text
+                );
+                let first = &term.grid()[line][Column(0)];
+                assert_eq!(first.fg, Color::Named(color));
+                assert!(first.inline_marker().is_none());
             }
         }
     }

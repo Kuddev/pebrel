@@ -40,8 +40,37 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) -> Vec<AnyElement> {
         let Some(session) = &self.session else { return Vec::new() };
+        let automatic_command_views = session.automatic_command_views_enabled();
+        if !automatic_command_views
+            && let Some(focused) = window.focused(cx)
+            && self.native_results.entities.values().any(|entity| {
+                let result = entity.read(cx);
+                (result.focus == focused || result.focus.contains_focused(window, cx))
+                    && result.source.upgrade().is_some_and(|source| source.has_grid_source())
+            })
+        {
+            let view = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                if window.focused(cx) == Some(focused) {
+                    let _ = view.update(cx, |view, cx| {
+                        if view
+                            .session
+                            .as_ref()
+                            .is_some_and(|session| !session.automatic_command_views_enabled())
+                        {
+                            window.focus(&view.focus_handle, cx);
+                        }
+                    });
+                }
+            });
+        }
         self.native_results.reconcile_retention(cx);
-        self.native_results.sync(&mut session.term.lock(), self.grid_rows(), cx);
+        self.native_results.sync(
+            &mut session.term.lock(),
+            self.grid_rows(),
+            automatic_command_views,
+            cx,
+        );
         let placements = self.native_results.placements();
         let available_width = self.native_result_width();
         let parent = cx.entity().downgrade();
@@ -144,6 +173,11 @@ pub(super) struct NativeResult {
 }
 
 impl NativeResult {
+    #[cfg(test)]
+    pub(super) fn focus_handle_for_test(&self) -> FocusHandle {
+        self.focus.clone()
+    }
+
     #[cfg(test)]
     pub(super) fn height(&self) -> Pixels {
         self.measured_height
@@ -364,17 +398,31 @@ impl NativeResult {
         }));
     }
 
-    fn raw_element(&self, _: &mut Context<'_, Self>) -> AnyElement {
+    fn raw_element(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let raw = self.selected_raw();
+        let body = div().debug_selector(|| "native-result-raw-content".into()).relative().w_full();
+        if raw.text.is_empty() && self.status != Status::Evicted {
+            let language = crate::gpui_shell::config::ui_language(cx);
+            let message = if self.status == Status::Receiving {
+                Message::NativeResultReceiving
+            } else {
+                Message::NativeResultNoOutput
+            };
+            // An empty stream still needs a body so the stream switcher can be reached.
+            return body
+                .min_h(self.row_height.max(px(tools::TOOLBAR_HEIGHT)))
+                .px_2()
+                .flex()
+                .items_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(language.text(message))
+                .into_any_element();
+        }
         let first = (self.visible_top / self.row_height.as_f32()).floor() as usize;
         let last = ((self.visible_top + self.visible_height) / self.row_height.as_f32()).ceil()
             as usize
             + 2;
-        div()
-            .debug_selector(|| "native-result-raw-content".into())
-            .relative()
-            .w_full()
-            .h(self.row_height * raw.lines.len() as f32)
+        body.h(self.row_height * raw.lines.len() as f32)
             .children((first.saturating_sub(2)..last.min(raw.lines.len())).map(|index| {
                 div()
                     .absolute()
@@ -392,8 +440,12 @@ impl NativeResult {
         if self.raw_stderr { &self.stderr } else { &self.raw }
     }
 
+    fn can_copy_source(&self) -> bool {
+        self.status != Status::Evicted && !self.selected_raw().text.is_empty()
+    }
+
     fn copy_source(&mut self, cx: &mut Context<'_, Self>) {
-        if self.status == Status::Evicted {
+        if !self.can_copy_source() {
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(self.selected_raw().text.clone()));

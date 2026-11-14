@@ -1,11 +1,8 @@
 package io.github.kuddev.pebrel.mobile.ui
 
 import androidx.annotation.DrawableRes
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,7 +28,6 @@ fun NewConnectionSheet(
     onDeployRelay: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var choosing by remember { mutableStateOf(false) }
@@ -49,21 +45,7 @@ fun NewConnectionSheet(
             }
         }
     }
-    // 圆角交给组件内部 Surface；外层描边不会随面板位移，会残留在屏幕顶部。
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheet,
-        shape = shape,
-        containerColor = colors.surface,
-        contentColor = colors.onSurface,
-        tonalElevation = 0.dp,
-        scrimColor = colors.scrim.copy(alpha = .62f),
-        dragHandle = {
-            Box(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 8.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(32.dp, 4.dp).background(colors.onSurfaceVariant.copy(alpha = .4f), RoundedCornerShape(2.dp)))
-            }
-        },
-    ) {
+    GlassSheet(onDismiss, sheet) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
             Text(stringResource(R.string.new_connection), fontSize = 13.sp, color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(start = 18.dp, top = 4.dp, bottom = 12.dp).semantics { heading() })
@@ -87,7 +69,7 @@ private fun NewConnectionRow(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+    Row(Modifier.fillMaxWidth().pressClickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .heightIn(min = 60.dp).padding(horizontal = 28.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Glyph(icon, Modifier.size(20.dp))
