@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use super::ui::geometry as layout_geometry;
-use super::{NebulaTheme, SizeInfo};
+use super::{NebulaTheme, SizeInfo, UiLanguage};
 use crate::config::ui_config::Profile;
 use crate::shell_detect::DetectedShell;
 use unicode_width::UnicodeWidthChar;
@@ -1278,7 +1278,7 @@ impl CommandPalette {
     }
 }
 
-fn localized_item_label(item: &PaletteItem, language: super::UiLanguage) -> &'static str {
+pub(crate) fn localized_item_label(item: &PaletteItem, language: UiLanguage) -> &'static str {
     use PaletteAction::*;
     if matches!(item.action, CycleCompletionStyle) {
         return language.text(crate::i18n::Message::SettingsCompletionCycle);

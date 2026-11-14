@@ -482,28 +482,7 @@ pub(crate) fn completion_colors(cx: &App, _term_bg: GpuiRgba) -> CompletionColor
     }
 }
 
-/// 设置页悬停/选中水洗与旧壳 `settings_skin` 同源：使用当前主题 accent，
-/// 深浅主题分别控制透明度。通用 chrome hover 仍保持中性，两种语义不混用。
-/// 设置页"这一项我改过"的标记色。
-///
-/// 不复用 accent：那是给按钮和选中底用的，饱和度是按"要被点"调的。这里只
-/// 需要在一条 2px 的细线上被扫到，高饱和的紫在深底上会发光振动，细元素尤其
-/// 明显——那就是"刺眼"的来源。所以**降饱和、保亮度**：可辨来自亮度差，刺眼
-/// 来自饱和度，两者可以拆开。
-pub fn settings_mark(cx: &App) -> Hsla {
-    if resolved_skin(cx).is_light {
-        // 浅色底上要更暗才看得见，同样压饱和。
-        hsla(250.0 / 360.0, 0.40, 0.47, 1.0)
-    } else {
-        hsla(250.0 / 360.0, 0.36, 0.71, 1.0)
-    }
-}
-
-/// 设置页的结构分割线（导航↔内容、页头↔正文）。
-///
-/// 比行左侧轨道更淡：轨道在说"这几行是一组"，是内容的一部分；这条线只是
-/// 在说"这是两个区"，属于容器。两者同色同粗的话，画面上就出现两条同等分量
-/// 的线在争同一件事的解释权。
+/// 设置页导航与分组卡内的细分隔线。
 pub fn settings_hairline(cx: &App) -> Hsla {
     let sk = resolved_skin(cx);
     // 浅色底上黑线比深色底上白线更"重"（同 alpha 视觉对比更高），所以浅色
@@ -529,6 +508,63 @@ fn sync_component_focus_ring_for_input(last_input_was_keyboard: bool, cx: &mut A
     Theme::global_mut(cx).ring = ring;
 }
 
+/// 设置卡片借用当前主题的中性色阶，独立于选中与焦点色。
+pub(super) fn settings_card_fill(cx: &App) -> Hsla {
+    settings_card_fill_for_theme(&resolved_theme(cx))
+}
+
+fn settings_card_fill_for_theme(theme: &ResolvedTheme) -> Hsla {
+    let sk = theme.skin();
+    if sk.is_light {
+        return solid(sk.panel).blend(hsla(0.0, 0.0, 1.0, 0.86));
+    }
+
+    let panel = sk.panel;
+    let card = sk.card;
+    // The built-in opaque picker fills are the next step in each neutral ramp.
+    if !theme.is_custom()
+        && card.a == 255
+        && luma(card.r, card.g, card.b) > luma(panel.r, panel.g, panel.b)
+    {
+        return solid(crate::display::ui::surface::over(Rgba { a: 128, ..card }, panel));
+    }
+
+    // Custom cards describe the shell; translucent picker fills describe selection.
+    // Lift the panel in its own hue when there is no suitable raised swatch.
+    let base = solid(panel);
+    Hsla { l: (base.l + 7.0 / 255.0).min(1.0), ..base }
+}
+
+pub(super) fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    if !resolved_skin(cx).is_light {
+        return Vec::new();
+    }
+    [(0.06, 0.0, 0.0, 1.0), (0.08, 4.0, 12.0, 0.0)]
+        .into_iter()
+        .map(|(alpha, y, blur, spread)| gpui::BoxShadow {
+            color: hsla(220.0 / 360.0, 0.4, 0.14, alpha),
+            offset: point(px(0.0), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset: false,
+        })
+        .collect()
+}
+
+pub(super) fn settings_canvas_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
+    } else {
+        gpui::transparent_black()
+    }
+}
+
+/// 中性悬停色用于次要操作，强调色留给选中、开启和焦点。
+pub(super) fn neutral_hover(cx: &App) -> Hsla {
+    ink(resolved_skin(cx).ink).opacity(0.05)
+}
+
+/// 设置页悬停与选中使用当前主题的强调色。
 pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
     let sk = resolved_skin(cx);
     let (hover_alpha, strong_alpha) = if sk.is_light { (10, 18) } else { (30, 46) };

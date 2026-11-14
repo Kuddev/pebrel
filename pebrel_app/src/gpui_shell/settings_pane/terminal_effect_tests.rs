@@ -77,6 +77,7 @@ fn keyboard_picker_enable_reload_and_remove_use_rendered_controls(cx: &mut TestA
         focus.focus(window, cx);
     });
     draw(&mut window);
+    press("shift-tab", &mut window); // Restore the modified animation setting.
     press("shift-tab", &mut window); // Enable; disabled Reload is skipped.
     press("shift-tab", &mut window); // Add WGSL.
     press("enter", &mut window);
