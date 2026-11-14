@@ -62,6 +62,7 @@ class PowerShellPointerTests(unittest.TestCase):
         script = home / "init.ps1"
         (home / "native-editor.ps1").write_text(
             (root / "completion.ps1").read_text(encoding="utf-8") + "\n" +
+            (root / "clipboard.ps1").read_text(encoding="utf-8") + "\n" +
             (root / "pointer.ps1").read_text(encoding="utf-8"), encoding="utf-8",
         )
         bootstrap = home / "bootstrap.ps1"
@@ -215,13 +216,145 @@ class PowerShellPointerTests(unittest.TestCase):
                 self.assertNotIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
 
     def test_pointer_chords_preserve_the_clipboard_key(self) -> None:
-        session = self.start(before="Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F11 -Function BeginningOfLine")
+        # An unrelated user-held chord (never a Pebrel-owned F-key) must not
+        # disturb the native pointer or editor channels.
+        session = self.start(before="Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F2 -Function BeginningOfLine")
         os.write(session.master, b"echo abc")
         self.assertEqual(self.query(session)[3], "echo abc")
         self.action(session, 1 + 5)
         self.assertEqual(self.snapshot(session), (5, "echo abc"))
-        os.write(session.master, b"\x1b[23;6~")
-        self.assertEqual(self.snapshot(session), (0, "echo abc"))
+        # The owned redraw chord clears the glass through the line editor: the
+        # buffer and caret survive it in place.
+        os.write(session.master, b"\x1b[20;6~")
+        self.assertEqual(self.snapshot(session), (5, "echo abc"))
+
+    def test_user_owned_redraw_chord_withdraws_the_editor_channel(self) -> None:
+        # Ctrl+Shift+F9 is the owned prompt-redraw chord: a user binding on it
+        # withdraws only the redraw capability. Query, completion, pointer and
+        # the native paste chord keep working exactly as in the pre-redraw
+        # releases.
+        session = self.start(
+            before="Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function BeginningOfLine"
+        )
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"echo probe\x1b[24;6~")
+        self.assertEqual(self.value(session, "pebrel_editor")[3], "echo probe")
+        os.write(session.master, b"\x1b[20;6~")
+        # The user's BeginningOfLine still owns the chord, not ClearScreen.
+        session.settle()
+        self.assertEqual(self.snapshot(session), (0, "echo probe"))
+
+    def test_production_load_order_keeps_paste_and_redraw_independent(self) -> None:
+        # Production loads completion.ps1 before clipboard.ps1: the redraw
+        # chord must never squat on the native paste's Ctrl+Shift+F11. The
+        # installed redraw identity lives in Description; Function is only a
+        # display name (the installed handler is a scriptblock).
+        session = self.start()
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9).Description\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"PebrelRedraw:cHdzaDpmaXh0dXJl", output)
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F11).Function\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"PebrelClipboardPaste", output)
+        self.assertNotIn(b"PebrelRedraw:", output.split(b"(Get-PSReadLineKeyHandler")[-1])
+
+    def test_redraw_identity_is_the_description_token(self) -> None:
+        # The installed redraw handler is a scriptblock performing the native
+        # ClearScreen work, carrying its identity in Description: Function is
+        # a display name and proves nothing, so the re-check matches the token
+        # alone — and the chord still clears the glass through the line editor.
+        session = self.start()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=cHdzaDpmaXh0dXJl\x07", session.output)
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9).Description\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"PebrelRedraw:cHdzaDpmaXh0dXJl", output)
+        os.write(session.master, b"echo abc")
+        self.assertEqual(self.query(session)[3], "echo abc")
+        self.action(session, 1 + 5)
+        self.assertEqual(self.snapshot(session), (5, "echo abc"))
+        # The chord clears the glass through the line editor: buffer and caret
+        # hold their place.
+        os.write(session.master, b"\x1b[20;6~")
+        self.assertEqual(self.snapshot(session), (5, "echo abc"))
+
+    def test_redraw_install_failure_is_isolated_from_the_editor(self) -> None:
+        # A PSReadLine that refuses the redraw binding (2.4.5 rejects the
+        # Function+Description combination outright) must only cost the redraw
+        # capability: query, completion and pointer init keep working, and no
+        # redraw advertisement appears.
+        session = self.start(before=(
+            "function global:Set-PSReadLineKeyHandler {\n"
+            "  if ($args -contains 'Ctrl+Shift+F9') {\n"
+            "    [Console]::Write(\"$([char]27)]1337;SetUserVar=qa_redraw_refused=eQ==$([char]7)\")\n"
+            "    throw 'fixture: redraw refused'\n"
+            "  }\n"
+            "  & (Get-Command Set-PSReadLineKeyHandler -CommandType Cmdlet) @args\n"
+            "}\n"
+        ))
+        # The fixture must prove the refusal was actually injected before the
+        # isolation assertions mean anything.
+        self.assertIn(b"SetUserVar=qa_redraw_refused=eQ==\x07", session.output)
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertIn(b"SetUserVar=pebrel_pointer_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"echo probe\x1b[24;6~")
+        self.assertEqual(self.value(session, "pebrel_editor")[3], "echo probe")
+
+    def test_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
+        # The advertisement follows the live chord: rebinding it in the same
+        # session revokes the capability with an empty value on the next
+        # prompt, and the user's new binding keeps the chord.
+        session = self.start()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=cHdzaDpmaXh0dXJl\x07", session.output)
+        os.write(
+            session.master,
+            b"Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -Function BeginningOfLine\r",
+        )
+        output = session.wait(b"PS> ")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        os.write(session.master, b"(Get-PSReadLineKeyHandler -Chord Ctrl+Shift+F9).Function\r")
+        output = session.wait(b"PS> ")
+        self.assertIn(b"BeginningOfLine", output)
+        self.assertNotIn(b"ClearScreen", output)
+
+    def test_same_name_scriptblock_before_startup_stays_user_owned(self) -> None:
+        # Function is PSReadLine's display description, not handler identity:
+        # a scriptblock wearing BriefDescription ClearScreen keeps the chord
+        # user-owned — the integration may neither overwrite it nor advertise
+        # the redraw capability.
+        session = self.start(before=(
+            "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ScriptBlock { "
+            "[Microsoft.PowerShell.PSConsoleReadLine]::Insert('USER-F9') } -BriefDescription ClearScreen"
+        ))
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"\x1b[20;6~")
+        session.settle()
+        # The user's scriptblock still owns the chord and keeps firing.
+        self.assertEqual(self.snapshot(session)[1], "USER-F9")
+
+    def test_rebinding_to_a_same_name_scriptblock_revokes_the_advertisement(self) -> None:
+        # Rebinding the chord to a scriptblock described as ClearScreen must
+        # revoke the capability on the next prompt: the description alone does
+        # not make it the native handler this session installed.
+        session = self.start()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=cHdzaDpmaXh0dXJl\x07", session.output)
+        os.write(session.master, (
+            "Set-PSReadLineKeyHandler -Chord Ctrl+Shift+F9 -ScriptBlock { "
+            "[Microsoft.PowerShell.PSConsoleReadLine]::Insert('USER-F9') } -BriefDescription ClearScreen\r"
+        ).encode())
+        # Keying the raw chord as soon as the prompt shows up lands it inside
+        # the read's cursor-position handshake and the buffer receives "~;".
+        # Wait for the next editor read to announce itself, then finish the
+        # handshake before sending the chord.
+        session.wait(b"SetUserVar=qa_ready=")
+        session.settle()
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", session.output)
+        os.write(session.master, b"\x1b[20;6~")
+        session.settle()
+        self.assertEqual(self.snapshot(session)[1], "USER-F9")
 
     def test_production_bootstrap_preserves_native_prompt_and_command_lifecycle(self) -> None:
         session = self.start(before="function prompt { if ($?) { 'native-ok> ' } else { 'native-failed> ' } }")

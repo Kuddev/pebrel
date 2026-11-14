@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import unittest
 
 from scripts.tests import test_shell_integration as shell_integration
@@ -39,7 +40,10 @@ class CompletionEditorTests(unittest.TestCase):
         self.assertTrue(owner.startswith(("bash:", "zsh:", "wsl|")), owner)
         return owner, int(cursor), line
 
-    def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False) -> shell_integration.ShellSession:
+    def start_bootstrap(self, shell: str, route: str, owned_binding: bool = False,
+                        owned_redraw: bool = False, owned_macro: bool = False,
+                        vicmd_widget: bool = False, vicmd_macro: bool = False,
+                        vi_command_macro: bool = False, vi_mode: bool = False) -> shell_integration.ShellSession:
         root = Path(__file__).resolve().parents[2]
         program = shutil.which(shell)
         if not program:
@@ -64,13 +68,59 @@ class CompletionEditorTests(unittest.TestCase):
             rc.write_text(body.group(1) + "\n" + adapter)
             args = ["--noprofile", "--rcfile", str(rc), "-i"] if shell == "bash" else ["-d", "-i"]
             env = {} if shell == "bash" else {"ZDOTDIR": str(directory)}
-        if owned_binding:
+        if owned_binding or owned_redraw or owned_macro or vicmd_widget or vicmd_macro or vi_command_macro or vi_mode:
             if shell == "bash":
                 inputrc = self.fixture.home / ".inputrc"
-                inputrc.write_text('"\\e[45~": beginning-of-line\n')
+                lines = ""
+                if owned_binding:
+                    lines += '"\\e[45~": beginning-of-line\n'
+                if owned_redraw:
+                    lines += '"\\e[46~": beginning-of-line\n'
+                if owned_macro:
+                    # A string macro, which bind -p and bind -X do not list.
+                    lines += '"\\e[46~": "PEBREL-USER-MACRO"\n'
+                if vi_command_macro:
+                    # vi mode: the integration installs its clear-screen into
+                    # the startup keymap (vi-insert) while the chord carries a
+                    # user macro in vi-command, reachable mid-prompt via ESC.
+                    # The leading "a" makes the vi-command macro append text,
+                    # so the insertion is deterministic.
+                    lines += 'set editing-mode vi\nset keymap vi-command\n"\\e[46~": "aPEBREL-USER-MACRO"\n'
+                elif vi_mode:
+                    # Plain vi mode, no custom keys anywhere on the chord.
+                    lines += 'set editing-mode vi\n'
+                inputrc.write_text(lines)
                 env["INPUTRC"] = str(inputrc)
             else:
-                (self.fixture.home / ".zshrc").write_text("bindkey '\\e[45~' beginning-of-line\n")
+                zshrc = ""
+                if owned_binding:
+                    zshrc += "bindkey '\\e[45~' beginning-of-line\n"
+                if owned_redraw:
+                    zshrc += "bindkey '\\e[46~' beginning-of-line\n"
+                if owned_macro:
+                    zshrc += "bindkey -s '\\e[46~' 'PEBREL-USER-MACRO'\n"
+                if vicmd_widget:
+                    # vi mode: the chord is free in viins but carries a user
+                    # widget in vicmd, reachable mid-prompt via ESC.
+                    zshrc += (
+                        "bindkey -v\n"
+                        "userwid() { BUFFER+='VICMD-USER' }; zle -N userwid\n"
+                        "bindkey -M vicmd '\\e[46~' userwid\n"
+                    )
+                if vicmd_macro:
+                    # vi mode: the chord resolves to our built-in in viins, but
+                    # vicmd carries a quoted string macro whose body merely
+                    # contains the word undefined-key. A bare undefined-key
+                    # report means unbound; a quoted macro ends in a quote and
+                    # must revoke.
+                    zshrc += (
+                        "bindkey -v\n"
+                        "bindkey -M vicmd -s '\\e[46~' 'aundefined-key'\n"
+                    )
+                if vi_mode:
+                    # Plain vi mode, no custom keys anywhere on the chord.
+                    zshrc += "bindkey -v\n"
+                (self.fixture.home / ".zshrc").write_text(zshrc)
         session = shell_integration.ShellSession(program, self.fixture.home, args, env)
         self.addCleanup(session.close)
         session.wait(b"\x1b]133;A\x07")
@@ -133,6 +183,304 @@ class CompletionEditorTests(unittest.TestCase):
 
     def test_ssh_zsh_bootstrap_retains_user_owned_query_binding(self) -> None:
         self.check_bootstrap_binding("zsh", "ssh")
+
+    def check_integration_clear(self, shell: str, route: str) -> None:
+        session = self.start_bootstrap(shell, route)
+        ready = re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output)
+        if shell == "bash":
+            version = subprocess.check_output(
+                [shutil.which(shell), "--noprofile", "--norc", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+                text=True,
+            )
+            if int(version) < 4:
+                # Legacy Bash never installs the channel, so nothing owns the
+                # redraw key either: the byte stays inert for the host to decide.
+                self.assertIsNone(ready, session.output)
+                return
+        self.assertIsNotNone(ready, session.output)
+        # The redraw key drives the line editor's own clear-screen: the editor
+        # wipes the glass and repaints prompt, buffer and caret.
+        os.write(session.master, b"echo kept-line")
+        os.write(session.master, b"\x1b[46~")
+        output = session.wait(b"\x1b[2J")
+        self.assertIn(b"\x1b[2J", output)
+        os.write(session.master, b"\n")
+        output = session.wait(b"kept-line\r\n")
+        self.assertIn(b"kept-line\r\n", output)
+        # While the integration still owns the key, every prompt keeps
+        # announcing the redraw capability with the same token.
+        sustained = session.command("printf 'SUSTAINED\\n'", b"SUSTAINED\r\n")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=", sustained)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=\x07", sustained)
+
+    def test_ssh_bash_bootstrap_redraws_through_the_owned_clear_key(self) -> None:
+        self.check_integration_clear("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_redraws_through_the_owned_clear_key(self) -> None:
+        self.check_integration_clear("zsh", "ssh")
+
+    def check_legacy_bash(self, shell: str, session: shell_integration.ShellSession) -> bool:
+        if shell == "bash":
+            version = subprocess.check_output(
+                [shutil.which(shell), "--noprofile", "--norc", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+                text=True,
+            )
+            if int(version) < 4:
+                # Legacy Bash installs neither capability and binds no key.
+                self.assertNotIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+                self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+                return True
+        return False
+
+    def check_owned_redraw_binding(self, shell: str, route: str) -> None:
+        session = self.start_bootstrap(shell, route, owned_redraw=True)
+        if self.check_legacy_bash(shell, session):
+            return
+        # A user-owned redraw key only withdraws the redraw capability: the
+        # query capability keeps reporting, matching the pre-redraw releases.
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"echo tail\x1b[46~printf 'OWNED-REDRAW\\n'; \n")
+        output = session.wait(b"OWNED-REDRAW\r\n")
+        self.assertIn(b"OWNED-REDRAW\r\n", output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor=", output)
+        # The user's function binding survived; the reserved chord itself was
+        # never replaced by clear-screen (the table still lists the user's
+        # normal Ctrl+L entry, so only the reserved chord may be inspected).
+        if shell == "bash":
+            bindings = session.command(
+                "bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
+                b"BINDINGS-END\r\n",
+            )
+            self.assertIn(b'"\\e[46~": beginning-of-line', bindings)
+            self.assertNotIn(b'"\\e[46~": clear-screen', bindings)
+
+    def test_ssh_bash_bootstrap_retains_user_owned_redraw_binding(self) -> None:
+        self.check_owned_redraw_binding("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_retains_user_owned_redraw_binding(self) -> None:
+        self.check_owned_redraw_binding("zsh", "ssh")
+
+    def check_owned_redraw_macro(self, shell: str, route: str) -> None:
+        session = self.start_bootstrap(shell, route, owned_macro=True)
+        if self.check_legacy_bash(shell, session):
+            return
+        # A string macro on the redraw key is invisible to bind -p and bind -X
+        # in Bash; the probe must still treat the key as user-owned and leave
+        # the macro working, with the query capability unaffected.
+        self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        os.write(session.master, b"echo tail\x1b[46~")
+        _, _, line = self.snapshot(session)
+        self.assertEqual(line, "echo tailPEBREL-USER-MACRO")
+        if shell == "bash":
+            bindings = session.command(
+                "bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
+                b"BINDINGS-END\r\n",
+            )
+            self.assertIn(b'PEBREL-USER-MACRO', bindings)
+            self.assertNotIn(b'"\\e[46~": clear-screen', bindings)
+
+    def test_ssh_bash_bootstrap_retains_user_owned_redraw_macro(self) -> None:
+        self.check_owned_redraw_macro("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_retains_user_owned_redraw_macro(self) -> None:
+        self.check_owned_redraw_macro("zsh", "ssh")
+
+    def check_query_only_session(self, shell: str, route: str) -> None:
+        # The pre-redraw integrations advertised query readiness only and left
+        # the redraw key unbound: the current installation must not touch the
+        # key at all in such a session.
+        session = self.start_bootstrap(shell, route)
+        if self.check_legacy_bash(shell, session):
+            return
+        ready_token = re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output)
+        self.assertIsNotNone(ready_token, session.output)
+        # Withdraw the redraw binding this invocation installed — it now spans
+        # every keymap, so the withdrawal must too — which lands the session
+        # exactly where a query-only integration advertises: the chord free in
+        # every keymap.
+        session.command(
+            "for km in emacs-standard emacs-ctlx emacs-meta vi-insert vi-command vi-move; do"
+            " bind -m \"$km\" -r '\\e[46~' 2>/dev/null; done;"
+            " for km in $(bindkey -l 2>/dev/null); do bindkey -M \"$km\" -r '\\e[46~' 2>/dev/null; done;"
+            " printf 'WITHDRAWN\\n'",
+            b"WITHDRAWN\r\n",
+        )
+        # The next prompt re-verifies ownership and revokes the capability with
+        # an empty value while query readiness keeps its token.
+        output = session.command("printf 'REPROBE\\n'", b"REPROBE\r\n")
+        self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+        self.assertIn(ready_token.group(0), output)
+        if shell == "bash":
+            bindings = session.command(
+                "bind -p 2>/dev/null; bind -X 2>/dev/null; bind -s 2>/dev/null; printf 'BINDINGS-END\\n'",
+                b"BINDINGS-END\r\n",
+            )
+            self.assertNotIn(b'"\\e[46~"', bindings)
+            self.assertIn(b'"\\e[45~"', bindings)
+        else:
+            output = session.command("bindkey '\\e[46~'; printf 'UNBOUND-CHECK\\n'", b"UNBOUND-CHECK\r\n")
+            self.assertIn(b"undefined-key", output)
+
+    def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("zsh", "ssh")
+
+    def check_redraw_rebind(self, shell: str, route: str) -> None:
+        # The advertisement follows the live binding: rebinding the chord in
+        # the same shell — without reconnecting — revokes the capability on
+        # the next prompt, and the user's new binding keeps firing.
+        # zsh additionally covers the two lookalike rebinds from review: a
+        # macro whose text is exactly the widget's name, and a user widget
+        # shadowing that name — neither may keep the capability announced.
+        rebinds = {
+            "bash": [
+                # Review repro: a lookalike line that merely CONTAINS the
+                # entry (a chord sequence ending in \e[46~ bound to
+                # clear-screen) must not satisfy the probe once the real
+                # entry is gone — the quoted macro keeps the chord and fires.
+                (
+                    "bind '\"\\C-x\\\"\\e[46~\": clear-screen';"
+                    " bind '\"\\e[46~\": \"QUOTED-KEY-MACRO\"'",
+                    "QUOTED-KEY-MACRO",
+                ),
+                ("bind '\"\\e[46~\": \"PEBREL-REBIND\"'", "PEBREL-REBIND"),
+            ],
+            "zsh": [
+                ("bindkey -s '\\e[46~' 'PEBREL-REBIND'", "PEBREL-REBIND"),
+                ("bindkey -s '\\e[46~' 'clear-screen'", "clear-screen"),
+                (
+                    "userfn() { BUFFER+='USERWID'; }; zle -N clear-screen userfn;"
+                    " bindkey '\\e[46~' clear-screen",
+                    "USERWID",
+                ),
+            ],
+        }[shell]
+        session = self.start_bootstrap(shell, route)
+        if self.check_legacy_bash(shell, session):
+            return
+        token = re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output)
+        self.assertIsNotNone(token, session.output)
+        if shell == "bash":
+            # A decoy clear-screen on \e[146~ must not satisfy the probe for
+            # \e[46~: the following rebinds revoke despite the decoy staying.
+            session.command("bind '\"\\e[146~\": clear-screen'; printf 'DECOY\\n'", b"DECOY\r\n")
+        for rebind, inserted in rebinds:
+            os.write(session.master, b"\x15")  # discard any line from the prior case
+            session.command(rebind + "; printf 'REBIND-DONE\\n'", b"REBIND-DONE\r\n")
+            output = session.command("printf 'REBOUND\\n'", b"REBOUND\r\n")
+            self.assertIn(b"SetUserVar=pebrel_editor_redraw=\x07", output)
+            self.assertIn(b"SetUserVar=pebrel_editor_ready=", output)
+            os.write(session.master, b"echo tail\x1b[46~")
+            _, _, line = self.snapshot(session)
+            self.assertEqual(line, f"echo tail{inserted}", f"{shell}: {rebind}")
+
+    def test_ssh_bash_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
+        self.check_redraw_rebind("bash", "ssh")
+
+    def test_ssh_zsh_rebinding_the_redraw_chord_revokes_the_advertisement(self) -> None:
+        self.check_redraw_rebind("zsh", "ssh")
+
+    def check_redraw_keymap_switch(self, route: str) -> None:
+        # vi mode: the prompt validates the main keymap, but one prompt can
+        # switch keymaps mid-line (ESC -> vicmd). A user widget on the chord
+        # in vicmd keeps the capability revoked — announcing from viins alone
+        # would send the byte into user code — while the widget itself stays.
+        session = self.start_bootstrap("zsh", route, vicmd_widget=True)
+        # A user widget on the chord in any keymap aborts the whole install:
+        # the capability is never announced at all — no token and no empty
+        # revocation either — while the widget itself stays.
+        self.assertIsNotNone(
+            re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output),
+            session.output,
+        )
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        # Within the same prompt: ESC switches to vicmd and the chord fires
+        # the user's widget into the line, then Enter runs the buffer.
+        os.write(session.master, b"echo tail")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b[46~\n")
+        output = session.wait(b"tailVICMD-USER\r\n")
+        self.assertIn(b"tailVICMD-USER\r\n", output)
+
+    def test_ssh_zsh_redraw_keymap_switch_in_the_same_prompt_revokes(self) -> None:
+        self.check_redraw_keymap_switch("ssh")
+
+    def check_redraw_foreign_keymap_macro(self, shell: str, route: str) -> None:
+        # The chord is ours in the startup keymap, but a quoted macro waits in
+        # the keymap ESC reaches mid-prompt (vicmd / vi-command). A macro body
+        # that merely contains the word undefined-key is user code, not an
+        # unbound key: the prompt must revoke instead of announcing, and the
+        # macro keeps firing.
+        flag = {"bash": "vi_command_macro", "zsh": "vicmd_macro"}[shell]
+        session = self.start_bootstrap(shell, route, **{flag: True})
+        if self.check_legacy_bash(shell, session):
+            return
+        # A user binding in any keymap aborts the whole install: no redraw
+        # announcement and no empty revocation either, while query readiness
+        # and the user's macro keep working.
+        self.assertIsNotNone(
+            re.search(rb"SetUserVar=pebrel_editor_ready=([^\x07]+)\x07", session.output),
+            session.output,
+        )
+        self.assertNotIn(b"SetUserVar=pebrel_editor_redraw=", session.output)
+        # Within the same prompt: ESC switches to the foreign keymap and the
+        # chord fires the user's macro into the line, then Enter runs it.
+        os.write(session.master, b"echo tail")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b[46~\n")
+        output = session.wait(b"tailPEBREL-USER-MACRO\r\n" if shell == "bash" else b"tailundefined-key\r\n")
+        self.assertIn(b"tailPEBREL-USER-MACRO\r\n" if shell == "bash" else b"tailundefined-key\r\n", output)
+
+    def test_ssh_bash_redraw_macro_in_the_vi_command_keymap_revokes(self) -> None:
+        self.check_redraw_foreign_keymap_macro("bash", "ssh")
+
+    def test_ssh_zsh_quoted_macro_in_another_keymap_revokes(self) -> None:
+        self.check_redraw_foreign_keymap_macro("zsh", "ssh")
+
+    def check_redraw_vi_mode_plain(self, shell: str, route: str) -> None:
+        # Review reproduction, vi mode with no custom keys anywhere on the
+        # chord: the capability is announced only because the installation now
+        # covers every reachable keymap, so vicmd / vi-command consume the
+        # whole chord with our clear-screen. Sending it mid-line clears the
+        # glass and leaves the line intact — the tail "~" must never run the
+        # invert-case command ("original" -> "originaL").
+        session = self.start_bootstrap(shell, route, vi_mode=True)
+        if self.check_legacy_bash(shell, session):
+            return
+        self.assertIsNotNone(
+            re.search(rb"SetUserVar=pebrel_editor_redraw=([^\x07]+)\x07", session.output),
+            session.output,
+        )
+        os.write(session.master, b"printf 'LINE:%s\\n' original")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b")
+        time.sleep(0.4)
+        os.write(session.master, b"\x1b[46~")
+        time.sleep(0.4)
+        os.write(session.master, b"\n")
+        output = session.wait(b"LINE:original")
+        self.assertIn(b"LINE:original\r\n", output)
+        self.assertNotIn(b"originaL", session.output)
+
+    def test_ssh_zsh_plain_vi_mode_fully_consumes_the_redraw_chord(self) -> None:
+        self.check_redraw_vi_mode_plain("zsh", "ssh")
+
+    def test_ssh_bash_plain_vi_mode_fully_consumes_the_redraw_chord(self) -> None:
+        self.check_redraw_vi_mode_plain("bash", "ssh")
+
+    def test_ssh_bash_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("bash", "ssh")
+
+    def test_ssh_zsh_bootstrap_query_only_session_leaves_redraw_unbound(self) -> None:
+        self.check_query_only_session("zsh", "ssh")
 
     def check_middle_edit(self, shell: str) -> None:
         session = self.start(shell)

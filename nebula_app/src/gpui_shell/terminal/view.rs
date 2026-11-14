@@ -58,7 +58,7 @@ use nebula_terminal::index::{Column, Line, Point as TermPoint, Side};
 use nebula_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
 use nebula_terminal::selection::{Selection, SelectionType};
 use nebula_terminal::term::TermMode;
-use nebula_terminal::vte::ansi::CursorStyle;
+use nebula_terminal::vte::ansi::{ClearMode, CursorStyle, Handler as _};
 
 use std::sync::Arc;
 
@@ -530,6 +530,10 @@ pub struct TerminalView {
     suggestion_task: Option<suggest::Pending>,
     completion_session: crate::completion::Session,
     completion_editor: editor::Editor,
+    /// 拥有 redraw 键的 shell token（`pebrel_editor_redraw` 上报）。与查询
+    /// 能力（`completion_editor`）分开声明：旧集成只报 query、不装 redraw
+    /// 键，二者混用会让升级后的客户端把键发进未绑定它的活动 shell。
+    editor_redraw_owner: Option<String>,
     editor_query_task: Option<gpui::Task<()>>,
     ghost_enabled: bool,
     completion_style: crate::display::CompletionStyle,
@@ -1289,6 +1293,40 @@ impl TerminalView {
             cx.notify();
         }
         true
+    }
+
+    /// 清屏（设置页「清屏」动作的落点）。应用侧立刻清掉可见屏与回滚（零
+    /// 延迟反馈），随后按前台状态分流：
+    /// - 提示符状态（shell 在等输入，OSC 133 跟踪）：发集成自有键让 shell
+    ///   行编辑器自己清屏重绘提示符，行状态与屏幕保持同步；
+    /// - 命令运行中或集成通道未就绪：应用侧直接把光标归顶，顺序输出从顶
+    ///   部继续；绝不发送 ^L 之类的键盘字节——那会执行 shell 里用户对
+    ///   Ctrl+L 的任意重绑定（审查裁定 2026-11-12）；
+    /// - 备用屏（vim/less 等全屏程序）：^L 不是清屏，整键不动。
+    pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else { return };
+        {
+            let mut term = session.term.lock();
+            if term.mode().contains(TermMode::ALT_SCREEN) {
+                return;
+            }
+            term.clear_screen(ClearMode::All);
+            term.clear_screen(ClearMode::Saved);
+            if term.nebula_prompt_active() {
+                drop(term);
+                // editor_clear_bytes reads term_mode(), which re-locks the same
+                // term mutex; the redraw decision must run after the guard is
+                // released, and the fallback re-locks for the cursor home.
+                if let Some(bytes) = self.editor_clear_bytes() {
+                    self.write_bytes(bytes);
+                } else {
+                    session.term.lock().goto(0, 0);
+                }
+            } else {
+                term.goto(0, 0);
+            }
+        }
+        cx.notify();
     }
 
     fn paste_now(&mut self, text: &str, cx: &mut Context<Self>) {

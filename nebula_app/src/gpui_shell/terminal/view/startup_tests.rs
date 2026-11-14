@@ -110,6 +110,214 @@ pub(super) fn feed(view: &mut TerminalView, bytes: &[u8]) {
     parser.advance(&mut *term, bytes);
 }
 
+#[gpui::test]
+fn clear_screen_clears_history_and_redraws_only_through_the_integration_key(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, receiver) = open(cx);
+    // (prompt, ready, redraw)：redraw 是独立于 query 的显式能力。命令运行
+    // 中、无任何声明、以及 2.5.3 旧集成的 query-only 会话（ready 有、
+    // redraw 缺席——键在旧 shell 里未绑定）都不发任何字节（应用侧光标归
+    // 顶）；只有 `pebrel_editor_redraw` 声明的提示符才发 `\e[46~`。任何状
+    // 态都绝不发 ^L——无论清屏快捷键绑定在哪个键上，^L 都会执行 shell 里
+    // 用户对 Ctrl+L 的任意重绑定（审查裁定 2026-11-12）。
+    for (prompt, ready, redraw) in
+        [(false, false, false), (true, false, false), (true, true, false), (true, true, true)]
+    {
+        view.update(cx, |view, cx| {
+            if ready || redraw {
+                view.process_event(
+                    TermEvent::UserVar {
+                        name: "pebrel_shell".into(),
+                        value: "bash:clear-fixture".into(),
+                    },
+                    cx,
+                );
+            }
+            if ready {
+                view.process_event(
+                    TermEvent::UserVar {
+                        name: "pebrel_editor_ready".into(),
+                        value: "bash:clear-fixture".into(),
+                    },
+                    cx,
+                );
+            }
+            if redraw {
+                view.process_event(
+                    TermEvent::UserVar {
+                        name: "pebrel_editor_redraw".into(),
+                        value: "bash:clear-fixture".into(),
+                    },
+                    cx,
+                );
+            }
+            for _ in 0..40 {
+                feed(view, b"previous output\r\n");
+            }
+            {
+                let mut term = view.session.as_ref().unwrap().term.lock();
+                assert!(term.history_size() > 0);
+                term.selection = Some(Selection::new(
+                    SelectionType::Simple,
+                    TermPoint::new(Line(0), Column(0)),
+                    Side::Left,
+                ));
+                if prompt {
+                    term.nebula_add_prompt_mark();
+                } else {
+                    term.nebula_end_prompt();
+                }
+            }
+            receiver.try_iter().for_each(drop);
+            view.clear_screen(cx);
+            let term = view.session.as_ref().unwrap().term.lock();
+            assert_eq!(term.history_size(), 0);
+            assert_eq!(term.grid().display_offset(), 0);
+            assert!(term.selection.is_none());
+            assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
+            if !prompt || !redraw {
+                assert_eq!(term.grid().cursor.point, TermPoint::new(Line(0), Column(0)));
+            }
+        });
+        let writes: Vec<_> = receiver
+            .try_iter()
+            .filter_map(|message| match message {
+                Msg::Input(bytes) => Some(bytes.into_owned()),
+                _ => None,
+            })
+            .collect();
+        let expected = if prompt && redraw { vec![b"\x1b[46~".to_vec()] } else { vec![] };
+        assert_eq!(writes, expected, "prompt={prompt} ready={ready} redraw={redraw}");
+        assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
+    }
+}
+
+#[gpui::test]
+fn clear_screen_sends_the_owned_powershell_chord_for_pwsh(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    view.update(cx, |view, cx| {
+        view.process_event(
+            TermEvent::UserVar { name: "pebrel_shell".into(), value: "pwsh:clear-fixture".into() },
+            cx,
+        );
+        view.process_event(
+            TermEvent::UserVar {
+                name: "pebrel_editor_ready".into(),
+                value: "pwsh:clear-fixture".into(),
+            },
+            cx,
+        );
+        view.process_event(
+            TermEvent::UserVar {
+                name: "pebrel_editor_redraw".into(),
+                value: "pwsh:clear-fixture".into(),
+            },
+            cx,
+        );
+        feed(view, b"previous output\r\n");
+        view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+    });
+    let writes: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .collect();
+    let expected = view.read_with(cx, |view, _| {
+        let key = gpui::Keystroke::parse("ctrl-shift-f9").unwrap();
+        vec![keymap::encode(&key, &view.term_mode()).unwrap()]
+    });
+    assert_eq!(writes, expected);
+    assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
+}
+
+#[gpui::test]
+fn clear_screen_forgets_redraw_ownership_when_revoked(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    view.update(cx, |view, cx| {
+        for (name, value) in [
+            ("pebrel_shell", "bash:rebind-fixture"),
+            ("pebrel_editor_ready", "bash:rebind-fixture"),
+            ("pebrel_editor_redraw", "bash:rebind-fixture"),
+        ] {
+            view.process_event(TermEvent::UserVar { name: name.into(), value: value.into() }, cx);
+        }
+        feed(view, b"previous output\r\n");
+        view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+        assert_eq!(
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![b"\x1b[46~".to_vec()]
+        );
+        // 同一会话内用户重绑了 chord:下一个提示符的撤销上报（空值）让视图
+        // 忘掉所有权,再清屏退回应用侧光标归顶,不向已不属于集成的键发字节。
+        view.process_event(
+            TermEvent::UserVar { name: "pebrel_editor_redraw".into(), value: String::new() },
+            cx,
+        );
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+        let term = view.session.as_ref().unwrap().term.lock();
+        assert_eq!(term.grid().cursor.point, TermPoint::new(Line(0), Column(0)));
+    });
+    let writes: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(writes, Vec::<Vec<u8>>::new());
+    assert!(writes.iter().all(|bytes| !bytes.contains(&0x0c)), "{writes:?}");
+}
+
+#[gpui::test]
+fn clear_screen_keeps_alternate_screen_and_primary_history(cx: &mut TestAppContext) {
+    let (view, cx, receiver) = open(cx);
+    view.update(cx, |view, cx| {
+        for _ in 0..40 {
+            feed(view, b"primary output\r\n");
+        }
+        let history = view.session.as_ref().unwrap().term.lock().history_size();
+        assert!(history > 0);
+        feed(view, b"\x1b[?1049hfull-screen application");
+        let before = {
+            let term = view.session.as_ref().unwrap().term.lock();
+            (
+                term.grid().cursor.point,
+                term.grid().display_iter().map(|cell| cell.c).collect::<String>(),
+            )
+        };
+        receiver.try_iter().for_each(drop);
+        view.clear_screen(cx);
+        {
+            let term = view.session.as_ref().unwrap().term.lock();
+            assert!(term.mode().contains(TermMode::ALT_SCREEN));
+            assert_eq!(
+                before,
+                (
+                    term.grid().cursor.point,
+                    term.grid().display_iter().map(|cell| cell.c).collect::<String>()
+                )
+            );
+        }
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        feed(view, b"\x1b[?1049l");
+        assert_eq!(view.session.as_ref().unwrap().term.lock().history_size(), history);
+    });
+}
+
 fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<TerminalView>) {
     let (line, anchor) = {
         let term = view.session.as_ref().unwrap().term.lock();
