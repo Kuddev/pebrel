@@ -5,7 +5,7 @@ use super::*;
 /// 标签元数据：用户名字、色标沿用 session v4；运行时身份只随活体标签移动，
 /// 不写入 session，避免重启后的请求命中新标签。
 /// 与 `tabs` **同下标**。长度必须一致，所以增删移三种结构性改动只允许走
-/// `insert_tab_at` / `remove_tab_at` / `move_tab`——别处直接 `self.tabs.push`
+/// `insert_tab_at` / `remove_tab_at` / `move_tab` / `reorder_tabs`——别处直接 `self.tabs.push`
 /// 会让色条和名字错位到邻居身上。
 #[derive(Clone, Debug, Default)]
 pub(super) struct TabMeta {

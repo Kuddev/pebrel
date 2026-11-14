@@ -450,6 +450,55 @@ mod tests {
     }
 
     #[gpui::test]
+    fn dragging_sidebar_tabs_reorders_the_visible_recent_list(cx: &mut TestAppContext) {
+        use crate::gpui_shell::workspace::sidebar_groups::{SidebarTabOrder, SidebarTabRow};
+
+        let (workspace, _terminals, _receivers, mut window) =
+            open_painted_workspace(&[1, 1, 1, 1], cx);
+        workspace.update(&mut window, |workspace, cx| {
+            let now = std::time::Instant::now();
+            for (ix, age) in [3, 0, 4, 1].into_iter().enumerate() {
+                let meta = &mut workspace.tab_meta[ix];
+                meta.custom_name = Some(ix.to_string());
+                meta.sidebar_selected = Some(now - Duration::from_secs(age));
+            }
+            workspace.sidebar_tab_layout.order = SidebarTabOrder::Recent;
+            cx.notify();
+        });
+        draw(&mut window);
+        let names = |window: &VisualTestContext| {
+            workspace.read_with(window, |workspace, cx| {
+                let rows = workspace.sidebar_tab_rows(cx);
+                (0..rows.len())
+                    .filter_map(|slot| match rows.row(slot) {
+                        Some(SidebarTabRow::Tab(ix)) => workspace.tab_meta[ix].custom_name.clone(),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        let drag = |from: &'static str, to: &'static str, window: &mut VisualTestContext| {
+            let start = window.debug_bounds(from).unwrap().center();
+            let end = window.debug_bounds(to).unwrap().center();
+            window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+            window.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+            draw(window);
+            window.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+            window.simulate_mouse_move(point(px(1200.0), px(850.0)), None, Modifiers::default());
+            draw(window);
+        };
+        assert_eq!(names(&window), ["1", "3", "0", "2"]);
+        drag("sidebar-tab-0", "sidebar-tab-1", &mut window);
+        assert_eq!(names(&window), ["0", "1", "3", "2"]);
+        drag("sidebar-tab-2", "sidebar-tab-3", &mut window);
+        assert_eq!(names(&window), ["0", "1", "2", "3"]);
+        workspace.read_with(&window, |workspace, _| {
+            assert!(workspace.sidebar_tab_layout.order == SidebarTabOrder::Manual);
+            assert_eq!(workspace.tab_meta[workspace.active].custom_name.as_deref(), Some("0"));
+        });
+    }
+
+    #[gpui::test]
     fn spinner_frames_reuse_single_terminal_snapshot(cx: &mut TestAppContext) {
         let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
         assert_spinner_reuses_terminal_paint(&workspace, &terminals, &mut window);

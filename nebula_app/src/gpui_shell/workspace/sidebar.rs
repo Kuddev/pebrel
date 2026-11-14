@@ -223,9 +223,7 @@ impl NebulaWorkspace {
         let drag = self
             .tab_drag
             .as_ref()
-            .filter(|d| {
-                d.active && d.axis == TabDragAxis::Vertical && self.sidebar_drag_can_reorder()
-            })
+            .filter(|d| d.active && d.axis == TabDragAxis::Vertical)
             .and_then(|d| {
                 let target = Self::sidebar_drag_slot(d, &rows);
                 Some((rows.index_of(d.source)?, rows.index_of(target)?, d.offset))

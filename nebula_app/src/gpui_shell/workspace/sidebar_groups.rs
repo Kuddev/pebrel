@@ -240,7 +240,7 @@ impl NebulaWorkspace {
         TabGroup::Terminal
     }
 
-    pub(super) fn sidebar_drag_can_reorder(&self) -> bool {
+    fn sidebar_order_matches_storage(&self) -> bool {
         match self.sidebar_tab_layout.order {
             SidebarTabOrder::Manual => true,
             SidebarTabOrder::Created => self.created_order_is_storage_order(),
@@ -252,16 +252,21 @@ impl NebulaWorkspace {
         self.tab_meta.windows(2).all(|pair| pair[0].sidebar_created <= pair[1].sidebar_created)
     }
 
+    fn sidebar_tab_indices(&self) -> Vec<usize> {
+        let mut indices: Vec<_> = (0..self.tabs.len()).collect();
+        self.sidebar_tab_layout.order.sort(&mut indices, &self.tab_meta);
+        indices
+    }
+
     pub(super) fn sidebar_tab_rows(&self, cx: &App) -> SidebarTabRows {
         let layout = &self.sidebar_tab_layout;
         if layout.grouping == SidebarGrouping::None
-            && self.sidebar_drag_can_reorder()
+            && self.sidebar_order_matches_storage()
             && self.tab_meta.iter().all(|meta| !meta.sidebar_divider)
         {
             return SidebarTabRows::Flat(self.tabs.len());
         }
-        let mut indices: Vec<_> = (0..self.tabs.len()).collect();
-        layout.order.sort(&mut indices, &self.tab_meta);
+        let indices = self.sidebar_tab_indices();
         if layout.grouping != SidebarGrouping::None {
             return SidebarTabRows::grouped(
                 indices.into_iter().map(|ix| (ix, self.sidebar_tab_group(ix, cx))),
@@ -276,6 +281,45 @@ impl NebulaWorkspace {
             })
             .collect();
         SidebarTabRows::Projected { rows, hidden: BTreeMap::new() }
+    }
+
+    pub(super) fn reorder_sidebar_tabs(
+        &mut self,
+        source: usize,
+        target: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if source == target {
+            return;
+        }
+        let mut order = self.sidebar_tab_indices();
+        if self.sidebar_tab_layout.grouping == SidebarGrouping::None {
+            let Some(from) = order.iter().position(|&ix| ix == source) else { return };
+            let Some(to) = order.iter().position(|&ix| ix == target) else { return };
+            order.remove(from);
+            order.insert(to, source);
+        } else {
+            // Reorder only the slots occupied by this group. A drag inside a
+            // group should not move its heading past a neighboring group.
+            let group = self.sidebar_tab_group(source, cx);
+            let mut members: Vec<_> =
+                order.iter_mut().filter(|ix| self.sidebar_tab_group(**ix, cx) == group).collect();
+            let Some(from) = members.iter().position(|ix| **ix == source) else { return };
+            let Some(to) = members.iter().position(|ix| **ix == target) else { return };
+            if from < to {
+                for i in from..to {
+                    *members[i] = *members[i + 1];
+                }
+            } else {
+                for i in (to + 1..=from).rev() {
+                    *members[i] = *members[i - 1];
+                }
+            }
+            *members[to] = source;
+        }
+        self.sidebar_tab_layout.order = SidebarTabOrder::Manual;
+        self.reorder_tabs(order, window, cx);
     }
 
     pub(super) fn mark_sidebar_tab_selected(&mut self) {

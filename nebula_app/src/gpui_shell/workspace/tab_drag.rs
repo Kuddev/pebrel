@@ -221,10 +221,16 @@ impl NebulaWorkspace {
             _ => None,
         };
         if target >= slot {
-            (target..span.end).find_map(find_tab).unwrap_or(drag.source)
+            (target..span.end)
+                .find_map(find_tab)
+                .or_else(|| (slot..target).rev().find_map(find_tab))
         } else {
-            (span.start..=target).rev().find_map(find_tab).unwrap_or(drag.source)
+            (span.start..=target)
+                .rev()
+                .find_map(find_tab)
+                .or_else(|| (target + 1..=slot).find_map(find_tab))
         }
+        .unwrap_or(drag.source)
     }
 
     pub(super) fn update_tab_drag(
@@ -364,19 +370,20 @@ impl NebulaWorkspace {
             if let Some(nav) = drag.dock {
                 self.dock_tab_into_active(drag.source, nav, window, cx);
             } else {
-                let target = match drag.axis {
-                    TabDragAxis::Vertical if self.sidebar_drag_can_reorder() => {
+                match drag.axis {
+                    TabDragAxis::Vertical => {
                         let target = Self::sidebar_drag_slot(&drag, &self.sidebar_tab_rows(cx));
-                        if target != drag.source {
-                            self.sidebar_tab_layout.order =
-                                super::sidebar_groups::SidebarTabOrder::Manual;
-                        }
-                        target
+                        self.reorder_sidebar_tabs(drag.source, target, window, cx);
                     },
-                    TabDragAxis::Vertical => drag.source,
-                    TabDragAxis::Horizontal => Self::drag_slot(&drag, self.tabs.len()),
-                };
-                self.move_tab(drag.source, target, window, cx);
+                    TabDragAxis::Horizontal => {
+                        self.move_tab(
+                            drag.source,
+                            Self::drag_slot(&drag, self.tabs.len()),
+                            window,
+                            cx,
+                        );
+                    },
+                }
             }
         }
         cx.notify();
@@ -541,6 +548,33 @@ impl NebulaWorkspace {
             }
             ix
         };
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// Apply a complete storage permutation and keep each tab paired with its metadata.
+    pub(super) fn reorder_tabs(
+        &mut self,
+        order: Vec<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut destinations = vec![0; order.len()];
+        for (slot, original) in order.into_iter().enumerate() {
+            destinations[original] = slot;
+        }
+        self.active = destinations[self.active];
+        if let Some(rename) = &mut self.tab_rename {
+            rename.ix = destinations[rename.ix];
+        }
+        for slot in 0..destinations.len() {
+            while destinations[slot] != slot {
+                let target = destinations[slot];
+                self.tabs.swap(slot, target);
+                self.tab_meta.swap(slot, target);
+                destinations.swap(slot, target);
+            }
+        }
         self.focus_active(window, cx);
         cx.notify();
     }
