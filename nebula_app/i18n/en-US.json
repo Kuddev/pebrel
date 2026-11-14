@@ -574,7 +574,7 @@
       "checking_for_updates": "Checking for updates...",
       "new_version_available": "New version available",
       "update_check_failed": "Update check failed",
-      "gpu_accelerated_terminal_windows": "GPU-accelerated terminal · Windows",
+      "gpu_accelerated_terminal": "GPU-accelerated terminal · {platform}",
       "version_and_updates": "Version and updates",
       "automatically_check_for_updates": "Automatically check for updates",
       "update_channel": "Update channel",

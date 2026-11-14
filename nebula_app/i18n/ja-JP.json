@@ -366,7 +366,7 @@
       "checking_for_updates": "更新を確認中…",
       "new_version_available": "新しいバージョン",
       "update_check_failed": "更新の確認に失敗しました",
-      "gpu_accelerated_terminal_windows": "GPU アクセラレーション対応ターミナル · Windows",
+      "gpu_accelerated_terminal": "GPU アクセラレーション対応ターミナル · {platform}",
       "version_and_updates": "バージョンと更新",
       "automatically_check_for_updates": "自動的に更新を確認",
       "update_channel": "更新チャネル",

@@ -212,16 +212,19 @@ pub(super) fn query_component(value: &str) -> String {
     encoded
 }
 
-/// GitHub issue form 预填合同：模板、版本、平台、安装来源
-/// 和诊断摘要都来自当前运行实例，用户只需补充复现步骤与实际表现。
-pub(super) fn issue_url() -> String {
-    let version = env!("CARGO_PKG_VERSION");
-    let platform = match std::env::consts::OS {
+pub(super) fn desktop_platform_name() -> &'static str {
+    match std::env::consts::OS {
         "windows" => "Windows",
         "macos" => "macOS",
         "linux" => "Linux",
         _ => "Other",
-    };
+    }
+}
+
+/// GitHub issue form 预填合同：模板、版本、平台、安装来源
+/// 和诊断摘要都来自当前运行实例，用户只需补充复现步骤与实际表现。
+pub(super) fn issue_url() -> String {
+    let version = env!("CARGO_PKG_VERSION");
     let install_source = if cfg!(debug_assertions) {
         "Built from source (cargo build / cargo run)"
     } else {
@@ -239,7 +242,7 @@ pub(super) fn issue_url() -> String {
         ("template", BUG_REPORT_TEMPLATE),
         ("title", "[Bug] "),
         ("version", version),
-        ("platform", platform),
+        ("platform", desktop_platform_name()),
         ("install_source", install_source),
         ("logs", logs.as_str()),
     ]

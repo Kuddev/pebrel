@@ -79,6 +79,10 @@ impl SettingsPane {
         let warning = theme.warning;
         let danger = theme.danger;
         let base_px = self.font_size_px(cx);
+        let description = language.format(
+            crate::i18n::Message::SettingsAboutGpuAcceleratedTerminal,
+            &[("platform", desktop_platform_name())],
+        );
         let cached_update = crate::update_download::cached_asset().filter(|asset| {
             !managed
                 && (crate::update_check::is_newer(&asset.version, env!("CARGO_PKG_VERSION"))
@@ -148,66 +152,63 @@ impl SettingsPane {
                 badge.child(Icon::new(IconName::Check).xsmall())
             })
             .child(div().min_w_0().truncate().child(status));
-        let identity =
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(px(24.0))
-                .pb(px(64.0))
-                .when_some(
-                    crate::app_icon::preview(
-                        crate::app_icon::selected(),
-                        (96.0 * window.scale_factor()).round() as u32,
+        let identity = h_flex()
+            .w_full()
+            .items_center()
+            .gap(px(24.0))
+            .pb(px(64.0))
+            .when_some(
+                crate::app_icon::preview(
+                    crate::app_icon::selected(),
+                    (96.0 * window.scale_factor()).round() as u32,
+                ),
+                |row, logo| row.child(img(logo).size(px(96.0)).flex_shrink_0()),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(7.0))
+                    .child(
+                        div()
+                            .text_size(px(base_px * 2.15))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(ink)
+                            .child(crate::brand::NAME),
+                    )
+                    .child(div().text_color(muted).child(description))
+                    .child(
+                        h_flex()
+                            .mt(px(12.0))
+                            .items_center()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .text_size(px(base_px * 0.88))
+                                    .text_color(muted)
+                                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                            )
+                            .child(status_badge),
                     ),
-                    |row, logo| row.child(img(logo).size(px(96.0)).flex_shrink_0()),
-                )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(px(7.0))
-                        .child(
-                            div()
-                                .text_size(px(base_px * 2.15))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(ink)
-                                .child(crate::brand::NAME),
-                        )
-                        .child(div().text_color(muted).child(language.text(
-                            crate::i18n::Message::SettingsAboutGpuAcceleratedTerminalWindows,
-                        )))
-                        .child(
-                            h_flex()
-                                .mt(px(12.0))
-                                .items_center()
-                                .gap_4()
-                                .child(
-                                    div()
-                                        .text_size(px(base_px * 0.88))
-                                        .text_color(muted)
-                                        .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                                )
-                                .child(status_badge),
-                        ),
-                )
-                .child(v_flex().gap_2().flex_shrink_0().child(update_button).when_some(
-                    cached_update,
-                    |actions, asset| {
-                        actions.child(
-                            Button::new("about-cached-update")
-                                .label(language.text(crate::i18n::Message::UpdateViewDetails))
-                                .on_click(move |_, window, cx| {
-                                    crate::gpui_shell::workspace::open_update_dialog(
-                                        crate::update_check::UpdateCheckResult::from_cached(
-                                            asset.clone(),
-                                        ),
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                        )
-                    },
-                ));
+            )
+            .child(v_flex().gap_2().flex_shrink_0().child(update_button).when_some(
+                cached_update,
+                |actions, asset| {
+                    actions.child(
+                        Button::new("about-cached-update")
+                            .label(language.text(crate::i18n::Message::UpdateViewDetails))
+                            .on_click(move |_, window, cx| {
+                                crate::gpui_shell::workspace::open_update_dialog(
+                                    crate::update_check::UpdateCheckResult::from_cached(
+                                        asset.clone(),
+                                    ),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                    )
+                },
+            ));
 
         let auto_update_switch =
             crate::gpui_shell::widgets::NebulaSwitch::new("auto-check-updates")

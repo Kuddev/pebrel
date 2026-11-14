@@ -574,7 +574,7 @@
       "checking_for_updates": "正在检查更新…",
       "new_version_available": "发现新版本",
       "update_check_failed": "检查失败",
-      "gpu_accelerated_terminal_windows": "GPU 加速终端 · Windows",
+      "gpu_accelerated_terminal": "GPU 加速终端 · {platform}",
       "version_and_updates": "版本与更新",
       "automatically_check_for_updates": "自动检查更新",
       "update_channel": "更新通道",
