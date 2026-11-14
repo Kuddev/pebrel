@@ -1,0 +1,184 @@
+"""Check generated navigation, rich content, and portable asset references."""
+import json
+import hashlib
+import tempfile
+import unittest
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+import palettes
+from build import build, HERE, home_header, page_url, source_details
+
+
+class Document(HTMLParser):
+    def __init__(self, source):
+        super().__init__()
+        self.ids = set()
+        self.duplicates = set()
+        self.references = []
+        self.headings = []
+        self.images_without_alt = []
+        self.remote_runtime = []
+        self.feed(source)
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        identity = values.get('id')
+        if identity in self.ids:
+            self.duplicates.add(identity)
+        if identity:
+            self.ids.add(identity)
+        if tag == 'h1':
+            self.headings.append(tag)
+        if tag == 'img' and 'alt' not in values:
+            self.images_without_alt.append(values)
+        for key in ('src', 'href'):
+            if key in values:
+                self.references.append(values[key])
+        resource = values.get('src') if tag == 'script' else values.get('href') if tag == 'link' and values.get('rel') == 'stylesheet' else ''
+        if resource and urlsplit(resource).scheme:
+            self.remote_runtime.append(resource)
+
+
+class SiteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.temp.name)
+        cls.stale_page = cls.root / 'obsolete' / 'index.html'
+        cls.stale_page.parent.mkdir()
+        cls.stale_page.write_text('stale output')
+        (cls.root / 'build-info.json').write_text('{}')
+        (cls.root / '.nojekyll').touch()
+        cls.report = build(cls.root, 'https://example.org/pebrel/')
+        cls.documents = {
+            path.resolve(): Document(path.read_text())
+            for path in cls.root.rglob('*.html')
+        }
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def test_build_removes_stale_output(self):
+        self.assertFalse(self.stale_page.exists())
+
+    def test_build_preserves_unrelated_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            sentinel = output / 'user-data.txt'
+            sentinel.write_text('keep')
+            with self.assertRaisesRegex(ValueError, 'not a generated site'):
+                build(output, '')
+            self.assertEqual(sentinel.read_text(), 'keep')
+
+    def test_build_does_not_remove_source_directories(self):
+        with self.assertRaisesRegex(ValueError, 'overlaps repository sources'):
+            build(HERE, '')
+
+    def test_internal_links_and_fragments(self):
+        for path, document in self.documents.items():
+            for reference in document.references:
+                url = urlsplit(reference)
+                if url.scheme or url.netloc:
+                    continue
+                target = (path.parent / unquote(url.path)).resolve() if url.path else path
+                if target.is_dir():
+                    target /= 'index.html'
+                with self.subTest(page=path.name, link=reference):
+                    self.assertTrue(target.is_relative_to(self.root), 'Link escapes site root')
+                    self.assertTrue(target.is_file(), f'Missing local destination: {target}')
+                    if url.fragment and target in self.documents:
+                        self.assertIn(unquote(url.fragment), self.documents[target].ids)
+
+    def test_homepage_hero_has_no_eyebrow_or_description(self):
+        header = home_header()
+        hero = header.split('</section>', 1)[0]
+        self.assertNotIn('eyebrow', hero)
+        self.assertNotIn('<p', hero)
+        self.assertNotIn('USER GUIDE', hero)
+        self.assertIn('从一个终端开始', hero)
+        self.assertIn('quickstart/index.html', hero)
+        self.assertIn('installation/index.html', hero)
+        self.assertEqual(header.count('https://github.com/Kuddev/pebrel/releases/latest'), 3)
+
+    def test_every_builtin_theme_is_selectable_and_readable(self):
+        themes = palettes.load()
+        catalog = palettes.THEMES_RS.read_text(encoding='utf-8')
+        declared = __import__('re').search(r'BUILTIN: \[Self; (\d+)\]', catalog).group(1)
+        self.assertEqual(len(themes), int(declared))
+        stylesheet = (self.root / 'assets' / 'palettes.css').read_text()
+        index = (self.root / 'index.html').read_text()
+        for theme in themes:
+            values = {name: tuple(int(value[i:i + 2], 16) for i in (1, 3, 5)) for name, value in palettes.tokens(theme).items()}
+            with self.subTest(theme=theme['id']):
+                self.assertIn(f'html[data-palette="{theme["id"]}"]', stylesheet)
+                self.assertIn(f'data-palette-option="{theme["id"]}"', index)
+                for surface in ('bg', 'soft'):
+                    for ink in ('text', 'muted', 'accent'):
+                        self.assertGreaterEqual(palettes.contrast(values[ink], values[surface]), 4.5, f'{ink} on {surface}')
+                for ink in ('red', 'green', 'yellow', 'blue', 'purple', 'cyan'):
+                    self.assertGreaterEqual(palettes.contrast(values[ink], values['code']), 4.5, f'{ink} on code')
+        self.assertIn('data-palette-option="system"', index)
+
+    def test_palette_switch_suspends_transitions(self):
+        css = (self.root / 'assets' / 'site.css').read_text()
+        script = (self.root / 'assets' / 'site.js').read_text()
+        self.assertIn('html[data-switching] *', css)
+        self.assertIn('transition:none!important', css.split('html[data-switching] *', 1)[1].split('}', 1)[0])
+        self.assertIn('html.dataset.switching', script)
+
+    def test_page_specific_version_and_sources(self):
+        config = json.loads((HERE / 'site.json').read_text())
+        for group in config['groups']:
+            for page in group['pages']:
+                with self.subTest(page=page['slug']):
+                    output = (self.root / page_url(page['slug'])).read_text()
+                    commit = page.get('source_commit', config['source_commit'])
+                    self.assertIn(source_details(page, config['source_commit']), output)
+                    self.assertIn(f'/blob/{commit}/', output)
+                    self.assertIn(f"Pebrel {page.get('version', config['version'])} 用户手册", output)
+
+    def test_page_structure(self):
+        for path, document in self.documents.items():
+            with self.subTest(page=path):
+                self.assertEqual(len(document.headings), 1)
+                self.assertFalse(document.duplicates)
+                self.assertFalse(document.images_without_alt)
+                self.assertFalse(document.remote_runtime)
+        self.assertTrue((self.root / '.nojekyll').is_file())
+        self.assertFalse(list(self.root.rglob('*.woff*')))
+        self.assertFalse(list(self.root.rglob('*.ttf')))
+
+    def test_navigation_matches_authored_content(self):
+        config = json.loads((HERE / 'site.json').read_text())
+        pages = [page for group in config['groups'] for page in group['pages']]
+        slugs = [page['slug'] for page in pages]
+        self.assertEqual(len(slugs), len(set(slugs)))
+        self.assertEqual(set(slugs), {path.stem for path in (HERE / 'content').glob('*.md')})
+        for page in pages:
+            with self.subTest(page=page['slug']):
+                self.assertTrue(page['title'].strip())
+                self.assertTrue(page['description'].strip())
+                self.assertTrue(page['sources'], 'Missing source references')
+        sources = json.loads((HERE / 'screenshots.json').read_text())
+        self.assertEqual(set(config['images']), set(sources))
+        for name, source in sources.items():
+            image = self.root / 'assets' / 'screenshots' / name
+            self.assertEqual(hashlib.sha256(image.read_bytes()).hexdigest(), source['sha256'])
+
+    def test_search_and_markdown_cover_each_page(self):
+        config = json.loads((HERE / 'site.json').read_text())
+        search = (self.root / 'search-index.js').read_text()
+        entries = json.loads(search.partition('=')[2].rstrip(';\n'))
+        for group in config['groups']:
+            for page in group['pages']:
+                with self.subTest(page=page['slug']):
+                    self.assertTrue(any(item['url'].split('#')[0] == page_url(page['slug']) for item in entries))
+                    self.assertTrue((self.root / 'markdown' / (page['slug'] + '.md')).is_file())
+        self.assertIn('/pebrel/quickstart/index.html', (self.root / 'sitemap.xml').read_text())
+
+
+if __name__ == '__main__':
+    unittest.main()
