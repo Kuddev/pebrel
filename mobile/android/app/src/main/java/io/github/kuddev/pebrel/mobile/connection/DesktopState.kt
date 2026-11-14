@@ -10,6 +10,30 @@ fun desktopOsIcon(os: String): String = when (val normalized = os.lowercase(java
     else -> "term"
 }
 
+/** Icons that name a system; a host showing one of these (or the default) follows what its server reports. */
+val systemOsIcons = setOf("term", "linux", "ubuntu", "debian", "centos", "rhel", "fedora", "rocky", "alpine", "arch", "suse",
+    "nixos", "kali", "freebsd", "macos", "windows")
+
+/** Same mapping as the desktop's `detected_os::icon_for`: the distribution first, then the families it declares. */
+fun remoteOsIcon(uname: String, osRelease: String): String {
+    when (val system = uname.trim().lowercase(java.util.Locale.ROOT)) {
+        "linux" -> Unit
+        else -> return desktopOsIcon(system)
+    }
+    fun field(key: String) = osRelease.lineSequence().firstOrNull { it.startsWith("$key=") }
+        ?.substringAfter('=')?.trim()?.trim('"', '\'')?.lowercase(java.util.Locale.ROOT).orEmpty()
+    for (candidate in listOf(field("ID")) + field("ID_LIKE").split(' ').filter(String::isNotBlank)) {
+        when {
+            candidate == "raspbian" -> return "rpi"
+            candidate == "redhat" -> return "rhel"
+            candidate == "archarm" -> return "arch"
+            candidate == "sles" || candidate.startsWith("opensuse") -> return "suse"
+            candidate in systemOsIcons && candidate != "term" -> return candidate
+        }
+    }
+    return "linux"
+}
+
 data class DesktopPane(
     val window: Long, val id: Long, val title: String, val cwd: String,
     val task: String, val state: String, val sequence: Long,

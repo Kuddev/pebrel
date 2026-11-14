@@ -68,10 +68,7 @@ object RemoteSessions {
         require(text.toByteArray(Charsets.UTF_8).size <= 64 * 1024)
         val data = sections(text)
         val system = data["os"].orEmpty().trim().lowercase(java.util.Locale.ROOT)
-        val distro = data["distro"].orEmpty().lineSequence().firstOrNull { it.startsWith("ID=") }
-            ?.substringAfter('=')?.trim('"', '\'')
-        val os = if (system == "linux" && distro != null) desktopOsIcon(distro).takeUnless { it == "term" } ?: "linux"
-            else desktopOsIcon(system)
+        val os = remoteOsIcon(system, data["distro"].orEmpty())
         val windows = data["windows"].orEmpty().lineSequence().mapNotNull { line ->
             val fields = line.split('\t')
             if (fields.size !in setOf(4, 6) || !fields[0].matches(Regex("\\$[0-9]+")) || !fields[1].matches(Regex("@[0-9]+")) || !valid(fields[3])) null
