@@ -10,17 +10,24 @@ pub(super) enum LibraryRow {
     Host { destination: String, index: usize },
 }
 
-/// Groups follow their first host; host order within a group stays authoritative.
+/// Pins retain their ordered prefix; ordinary groups follow their first host.
 /// Search reveals matches without changing the user's saved in-view fold state.
 pub(super) fn library_rows(
     hosts: Vec<String>,
     profiles: &SshProfiles,
+    pinned: &[String],
     collapsed_groups: &HashSet<String>,
     searching: bool,
 ) -> Vec<LibraryRow> {
+    let pinned: HashSet<&str> = pinned.iter().map(String::as_str).collect();
+    let mut rows = Vec::new();
     let mut groups: Vec<(String, Vec<LibraryRow>)> = Vec::new();
     let mut indices = HashMap::new();
     for (index, destination) in hosts.into_iter().enumerate() {
+        if pinned.contains(destination.as_str()) {
+            rows.push(LibraryRow::Host { destination, index });
+            continue;
+        }
         let name = profiles.organization(&destination).group.clone();
         let group_index = *indices.entry(name.clone()).or_insert_with(|| {
             groups.push((name, Vec::new()));
@@ -30,9 +37,9 @@ pub(super) fn library_rows(
     }
     // Preserve the compact flat list when no host has been assigned a group.
     if groups.len() == 1 && groups[0].0.is_empty() {
-        return groups.pop().unwrap().1;
+        rows.extend(groups.pop().unwrap().1);
+        return rows;
     }
-    let mut rows = Vec::new();
     for (name, hosts) in groups {
         let collapsed = !searching && collapsed_groups.contains(&name);
         rows.push(LibraryRow::Group { name, count: hosts.len(), collapsed });
@@ -64,7 +71,7 @@ mod tests {
         }
         let hosts = || ["a", "b", "c", "unassigned"].map(str::to_owned).to_vec();
         let collapsed = HashSet::from(["work".into(), "".into()]);
-        let rows = library_rows(hosts(), &profiles, &collapsed, false);
+        let rows = library_rows(hosts(), &profiles, &[], &collapsed, false);
         assert_eq!(
             rows,
             vec![
@@ -74,7 +81,7 @@ mod tests {
                 LibraryRow::Group { name: "".into(), count: 1, collapsed: true },
             ]
         );
-        let revealed = library_rows(hosts(), &profiles, &collapsed, true);
+        let revealed = library_rows(hosts(), &profiles, &[], &collapsed, true);
         let destinations: Vec<_> = revealed
             .iter()
             .filter_map(|row| match row {
@@ -83,8 +90,8 @@ mod tests {
             })
             .collect();
         assert_eq!(destinations, ["a", "c", "b", "unassigned"]);
-        assert_eq!(library_rows(hosts(), &profiles, &collapsed, false), rows);
-        assert!(library_rows(Vec::new(), &profiles, &collapsed, false).is_empty());
+        assert_eq!(library_rows(hosts(), &profiles, &[], &collapsed, false), rows);
+        assert!(library_rows(Vec::new(), &profiles, &[], &collapsed, false).is_empty());
     }
 
     #[test]
@@ -93,6 +100,7 @@ mod tests {
             library_rows(
                 vec!["a".into()],
                 &SshProfiles::default(),
+                &[],
                 &HashSet::from(["".into()]),
                 false
             ),

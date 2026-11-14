@@ -800,9 +800,15 @@ impl SettingsPane {
         let hidden: Vec<String> = self.ssh_hosts.hidden_hosts().to_vec();
 
         let searching = !self.ssh_library.search.read(cx).value().trim().is_empty();
+        let pinned = if self.ssh_library.scope == HostScope::Recent {
+            &[][..]
+        } else {
+            self.ssh_hosts.pinned.as_slice()
+        };
         let rows = library_rows(
             hosts,
             &self.ssh_hosts.profiles,
+            pinned,
             &self.ssh_library.collapsed_groups,
             searching,
         );

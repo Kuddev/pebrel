@@ -175,10 +175,11 @@ discover candidates from the current environment without matching prior commands
 - Saved hosts, SSH config aliases, proxy and jump-host options, private-key and
   keyboard-interactive authentication, and host-key verification.
 - SFTP browsing, uploads and downloads, folder transfers, progress, and cancellation.
-- The SSH host page groups hosts under collapsible headings, including ungrouped
-  hosts when named groups exist. This extends the group filter for large libraries;
-  an entirely ungrouped library keeps its flat list. Groups follow their first
-  matching host, preserving host order within each group. Folding lasts for the
+- The SSH host page's All view keeps pinned hosts at the top, followed by ordinary hosts
+  under collapsible group headings. Heading counts cover those ordinary hosts;
+  folding a group leaves its pinned hosts visible. An entirely ungrouped list of
+  ordinary hosts stays flat. Groups follow their first matching ordinary host,
+  preserving host order within each group. Folding lasts for the
   settings view's lifetime. Search temporarily reveals matching hosts and disables
   folding; clearing it restores the previous folds. Headings support mouse and
   keyboard activation. No host data or saved configuration format changes.
