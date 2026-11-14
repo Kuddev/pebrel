@@ -256,11 +256,7 @@ pub(super) fn spawn_with_scrollback(
 
     tty::setup_env();
     let pty = if scrollback.is_some() {
-        #[cfg(unix)]
-        let pty = tty::new_with_required_directory(&options, window_size, 0)?;
-        #[cfg(windows)]
-        let pty = tty::new(&options, window_size, 0)?;
-        pty
+        tty::new_with_required_directory(&options, window_size, 0)?
     } else {
         tty::new(&options, window_size, 0)?
     };

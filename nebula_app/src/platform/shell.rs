@@ -107,6 +107,33 @@ pub(crate) fn snapshot_shell(
     configured
 }
 
+/// Freeze the Unix login shell when hibernating an otherwise unspecified launch.
+/// Windows snapshots capture an explicit shell at startup.
+pub(crate) fn hibernation_default_shell() -> Option<(String, nebula_terminal::tty::Shell)> {
+    #[cfg(unix)]
+    {
+        let program = nebula_terminal::tty::default_shell_program().ok()?;
+        let name = program.rsplit('/').next()?.to_owned();
+        let shell = nebula_terminal::tty::Shell::new(program, interactive_args(&name));
+        Some((name, shell))
+    }
+    #[cfg(windows)]
+    {
+        None
+    }
+}
+
+/// The Windows bootstrap reports PowerShell jobs that have no child process.
+pub(crate) const POWERSHELL_SLEEP_READINESS: bool = cfg!(windows);
+
+pub(crate) fn requires_sleep_readiness_report(program: &str) -> bool {
+    POWERSHELL_SLEEP_READINESS
+        && matches!(
+            crate::process_tree::display_name(program).to_ascii_lowercase().as_str(),
+            "powershell" | "pwsh"
+        )
+}
+
 #[cfg(windows)]
 pub(super) fn prepare_startup_directory(options: &mut nebula_terminal::tty::Options) {
     use std::path::{Component, Prefix};

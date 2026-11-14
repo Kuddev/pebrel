@@ -516,7 +516,6 @@ pub struct TerminalView {
     /// 上一次输出驱动帧的时刻（[`Self::schedule_output_frame`] 的合并基准）。
     last_output_frame: Option<std::time::Instant>,
     sleep_idle_since: std::time::Instant,
-    #[cfg(windows)]
     power_shell_sleep_epoch: Option<u64>,
     /// 在途的输出尾帧定时器（间隔内批次的补帧）。
     output_trailing_frame: Option<gpui::Task<()>>,
@@ -871,7 +870,6 @@ impl TerminalView {
                     self.on_native_cmd_prompt(cx);
                 }
                 self.suggest.completion_shell_report(&name, &value);
-                #[cfg(windows)]
                 self.observe_sleep_readiness(&name, &value);
                 self.native_clipboard.observe(&name, &value);
                 self.observe_shell_pointer(&name, &value, cx);

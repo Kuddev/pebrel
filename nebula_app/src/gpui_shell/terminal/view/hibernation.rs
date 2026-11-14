@@ -7,6 +7,7 @@ use nebula_terminal::term::grid_content::Scrollback;
 
 use super::TerminalView;
 use crate::gpui_shell::terminal::session::EventProxy;
+use crate::platform::shell;
 use crate::session::LaunchSession;
 
 const MAX_SLEEP_BYTES: usize = 4 * 1024 * 1024;
@@ -45,8 +46,10 @@ impl TerminalView {
             && self.session.as_ref().is_some_and(|session| session.shell_pid != 0)
     }
 
-    #[cfg(windows)]
     pub(super) fn observe_sleep_readiness(&mut self, name: &str, value: &str) {
+        if !shell::POWERSHELL_SLEEP_READINESS {
+            return;
+        }
         if name == crate::completion_context::SHELL_VAR {
             self.power_shell_sleep_epoch = None;
         } else if name == "pebrel_sleep_ready"
@@ -74,24 +77,18 @@ impl TerminalView {
         let session = self.session.as_ref()?;
         let launch = match &self.session_launch {
             LaunchSession::Shell { .. } => self.session_launch.clone(),
-            #[cfg(unix)]
             LaunchSession::Default => {
-                let program = nebula_terminal::tty::default_shell_program().ok()?;
-                let name = program.rsplit('/').next()?.to_owned();
+                let (name, shell) = shell::hibernation_default_shell()?;
                 LaunchSession::Shell {
-                    args: crate::platform::shell::interactive_args(&name),
                     name,
-                    program,
+                    program: shell.program().to_owned(),
+                    args: shell.args().to_vec(),
                 }
             },
             _ => return None,
         };
-        #[cfg(windows)]
         if let LaunchSession::Shell { program, .. } = &launch
-            && matches!(
-                crate::process_tree::display_name(program).to_ascii_lowercase().as_str(),
-                "powershell" | "pwsh"
-            )
+            && shell::requires_sleep_readiness_report(program)
             && self.power_shell_sleep_epoch != Some(self.prompt_input_epoch)
         {
             return None;

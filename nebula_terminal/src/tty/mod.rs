@@ -19,6 +19,29 @@ pub mod windows;
 #[cfg(windows)]
 pub use self::windows::*;
 
+/// Start the shell in the requested directory or return the startup error.
+pub fn new_with_required_directory(
+    config: &Options,
+    window_size: crate::event::WindowSize,
+    window_id: u64,
+) -> io::Result<Pty> {
+    #[cfg(not(windows))]
+    {
+        unix::new_with_required_directory(config, window_size, window_id)
+    }
+    #[cfg(windows)]
+    {
+        if config.working_directory.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a working directory is required",
+            ));
+        }
+        // CreateProcessW rejects an invalid explicit working directory.
+        windows::new(config, window_size, window_id)
+    }
+}
+
 /// Shared SSH/WSL execution reports for local and bootstrapped bash/zsh shells.
 pub fn connection_shell() -> &'static str {
     static SCRIPT: LazyLock<Cow<'static, str>> = LazyLock::new(|| {

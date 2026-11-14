@@ -434,7 +434,6 @@ impl TerminalView {
             output_visible: true,
             last_output_frame: None,
             sleep_idle_since: std::time::Instant::now(),
-            #[cfg(windows)]
             power_shell_sleep_epoch: None,
             output_trailing_frame: None,
             _cursor_blink_subscriptions: cursor_blink_subscriptions,

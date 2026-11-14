@@ -203,7 +203,7 @@ pub fn new(config: &Options, window_size: WindowSize, window_id: u64) -> Result<
 }
 
 /// Resume in the exact directory or report the chdir error to the caller.
-pub fn new_with_required_directory(
+pub(super) fn new_with_required_directory(
     config: &Options,
     window_size: WindowSize,
     window_id: u64,
