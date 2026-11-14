@@ -45,6 +45,7 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "shift-insert",
     "alt-enter",
     "ctrl-shift-o",
+    "ctrl-shift-l",
 ];
 
 /// 存储格式 combo（`ctrl+shift+t`）→ gpui 绑定串（`ctrl-shift-t`）。键名
@@ -145,6 +146,11 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-v", gpui_component::input::Paste, Some("Input")),
         KeyBinding::new("alt-enter", ToggleFullscreen, None),
         KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
+        KeyBinding::new(
+            "ctrl-shift-l",
+            CopyWorkingDirectory,
+            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+        ),
     ];
     // Shift+Insert 是 Windows/Linux 终端的粘贴惯例（旧壳 winit 表
     // `Insert+SHIFT → PasteSelection` 的 GPUI 对应物）。不绑的话按键会被
@@ -315,6 +321,11 @@ fn workspace_binding_in_context(
         // ⌘M 最小化当前窗口：视图处理器调 gpui 的 minimize_window。
         Action::Minimize => Some(KeyBinding::new(&combo, MinimizeWindow, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
+        Action::CopyWorkingDirectory => Some(KeyBinding::new(
+            &combo,
+            CopyWorkingDirectory,
+            scope.or(Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
+        )),
         // macOS 的退出键走与托盘退出同一条路径：先落盘会话与草稿，再停 PTY。
         Action::Quit => Some(KeyBinding::new(&combo, QuitApp, scope)),
         // 屏蔽应用动作后，ReceiveChar 仍交给终端编码，保留改键释放旧键的语义。

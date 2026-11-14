@@ -219,6 +219,7 @@ pub fn nebula_key_bindings() -> Vec<KeyBinding> {
         ArrowDown,  ctrl_alt;   Action::FocusPaneDown;
         "f",        ctrl_shift; Action::ToggleFilesPanel;
         "g",        ctrl_shift; Action::ToggleGitPanel;
+        "l",        ctrl_shift; Action::CopyWorkingDirectory;
         ArrowUp,    ctrl_shift; Action::PromptJumpUp;
         ArrowDown,  ctrl_shift; Action::PromptJumpDown;
     );

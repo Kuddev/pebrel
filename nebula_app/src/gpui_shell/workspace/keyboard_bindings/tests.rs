@@ -16,11 +16,43 @@ fn control_character_defaults_follow_the_host_platform() {
         assert_eq!(bindings.is_empty(), is_macos(), "{combo}");
     }
     // Named keys and the established modified navigation chords retain their defaults.
-    for combo in ["ctrl-tab", "ctrl-shift-t", "ctrl-alt-left"] {
+    for combo in ["ctrl-tab", "ctrl-shift-t", "ctrl-alt-left", "ctrl-shift-l"] {
         let (bindings, pending) =
             keymap.bindings_for_input(&[Keystroke::parse(combo).unwrap()], &contexts);
         assert!(!pending && !bindings.is_empty(), "{combo}");
     }
+}
+
+#[test]
+fn copy_working_directory_default_binds_gpui_action() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let binding = workspace_binding_in_context(
+        "ctrl+shift+l",
+        &crate::config::Action::CopyWorkingDirectory,
+        None,
+    )
+    .expect("CopyWorkingDirectory must map to a GPUI binding");
+    assert!(binding.action().as_any().is::<CopyWorkingDirectory>());
+    let keymap = Keymap::new(vec![binding.clone()]);
+    let key = [Keystroke::parse("ctrl-shift-l").unwrap()];
+    let terminal = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let (bindings, pending) = keymap.bindings_for_input(&key, &terminal);
+    assert!(!pending);
+    assert!(bindings.first().is_some_and(|b| b.action().as_any().is::<CopyWorkingDirectory>()));
+    let input = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let (bindings, pending) = keymap.bindings_for_input(&key, &input);
+    assert!(!pending);
+    assert!(
+        bindings.is_empty(),
+        "settings and dialog inputs must not trigger copy-working-directory"
+    );
+    let default_binding = default_workspace_bindings()
+        .into_iter()
+        .find(|candidate| candidate.action().as_any().is::<CopyWorkingDirectory>())
+        .expect("default workspace bindings must register copy-working-directory");
+    let keymap = Keymap::new(vec![default_binding]);
+    let (bindings, pending) = keymap.bindings_for_input(&key, &input);
+    assert!(!pending && bindings.is_empty(), "defaults must stay terminal-scoped");
 }
 
 #[test]
@@ -909,6 +941,78 @@ mod dispatch {
             }
             assert!(!workspace.read_with(&cx, |workspace, _| workspace.tab_meta[8].has_bell));
         }
+    }
+
+    #[gpui::test]
+    fn copy_working_directory_shortcut_respects_settings_search_focus(cx: &mut TestAppContext) {
+        use gpui::{ClipboardItem, Focusable as _};
+
+        const SENTINEL: &str = "copy-cwd-sentinel";
+        const CWD: &str = "/tmp/pebrel-copy-cwd-fixture";
+
+        let shortcut = if is_macos() { "shift-cmd-l" } else { "ctrl-shift-l" };
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        let terminal = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "copy cwd shortcut fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                terminal.update(cx, |view, _| view.cwd = CWD.into());
+                terminal
+            })
+        });
+        cx.write_to_clipboard(ClipboardItem::new_string(SENTINEL.into()));
+
+        cx.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.open_settings(window, cx));
+        });
+        cx.run_until_parked();
+        cx.simulate_input("settings");
+        cx.run_until_parked();
+
+        press(shortcut, &mut cx);
+
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            Some(SENTINEL),
+            "settings search must keep clipboard when shortcut does not match"
+        );
+        cx.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert!(workspace.settings_open);
+            let settings = workspace.settings_surface.as_ref().unwrap().0.read(cx);
+            assert!(
+                settings.focus_handle(cx).contains_focused(window, cx),
+                "shortcut must not return focus to the terminal behind settings"
+            );
+            assert!(
+                !terminal.read(cx).focus_handle.is_focused(window),
+                "terminal must stay unfocused while settings search is active"
+            );
+        });
+
+        cx.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.leave_settings(window, cx));
+        });
+        cx.run_until_parked();
+        press(shortcut, &mut cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            Some(CWD),
+            "terminal focus must still copy the reported working directory"
+        );
     }
 
     #[gpui::test]
