@@ -523,6 +523,9 @@ _pebrel() {
             pebrel__help__tab,move)
                 cmd="pebrel__help__tab__move"
                 ;;
+            pebrel__help__tab,new)
+                cmd="pebrel__help__tab__new"
+                ;;
             pebrel__help__tab,rename)
                 cmd="pebrel__help__tab__rename"
                 ;;
@@ -664,6 +667,9 @@ _pebrel() {
             pebrel__tab,move)
                 cmd="pebrel__tab__move"
                 ;;
+            pebrel__tab,new)
+                cmd="pebrel__tab__new"
+                ;;
             pebrel__tab,rename)
                 cmd="pebrel__tab__rename"
                 ;;
@@ -675,6 +681,9 @@ _pebrel() {
                 ;;
             pebrel__tab__help,move)
                 cmd="pebrel__tab__help__move"
+                ;;
+            pebrel__tab__help,new)
+                cmd="pebrel__tab__help__new"
                 ;;
             pebrel__tab__help,rename)
                 cmd="pebrel__tab__help__rename"
@@ -2182,13 +2191,32 @@ _pebrel() {
             return 0
             ;;
         pebrel__ctl__new__tab)
-            opts="-h --window --pretty --timeout-ms --help"
+            opts="-e -h --window --cwd --shell --command --pretty --timeout-ms --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=()
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o plusdirs
+                    fi
+                    return 0
+                    ;;
+                --shell)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --command)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -e)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3583,7 +3611,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__tab)
-            opts="close rename move"
+            opts="new close rename move"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3611,6 +3639,20 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__tab__move)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__tab__new)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -4522,7 +4564,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__tab)
-            opts="-h --help close rename move help"
+            opts="-h --help new close rename move help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4558,7 +4600,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__tab__help)
-            opts="close rename move help"
+            opts="new close rename move help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4613,6 +4655,20 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__tab__help__new)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__tab__help__rename)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -4635,6 +4691,47 @@ _pebrel() {
             fi
             case "${prev}" in
                 --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --timeout-ms)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__tab__new)
+            opts="-e -h --window --cwd --shell --command --pretty --timeout-ms --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=()
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o plusdirs
+                    fi
+                    return 0
+                    ;;
+                --shell)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --command)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -e)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

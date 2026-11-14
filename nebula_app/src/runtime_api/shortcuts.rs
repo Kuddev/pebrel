@@ -74,6 +74,10 @@ pub fn window(options: WindowResourceOptions) -> Result<(), Box<dyn Error>> {
 
 pub fn tab(options: TabResourceOptions) -> Result<(), Box<dyn Error>> {
     match options.command {
+        TabCommand::New(options) => {
+            let pretty = options.output.pretty;
+            finish(pretty, tab_new(options))
+        },
         TabCommand::Close(options) => {
             let pretty = options.output.pretty;
             finish(pretty, tab_close(options))
@@ -162,6 +166,12 @@ pub fn agent(options: AgentOptions) -> Result<(), Box<dyn Error>> {
 fn window_close(options: WindowCloseOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
     let response = request_once("window.close", json!({ "window_id": options.window }), timeout)?;
+    print_response(&response, options.output.pretty)
+}
+
+fn tab_new(options: crate::cli::TabNewOptions) -> Result<(), Box<dyn Error>> {
+    let timeout = validated_timeout(options.timeout_ms)?;
+    let response = request_once("tab.new", cli::tab_launch_params(options.launch)?, timeout)?;
     print_response(&response, options.output.pretty)
 }
 
@@ -342,6 +352,11 @@ fn describe_self(pane_id: u64, timeout: Duration) -> Option<Value> {
 /// 教它*什么时候*该调，这份清单负责保证它*调得对*。
 fn command_catalog() -> Value {
     json!([
+        {
+            "command": "pebrel tab new [--window <window>] [--cwd <directory>] [--command <program> <args>...]",
+            "purpose": "Create a terminal tab, using the most recently active window by default, optionally running a program directly.",
+            "example": "pebrel tab new --cwd . --command claude",
+        },
         {
             "command": "pebrel window close <window>",
             "purpose": "Close an idle window. Busy panes return confirmation_required.",

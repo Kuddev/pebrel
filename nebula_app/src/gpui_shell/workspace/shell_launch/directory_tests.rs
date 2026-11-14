@@ -3,6 +3,30 @@ use crate::gpui_shell::terminal::view::TerminalLaunch;
 use crate::gpui_shell::workspace::NebulaWorkspace;
 use crate::session::LaunchSession;
 
+#[cfg(unix)]
+#[test]
+fn native_wsl_named_program_receives_only_literal_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("wsl");
+    std::os::unix::fs::symlink("/bin/echo", &program).unwrap();
+    let command = crate::config::ui_config::Program::WithArgs {
+        program: program.to_str().unwrap().into(),
+        args: vec!["literal value".into()],
+    };
+    let LaunchSession::Shell { program, args, .. } =
+        command_launch(&command, Some(directory.path()))
+    else {
+        panic!("expected a direct command");
+    };
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"literal value\n");
+}
+
 #[test]
 fn explicit_directory_reaches_the_terminal_without_changing_the_saved_profile() {
     let saved = tempfile::tempdir().unwrap();
@@ -36,6 +60,7 @@ fn explicit_directory_reaches_the_terminal_without_changing_the_saved_profile() 
     assert_eq!(cwd.as_deref(), Some(saved.path()));
 }
 
+#[cfg(windows)]
 #[test]
 fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_arguments() {
     let requested = tempfile::tempdir().unwrap();
@@ -100,6 +125,7 @@ fn directory_override_cannot_turn_an_invalid_shell_request_into_a_default_shell(
     assert!(resolve_shell_at("pebrel-missing-shell-id", Some(requested.path())).is_err());
 }
 
+#[cfg(windows)]
 #[test]
 fn explicit_relative_host_directory_is_absolute_before_wsl_receives_it() {
     let launch =
@@ -115,6 +141,7 @@ fn explicit_relative_host_directory_is_absolute_before_wsl_receives_it() {
     assert_eq!(args, vec!["--cd".to_owned(), encoded]);
 }
 
+#[cfg(windows)]
 #[test]
 fn explicit_guest_directory_survives_to_the_wsl_launch() {
     let requested = Path::new("/home/pebrel-fixture/project space");
@@ -139,6 +166,7 @@ fn explicit_guest_directory_survives_to_the_wsl_launch() {
     assert!(options.working_directory.is_none());
 }
 
+#[cfg(windows)]
 #[test]
 fn profile_directory_precedes_guest_home_but_explicit_wsl_cd_keeps_precedence() {
     let directory = tempfile::tempdir().unwrap();
