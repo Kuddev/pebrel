@@ -58,21 +58,6 @@ pub(super) fn attention_message(payload: &Value) -> Option<String> {
         .map(|message| truncate(&message, MESSAGE_MAX_CHARS))
 }
 
-/// Explicit blocking notification types and supported compatibility spellings.
-/// Substrings such as "input" would also match nonblocking "input_completed".
-const ACTIONABLE_ATTENTION_TYPES: &[&str] = &[
-    "permission",
-    "permission_prompt",
-    "permission_request",
-    "tool_permission",
-    "tool_permission_request",
-    "approval_request",
-    "confirmation_request",
-    "input_request",
-    "awaiting_input",
-    "elicitation_dialog",
-];
-
 /// A notification requires an explicit blocking type. Neither its prose nor
 /// the presence of an active turn establishes a permission or input request.
 /// Do not read `type`/`kind`: those carry other providers' lifecycle events.
@@ -81,7 +66,7 @@ pub(super) fn attention_is_actionable(payload: &Value) -> bool {
         return false;
     };
     let kind = kind.to_ascii_lowercase();
-    ACTIONABLE_ATTENTION_TYPES.contains(&kind.as_str())
+    super::attention::notification_kind(&kind).is_some()
 }
 
 pub(super) fn background_task_summary(payload: &Value) -> Option<AiBackgroundTasks> {
