@@ -154,7 +154,8 @@ fn claude_form_disappearing_into_an_unmatched_running_layout_clears_attention() 
     let form = "Do you want to proceed?\n❯ 1. Yes\n2. No\nEsc to cancel · Tab to amend";
     assert!(activity.observe_screen(crate::ai_agents::detect("claude", form)));
     assert_eq!(activity.status(), AgentStatus::Blocked);
-    let running = "* Ideating… (2m · 123 tokens)\n────────\n❯\n────────\n版本 2.1.301\n上下文 25%\n状态 运行中\n/project";
+    let running = "* Ideating… (2m · 123 tokens)\n────────\n❯\n────────\n版本 2.1.301\n上下文 \
+                   25%\n状态 运行中\n/project";
     assert!(crate::ai_agents::detect("claude", running).is_none());
     assert!(!activity.observe_screen(crate::ai_agents::detect("claude", running)));
     assert_eq!(activity.status(), AgentStatus::Blocked, "one redraw is inconclusive");
@@ -369,8 +370,20 @@ fn verified_process_can_change_session_and_background_tasks_keep_working() {
     let mut start = event("claude", "first", "SessionStart");
     start.agent_pid = Some(10);
     activity.apply_hook(&start);
+    let mut previous_prompt =
+        event_with_turn("claude", "first", "UserPromptSubmit", "reused-prompt");
+    previous_prompt.agent_pid = Some(10);
+    assert!(activity.apply_hook(&previous_prompt));
+
     start.session_id = Some("cleared".into());
     assert!(activity.apply_hook(&start));
+
+    let mut current_prompt =
+        event_with_turn("claude", "cleared", "UserPromptSubmit", "reused-prompt");
+    current_prompt.agent_pid = Some(10);
+    assert!(activity.apply_hook(&current_prompt));
+    assert!(activity.is_current_turn("reused-prompt"));
+
     let mut late = event("claude", "first", "Stop");
     late.agent_pid = Some(10);
     assert!(!activity.apply_hook(&late), "the old session cannot undo a verified /clear");
@@ -414,7 +427,8 @@ fn ordinary_idle_reminders_are_not_blocking_requests() {
         "approval_complete",
     ] {
         let wire = format!(
-            "nebula-hook/1 source=claude\n{{\"hook_event_name\":\"Notification\",\"notification_type\":\"{kind}\"}}"
+            r#"nebula-hook/1 source=claude
+{{"hook_event_name":"Notification","notification_type":"{kind}"}}"#
         );
         assert!(parse_remote_envelope(wire.as_bytes(), Some(1)).is_none());
     }
@@ -458,6 +472,65 @@ fn shell_command_end_rejects_late_hooks_until_a_new_command_starts() {
     }
     activity.begin_command(true);
     assert!(activity.apply_hook(&event("codex", "new", "notify")));
+}
+
+#[test]
+fn stale_claude_prompt_submit_cannot_rewind_the_current_turn() {
+    let mut activity = AgentActivity::default();
+    let old = event_with_turn("claude", "s", "UserPromptSubmit", "old-prompt");
+    assert!(activity.apply_hook(&old));
+
+    activity.submitted_text("claude", "new prompt");
+    let current = event_with_turn("claude", "s", "UserPromptSubmit", "current-prompt");
+    assert!(activity.apply_hook(&current));
+    assert!(!activity.apply_hook(&old));
+    assert!(activity.is_current_turn("current-prompt"));
+    assert_eq!(activity.status(), AgentStatus::Working);
+}
+
+#[test]
+fn provider_confirmed_prompt_starts_the_next_turn_without_a_local_submit() {
+    let mut activity = AgentActivity::default();
+    let first = event_with_turn("claude", "s", "UserPromptSubmit", "first-prompt");
+    assert!(activity.apply_hook(&first));
+    assert!(activity.apply_hook(&event_with_turn("claude", "s", "Stop", "first-prompt")));
+    assert_eq!(activity.status(), AgentStatus::Done);
+
+    // Claude can submit through a rebound keybinding, so the provider-confirmed
+    // identity must start the turn without Pebrel's physical Enter branch.
+    let second = event_with_turn("claude", "s", "UserPromptSubmit", "second-prompt");
+    assert!(activity.apply_hook(&second));
+    assert!(activity.is_current_turn("second-prompt"));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    assert!(!activity.apply_hook(&first), "a replayed prompt ID must stay rejected");
+}
+
+#[test]
+fn queued_prompt_records_the_current_completion_and_blocks_retry() {
+    let mut activity = AgentActivity::default();
+    assert!(activity.apply_hook(&event_with_turn(
+        "claude",
+        "s",
+        "UserPromptSubmit",
+        "first-prompt"
+    )));
+    activity.queued_submit();
+    assert!(activity.queued_prompt_pending());
+
+    // The completion is a fact about the current turn; only the retry decision
+    // waits for the queued prompt's identity.
+    assert!(activity.apply_hook(&event_with_turn("claude", "s", "StopFailure", "first-prompt")));
+    assert_eq!(activity.status(), AgentStatus::Idle);
+    assert!(activity.queued_prompt_pending());
+
+    assert!(activity.apply_hook(&event_with_turn(
+        "claude",
+        "s",
+        "UserPromptSubmit",
+        "second-prompt"
+    )));
+    assert!(!activity.queued_prompt_pending());
+    assert!(activity.is_current_turn("second-prompt"));
 }
 
 /// Age and familiar screen forms cannot replace a complete provider lifecycle.

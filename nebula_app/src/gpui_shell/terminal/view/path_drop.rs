@@ -107,6 +107,7 @@ impl TerminalView {
             );
             return;
         };
+        self.cancel_auto_continue();
         if self.ssh_destination.is_some() {
             self.upload_dropped_paths(paths.into_iter().map(PathBuf::from).collect(), window, cx);
             return;
