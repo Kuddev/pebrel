@@ -203,8 +203,6 @@
     <string name="chat_title">对话视图</string>
     <string name="chat_compose">给助手发消息…</string>
     <string name="chat_terminal">终端视图</string>
-    <string name="chat_you">你</string>
-    <string name="chat_tool">工具</string>
     <string name="chat_tool_pending">执行中</string>
     <string name="chat_content_clipped">较长内容仅展示一部分，可在终端查看完整输出。</string>
     <string name="chat_older">更早消息</string>

@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -37,7 +38,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
                         onRetry: () -> Unit, onEdit: () -> Unit, onClose: () -> Unit, onFiles: (() -> Unit)? = null,
-                        onAttachRemote: ((RemoteAttachment) -> Unit)? = null, active: Boolean = true) {
+                        onAttachRemote: ((RemoteAttachment) -> Unit)? = null, active: Boolean = true,
+                        onConversation: ((String) -> Unit)? = null) {
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     var direct by rememberSaveable(session.id, prefs.directInput) { mutableStateOf(prefs.directInput) }
     val attachments = rememberTerminalAttachmentAction(session, repository) { direct = false }
@@ -50,9 +52,14 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
     var focused by rememberSaveable(session.id) { mutableStateOf(false) }
     var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
     val trust by repository.trust.collectAsStateWithLifecycle()
+    val agent = session.foreground?.agent?.takeIf { onConversation != null && active }
+    // Header and body stack in this screen's own column: the bar is raised for its shadow and must not overlap the body.
+    Column(Modifier.fillMaxSize()) {
     if (!focused) TerminalHeader(session.title,
         if (session.source == "Local") stringResource(R.string.local_device) else session.source,
         session.status, onBack, onSessions, { closing = true }, onFiles = onFiles,
+        onConversation = agent?.let { kind -> onConversation?.let { open -> { open(kind) } } },
+        detail = session.foreground?.label?.ifEmpty { null },
         onRemoteSessions = if (onAttachRemote != null && session.host != null && session.status == "ready") ({ remoteSessions = true }) else null)
     Column(Modifier.fillMaxSize()) {
         if (session.status == "ended" || (session.hasConnected && session.status != "ready"))
@@ -80,6 +87,7 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
             val bytes = (command + "\r").toByteArray()
             session.terminal.tryWrite(bytes, 0, bytes.size)
         }
+    }
     }
     if (retryCredentials) SshRetryCredentials(session.host?.keyUri?.isNotEmpty() == true,
         onDismiss = { retryCredentials = false }, onRetry = { secret ->
@@ -122,12 +130,12 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     }
     DisposableEffect(identity) { onDispose { repository.leaveDesktopPane() } }
     DesktopTerminalTheme(if (output.target == identity) output.frame else null) {
+    Column(Modifier.fillMaxSize()) {
     if (!focused) TerminalHeader(pane.displayTitle, desktop.host.name, desktop.status, onBack, onSessions,
         onGit = onGit.takeIf { pane.sshDestination == null }, gitEnabled = desktop.status == "ready",
-        onDetails = { showDetails = true },
+        onDetails = { showDetails = true }, onConversation = onConversation.takeIf { pane.agent != null },
         wrapLines = wrapLines, onToggleWrap = { repository.display.update { it.copy(desktopWrapLines = !it.desktopWrapLines) } })
     Column(Modifier.fillMaxSize()) {
-        if (!focused && pane.agent != null && onConversation != null) SessionModeTabs(conversation = false, onSwitch = onConversation)
         if (desktop.status != "ready") Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             val recovering = desktop.hasConnected && desktop.relayProfile != null && DesktopReconnect.retryable(desktop.failure)
@@ -158,6 +166,7 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
             if (TerminalShortcut.parse(label)?.send(input) != true) repository.error.value = "input_rejected"
         }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused },
             send = input::submit)
+    }
     }
     if (showPermission) AlertDialog(onDismissRequest = { showPermission = false },
         title = { Text(stringResource(R.string.composer_pc_enable_input)) },
@@ -201,11 +210,14 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
                            onClose: (() -> Unit)? = null, onGit: (() -> Unit)? = null, gitEnabled: Boolean = true,
                            onDetails: (() -> Unit)? = null, onConversation: (() -> Unit)? = null, conversationActive: Boolean = false,
                            onFiles: (() -> Unit)? = null, wrapLines: Boolean = false, onToggleWrap: (() -> Unit)? = null,
-                           onRemoteSessions: (() -> Unit)? = null) {
+                           onRemoteSessions: (() -> Unit)? = null, standalone: Boolean = true,
+                           onImmersive: (() -> Unit)? = null, detail: String? = null) {
     var menu by remember { mutableStateOf(false) }
     val connection = "$endpoint · ${statusLabel(status)}"
-    Row(Modifier.fillMaxWidth().then(if (conversationActive) Modifier.heightIn(min = 64.dp) else Modifier.height(48.dp))
-        .background(MaterialTheme.colorScheme.background), verticalAlignment = Alignment.CenterVertically) {
+    // Standalone it is its own bar; inside a larger glass bar it adds no second surface.
+    Row(Modifier.fillMaxWidth().then(if (standalone) Modifier.glassBar() else Modifier)
+        .then(if (conversationActive) Modifier.heightIn(min = 64.dp) else Modifier.height(48.dp)),
+        verticalAlignment = Alignment.CenterVertically) {
         GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
         Row(Modifier.weight(1f).heightIn(min = 48.dp)
             .clickable(onClickLabel = stringResource(R.string.switch_session), onClick = onSessions)
@@ -218,6 +230,12 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(connection, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+            } else if (detail != null) Column(Modifier.weight(1f, fill = false)) {
+                // What runs in the terminal and where, as the server reports it.
+                Text(title, fontSize = 13.sp, lineHeight = 17.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                Text(detail, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else Text(title, fontSize = 13.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Glyph(R.drawable.ic_down, Modifier.size(12.dp))
@@ -226,6 +244,7 @@ internal fun TerminalHeader(title: String, endpoint: String, status: String, onB
             if (onGit != null) TerminalHeaderAction(R.drawable.ic_github, stringResource(R.string.git_title), onGit, enabled = gitEnabled)
             if (onConversation != null) TerminalHeaderAction(if (conversationActive) R.drawable.ic_terminal else R.drawable.ic_chat,
                 stringResource(if (conversationActive) R.string.chat_terminal else R.string.chat_title), onConversation)
+            if (onImmersive != null) TerminalHeaderAction(R.drawable.ic_expand, stringResource(R.string.chat_immersive), onImmersive)
             if (onFiles != null) TerminalHeaderAction(R.drawable.ic_git_folder, stringResource(R.string.sftp_title), onFiles, enabled = status == "ready")
             if (onClose != null || onDetails != null || onToggleWrap != null || onRemoteSessions != null) Box {
                 TerminalHeaderAction(R.drawable.ic_more, stringResource(R.string.more_actions), { menu = true })
@@ -254,8 +273,9 @@ private fun TerminalHeaderAction(@DrawableRes icon: Int, label: String, onClick:
 
 @Composable
 fun DesktopScreen(desktop: DesktopWorkspace?, onPane: (DesktopPane) -> Unit, onRetry: (() -> Unit)? = null,
-                  onTab: ((DesktopTab) -> Unit)? = null, onCloseTab: ((DesktopTab) -> Unit)? = null, onDisconnect: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 12.dp)) {
+                  onTab: ((DesktopTab) -> Unit)? = null, onCloseTab: ((DesktopTab) -> Unit)? = null, onDisconnect: () -> Unit,
+                  modifier: Modifier = Modifier, top: Dp = 0.dp) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = top).padding(horizontal = 22.dp, vertical = 12.dp)) {
         Row(Modifier.padding(vertical = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(15.dp)) {
             Glyph(R.drawable.ic_monitor, Modifier.size(30.dp), MaterialTheme.colorScheme.primary)
             Column {
@@ -275,7 +295,7 @@ fun DesktopScreen(desktop: DesktopWorkspace?, onPane: (DesktopPane) -> Unit, onR
         if (desktop != null && desktop.tabs.isNotEmpty() && onTab != null) DesktopTabRows(desktop, onTab, onPane, onCloseTab)
         else desktop?.panes?.forEach { pane ->
             Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).workspaceFrame()
-                .clickable(enabled = desktop.status == "ready") { onPane(pane) }.padding(horizontal = 14.dp, vertical = 18.dp),
+                .pressClickable(enabled = desktop.status == "ready") { onPane(pane) }.padding(horizontal = 14.dp, vertical = 18.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Glyph(R.drawable.ic_terminal)
                 Column(Modifier.weight(1f)) {
