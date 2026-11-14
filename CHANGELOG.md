@@ -4,6 +4,90 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.8 - Unreleased
+
+- `Pebrel-v2.5.8-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-windows-x64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.8-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Added
+
+- Added renaming for saved command groups. Addresses [#660](https://github.com/Kuddev/nebula/issues/660).
+- Added an Android conversation view for supported agents in SSH terminals, with sent messages, agent status, and edited files in the timeline.
+- Added editable Android shortcuts and grouped the fields in the SSH connection form.
+
+#### Fixed
+
+- Fixed vertical dragging in the tab sidebar so tabs can be reordered again.
+- Fixed uneven sizes and alignment of shell and host icons in tab rows and pickers.
+- Fixed split tabs showing a generic icon instead of the focused shell's icon.
+- Fixed the sidebar activity indicator so it shares the close button's center.
+- Fixed SFTP refresh and parent navigation when the current directory has been deleted. Addresses [#974](https://github.com/Kuddev/nebula/issues/974).
+- Fixed Android SSH tabs dropping after a network change or when the device goes to sleep.
+- Fixed the white plate behind the Android launcher icon on launchers that support adaptive icons.
+- Fixed automatic Android host icons overwriting role icons such as Docker or server.
+- Fixed Android SFTP uploads rejecting batches when the JSON encoder escapes Base64 characters.
+- Fixed built-in command palette labels displaying Chinese when English is selected.
+- Fixed repeated disk writes during frequent agent events when the session details have not changed.
+
+#### Improved
+
+- Improved Android SFTP uploads by preparing the next batch while the current batch is sent.
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 新增已保存命令分组的重命名。对应 [#660](https://github.com/Kuddev/nebula/issues/660)。
+- 新增 Android SSH 终端内受支持助手的对话视图，时间线可显示已发送消息、助手状态和改动文件。
+- 新增 Android 自定义快捷键编辑，并将 SSH 连接表单按用途分组。
+
+#### 修复
+
+- 修复侧栏标签不能上下拖动排序的问题。
+- 修复标签行和选择器中 Shell 与主机图标大小不一、对齐不齐的问题。
+- 修复分屏标签只显示通用图标的问题，现在显示聚焦窗格的 Shell 图标。
+- 修复侧栏运行状态图标偏移的问题，使它与关闭按钮共用同一中心。
+- 修复 SFTP 当前目录被删除后，刷新和返回上一级失效的问题。对应 [#974](https://github.com/Kuddev/nebula/issues/974)。
+- 修复 Android 在切换网络或设备休眠时 SSH 标签页掉线的问题。
+- 修复支持自适应图标的 Android 启动器给应用图标加白底的问题。
+- 修复 Android 自动识别主机系统图标时覆盖 Docker、服务器等用途图标的问题。
+- 修复 Android 对 Base64 字符进行 JSON 转义时，SFTP 上传批次被拒绝的问题。
+- 修复选用英文时，命令面板的内置命令仍显示中文的问题。
+- 修复助手频繁报告状态、但会话信息未变时反复写盘的问题。
+
+#### 改进
+
+- 改进 Android SFTP 上传，在传输当前批次时准备下一批数据。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/Celestial-0"><img src="https://avatars.githubusercontent.com/u/156834902?v=4&amp;s=96" width="48" height="48" alt="Celestial-0" title="Celestial-0" /></a>
+  <a href="https://github.com/not-exist"><img src="https://avatars.githubusercontent.com/u/121529946?v=4&amp;s=96" width="48" height="48" alt="not-exist" title="not-exist" /></a>
+</p>
+
+- [@Kuddev](https://github.com/Kuddev)
+- [@Aschenbath](https://github.com/Aschenbath)
+- [@Celestial-0](https://github.com/Celestial-0)
+- [@not-exist](https://github.com/not-exist)
+
 ## 2.5.7 - 2026-11-13
 
 ```text

@@ -1,6 +1,6 @@
 [package]
 name = "pebrel-completions"
-version = "2.5.7"
+version = "2.5.8"
 edition.workspace = true
 
 [features]
