@@ -621,6 +621,7 @@ impl PersistedFormula {
             formula_neighbours_above: [false; MAX_ABSORBED_BLANK_ROWS],
             formula_neighbours_below: [false; MAX_ABSORBED_BLANK_ROWS],
             widen_right_to: None,
+            reflow_limit: None,
         }
     }
 }
@@ -690,6 +691,11 @@ pub(crate) struct FormulaOverlay {
     /// Right edge (in grid columns) available to a display formula whose rows
     /// hold nothing after the source.
     widen_right_to: Option<usize>,
+    /// First column after the source that a compact inline formula must not
+    /// move: a box-drawing border, an independently positioned column or a
+    /// coloured surface (see [`scan::reflow_barrier`]). Only the prose between
+    /// the formula and this column follows the compacted formula.
+    reflow_limit: Option<usize>,
 }
 
 impl FormulaOverlay {
@@ -828,6 +834,16 @@ struct ProjectionSpan {
     visual_cells: usize,
     shift_before: isize,
     shift_after: isize,
+    /// Source column where this span's shift stops; cells from here on keep
+    /// their terminal column.
+    limit: usize,
+}
+
+impl ProjectionSpan {
+    /// Shift of a source cell that follows this span (and no later span).
+    fn shift_at(&self, source_column: usize) -> isize {
+        if source_column < self.limit { self.shift_after } else { 0 }
+    }
 }
 
 /// Sparse source-to-screen mapping for compact inline formulas in the current
@@ -899,6 +915,7 @@ impl LineProjection {
                 visual_cells,
                 shift_before: 0,
                 shift_after: 0,
+                limit: overlay.reflow_limit.map_or(usize::MAX, |limit| limit.max(span.end)),
             });
         }
         self.spans.sort_unstable_by(|left, right| {
@@ -928,11 +945,15 @@ impl LineProjection {
 
         let mut row = None;
         let mut shift = 0isize;
+        let mut limit = usize::MAX;
         for span in &mut self.spans {
-            if row != Some(span.row) {
+            // A formula past the previous span's stop column starts a fresh
+            // shift: the border or column between them stays where it is.
+            if row != Some(span.row) || span.source_start >= limit {
                 row = Some(span.row);
                 shift = 0;
             }
+            limit = span.limit;
             span.shift_before = shift;
             let source_cells = span.source_end - span.source_start;
             shift = shift.saturating_add(span.visual_cells as isize - source_cells as isize);
@@ -959,18 +980,23 @@ impl LineProjection {
             .iter()
             .take_while(|span| span.source_end <= source_column)
             .last()
-            .map_or(0, |span| span.shift_after)
+            .map_or(0, |span| span.shift_at(source_column))
     }
 
     pub(crate) fn project_cell(&self, point: Point<usize>, columns: usize) -> Option<Point<usize>> {
         let spans = self.row_spans(point.line);
         let preceding = spans.partition_point(|span| span.source_start <= point.column.0);
-        let shift = match preceding.checked_sub(1).and_then(|index| spans.get(index)) {
+        let (shift, limit) = match preceding.checked_sub(1).and_then(|index| spans.get(index)) {
             Some(span) if point.column.0 < span.source_end => return None,
-            Some(span) => span.shift_after,
-            None => 0,
+            Some(span) => (span.shift_at(point.column.0), span.limit),
+            None => (0, usize::MAX),
         };
         let column = apply_shift(point.column.0, shift);
+        // Prose pushed right by a formula wider than its source may not land
+        // on the column that stops the shift.
+        if point.column.0 < limit && column >= limit {
+            return None;
+        }
         (column < columns).then(|| Point::new(point.line, Column(column)))
     }
 
@@ -1002,6 +1028,7 @@ impl LineProjection {
         let spans = self.row_spans(point.line);
         let visual_column = point.column.0;
         let mut shift = 0isize;
+        let mut limit = usize::MAX;
 
         for span in spans {
             let visual_start = apply_shift(span.source_start, span.shift_before);
@@ -1020,9 +1047,16 @@ impl LineProjection {
                 };
             }
             shift = span.shift_after;
+            limit = span.limit;
         }
 
-        let source_column = apply_shift(visual_column, shift.saturating_neg());
+        if visual_column >= limit {
+            return (point, side);
+        }
+        // Cells vacated in front of the stop column map back to the last
+        // source cell before it rather than onto the border itself.
+        let source_column =
+            apply_shift(visual_column, shift.saturating_neg()).min(limit.saturating_sub(1));
         (Point::new(point.line, Column(source_column)), side)
     }
 }
@@ -1122,7 +1156,11 @@ pub(crate) fn prepare_overlays(
             }
             let compact_inline = !overlay.display && overlay.spans.len() == 1;
             let source_start = overlay.spans.first()?.start;
-            let remaining_columns = size.columns().saturating_sub(source_start);
+            // A compact box must not grow over the column that stops the shift.
+            let right_edge = overlay.reflow_limit.map_or(size.columns(), |limit| {
+                limit.max(overlay.spans.first().map_or(0, |span| span.end)).min(size.columns())
+            });
+            let remaining_columns = right_edge.saturating_sub(source_start);
             let natural_cells =
                 quantized_visual_cells(widest, size.cell_width(), remaining_columns);
             let box_right = if compact_inline {
@@ -1456,3 +1494,7 @@ pub(crate) fn draw_overlays(
 #[cfg(test)]
 #[path = "terminal_math/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "terminal_math/reflow_tests.rs"]
+mod reflow_tests;
