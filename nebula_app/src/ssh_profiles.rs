@@ -122,19 +122,32 @@ impl SshProfiles {
     }
 
     pub fn save(&mut self, path: &Path) -> io::Result<()> {
-        self.validate_targets()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         // Reuse the OS-handle lease, scoped to this write. A stale snapshot must
         // never replace a profile another window has just edited.
-        let _lease = crate::atomic_file::try_lifetime_lock(path)?.ok_or_else(|| {
+        let lease = crate::atomic_file::try_lifetime_lock(path)?.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "Host profiles are being saved by another window",
             )
         })?;
+        self.save_leased(path, &lease)
+    }
+
+    /// 在调用方已持有的租约内提交。重复检查、凭据写入和提交要作为一笔事务
+    /// 的写入方（快捷添加）必须从取租约到落盘全程持锁，才能让其它窗口的
+    /// 保存插不进来，所以把「读当前文件 → 写出」拆到这里；公开的
+    /// [`Self::save`] 自己取租约后同样落到这里。租约参数只是调用方持有它
+    /// 的证明——没有租约的调用方不允许绕过这段互斥。
+    pub(crate) fn save_leased(
+        &mut self,
+        path: &Path,
+        _lease: &crate::atomic_file::LifetimeFileLock,
+    ) -> io::Result<()> {
+        self.validate_targets()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let current = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -162,6 +175,13 @@ impl SshProfiles {
                 icon: None,
                 connection: SshConnectionOptions::default(),
             })
+    }
+
+    /// 目的地是否已有保存的 profile。[`Self::for_destination`] 缺失时返回
+    /// 回落默认值，调用方区分不了「库里已有」和「未保存」；写入路径用它
+    /// 在落盘前识别冲突，精确比较与 `upsert` 的替换键一致。
+    pub fn contains_destination(&self, destination: &str) -> bool {
+        self.profiles.iter().any(|profile| profile.destination == destination)
     }
 
     /// 地址 → 显示名。侧栏每帧都要画主机行，不能每帧读一次 JSON，所以调用方

@@ -5,7 +5,7 @@ const EDITOR_WIDTH: f32 = 512.0;
 const EDITOR_HEIGHT: f32 = 720.0;
 const EDITOR_PADDING: f32 = 28.0;
 
-pub(super) fn editor_input(
+pub(in crate::gpui_shell) fn editor_input(
     state: &Entity<InputState>,
     label: &'static str,
     window: &Window,
@@ -32,7 +32,10 @@ pub(super) fn editor_input(
         .aria_label(label)
 }
 
-pub(super) fn editor_field(label: &'static str, control: impl IntoElement) -> gpui::Div {
+pub(in crate::gpui_shell) fn editor_field(
+    label: &'static str,
+    control: impl IntoElement,
+) -> gpui::Div {
     v_flex()
         .w_full()
         .min_w_0()
@@ -41,7 +44,10 @@ pub(super) fn editor_field(label: &'static str, control: impl IntoElement) -> gp
         .child(control)
 }
 
-pub(super) fn editor_hint(text: impl Into<SharedString>, cx: &gpui::App) -> gpui::Div {
+pub(in crate::gpui_shell) fn editor_hint(
+    text: impl Into<SharedString>,
+    cx: &gpui::App,
+) -> gpui::Div {
     div()
         .text_xs()
         .line_height(gpui::relative(1.6))
