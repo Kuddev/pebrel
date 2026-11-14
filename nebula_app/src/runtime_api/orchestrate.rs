@@ -741,11 +741,15 @@ fn execute_step(
 /// 从这一步返回的内嵌快照里取出目标 pane 的状态序号。取不到就不写——基线缺失只是
 /// 让后续 wait 退回"任意匹配"，写一个猜的值才会真正骗到调用方。
 fn submitted_state_seq(result: &Value, action: &Value) -> Option<u64> {
+    submitted_pane(result, action).map(|pane| pane.state_change_seq)
+}
+
+fn submitted_pane(result: &Value, action: &Value) -> Option<RuntimePane> {
     let pane_id = action.get("pane_id").and_then(Value::as_u64)?;
     let window_id = action.get("window_id").and_then(Value::as_u64);
     let snapshot = result.get("snapshot")?;
     let snapshot: RuntimeSnapshot = serde_json::from_value(snapshot.clone()).ok()?;
-    snapshot.pane(window_id, pane_id).ok().map(|pane| pane.state_change_seq)
+    snapshot.pane(window_id, pane_id).ok().cloned()
 }
 
 /// 取被引用步骤回执里的状态序号做等待基线。直接指定 pane 的目标没有基线可言，
@@ -963,9 +967,9 @@ fn finalize_agent(
 ) -> AgentFinalization {
     let outcome = wait_agent_ready(hub, &pending.agent_id, pending.generation, pending.deadline)
         .and_then(|(agent, ready_state)| {
-            dispatch_runtime_command(
+            let result = dispatch_runtime_command(
                 RuntimeCommand::AgentPrompt {
-                    agent: agent.agent_id,
+                    agent: agent.agent_id.clone(),
                     generation: Some(agent.generation),
                     text: pending.initial_prompt.clone(),
                     submit: true,
@@ -978,6 +982,11 @@ fn finalize_agent(
                 "ready_state".to_owned(),
                 serde_json::to_value(ready_state).unwrap_or(Value::Null),
             );
+            action.insert("ready_state_scope".to_owned(), Value::String("before_initial_prompt".into()));
+            if let Some(pane) = submitted_pane(&result, &Value::Object(action.clone())) {
+                action.insert("state_after_submission".to_owned(), serde_json::to_value(pane.task_state).unwrap_or(Value::Null));
+                action.insert("state_change_seq".to_owned(), Value::Number(pane.state_change_seq.into()));
+            }
             action.insert("submitted".to_owned(), Value::Bool(true));
             Ok(Value::Object(action))
         })

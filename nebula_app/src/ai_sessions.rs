@@ -142,6 +142,12 @@ fn registry_path() -> PathBuf {
     settings_dir().join("ai_sessions.json")
 }
 
+#[cfg(test)]
+fn settings_dir() -> PathBuf {
+    crate::platform::dirs::data_dir().to_owned()
+}
+
+#[cfg(not(test))]
 fn settings_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("NEBULA_CONFIG_DIR").filter(|path| !path.is_empty()) {
         return PathBuf::from(path);

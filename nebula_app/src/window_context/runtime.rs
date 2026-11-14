@@ -373,6 +373,27 @@ impl WindowContext {
         Ok(())
     }
 
+    pub(crate) fn ensure_delegation_ready(
+        &self,
+        managed: &crate::runtime_api::RuntimeManagedAgent,
+    ) -> Result<(), ApiError> {
+        let pane_id = managed.pane_id;
+        let pane = self
+            .pane(pane_id)
+            .ok_or_else(|| ApiError::new("target_not_found", "the target pane no longer exists"))?;
+        let state = task_state(&pane.nebula_state);
+        if !matches!(state, RuntimeTaskState::Idle | RuntimeTaskState::Finished)
+            || pane.nebula_state.agent_activity.runtime_turn_pending()
+            || pane.nebula_state.runtime_submit_barrier.is_some()
+        {
+            return Err(ApiError::new(
+                "target_busy",
+                "the target Agent has an unfinished turn; delegation was not submitted",
+            ));
+        }
+        managed.check_delegation_identity(runtime_agent(pane).as_ref())
+    }
+
     pub(crate) fn runtime_prompt(
         &mut self,
         pane_id: u64,
@@ -411,7 +432,6 @@ impl WindowContext {
                 pane.nebula_state.runtime_submit_barrier =
                     Some(crate::display::state::RuntimeSubmitBarrier {
                         baseline_screen: runtime_screen_snapshot(pane).unwrap_or_default(),
-                        submit_bytes,
                     });
             }
         }
@@ -487,12 +507,10 @@ impl WindowContext {
         if codex_submit {
             bytes = crate::input::terminal_input::build_runtime_codex_submission(&text, mode);
         } else if submit {
-            let submit_bytes =
-                runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
+            runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
             pane.nebula_state.runtime_submit_barrier =
                 Some(crate::display::state::RuntimeSubmitBarrier {
                     baseline_screen: runtime_screen_snapshot(pane).unwrap_or_default(),
-                    submit_bytes,
                 });
         }
         pane.notifier.notify(bytes);
@@ -648,12 +666,10 @@ impl WindowContext {
         }
         let mode = *pane.terminal.lock().mode();
         let bytes = crate::input::terminal_input::build_runtime_text_sequence(&command, mode);
-        let submit_bytes =
-            runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
+        runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
         pane.nebula_state.runtime_submit_barrier =
             Some(crate::display::state::RuntimeSubmitBarrier {
                 baseline_screen: runtime_screen_snapshot(pane).unwrap_or_default(),
-                submit_bytes,
             });
         let run = crate::runtime_api::begin_runtime_run();
         let run_id = run.run_id;
@@ -714,8 +730,12 @@ impl WindowContext {
             return;
         }
         let pane = &mut self.panes[index];
-        let pending = pane.nebula_state.runtime_submit_barrier.take().expect("checked above");
-        pane.notifier.notify(pending.submit_bytes);
+        let submit_bytes = crate::input::terminal_input::build_runtime_deferred_submission(
+            pane.nebula_state.running_program.as_deref(),
+            *pane.terminal.lock().mode(),
+        );
+        pane.nebula_state.runtime_submit_barrier = None;
+        pane.notifier.notify(submit_bytes);
     }
 }
 

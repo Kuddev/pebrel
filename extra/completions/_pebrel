@@ -119,6 +119,19 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(agent-attach)
+_arguments "${_arguments_options[@]}" : \
+'--window=[]:WINDOW:_default' \
+'--pane=[]:PANE:_default' \
+'--name=[]:NAME:_default' \
+'--kind=[]:KIND:_default' \
+'--expected-session-id=[]:EXPECTED_SESSION_ID:_default' \
+'--timeout-ms=[Maximum time to wait for a command response]:TIMEOUT_MS:_default' \
+'--pretty[Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (agent-start)
 _arguments "${_arguments_options[@]}" : \
 '--window=[]:WINDOW:_default' \
@@ -475,6 +488,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (agents)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(agent-attach)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1435,6 +1452,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(agent-attach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (agent-start)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1981,6 +2002,7 @@ _pebrel__ctl_commands() {
 'snapshot:Read the authoritative window, tab, pane, and task-state projection' \
 'orchestrate:Execute one typed multi-step terminal workflow in a single Runtime request' \
 'agents:List only panes Pebrel recognizes as AI agents, with semantic state and session identity' \
+'agent-attach:Name an already running native Agent without starting or prompting it' \
 'agent-start:Start a verified AI CLI in a new terminal tab and assign a stable name' \
 'agent-fork:Create an isolated Git worktree, then start a named AI CLI in that checkout' \
 'agent-get:Resolve one managed agent by stable id or active name' \
@@ -2011,6 +2033,11 @@ _pebrel__ctl_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel ctl commands' commands "$@"
+}
+(( $+functions[_pebrel__ctl__agent-attach_commands] )) ||
+_pebrel__ctl__agent-attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel ctl agent-attach commands' commands "$@"
 }
 (( $+functions[_pebrel__ctl__agent-fork_commands] )) ||
 _pebrel__ctl__agent-fork_commands() {
@@ -2089,6 +2116,7 @@ _pebrel__ctl__help_commands() {
 'snapshot:Read the authoritative window, tab, pane, and task-state projection' \
 'orchestrate:Execute one typed multi-step terminal workflow in a single Runtime request' \
 'agents:List only panes Pebrel recognizes as AI agents, with semantic state and session identity' \
+'agent-attach:Name an already running native Agent without starting or prompting it' \
 'agent-start:Start a verified AI CLI in a new terminal tab and assign a stable name' \
 'agent-fork:Create an isolated Git worktree, then start a named AI CLI in that checkout' \
 'agent-get:Resolve one managed agent by stable id or active name' \
@@ -2119,6 +2147,11 @@ _pebrel__ctl__help_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel ctl help commands' commands "$@"
+}
+(( $+functions[_pebrel__ctl__help__agent-attach_commands] )) ||
+_pebrel__ctl__help__agent-attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel ctl help agent-attach commands' commands "$@"
 }
 (( $+functions[_pebrel__ctl__help__agent-fork_commands] )) ||
 _pebrel__ctl__help__agent-fork_commands() {
@@ -2457,6 +2490,7 @@ _pebrel__help__ctl_commands() {
 'snapshot:Read the authoritative window, tab, pane, and task-state projection' \
 'orchestrate:Execute one typed multi-step terminal workflow in a single Runtime request' \
 'agents:List only panes Pebrel recognizes as AI agents, with semantic state and session identity' \
+'agent-attach:Name an already running native Agent without starting or prompting it' \
 'agent-start:Start a verified AI CLI in a new terminal tab and assign a stable name' \
 'agent-fork:Create an isolated Git worktree, then start a named AI CLI in that checkout' \
 'agent-get:Resolve one managed agent by stable id or active name' \
@@ -2486,6 +2520,11 @@ _pebrel__help__ctl_commands() {
 'wait:Wait until a pane reaches a semantic task state' \
     )
     _describe -t commands 'pebrel help ctl commands' commands "$@"
+}
+(( $+functions[_pebrel__help__ctl__agent-attach_commands] )) ||
+_pebrel__help__ctl__agent-attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help ctl agent-attach commands' commands "$@"
 }
 (( $+functions[_pebrel__help__ctl__agent-fork_commands] )) ||
 _pebrel__help__ctl__agent-fork_commands() {

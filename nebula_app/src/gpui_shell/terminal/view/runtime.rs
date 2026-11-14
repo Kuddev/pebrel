@@ -203,6 +203,24 @@ impl TerminalView {
         {
             return RuntimeTaskState::Failed;
         }
+        if self.agent_activity.runtime_turn_pending() && self.exited.is_none() {
+            if self.agent_activity.status() == AgentStatus::Blocked {
+                return RuntimeTaskState::Attention;
+            }
+            if let Some(status) = self.effective_program_status()
+                && matches!(
+                    status.task_state(),
+                    RuntimeTaskState::Attention
+                        | RuntimeTaskState::WaitingInput
+                        | RuntimeTaskState::Failed
+                )
+            {
+                return status.task_state();
+            }
+            // The previous OSC idle frame cannot finish an explicitly
+            // submitted task before its provider completion has arrived.
+            return RuntimeTaskState::Running;
+        }
         if let Some(status) = self.effective_program_status() {
             return status.task_state();
         }
@@ -628,14 +646,13 @@ impl TerminalView {
         }
         let bytes =
             crate::input::terminal_input::build_runtime_text_sequence(&command, self.term_mode());
-        let submit_bytes = self.runtime_key_sequence(
+        self.runtime_key_sequence(
             crate::runtime_api::RuntimeKey::Enter,
             crate::runtime_api::RuntimeKeyModifiers::default(),
             1,
         )?;
         self.pending_runtime_submit = Some(crate::display::state::RuntimeSubmitBarrier {
             baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
-            submit_bytes,
         });
         self.capture_runtime_prompt();
         let run = crate::runtime_api::begin_runtime_run();
@@ -685,6 +702,13 @@ impl TerminalView {
             ));
         }
         let agent = self.runtime_agent();
+        if submit
+            && agent.as_ref().is_some_and(|agent| {
+                crate::ai_hook::local_command::is_local_command(&agent.kind, &text)
+            })
+        {
+            self.ensure_delegation_ready()?;
+        }
         let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         if submit {
             self.capture_runtime_prompt();
@@ -707,7 +731,6 @@ impl TerminalView {
             } else {
                 self.pending_runtime_submit = Some(crate::display::state::RuntimeSubmitBarrier {
                     baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
-                    submit_bytes,
                 });
             }
         }
@@ -730,6 +753,36 @@ impl TerminalView {
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn runtime_delegation_callback(
+        &mut self,
+        callback: &crate::runtime_api::RuntimeDelegationCallback,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::runtime_api::ApiError> {
+        self.ensure_local_context_allowed(InputOrigin::Program)?;
+        if callback.prompt.contains('\n') && self.term_mode().contains(TermMode::BRACKETED_PASTE) {
+            self.runtime_agent_paste(callback.prompt.clone(), true, InputOrigin::Program, cx)
+        } else {
+            self.runtime_prompt(callback.single_line_prompt().into_owned(), true, cx)
+        }
+    }
+
+    pub(crate) fn ensure_delegation_ready(&self) -> Result<(), crate::runtime_api::ApiError> {
+        use crate::runtime_api::RuntimeTaskState;
+        let state = self.runtime_task_state();
+        if !matches!(state, RuntimeTaskState::Idle | RuntimeTaskState::Finished)
+            || self.agent_activity.runtime_turn_pending()
+            || self.pending_runtime_submit.is_some()
+        {
+            return Err(crate::runtime_api::ApiError::new(
+                "target_busy", "the target Agent has an unfinished turn or pending input; delegation was not submitted",
+            ).details(serde_json::json!({
+                "pane_id": self.pane_id, "task_state": state,
+                "submission_in_flight": self.agent_activity.runtime_turn_pending(),
+            })));
         }
         Ok(())
     }
@@ -806,6 +859,13 @@ impl TerminalView {
     ) -> Result<(), crate::runtime_api::ApiError> {
         self.ensure_local_context_allowed(origin)?;
         let agent = self.runtime_chat_agent();
+        if submit
+            && agent.as_ref().is_some_and(|agent| {
+                crate::ai_hook::local_command::is_local_command(&agent.kind, &text)
+            })
+        {
+            self.ensure_delegation_ready()?;
+        }
         if require_agent && agent.is_none() {
             return Err(crate::runtime_api::ApiError::new(
                 "invalid_target",
@@ -841,14 +901,13 @@ impl TerminalView {
         let codex_submit =
             submit && self.runtime_agent().is_some_and(|agent| agent.kind == "codex");
         if submit && !codex_submit {
-            let submit_bytes = self.runtime_key_sequence(
+            self.runtime_key_sequence(
                 crate::runtime_api::RuntimeKey::Enter,
                 crate::runtime_api::RuntimeKeyModifiers::default(),
                 1,
             )?;
             self.pending_runtime_submit = Some(crate::display::state::RuntimeSubmitBarrier {
                 baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
-                submit_bytes,
             });
         }
         if codex_submit {
@@ -945,6 +1004,7 @@ impl TerminalView {
                 if let Some(session) = session_id {
                     log::debug!("agent session identity from active rollout: pane={pane_id}");
                     let target = crate::session::AgentSession {
+                        managed_name: None,
                         source: "codex".to_owned(),
                         session_id: Some(session.session_id.clone()),
                         session_file: Some(session.session_file),
@@ -1343,8 +1403,14 @@ impl TerminalView {
         if screen == pending.baseline_screen {
             return;
         }
-        let pending = self.pending_runtime_submit.take().expect("checked above");
-        self.write_input(pending.submit_bytes, cx);
+        // A cold CLI can negotiate a different keyboard protocol while its
+        // text is being echoed. Encode Enter at delivery, never at queuing.
+        let submit_bytes = crate::input::terminal_input::build_runtime_deferred_submission(
+            self.running_program.as_deref(),
+            self.term_mode(),
+        );
+        self.pending_runtime_submit = None;
+        self.write_input(submit_bytes, cx);
     }
 }
 

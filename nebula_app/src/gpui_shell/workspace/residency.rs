@@ -8,13 +8,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{App, Context, Window};
+use gpui::{App, Context, Entity, Window};
 use nebula_split::{SplitDirection, SplitTree};
 use serde_json::{Value, json};
 
 use super::{NebulaWorkspace, WorkspaceTab};
 use crate::gpui_shell::GpuiShellEvent;
-use crate::gpui_shell::terminal::view::InputOrigin;
+use crate::gpui_shell::terminal::view::{InputOrigin, TerminalView};
 use crate::runtime_api::{
     ApiError, RuntimeCommand, RuntimeDispatch, RuntimeLayout, RuntimePane, RuntimeSnapshot,
     RuntimeSplitDirection, RuntimeTab, RuntimeTaskState, RuntimeWindow,
@@ -185,6 +185,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::Run { .. }
             | RuntimeCommand::AgentStart { .. }
             | RuntimeCommand::AgentPrompt { .. }
+            | RuntimeCommand::DelegationPrompt { .. }
             | RuntimeCommand::AgentPaste { .. } => {
                 self.reveal_session(cx);
                 self.runtime_pending.push(dispatch);
@@ -203,6 +204,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::ScrollPane { .. }
             | RuntimeCommand::Procs { .. }
             | RuntimeCommand::AgentRead { .. }
+            | RuntimeCommand::AgentAttach { .. }
             | RuntimeCommand::AgentFork { .. } => {
                 self.runtime_pending.push(dispatch);
             },
@@ -538,15 +540,11 @@ impl NebulaWorkspace {
                 }
                 .expect("tab_of_pane resolved a terminal pane");
                 view.update(cx, |view, cx| view.runtime_prompt(text.clone(), *submit, cx))?;
-                self.runtime_result(
-                    json!({
-                        "window_id": self.runtime_window_id,
-                        "pane_id": pane_id,
-                        "submitted": submit
-                    }),
-                    window,
-                    cx,
-                )
+                let mut action = json!({
+                    "window_id": self.runtime_window_id, "pane_id": pane_id, "submitted": submit,
+                });
+                self.finish_runtime_input(&view, text, *submit, &mut action, cx);
+                self.runtime_result(action, window, cx)
             },
             RuntimeCommand::Paste { window_id, pane_id, text, submit } => {
                 self.runtime_window_requested(*window_id)?;
@@ -566,16 +564,12 @@ impl NebulaWorkspace {
                 view.update(cx, |view, cx| {
                     view.runtime_paste(text.clone(), *submit, InputOrigin::Program, cx)
                 })?;
-                self.runtime_result(
-                    json!({
-                        "window_id": self.runtime_window_id,
-                        "pane_id": pane_id,
-                        "submitted": submit,
-                        "input": "paste"
-                    }),
-                    window,
-                    cx,
-                )
+                let mut action = json!({
+                    "window_id": self.runtime_window_id, "pane_id": pane_id,
+                    "submitted": submit, "input": "paste",
+                });
+                self.finish_runtime_input(&view, text, *submit, &mut action, cx);
+                self.runtime_result(action, window, cx)
             },
             RuntimeCommand::ReadPane { window_id, pane_id, lines, screen } => {
                 self.runtime_window_requested(*window_id)?;
@@ -710,6 +704,37 @@ impl NebulaWorkspace {
                 "invalid_runtime_command",
                 "pane.exec must be prepared before entering the synchronous GPUI dispatcher",
             )),
+            RuntimeCommand::AgentAttach { window_id, pane_id, name, kind, expected_session_id } => {
+                self.runtime_window_requested(*window_id)?;
+                let tab_ix = self.tab_of_pane(*pane_id).ok_or_else(|| {
+                    ApiError::new("target_not_found", format!("pane {pane_id} does not exist"))
+                })?;
+                let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix) else {
+                    unreachable!("tab_of_pane only resolves terminal tabs")
+                };
+                let view = panes
+                    .iter()
+                    .find(|pane| pane.id == *pane_id)
+                    .expect("tab_of_pane resolved a terminal pane")
+                    .view
+                    .read(cx);
+                view.ensure_delegation_ready()?;
+                let actual = view.runtime_chat_agent().ok_or_else(|| {
+                    ApiError::new(
+                        "agent_identity_mismatch",
+                        "there is no foreground Agent to attach",
+                    )
+                })?;
+                let agent = self.runtime_hub.attach_agent(
+                    name.clone(),
+                    *kind,
+                    self.runtime_window_id,
+                    *pane_id,
+                    expected_session_id,
+                    &actual,
+                )?;
+                self.runtime_result(json!({"agent": agent, "attached": true}), window, cx)
+            },
             RuntimeCommand::AgentStart {
                 window_id,
                 pane_id,
@@ -796,7 +821,8 @@ impl NebulaWorkspace {
                 "invalid_runtime_command",
                 "agent.fork reached the UI before its Git worktree was prepared",
             )),
-            RuntimeCommand::AgentPrompt { agent, generation, text, submit } => {
+            RuntimeCommand::AgentPrompt { agent, generation, text, .. }
+            | RuntimeCommand::DelegationPrompt { agent, generation, text, .. } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;
                 self.runtime_window_requested(Some(managed.window_id))?;
                 let Some(tab_ix) = self.tab_of_pane(managed.pane_id) else {
@@ -814,8 +840,29 @@ impl NebulaWorkspace {
                         .clone(),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 };
-                view.update(cx, |view, cx| view.runtime_prompt(text.clone(), *submit, cx))?;
-                self.runtime_result(json!({ "agent": managed }), window, cx)
+                let result = view.update(cx, |view, cx| match command {
+                    RuntimeCommand::DelegationPrompt { task_id, .. } => {
+                        view.ensure_delegation_ready()?;
+                        managed.check_delegation_identity(view.runtime_chat_agent().as_ref())?;
+                        self.runtime_hub.commit_delegation(task_id, &managed)?;
+                        view.runtime_prompt(text.clone(), true, cx)
+                    },
+                    RuntimeCommand::AgentPrompt { submit, .. } => {
+                        managed.check_delegation_identity(view.runtime_chat_agent().as_ref())?;
+                        view.runtime_prompt(text.clone(), *submit, cx)
+                    },
+                    _ => unreachable!(),
+                });
+                if let Err(error) = result {
+                    if let RuntimeCommand::DelegationPrompt { task_id, .. } = command {
+                        self.runtime_hub.cancel_delegation(task_id);
+                    }
+                    return Err(error);
+                }
+                let mut action = json!({ "agent": managed });
+                let submit = !matches!(command, RuntimeCommand::AgentPrompt { submit: false, .. });
+                self.finish_runtime_input(&view, text, submit, &mut action, cx);
+                self.runtime_result(action, window, cx)
             },
             RuntimeCommand::AgentPaste { agent, generation, text, submit } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;
@@ -836,9 +883,12 @@ impl NebulaWorkspace {
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 };
                 view.update(cx, |view, cx| {
+                    managed.check_delegation_identity(view.runtime_chat_agent().as_ref())?;
                     view.runtime_agent_paste(text.clone(), *submit, InputOrigin::Program, cx)
                 })?;
-                self.runtime_result(json!({ "agent": managed, "input": "paste" }), window, cx)
+                let mut action = json!({ "agent": managed, "input": "paste" });
+                self.finish_runtime_input(&view, text, *submit, &mut action, cx);
+                self.runtime_result(action, window, cx)
             },
             RuntimeCommand::AgentRead { agent, generation, lines } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;
@@ -861,6 +911,39 @@ impl NebulaWorkspace {
                 }?;
                 Ok(json!({ "agent": managed, "read": read }))
             },
+        }
+    }
+
+    fn finish_runtime_input(
+        &self,
+        view: &Entity<TerminalView>,
+        text: &str,
+        submit: bool,
+        action: &mut serde_json::Value,
+        cx: &App,
+    ) {
+        if !submit {
+            return;
+        }
+        let view = view.read(cx);
+        let Some(agent) = view.runtime_agent() else { return };
+        if !crate::ai_hook::local_command::is_local_command(&agent.kind, text) {
+            return;
+        }
+        action["local_command"] = json!(true);
+        if self.runtime_hub.retire_agents_for_local_reset(
+            self.runtime_window_id,
+            view.pane_id,
+            &agent.kind,
+            text,
+        ) {
+            action["conversation_reset_requested"] = json!(true);
+            action["requires_attach"] = json!(true);
+            if let Some(id) = action["agent"]["agent_id"].as_str()
+                && let Ok(closed) = self.runtime_hub.managed_agent(id, None, false)
+            {
+                action["agent"] = serde_json::to_value(closed).expect("serialize managed Agent");
+            }
         }
     }
 

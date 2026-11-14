@@ -46,9 +46,13 @@ impl SessionRecovery {
         if let Some(previous) = &self.target
             && previous.source == target.source
             && previous.session_id == target.session_id
-            && target.session_file.is_none()
         {
-            target.session_file = previous.session_file.clone();
+            if target.session_file.is_none() {
+                target.session_file = previous.session_file.clone();
+            }
+            if target.session_id.is_some() {
+                target.managed_name = previous.managed_name.clone();
+            }
         }
         self.target = Some(target);
         self.awaiting_confirmation = false;
@@ -132,6 +136,7 @@ impl TerminalView {
         let pending = self.pending_shell_command.as_ref();
         if let Some(identity) = &self.ai_session {
             return Some(crate::session::AgentSession {
+                managed_name: None,
                 source: identity.source.clone(),
                 session_id: Some(identity.session_id.clone()),
                 session_file: None,
@@ -143,6 +148,7 @@ impl TerminalView {
                 self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse)
             })?;
         Some(crate::session::AgentSession {
+            managed_name: None,
             session_file: None,
             source: kind.slug().to_owned(),
             session_id: None,
@@ -188,6 +194,7 @@ impl TerminalView {
         {
             self.recovery = SessionRecovery {
                 target: Some(crate::session::AgentSession {
+                    managed_name: None,
                     source,
                     session_id: Some(session_id),
                     session_file: None,

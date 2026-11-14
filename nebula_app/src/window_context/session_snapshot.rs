@@ -136,11 +136,13 @@ impl WindowContext {
             let program = state.running_program.as_deref()?;
             match &state.ai_session {
                 Some(identity) if identity.source == program => Some(session::AgentSession {
+                    managed_name: None,
                     session_file: None,
                     source: identity.source.clone(),
                     session_id: Some(identity.session_id.clone()),
                 }),
                 _ if matches!(program, "claude" | "codex") => Some(session::AgentSession {
+                    managed_name: None,
                     session_file: None,
                     source: program.to_owned(),
                     session_id: None,

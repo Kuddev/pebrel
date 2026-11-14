@@ -122,6 +122,8 @@ Agent 投递时，状态结束不能单独证明某一条请求已完成。`sett
 完成 Hook 到达后，Pebrel 把最多 4000 字符的结构化最终消息作为不可信 `worker_output` 自动提交
 给原 Agent，由它向用户总结。回传只认原 pane 中的同一 managed generation，或普通 Agent 的
 同一 provider session；不会退回当前焦点，也不会把旧任务交给同 pane 中后来启动的新会话。
+截断正文会在现有 4000 字符预算内以 `…[truncated]` 结尾，优先保留靠近预算边缘的完整行；
+未截断结果保持原文，缺失答案继续显式标记，不用尾部标记代替缺失状态。
 
 ### 完整协议
 
@@ -132,9 +134,9 @@ pebrel ctl orchestrate --file workflow.json --timeout-ms 30000 --pretty
 pebrel ctl agents --pretty
 pebrel ctl agent-fork --window <WINDOW_ID> --source-pane <PANE_ID> --name login-fixer --kind codex --pretty
 pebrel ctl agent-get --agent login-fixer --pretty
-pebrel ctl agent-prompt --agent login-fixer --generation 1 --text "修复登录回归" --pretty
-pebrel ctl agent-wait --agent login-fixer --generation 1 --state settled --timeout-ms 300000 --pretty
-pebrel ctl agent-read --agent login-fixer --generation 1 --lines 120 --pretty
+pebrel ctl agent-prompt --agent login-fixer --generation <GENERATION_FROM_RECEIPT> --text "修复登录回归" --pretty
+pebrel ctl agent-wait --agent login-fixer --generation <GENERATION_FROM_RECEIPT> --state settled --timeout-ms 300000 --pretty
+pebrel ctl agent-read --agent login-fixer --generation <GENERATION_FROM_RECEIPT> --lines 120 --pretty
 pebrel ctl read --window <WINDOW_ID> --pane <PANE_ID> --lines 120 --pretty
 pebrel ctl procs --window <WINDOW_ID> --pane <PANE_ID> --pretty
 pebrel ctl send-key --window <WINDOW_ID> --pane <PANE_ID> --key c --control --pretty
@@ -164,6 +166,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `events.subscribe` | 从 revision 开始订阅状态变化 | `since_revision?` |
 | `agents.list` | 只列出 Pebrel 已识别的 Agent Pane、会话身份、状态和证据来源 | `window_id?` |
 | `agent.start` | 在新 Tab 或指定既有 Pane 中启动命名 Agent | `window_id?`, `pane_id?`, `name`, `kind`, `cwd?`, `resume_session_id?` |
+| `agent.attach` | 给已运行且原生会话身份匹配的 Agent 绑定名称 | `window_id?`, `pane_id`, `name`, `kind`, `expected_session_id` |
 | `agent.fork` | 事务化创建独立 Git branch/worktree，再启动命名 Agent | `source_pane_id?`/`source_cwd?`, `name`, `kind`, `branch?`, `base?`, `path?`, `allow_dirty_source?` |
 | `agent.get` | 按稳定 id 或名称解析 Agent generation 与 worktree provenance | `agent`, `generation?` |
 | `agent.delegate` | 绑定调用方身份派发任务，并在目标回合完成后自动回传最终消息 | `agent`, `generation?`, `text`, `origin_pane_id` |
@@ -268,6 +271,40 @@ Runtime 先启动 workflow 中的所有 Agent，再并行等待各自被 registr
 
 ## 命名 Agent 与隔离 worktree
 
+已打开的 Agent 使用 `agents.list` 核对 pane、provider 与原生 `session_id` 后，可以直接绑定名称：
+
+```text
+pebrel ctl agent-attach --window <WINDOW_ID> --pane <PANE_ID> --name worker --kind codex --expected-session-id <NATIVE_SESSION_ID> --pretty
+```
+
+`agent.attach` 在 UI 线程重新核验前台 Agent 的精确原生身份和 idle/finished 状态，不重启 CLI、
+不提交 Prompt。相同绑定可重复调用；名称或 pane 已被其他活跃绑定占用会明确冲突。会话已变化
+时拒绝旧 ID；只有显式提交的新 ID 可以建立新运行身份。此路径不继承旧 worktree 的创建所有权。
+
+会话快照的逐 pane `AgentSession.managed_name` 可选字段保存名称。冷恢复沿该 pane 保存的执行
+环境接续原生对话，实际 Agent 身份匹配后才恢复名称；复制布局而不恢复 AI 时不创建绑定。
+恢复创建新的 `agent_id` 和 generation，不恢复旧任务、回调或 worktree 所有权。generation
+来自每个 RuntimeHub 的随机实例命名空间，调用者必须读取回执，不能假定首次为 1。
+
+Codex 的 `/new`、`/clear`、`/model`、`/plan`，以及 Claude 的 `/clear`（含 `/new`、`/reset` 别名）、
+`/model` 作为本地命令
+处理，不等待不存在的模型完成 Hook。`agent.prompt` / `agent.paste` 的提交回执通过
+`action.local_command=true` 标识这些输入；短命令的 `--wait` 返回该接受回执，不伪造模型结果。
+菜单操作需继续 `agent read` 并用 `pane.send_key` 发送明确按键。`agent.delegate` 对这些命令返回
+`local_command_requires_send`。`/compact` 与未知或自定义斜杠命令继续按可能调用模型的任务处理。
+本地命令也要求目标 idle/finished；运行中或已识别为 attention/waiting_input 时返回
+`target_busy`。部分菜单仍由 Provider 报告为 idle，主控须读界面确认菜单状态。
+
+重置命令接受时，回执增加 `conversation_reset_requested=true` 与 `requires_attach=true`，
+旧绑定立即按 `agent_replaced` 结束，不等 Provider 稍后报告新身份。即使取消了 `/new` 菜单，
+也需重新核验原生身份并显式绑定。Codex `/new` 可能先让用户选择工作树；菜单输入仍使用
+目标 pane 的明确按键通道。核验新对话的 `session_id` 后，重新执行 `agent.attach`。
+
+空的新 Codex 对话在首条任务前可能尚无可核验的原生 ID，此时 `agent.attach` 明确拒绝。
+主控应读取该明确 pane，确认新对话界面，按同一 window/pane 提交这次新对话的首条任务；
+原生 ID 出现后再绑定名称。不要把旧原生 ID 或 generation 当成新对话的身份。
+`/model` 进入菜单时，输入已接受不代表选择已完成；以实际界面和当前身份为准。
+
 `agent.start` 提供稳定的 `agent_id + generation + name`。冷启动命令只开放经过各 Provider
 官方 CLI 文档核实的 `claude`、`codex`、`opencode`、`cursor`、`pi`、`omp` 与 `kimi`；其中
 Cursor 的实际可执行文件名是 `agent`。恢复/会话分叉只在对应 Provider 有已核实语法时出现，
@@ -294,11 +331,24 @@ Cursor 的实际可执行文件名是 `agent`。恢复/会话分叉只在对应 
 
 `agent.delegate` 是 Agent 间需要自动回传时的专用方法。服务端先验证 `origin_pane_id` 当前确实
 运行着可稳定识别的 Agent，再把目标解析成精确 `agent_id + generation`，最后复用
-`agent.prompt` 的真实 PTY 投递路径。Provider 的完成 Hook 不含 Pebrel task id，因此同一目标
-generation 同时只允许一个委派；重复完成事件在首个事件消费 pending task 后不会再次回传。
+真实 PTY 投递路径。只有目标 idle/finished 才接受委派；忙碌时返回 `target_busy`，不会把输入
+排到正在运行的回合后面。Provider 的完成 Hook 不含 Pebrel task id，因此同一目标 generation
+同时只允许一个委派。注册记录在实际视图完成就绪、身份复核并确认提交后，才可接收完成事件；
+旧回合不能消费尚未提交的记录。重复完成事件在首个事件消费 pending task 后不会再次回传。
 回调若早于发起方自己的回合结束，会先排队并由 Agent 状态看门狗重试；`running` 会继续等待，
 `attention`/`waiting_input` 不会被自动输入覆盖。发起 pane 关闭、provider session 被替换或
 managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane。
+
+已提交的委派若在最终结果到达前遇到目标进程退出、pane 关闭或会话替换，Runtime 根据实际
+生命周期事实回传一次 `status=failed`，以 `reason` 区分 `pane_closed`、`pane_exited`、
+`agent_exited`、`agent_replaced` 或 `agent_closed`。没有最终答案时为
+`output_missing=true worker_output=null`，不把旧答案或终端尾部充当结果。该任务的 pending
+记录同时释放，迟到 Hook 不会追加第二条结果。发起方忙碌时仍按原身份排队；发起方已失效则
+释放记录并丢弃回调。注册但尚未提交的请求被关闭时只取消注册，不伪造任务失败回调。
+
+`agent.wait` 成功响应直接提供 `result.task_state` 和 `result.state_change_seq`，取自真正满足
+等待条件的目标 pane；完整的 `result.agent` 与 `result.snapshot` 继续保留。返回便利字段不改变
+`after_seq` 的严格大于条件。结果结构见 schema 的 `$defs/agent_wait_result`。
 
 ## 进程、控制键与真实命令结果
 

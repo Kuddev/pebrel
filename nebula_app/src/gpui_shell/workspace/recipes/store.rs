@@ -154,6 +154,7 @@ mod tests {
                 launch: None,
                 cwd: "D:/api".into(),
                 agent: Some(AgentSession {
+                    managed_name: None,
                     session_file: None,
                     source: "claude".into(),
                     session_id: Some("private-id".into()),

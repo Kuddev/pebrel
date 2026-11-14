@@ -89,6 +89,9 @@ pub struct AgentSession {
     /// Native session file, interpreted only inside the owning pane environment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_file: Option<String>,
+    /// Optional local Runtime alias, bound to this exact native conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_name: Option<String>,
 }
 
 /// Validate both Windows and guest absolute paths without consulting the host
@@ -487,6 +490,7 @@ mod tests {
                 launch: None,
                 cwd: "D:/work".into(),
                 agent: Some(AgentSession {
+                    managed_name: None,
                     session_file: None,
                     source: "claude".into(),
                     session_id: Some("0199a213-c2a4-7cf5-8f6b-d746fbb6e86c".into()),
@@ -539,6 +543,7 @@ mod tests {
             launch: None,
             cwd: "D:/w".into(),
             agent: Some(AgentSession {
+                managed_name: None,
                 session_file: None,
                 source: "codex".into(),
                 session_id: Some("abc-1".into()),
@@ -553,6 +558,7 @@ mod tests {
     #[test]
     fn agent_resume_commands_are_exact_and_injection_safe() {
         let agent = |source: &str, id: Option<&str>| AgentSession {
+            managed_name: None,
             session_file: None,
             source: source.into(),
             session_id: id.map(str::to_owned),
@@ -644,6 +650,7 @@ mod tests {
                     launch: None,
                     cwd: "/home/user/project".into(),
                     agent: Some(AgentSession {
+                        managed_name: None,
                         session_file: None,
                         source: "codex".into(),
                         session_id: Some((*id).into()),
