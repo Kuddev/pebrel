@@ -32,6 +32,7 @@ data class LocalSession(
     val files: SftpClient? = null,
     val attachment: RemoteAttachment? = null, val remote: RemoteInventory? = null,
     val discovering: Boolean = false, val discoveryFailed: Boolean = false,
+    val foreground: SshForeground? = null,
 )
 data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null,
                             val hasConnected: Boolean = false, val relayProfile: RelayProfile? = null,
@@ -85,6 +86,7 @@ class SessionRepository(private val context: Context,
     private val discoveryJobs = mutableMapOf<String, Job>()
     private val tmuxControls = mutableMapOf<String, TmuxSessionControl>()
     private val tmuxCheckpoints = mutableMapOf<String, Job>()
+    private val sshForegroundJobs = mutableMapOf<String, Job>()
     private val pendingTrust = java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Boolean>>()
     private var readJob: Job? = null
     private var readGeneration = 0L
@@ -507,6 +509,7 @@ class SessionRepository(private val context: Context,
         }, active = { live.value.any { it.id == id && it.status == "ready" } && sshConnections.containsKey(id) })
         discoveryJobs.remove(id)?.cancel()
         tmuxCheckpoints.remove(id)?.cancel()
+        sshForegroundJobs.remove(id)?.cancel()
         tmuxControls.remove(id)
         val detectShell = host.sessionMode == SshSessionMode.SHELL && attachment?.session?.kind != "herdr"
         val control = if (detectShell || attachment?.session?.kind == "tmux" || (attachment == null && host.sessionMode == SshSessionMode.TMUX))
@@ -610,6 +613,7 @@ class SessionRepository(private val context: Context,
                 sshReconnect.forget(id)
                 update(id) { it.copy(status = "ready", hasConnected = true, failure = null) }
                 refreshRemoteSessions(id)
+                if (host != null) watchSshForeground(id)
                 tmuxControls[id]?.let { control ->
                     tmuxCheckpoints.remove(id)?.cancel()
                     tmuxCheckpoints[id] = scope.launch {
@@ -624,6 +628,7 @@ class SessionRepository(private val context: Context,
                 if (!current(session)) return
                 sshConnections.remove(id)
                 tmuxCheckpoints.remove(id)?.cancel()
+                sshForegroundJobs.remove(id)?.cancel()
                 tmuxControls.remove(id)
                 discoveryJobs.remove(id)?.cancel()
                 cancelTrust(id)
@@ -656,6 +661,7 @@ class SessionRepository(private val context: Context,
         sshRetryJobs.remove(id)?.cancel()
         liveCredentials.forget(id)
         tmuxCheckpoints.remove(id)?.cancel()
+        sshForegroundJobs.remove(id)?.cancel()
         tmuxControls.remove(id)
         discoveryJobs.remove(id)?.cancel()
         sshConnections.remove(id)
@@ -994,11 +1000,61 @@ class SessionRepository(private val context: Context,
         }
     }
     private fun target(pane: DesktopPane) = JSONObject().put("window_id", pane.window).put("pane_id", pane.id)
+
+    private val sshChatScript by lazy {
+        context.resources.openRawResource(io.github.kuddev.pebrel.mobile.R.raw.ssh_agent_chat).use { it.readBytes() }
+    }
+    private val sshChats = mutableMapOf<SshConnection, SshAgentChat>()
+
+    private fun sshChat(id: String): SshAgentChat? {
+        val connection = sshConnections[id] ?: return null
+        return synchronized(sshChats) {
+            sshChats.keys.retainAll(sshConnections.values.toSet())
+            sshChats.getOrPut(connection) {
+                SshAgentChat(sshChatScript) { command ->
+                    withContext(Dispatchers.IO) {
+                        check(sshConnections[id] === connection) { "SSH connection replaced" }
+                        connection.query(command)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Polled only while the app is visible: often for the tab on screen, rarely for the others. */
+    private fun watchSshForeground(id: String) {
+        sshForegroundJobs.remove(id)?.cancel()
+        val chat = sshChat(id) ?: return
+        sshForegroundJobs[id] = scope.launch {
+            suspend fun show(seen: SshForeground?) = withContext(Dispatchers.Main) {
+                update(id) { if (it.status == "ready") it.copy(foreground = seen) else it }
+            }
+            while (isActive) {
+                if (foreground) try {
+                    show(chat.foreground())
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (failure: DesktopRpcFailure) {
+                    // Without python3, or without one terminal for this connection, the tab stays a plain terminal.
+                    if (failure.code in setOf("python_missing", "terminal_unknown")) show(null)
+                    if (failure.code == "python_missing") return@launch
+                } catch (_: Exception) {
+                    // A lost query keeps the last answer for one more round.
+                }
+                delay(when { !foreground -> 5_000L; renderOwner == id -> 3_000L; else -> 15_000L })
+            }
+        }
+    }
+
+    fun sshConversation(id: String, kind: String): ConversationSource? {
+        val chat = sshChat(id) ?: return null
+        return SshConversation(kind, chat) { live.value.find { it.id == id && it.status == "ready" }?.terminal }
+    }
     fun closeAll() {
         sshReconnect.clear()
         sshRetryJobs.values.forEach(Job::cancel); sshRetryJobs.clear()
         liveCredentials.clear()
         tmuxCheckpoints.values.forEach(Job::cancel); tmuxCheckpoints.clear()
+        sshForegroundJobs.values.forEach(Job::cancel); sshForegroundJobs.clear()
         tmuxControls.clear()
         discoveryJobs.values.forEach(Job::cancel); discoveryJobs.clear()
         sshConnections.clear()

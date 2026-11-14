@@ -203,8 +203,6 @@
     <string name="chat_title">Conversation</string>
     <string name="chat_compose">Message the agent…</string>
     <string name="chat_terminal">Terminal view</string>
-    <string name="chat_you">You</string>
-    <string name="chat_tool">Tool</string>
     <string name="chat_tool_pending">In progress</string>
     <string name="chat_content_clipped">Long content is limited here. View the full output in the terminal.</string>
     <string name="chat_older">Earlier messages</string>
