@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthChar;
 use winit::keyboard::ModifiersState;
 
 use crate::config::UiConfig;
-use crate::config::ui_config::{HintAction, HintInternalAction, default_hint_command};
+use crate::config::ui_config::{HintAction, HintInternalAction, Program, default_hint_command};
 use crate::display::hint::{self, HintMatch};
 use crate::i18n::{Message, UiLanguage};
 use crate::platform::Platform;
@@ -154,8 +154,8 @@ pub(super) fn hover_from_hint<T: EventListener>(
     language: UiLanguage,
 ) -> Option<LinkHover> {
     let raw = hint
-        .hyperlink()
-        .map(|link| link.uri().to_owned())
+        .effective_hyperlink_uri()
+        .map(str::to_owned)
         .or_else(|| hint.text(term).map(|text| text.into_owned()))?;
     let uri = crate::file_uri::extract_link_target(&raw);
     let origin = term.viewport_origin_for(rows);
@@ -178,6 +178,7 @@ pub(super) fn hover_from_hint<T: EventListener>(
 pub(super) fn open_hint_match(
     hint: &HintMatch,
     text: &str,
+    repaired_uri: Option<&str>,
     cwd: Option<&std::path::Path>,
     wsl_distro: Option<&str>,
     window: &mut Window,
@@ -188,7 +189,15 @@ pub(super) fn open_hint_match(
         .then(|| wsl_absolute_target(text, wsl_distro))
         .flatten();
     let text = target.as_deref().unwrap_or(text);
-    dispatch_hint_action(hint.action(), hint.hyperlink().is_some(), text, cwd, window, cx);
+    dispatch_hint_action(
+        hint.action(),
+        hint.hyperlink().is_some(),
+        text,
+        repaired_uri,
+        cwd,
+        window,
+        cx,
+    );
 }
 
 /// `wsl_distro` is the pane's spawn-time snapshot, so bare `wsl` and a WSL
@@ -244,12 +253,86 @@ mod path_tests {
         assert_eq!(link_base_directory(r"D:\host", Some("Debian"), host), host());
         assert_eq!(link_base_directory("/home/dev", None, host), host());
     }
+
+    #[test]
+    fn hover_preview_repairs_c1_truncated_local_osc8_hyperlink() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::index::Column;
+        use nebula_terminal::index::Line;
+        use nebula_terminal::term::{Config, test::TermSize};
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let mut term = Term::new(Config::default(), &TermSize::new(120, 4), VoidListener);
+        let stream = concat!(
+            "\x1b]8;;file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}\x1b\\",
+            "条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx",
+            "\x1b]8;;\x1b\\"
+        );
+        Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
+        let mods = gpui::Modifiers { control: true, ..Default::default() };
+        let hint =
+            highlighted_at(&term, &UiConfig::default(), Point::new(Line(0), Column(2)), &mods)
+                .unwrap();
+        let hover = hover_from_hint(&term, hint, 4, 120, UiLanguage::ZhCn).unwrap();
+        assert!(
+            hover.preview.starts_with(
+                "D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx · "
+            ),
+            "unexpected preview: {}",
+            hover.preview
+        );
+        assert!(!hover.preview.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn custom_hint_commands_receive_original_corrupted_osc8_uri() {
+        let custom =
+            Program::WithArgs { program: "custom-link-handler".into(), args: vec!["--raw".into()] };
+        let raw = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
+        let repaired = "file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx";
+        assert_eq!(
+            resolve_hint_command(&custom, true, raw, Some(repaired), None, UiLanguage::ZhCn),
+            Ok(Some(vec!["--raw".to_owned(), raw.to_owned()]))
+        );
+    }
+}
+
+fn resolve_hint_command(
+    command: &Program,
+    hyperlink: bool,
+    text: &str,
+    repaired_uri: Option<&str>,
+    cwd: Option<&std::path::Path>,
+    language: UiLanguage,
+) -> Result<Option<Vec<String>>, String> {
+    let target = if *command == default_hint_command() {
+        let local_result = if hyperlink {
+            crate::file_uri::try_open_osc8_local_link_with_cwd(text, repaired_uri, cwd)
+        } else {
+            crate::file_uri::try_open_local_link_with_cwd(text, cwd)
+        };
+        if let Some(result) = local_result {
+            return result.map(|()| None).map_err(|error| error.localized_message(language));
+        }
+        let target = crate::file_uri::extract_link_target(text);
+        if !hyperlink && !crate::file_uri::is_web_or_protocol_uri(target) {
+            return Err(language
+                .format(crate::i18n::Message::CommonLinkUnrecognized, &[("target", target)]));
+        }
+        target
+    } else {
+        text
+    };
+    let mut args = command.args().to_vec();
+    args.push(target.to_owned());
+    Ok(Some(args))
 }
 
 fn dispatch_hint_action(
     action: &HintAction,
     hyperlink: bool,
     text: &str,
+    repaired_uri: Option<&str>,
     cwd: Option<&std::path::Path>,
     window: &mut Window,
     cx: &mut App,
@@ -264,26 +347,23 @@ fn dispatch_hint_action(
         HintAction::Command(command) => command.clone(),
     };
     let text = text.to_owned();
+    let repaired_uri = (command == default_hint_command() && hyperlink)
+        .then(|| repaired_uri.map(str::to_owned))
+        .flatten();
     let cwd = cwd.map(std::path::Path::to_path_buf);
     let language = crate::gpui_shell::config::ui_language(cx);
     let task = cx.background_executor().spawn(async move {
-        let target = if command == default_hint_command() {
-            if let Some(result) =
-                crate::file_uri::try_open_local_link_with_cwd(&text, cwd.as_deref())
-            {
-                return result.map_err(|error| error.localized_message(language));
-            }
-            let target = crate::file_uri::extract_link_target(&text);
-            if !hyperlink && !crate::file_uri::is_web_or_protocol_uri(target) {
-                return Err(language
-                    .format(crate::i18n::Message::CommonLinkUnrecognized, &[("target", target)]));
-            }
-            target
-        } else {
-            &text
+        let Some(args) = resolve_hint_command(
+            &command,
+            hyperlink,
+            &text,
+            repaired_uri.as_deref(),
+            cwd.as_deref(),
+            language,
+        )?
+        else {
+            return Ok(());
         };
-        let mut args = command.args().to_vec();
-        args.push(target.to_owned());
         crate::daemon::spawn_detached(command.program(), &args).map_err(|error| {
             language.format(
                 crate::i18n::Message::CommonLinkOpenUrlFailed,
@@ -336,6 +416,7 @@ mod tests {
                     false,
                     text,
                     None,
+                    None,
                     window,
                     cx,
                 );
@@ -345,6 +426,50 @@ mod tests {
                 );
             });
         }
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn copying_corrupted_osc8_hyperlink_preserves_original_raw_uri(cx: &mut TestAppContext) {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::index::{Column, Line};
+        use nebula_terminal::term::{Config, test::TermSize};
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let mut term = Term::new(Config::default(), &TermSize::new(120, 4), VoidListener);
+        let raw_uri = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
+        let stream = format!(
+            "\x1b]8;;{raw_uri}\x1b\\条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx\x1b]8;;\x1b\\"
+        );
+        Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
+
+        let mut config = UiConfig::default();
+        Arc::make_mut(&mut config.hints.enabled[0]).action =
+            HintAction::Action(HintInternalAction::Copy);
+        let mods = match Platform::current() {
+            Platform::MacOS => gpui::Modifiers { platform: true, ..Default::default() },
+            Platform::Windows | Platform::Linux => {
+                gpui::Modifiers { control: true, ..Default::default() }
+            },
+        };
+        let hint = highlighted_at(&term, &config, Point::new(Line(0), Column(2)), &mods).unwrap();
+        let text = hint.text(&term).unwrap().into_owned();
+        let repaired = hint.repaired_hyperlink_uri(&term);
+        assert_eq!(text, raw_uri);
+        assert_eq!(
+            repaired.as_deref(),
+            Some("file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx")
+        );
+
+        let (_, window) = cx.add_window_view(|_, _| Surface);
+        window.update(|window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+            open_hint_match(&hint, &text, repaired.as_deref(), None, None, window, cx);
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+                Some(raw_uri)
+            );
+        });
         cx.run_until_parked();
     }
 }

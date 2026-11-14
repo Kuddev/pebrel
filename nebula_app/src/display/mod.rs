@@ -9753,7 +9753,7 @@ impl Display {
         // plus that hint's start cell as the anchor.
         let Some((uri, hint_start)) =
             self.highlighted_hint.iter().chain(&self.vi_highlighted_hint).find_map(|hint| {
-                hint.hyperlink().map(|h| (h.uri().to_owned(), *hint.bounds().start()))
+                hint.effective_hyperlink_uri().map(|uri| (uri.to_owned(), *hint.bounds().start()))
             })
         else {
             return;

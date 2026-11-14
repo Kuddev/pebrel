@@ -9,7 +9,7 @@ use winit::keyboard::ModifiersState;
 
 use nebula_terminal::grid::{BidirectionalIterator, Dimensions};
 use nebula_terminal::index::{Boundary, Column, Direction, Line, Point};
-use nebula_terminal::term::cell::Hyperlink;
+use nebula_terminal::term::cell::{Flags, Hyperlink};
 use nebula_terminal::term::search::{Match, RegexIter, RegexSearch};
 use nebula_terminal::term::{Term, TermMode};
 
@@ -166,7 +166,11 @@ impl HintState {
 
             // Hyperlinks take precedence over regex matches.
             let hyperlink = term.grid()[*bounds.start()].hyperlink();
-            Some(HintMatch { bounds, hyperlink, table_link: None, hint })
+            let repaired_uri = hyperlink
+                .as_ref()
+                .and_then(|link| repair_hyperlink_uri_in_term(term, &bounds, link))
+                .map(Arc::from);
+            Some(HintMatch { bounds, hyperlink, repaired_uri, table_link: None, hint })
         } else {
             // Store character to preserve the selection.
             self.keys.push(c);
@@ -203,6 +207,9 @@ pub struct HintMatch {
     /// OSC 8 hyperlink.
     hyperlink: Option<Hyperlink>,
 
+    /// Repaired URI when an OSC 8 local `file:` link contains UTF-8 replacement corruption.
+    repaired_uri: Option<Arc<str>>,
+
     table_link: Option<table::TableLink>,
 
     /// Hint which triggered this match.
@@ -232,6 +239,24 @@ impl HintMatch {
 
     pub fn hyperlink(&self) -> Option<&Hyperlink> {
         self.hyperlink.as_ref()
+    }
+
+    /// Effective OSC 8 URI for hover previews, preferring an in-memory repaired URI when the
+    /// raw hyperlink suffered UTF-8 / C1 truncation or replacement corruption.
+    pub fn effective_hyperlink_uri(&self) -> Option<&str> {
+        self.repaired_uri.as_deref().or_else(|| self.hyperlink.as_ref().map(Hyperlink::uri))
+    }
+
+    /// Revalidated in-memory repair candidate for an OSC 8 local `file:` URI containing `U+FFFD`.
+    ///
+    /// Callers must check the raw [`Self::text`] target first so existing literal filenames take
+    /// precedence, and so copy/custom hint actions continue to operate on the original match.
+    pub fn repaired_hyperlink_uri<T>(&self, term: &Term<T>) -> Option<String> {
+        let hyperlink = self.hyperlink.as_ref()?;
+        let (validated, bounds) = hyperlink_at(term, *self.bounds.start())?;
+        (&validated == hyperlink && bounds == self.bounds)
+            .then(|| repair_hyperlink_uri_in_term(term, &bounds, &validated))
+            .flatten()
     }
 
     /// Get the text content of the hint match.
@@ -541,9 +566,12 @@ pub fn highlighted_at_with_mouse_override<T>(
         if let Some((hyperlink, bounds)) =
             hint.content.hyperlinks.then(|| hyperlink_at(term, point)).flatten()
         {
+            let repaired_uri =
+                repair_hyperlink_uri_in_term(term, &bounds, &hyperlink).map(Arc::from);
             return Some(HintMatch {
                 bounds,
                 hyperlink: Some(hyperlink),
+                repaired_uri,
                 table_link: None,
                 hint: hint.clone(),
             });
@@ -564,11 +592,127 @@ pub fn highlighted_at_with_mouse_override<T>(
             })
         });
         if let Some((bounds, table_link)) = bounds.flatten() {
-            return Some(HintMatch { bounds, table_link, hint: hint.clone(), hyperlink: None });
+            return Some(HintMatch {
+                bounds,
+                table_link,
+                hint: hint.clone(),
+                hyperlink: None,
+                repaired_uri: None,
+            });
         }
 
         None
     })
+}
+
+/// Repair an OSC 8 local `file:` URI purely in memory from the terminal cells covered by `bounds`
+/// (and across TUI hard-wrap margin spaces when a single hyperlink wraps across adjacent rows).
+fn repair_hyperlink_uri_in_term<T>(
+    term: &Term<T>,
+    bounds: &Match,
+    hyperlink: &Hyperlink,
+) -> Option<String> {
+    let uri = hyperlink.uri();
+    if !crate::file_uri::has_utf8_replacement_corruption(uri) {
+        return None;
+    }
+    let contiguous = term.bounds_to_string(*bounds.start(), *bounds.end());
+    if let Some(repaired) = crate::file_uri::repair_corrupted_file_uri_with_text(uri, &contiguous) {
+        return Some(repaired);
+    }
+    let wrapped = wrapped_hyperlink_span_text(term, bounds, hyperlink)?;
+    crate::file_uri::repair_corrupted_file_uri_with_text(uri, &wrapped)
+}
+
+/// Join adjacent hard-wrapped segments of the same `hyperlink` separated only by unlinked `' '`
+/// padding across a single row break (e.g. TUI left/right margin spaces).
+///
+/// Segments must share both URI and explicit OSC 8 `id=` identity (`None` matches `None`, and
+/// `Some(a)` matches only `Some(a)`), preserving boundaries between distinct explicit IDs.
+fn wrapped_hyperlink_span_text<T>(
+    term: &Term<T>,
+    bounds: &Match,
+    hyperlink: &Hyperlink,
+) -> Option<String> {
+    const MAX_WRAPPED_NEIGHBOR_LINES: usize = 3;
+
+    let mut prefixes = Vec::new();
+    let mut start = *bounds.start();
+    while prefixes.len() < MAX_WRAPPED_NEIGHBOR_LINES
+        && let Some(seg) = adjacent_wrapped_segment(term, start, hyperlink, false)
+    {
+        start = *seg.start();
+        prefixes.push(seg);
+    }
+
+    let mut suffixes = Vec::new();
+    let mut end = *bounds.end();
+    while suffixes.len() < MAX_WRAPPED_NEIGHBOR_LINES
+        && let Some(seg) = adjacent_wrapped_segment(term, end, hyperlink, true)
+    {
+        end = *seg.end();
+        suffixes.push(seg);
+    }
+
+    if prefixes.is_empty() && suffixes.is_empty() {
+        return None;
+    }
+
+    let mut out = String::new();
+    for range in prefixes.iter().rev() {
+        out.push_str(&term.bounds_to_string(*range.start(), *range.end()));
+    }
+    out.push_str(&term.bounds_to_string(*bounds.start(), *bounds.end()));
+    for range in &suffixes {
+        out.push_str(&term.bounds_to_string(*range.start(), *range.end()));
+    }
+    Some(out)
+}
+
+fn adjacent_wrapped_segment<T>(
+    term: &Term<T>,
+    edge: Point,
+    target: &Hyperlink,
+    forward: bool,
+) -> Option<Match> {
+    let grid = term.grid();
+    let max_gap_cells = term.columns().saturating_add(16);
+    let expected_line = if forward { edge.line + 1 } else { edge.line - 1 };
+    let mut iter = grid.iter_from(edge);
+    let mut gap_steps = 0;
+    let mut hit = None;
+
+    while let Some(cell) = if forward { iter.next() } else { iter.prev() } {
+        if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            continue;
+        }
+        if cell.hyperlink().is_none() && cell.c == ' ' {
+            gap_steps += 1;
+            if gap_steps > max_gap_cells {
+                return None;
+            }
+            continue;
+        }
+        if let Some(link) = cell.hyperlink()
+            && link.uri() == target.uri()
+            && link.explicit_id() == target.explicit_id()
+            && cell.point.line == expected_line
+        {
+            hit = Some((cell.point, link));
+        }
+        break;
+    }
+
+    let (anchor, seg_link) = hit?;
+    let mut bound = anchor;
+    while let Some(cell) = if forward { iter.next() } else { iter.prev() } {
+        if cell.hyperlink().as_ref() == Some(&seg_link) {
+            bound = cell.point;
+        } else {
+            break;
+        }
+    }
+    Some(if forward { anchor..=bound } else { bound..=anchor })
 }
 
 /// Retrieve the hyperlink with its range, if there is one at the specified point.
@@ -1174,5 +1318,137 @@ mod tests {
 
         // The iterator should match everything in the viewport.
         assert_eq!(visible_regex_match_iter(&term, &mut regex).count(), 4096);
+    }
+
+    #[test]
+    fn osc8_c1_corrupted_and_hardwrapped_local_links_recover_distinct_targets() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::term::{Config, test::TermSize};
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let mut term = Term::new(Config::default(), &TermSize::new(120, 6), VoidListener);
+        let stream = concat!(
+            "• \x1b]8;;file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}\x1b\\",
+            "条目_42行_测试样本_v2.xlsx.cache/output/03_示例清单现有条目_42行_测试样本_v2.xlsx",
+            "\x1b]8;;\x1b\\ (及 \r\n",
+            "  \x1b]8;;file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}\x1b\\",
+            "条目_42行_测试样本.xlsx.cache/output/03_示例清单现有条目_42行_测试样本.xlsx",
+            "\x1b]8;;\x1b\\，已核验\r\n",
+            "  \x1b]8;;file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx\x1b\\",
+            "示例报表_最\x1b]8;;\x1b\\   \r\n",
+            "  \x1b]8;;file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx\x1b\\",
+            "终汇总结果_2026.xlsx\x1b]8;;\x1b\\"
+        );
+        Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
+        let config = UiConfig::default();
+
+        let raw_trunc = "file:///D:/workspace/demo/output/03_示例清单现\u{FFFD}";
+        let raw_pkg =
+            "file:///D:/workspace/demo/output/示例报表_\u{FFFD}\u{FFFD}终汇总结果_2026.xlsx";
+        let v2 = "file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本_v2.xlsx";
+        let v1 = "file:///D:/workspace/demo/output/03_示例清单现有条目_42行_测试样本.xlsx";
+        let pkg = "file:///D:/workspace/demo/output/示例报表_最终汇总结果_2026.xlsx";
+        for (line, col, raw_expected, repaired_expected) in [
+            (0, 4, raw_trunc, v2),
+            (1, 4, raw_trunc, v1),
+            (2, 3, raw_pkg, pkg),
+            (3, 3, raw_pkg, pkg),
+        ] {
+            let hit = highlighted_at(
+                &term,
+                &config,
+                Point::new(Line(line), Column(col)),
+                ModifiersState::CONTROL,
+            )
+            .unwrap();
+            assert_eq!(hit.text(&term).as_deref(), Some(raw_expected));
+            assert_eq!(hit.effective_hyperlink_uri(), Some(repaired_expected));
+            assert_eq!(hit.repaired_hyperlink_uri(&term).as_deref(), Some(repaired_expected));
+        }
+    }
+
+    #[test]
+    fn osc8_explicit_ids_preserve_boundaries_while_matching_id_hardwrap_recovers() {
+        use crate::file_uri::{LinkTargetKind, classify_osc8_link_target_with_cwd};
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::term::{Config, test::TermSize};
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let dir = tempfile::tempdir().unwrap();
+        let target_you = dir.path().join("report有.txt");
+        let target_zui = dir.path().join("report最.txt");
+        std::fs::write(&target_you, b"you").unwrap();
+        std::fs::write(&target_zui, b"zui").unwrap();
+        let missing = dir.path().join("report\u{FFFD}.txt");
+        let base =
+            dir.path().to_string_lossy().replace('\\', "/").trim_start_matches('/').to_owned();
+        let raw_uri = format!("file:/{base}/report\u{FFFD}.txt");
+        let repaired_you = format!("file:/{base}/report有.txt");
+        let config = UiConfig::default();
+
+        // 1. Distinct explicit OSC 8 IDs (`first` vs `second`, or explicit vs omitted) must
+        //    keep their boundary and stay `LocalMissing(report\u{FFFD}.txt)`.
+        for (first_params, second_params) in [
+            ("id=first", "id=second"),
+            ("id=first", ""),
+            ("", "id=second"),
+            ("id=0_nebula", "id=1_nebula"),
+        ] {
+            let mut term = Term::new(Config::default(), &TermSize::new(80, 4), VoidListener);
+            let stream = format!(
+                "\x1b]8;{first_params};{raw_uri}\x1b\\report\x1b]8;;\x1b\\\r\n  \
+                 \x1b]8;{second_params};{raw_uri}\x1b\\有.txt\x1b]8;;\x1b\\"
+            );
+            Processor::<StdSyncHandler>::default().advance(&mut term, stream.as_bytes());
+
+            for (line, col) in [(0, 1), (1, 2)] {
+                let hit = highlighted_at(
+                    &term,
+                    &config,
+                    Point::new(Line(line), Column(col)),
+                    ModifiersState::CONTROL,
+                )
+                .unwrap();
+                let raw = hit.text(&term).unwrap();
+                let repaired = hit.repaired_hyperlink_uri(&term);
+                assert_eq!(raw.as_ref(), raw_uri);
+                assert_eq!(hit.effective_hyperlink_uri(), Some(raw_uri.as_str()));
+                assert!(
+                    repaired.is_none(),
+                    "unexpected merge for ({first_params}, {second_params})"
+                );
+                assert_eq!(
+                    classify_osc8_link_target_with_cwd(&raw, repaired.as_deref(), Some(dir.path())),
+                    LinkTargetKind::LocalMissing(missing.clone())
+                );
+            }
+        }
+
+        // 2. Same explicit OSC 8 ID (`id=same`) hard-wrapped across lines still recovers
+        //    `LocalExisting(report有.txt)` even when sibling `report最.txt` exists.
+        let mut same_term = Term::new(Config::default(), &TermSize::new(80, 4), VoidListener);
+        let same_stream = format!(
+            "\x1b]8;id=same;{raw_uri}\x1b\\report\x1b]8;;\x1b\\\r\n  \
+             \x1b]8;id=same;{raw_uri}\x1b\\有.txt\x1b]8;;\x1b\\"
+        );
+        Processor::<StdSyncHandler>::default().advance(&mut same_term, same_stream.as_bytes());
+        for (line, col) in [(0, 1), (1, 2)] {
+            let hit = highlighted_at(
+                &same_term,
+                &config,
+                Point::new(Line(line), Column(col)),
+                ModifiersState::CONTROL,
+            )
+            .unwrap();
+            let raw = hit.text(&same_term).unwrap();
+            let repaired = hit.repaired_hyperlink_uri(&same_term);
+            assert_eq!(raw.as_ref(), raw_uri);
+            assert_eq!(hit.effective_hyperlink_uri(), Some(repaired_you.as_str()));
+            assert_eq!(repaired.as_deref(), Some(repaired_you.as_str()));
+            assert_eq!(
+                classify_osc8_link_target_with_cwd(&raw, repaired.as_deref(), Some(dir.path())),
+                LinkTargetKind::LocalExisting(target_you.clone())
+            );
+        }
     }
 }
