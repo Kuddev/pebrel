@@ -18,7 +18,6 @@ import io.github.kuddev.pebrel.mobile.session.LocalSession
 import io.github.kuddev.pebrel.mobile.session.SessionRepository
 import kotlinx.coroutines.CancellationException
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RemoteSessionSheet(local: LocalSession, repository: SessionRepository, onClose: () -> Unit,
                        onAttach: (RemoteAttachment) -> Unit) {
@@ -35,7 +34,7 @@ fun RemoteSessionSheet(local: LocalSession, repository: SessionRepository, onClo
         catch (_: Exception) { failed = true }
         finally { loading = false }
     }
-    ModalBottomSheet(onDismissRequest = onClose) {
+    GlassSheet(onClose) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 620.dp), contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
