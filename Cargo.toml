@@ -1,14 +1,14 @@
 [workspace]
 members = [
-    "nebula_app",
-    "nebula_terminal",
-    "nebula_config",
-    "nebula_config_derive",
-    "nebula-completions",
-    "nebula_hook",
-    "nebula_gpui",
-    "nebula_settings",
-    "nebula_split",
+    "pebrel_app",
+    "pebrel_terminal",
+    "pebrel_config",
+    "pebrel_config_derive",
+    "pebrel-completions",
+    "pebrel_hook",
+    "pebrel_gpui",
+    "pebrel_settings",
+    "pebrel_split",
     "mobile/link",
 ]
 resolver = "2"
@@ -44,8 +44,8 @@ ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
 gpui = { opt-level = 3 }
 gpui-component = { opt-level = 3 }
-nebula_terminal = { opt-level = 3 }
-nebula = { opt-level = 3, codegen-units = 16 }
+pebrel_terminal = { opt-level = 3 }
+pebrel = { opt-level = 3, codegen-units = 16 }
 image = { opt-level = 3 }
 
 # Debug 壳仍要承担真实终端负载：GPUI 布局/字体塑形和 VT 解析若以
@@ -67,9 +67,9 @@ ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
 gpui = { opt-level = 3 }
 gpui_macros = { opt-level = 3 }
-nebula_terminal = { opt-level = 3 }
+pebrel_terminal = { opt-level = 3 }
 
-nebula-gpui = { opt-level = 3, codegen-units = 16 }
+pebrel-gpui = { opt-level = 3, codegen-units = 16 }
 [workspace.dependencies]
 mlua = { version = "0.11.4", features = ["luau", "vendored", "serialize", "send"] }
 serde_path_to_error = "0.1.20"
@@ -161,7 +161,7 @@ pulldown-latex = { git = "https://github.com/Carlosted/pulldown-latex.git", rev 
 #      markdown 解析启用 math 构造；新增 text/math.rs 的 set_math_renderer
 #      全局注册点；InlineNode/Node 增加数学节点并在渲染时调钩子，未注册时
 #      回退现状（inline=code 文本、block=CodeBlock）。TeX 引擎/栅格化/绘制
-#      全部住在 nebula_app::gpui_shell::math_view，fork 只有接线层。上游
+#      全部住在 pebrel_app::gpui_shell::math_view，fork 只有接线层。上游
 #      0.6 线出现 MarkdownPlugin/Custom block 后应迁过去并撤掉本补丁。
 #   3. TextView 阅读器 GitHub 化（同分支，随 2 一起 push）：软换行按
 #      CommonMark 合并为空格（CJK 相邻直连）；图片 URL 分流（http(s)/data
@@ -200,7 +200,7 @@ pulldown-latex = { git = "https://github.com/Carlosted/pulldown-latex.git", rev 
 # 布局释放后地址被另一字体复用，中文粗体/斜体会画成错字（issue #744）。
 # Windows 打字后自动隐藏的鼠标指针只在屏幕坐标真正改变后恢复；Win32 在指针
 # 未移动时补发的 WM_MOUSEMOVE 不再让它每次按键闪一下（issue #868）。
-# 原因与撤销条件见 architecture/notes/nebula_app/input/2026-11-05-windows-pointer-auto-hide.md。
+# 原因与撤销条件见 architecture/notes/pebrel_app/input/2026-11-05-windows-pointer-auto-hide.md。
 # 这两项修复经 Kuddev/zed#2、#3 并入维护分支 fix/native-window-input-lifetime-20261015；
 # 组件经 Kuddev/gpui-component#2、#3 只同步五个 Zed 引用。
 # Input 补丁 4-5 仍保持独立。

@@ -22,8 +22,8 @@ share a 64 MiB budget. Additional images display a translated omission notice.
 Network images are not downloaded automatically. Local image paths are checked
 against the captured working directory; choosing a local file explicitly remains
 available when automatic loading is rejected. PNG and JPEG support is unchanged.
-The [document model](../nebula_app/src/assistant_answer/document.rs) and
-[reader](../nebula_app/src/gpui_shell/terminal/answer_reader.rs) own these limits.
+The [document model](../pebrel_app/src/assistant_answer/document.rs) and
+[reader](../pebrel_app/src/gpui_shell/terminal/answer_reader.rs) own these limits.
 
 阅读器保留已有的回答和图片上限；超限图片显示对应语言的提示。网络图片不会自动下载，
 自动加载本地图片时仍检查工作目录边界。加载被拒绝后，可以主动选择本地 PNG 或 JPEG。
@@ -55,4 +55,4 @@ logical viewport across English → Chinese → English. It resets the clipboard
 each copy and checks exact source equality, so a stale clipboard cannot pass the test.
 Generated/forged image markers, omitted-image bounds and sanitized localized failures
 have separate regression coverage. The ownership rationale is recorded in the
-[reader presentation decision](../architecture/notes/nebula_app/assistant_answer/2026-09-27-reader-presentation-language.md).
+[reader presentation decision](../architecture/notes/pebrel_app/assistant_answer/2026-09-27-reader-presentation-language.md).

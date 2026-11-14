@@ -1,0 +1,10506 @@
+//! The display subsystem including window management, font rasterization, and
+//! GPU drawing.
+
+use std::cmp;
+use std::fmt::{self, Formatter};
+use std::mem::{self, ManuallyDrop};
+use std::num::NonZeroU32;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use glutin::config::GetGlConfig;
+use glutin::context::{NotCurrentContext, PossiblyCurrentContext};
+use glutin::display::GetGlDisplay;
+use glutin::error::ErrorKind;
+use glutin::prelude::*;
+use glutin::surface::{Surface, SwapInterval, WindowSurface};
+
+use log::{debug, info, warn};
+use parking_lot::MutexGuard;
+use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::keyboard::ModifiersState;
+use winit::raw_window_handle::RawWindowHandle;
+use winit::window::{CursorIcon, Theme as WinitTheme};
+
+use crossfont::{Rasterize, Size as FontSize};
+use unicode_width::UnicodeWidthChar;
+
+use pebrel_terminal::event::{EventListener, OnResize};
+use pebrel_terminal::grid::Dimensions as TermDimensions;
+use pebrel_terminal::index::{Column, Direction, Line, Point};
+use pebrel_terminal::selection::Selection;
+use pebrel_terminal::term::cell::Flags;
+use pebrel_terminal::term::{
+    self, LineDamageBounds, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermDamage, TermMode,
+};
+use pebrel_terminal::vte::ansi::{CursorShape, NamedColor};
+
+use crate::config::UiConfig;
+use crate::config::debug::RendererPreference;
+use crate::config::font::Font;
+use crate::config::window::Dimensions;
+use crate::config::window::StartupMode;
+use crate::display::bell::VisualBell;
+use crate::display::color::{List, Rgb};
+use crate::display::content::{RenderableContent, RenderableCursor};
+use crate::display::cursor::IntoRects;
+use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
+use crate::display::hint::{HintMatch, HintState};
+use crate::display::meter::Meter;
+use crate::display::window::Window;
+use crate::event::{Event, EventType, Mouse, SearchState};
+use crate::message_bar::{self, MessageBuffer, MessageType};
+use crate::renderer::Rasterizer;
+use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit};
+use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
+use crate::renderer::ui::{Gradient, Rgba, UiQuad};
+use crate::renderer::{self, GlyphCache, Renderer, platform};
+use crate::scheduler::{Scheduler, TimerId, Topic};
+use crate::string::{ShortenDirection, StrShortener};
+
+mod animations;
+mod background_color_model;
+pub mod color;
+mod command_completion;
+mod completion;
+mod confirmation_text;
+pub mod content;
+pub mod cursor;
+pub mod hint;
+pub mod image_viewer;
+mod inline_image;
+mod input_state;
+pub mod ui;
+pub mod window;
+
+mod chrome;
+pub mod command_palette;
+pub(crate) mod context_menu;
+mod context_menu_model;
+mod document_model;
+mod file_operations;
+pub mod markdown_view;
+mod message_queue_entry;
+mod network_proxy_model;
+mod program_identity;
+mod proxy_editor;
+pub mod sftp_panel;
+pub mod side_panel;
+mod size_info;
+pub(crate) mod state;
+pub(crate) mod suggest_engine;
+mod surface_opacity;
+/// GPUI 壳的终端元素也用这里的 [`terminal_color::TerminalColorResolver`]：
+/// 「应用写死的颜色要不要按当前主题矫正」两个壳必须是同一个答案，否则同一份
+/// 输出在新旧壳读起来不一样。
+pub(crate) mod terminal_color;
+pub(crate) mod terminal_math;
+mod text_path_model;
+mod toast;
+
+/// Processor uses the same persisted value before the first window exists so
+/// the global quick-terminal shortcut is active from application startup.
+pub(crate) fn quick_terminal_hotkey_from_settings(config: &UiConfig) -> String {
+    settings::nebula_settings_load(config).quick_terminal_hotkey
+}
+
+use animations::WindowAnimations;
+
+pub use crate::i18n::{LanguagePreference, UiLanguage};
+pub use background_color_model::BgPickerPart;
+pub(crate) use background_color_model::{BACKGROUND_SWATCHES, hsv_to_rgb, rgb_to_hsv};
+pub(crate) use chrome::chrome_settings_button_rect;
+pub use chrome::{ChromeHit, TabDropAction, in_chrome_bar, resize_edge};
+use chrome::{ChromeTabLayout, TabDrag, chrome_hit_with_tabs, chrome_tab_layout, contains_rect};
+pub(crate) use command_completion::{
+    NEBULA_GHOST_MAX, extract_program, nebula_command_hint, nebula_command_hints,
+    nebula_commands_handle, nebula_is_command_position, nebula_path_wants_directory,
+};
+pub use context_menu_model::{ContextMenuAction, ContextMenuHit, ContextMenuTarget};
+pub(crate) use file_operations::send_to_recycle_bin;
+pub(crate) use input_state::{
+    nebula_clear_line, nebula_input_backspace, nebula_input_char, nebula_input_delete_word,
+    nebula_input_text, nebula_prompt_line_from_raw_grid,
+    nebula_shell_prompt_restored_from_raw_grid, nebula_shell_ready_from_raw_grid,
+};
+#[cfg(windows)]
+pub(crate) use input_state::{nebula_input_from_raw_grid, nebula_raw_grid_row_preview};
+pub use program_identity::AiLogo;
+pub(crate) use program_identity::{
+    ai_logo, ai_logo_for_program, prepare_ai_logo_texture, program_icon,
+};
+pub use size_info::SizeInfo;
+pub use state::{
+    AcceptKey, AiSessionIdentity, CompletionStyle, NebulaCompletionItem, NebulaCompletionKind,
+    NebulaConfirm, NebulaInlineImage, NebulaPaneState, NebulaShell, SplitDirection, SplitNav,
+};
+pub use suggest_engine::SuggestEnv;
+pub(crate) use text_path_model::{
+    fit_tail, percent_decode_lossy, strip_file_scheme, truncate_tab_label,
+};
+pub use toast::ToastKind;
+
+pub(crate) mod file_dialog;
+pub(crate) mod keymap;
+mod settings;
+pub(crate) mod ssh_connect;
+mod ssh_editor_input;
+mod ssh_editor_render;
+mod ssh_ui;
+mod text_input;
+
+use ssh_ui::SshDeleteUndo;
+pub(crate) use ssh_ui::merge_ssh_hosts;
+pub use ssh_ui::{
+    SSH_DELETE_UNDO_DURATION, SshEditorField, SshEditorHit, SshEditorRects, SshHostEditor,
+    auth_sections, join_destination_port, join_destination_user, push_private_key,
+    split_destination_port, split_destination_user,
+};
+pub use ui::theme::NebulaTheme;
+pub(crate) use ui::theme::write_nebula_prompt_theme;
+#[derive(Debug, Clone)]
+enum BackupOperation {
+    Export(std::path::PathBuf),
+    Restore(std::path::PathBuf),
+    /// 远程备份/恢复（协议与目的地在 `nebula_backup.txt`）。口令确认后由
+    /// 事件层在后台线程执行——网络绝不进 UI 线程。
+    RemotePush,
+    RemotePull,
+}
+
+/// 口令确认后待执行的远程备份动作，`complete_backup_operation` 返回给
+/// 输入层去分发事件（display 自己够不到 event proxy）。
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteBackupRequest {
+    pub upload: bool,
+    pub passphrase: String,
+    pub selection: crate::encrypted_backup::BackupSelection,
+}
+
+/// Shared caret blink phase for the chrome text editors (rename / filter /
+/// commit boxes). 相位挂在**最后一次编辑活动**上而不是挂钟纪元：聚焦或打完
+/// 字的那一刻光标必定是亮的，连续打字期间不闪。节律取自系统的
+/// `GetCaretBlinkTime`。完整理由见 [`ui::caret`]。
+///
+/// 保留这层薄封装是因为已有十处调用点写作 `caret_blink_on()`；新代码直接用
+/// [`ui::caret::is_on`]。
+pub(crate) fn caret_blink_on() -> bool {
+    ui::caret::is_on()
+}
+#[cfg(feature = "gpui-shell")]
+pub(crate) use network_proxy_model::{
+    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
+    manual_proxy_parts, manual_proxy_protocol_label, manual_proxy_value,
+};
+pub use settings::{NebulaSettingsSection, SettingsDropdown, SettingsHit, settings_hit};
+pub(crate) use settings::{NewTabPosition, SettingsOpacityTarget};
+
+/// 按显示列宽贪心断行（确认框正文等 UI 段落用）：CJK 逐字可断，行首空
+/// 格吞掉；零宽字符跟随前一个字。不做拉丁连词回退——正文以中文为主，
+/// 偶发的英文单词被折断可接受。
+fn wrap_display_cols(text: &str, max_cols: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut cols = 0usize;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if w == 0 {
+            line.push(ch);
+            continue;
+        }
+        if cols + w > max_cols && cols > 0 {
+            lines.push(std::mem::take(&mut line));
+            cols = 0;
+            if ch == ' ' {
+                continue;
+            }
+        }
+        line.push(ch);
+        cols += w;
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+mod bell;
+mod damage;
+mod meter;
+
+/// Label for the forward terminal search bar.
+const FORWARD_SEARCH_LABEL: &str = "Search: ";
+
+/// Label for the backward terminal search bar.
+const BACKWARD_SEARCH_LABEL: &str = "Backward Search: ";
+
+/// The character used to shorten the visible text like uri preview or search regex.
+const SHORTENER: char = '…';
+
+/// Private-use placeholders emitted by Nebula's injected prompt. They are
+/// replaced with spaces before text rendering; the real icons are vector UI
+/// quads, so no Nerd Font or bundled font is required.
+const NEBULA_FOLDER_ICON_MARKER: char = '\u{E100}';
+const NEBULA_GIT_BRANCH_ICON_MARKER: char = '\u{E101}';
+
+/// Color which is used to highlight damaged rects when debugging.
+const DAMAGE_RECT_COLOR: Rgb = Rgb::new(255, 0, 255);
+
+/// Visible split divider gap. The drag hit target is intentionally wider.
+pub(crate) const NEBULA_SPLIT_DIVIDER_GAP: f32 = 2.0;
+pub(crate) const NEBULA_SPLIT_HIT_SLOP: f32 = 8.0;
+
+/// How far the unfocused split is dimmed. Focus is conveyed by brightness, not
+/// a border: the inactive pane is pushed back under a translucent veil so the
+/// focused pane visually "lifts" without any outline.
+/// `unfocused-split-opacity = 0.7` (i.e. a 0.3 dim veil).
+pub(crate) const NEBULA_UNFOCUSED_SPLIT_DIM: f32 = 0.30;
+
+/// Max remembered commands for the history hint.
+
+/// Top chrome reserve, in logical pixels at scale factor 1.0. Sized as: top
+/// bar (8 margin + 40 bar) + card seam (8) + 8px of breathing room inside the
+/// terminal card, so the first grid row doesn't touch the card's top edge.
+pub const CHROME_BAR_LOGICAL: f32 = 64.0;
+
+/// 「刚完成」对勾在徽章位上停留多久，随后落回未读圆点。
+///
+/// 短到不像一个需要处理的状态、长到能被余光捕捉：低于 ~0.6s 在扫视中会被
+/// 整个错过，高于 ~2s 就开始像"它卡在完成态上了"。
+pub(crate) const BADGE_FLASH: std::time::Duration = std::time::Duration::from_millis(1100);
+
+/// Shared chrome/control corner radius. Used for the small in-shell affordances
+/// (window-control hover pills, tab pills, the "+" square) — kept modest so the
+/// controls stay crisp.
+///
+/// `pub(crate)`: the GPUI shell maps this onto `gpui_component::Theme::radius`
+/// so its controls share the legacy pill curve.
+pub(crate) const UI_CORNER_RADIUS_LOGICAL: f32 = 8.0;
+
+/// Outer radius of the connected chrome shell (the L-frame formed by the top
+/// bar + left sidebar). Larger than the control radius so the whole window
+/// chrome reads as one soft-cornered card while the affordances inside keep
+/// their tighter [`UI_CORNER_RADIUS_LOGICAL`] curve.
+///
+/// `pub(crate)`: the GPUI shell's terminal card borrows this exact value
+/// (see `gpui_shell::theme::card_radius`) so both shells round the card
+/// identically.
+///
+/// The number itself lives in `pebrel_settings` — it is the default for the
+/// per-theme card geometry, and a second literal here would be exactly the
+/// "two copies of one number" that produced the white seam around the card.
+pub(crate) const UI_SHELL_RADIUS_LOGICAL: f32 = pebrel_settings::DEFAULT_PANE_CARD_RADIUS;
+
+/// Gap between the terminal card and the window's right/bottom edges, in
+/// logical pixels — the visible "seam" of shell color that makes the terminal
+/// read as a rounded card floating on the shell backdrop. Top and left carry
+/// no seam of their own: the card tucks up under the top bar and sidebar.
+pub(super) const UI_CARD_SEAM_LOGICAL: f32 = 8.0;
+
+/// Shared quiet outline thickness.
+pub(super) const UI_HAIRLINE_LOGICAL: f32 = 1.0;
+
+/// Horizontal breathing space for terminal content, in logical pixels.
+/// Kept modest so the grid stays wide — this is *added on top of* the user's
+/// configured `window.padding`, on both sides, so large values noticeably
+/// narrow the usable area.
+pub const CONTENT_PAD_X_LOGICAL: f32 = 20.0;
+
+/// Reserved chrome height per side, in physical pixels for `scale_factor`.
+#[inline]
+pub fn chrome_reserve(scale_factor: f32) -> f32 {
+    (CHROME_BAR_LOGICAL * scale_factor).round()
+}
+
+/// Bottom grid reserve: card seam plus the same 8px inner breathing room used
+/// above the first row. Unlike [`chrome_reserve`], there is no title bar below
+/// the terminal, so mirroring the 64px top reserve creates a large dead band.
+#[inline]
+pub fn bottom_content_reserve(scale_factor: f32) -> f32 {
+    ((UI_CARD_SEAM_LOGICAL + 8.0) * scale_factor).round()
+}
+
+/// Horizontal content padding, in physical pixels for `scale_factor`.
+#[inline]
+pub fn content_pad_x(scale_factor: f32) -> f32 {
+    (CONTENT_PAD_X_LOGICAL * scale_factor).round()
+}
+
+/// Width of the left tab sidebar when expanded, in logical pixels. Chosen to
+/// match the reference design — wide enough for a directory-ish label plus a
+/// close affordance, narrow enough to leave the grid roomy.
+pub const SIDEBAR_W_LOGICAL: f32 = 230.0;
+
+/// 拖拽调节（设置·交互开关）允许的范围，逻辑 px。下限保行内容可读，
+/// 上限防把终端挤成一条缝；settings 解析与拖拽 update 用同一组钳制，
+/// 手拖出来的值和手改文件写出来的值才不会各有一套边界。
+pub const SIDEBAR_W_MIN: f32 = 170.0;
+pub const SIDEBAR_W_MAX: f32 = 420.0;
+pub const DRAWER_W_MIN: f32 = 220.0;
+pub const DRAWER_W_MAX: f32 = 560.0;
+/// SSH HOSTS 停靠区高度覆盖的下限 = 只剩标题条（`hosts_header_h` 的逻辑值）。
+pub const HOSTS_BAND_MIN: f32 = 38.0;
+
+/// Sidebar width in physical pixels for `scale_factor`, honouring the collapsed
+/// state. `logical_w` 是当前（可能被拖拽调过的）逻辑宽，[`SIDEBAR_W_LOGICAL`]
+/// 只是它的默认值。
+#[inline]
+pub fn sidebar_width(scale_factor: f32, collapsed: bool, logical_w: f32) -> f32 {
+    if collapsed { 0.0 } else { (logical_w * scale_factor).round() }
+}
+
+/// Re-derive the OS-enforced window floor from the current cell size and
+/// chrome, so the grid can never be dragged below
+/// [`SizeInfo::MIN_USABLE_COLUMNS`].
+///
+/// Must be re-applied whenever the cell size or sidebar width changes: a floor
+/// computed for a 7px cell stops protecting anything once the user zooms to a
+/// 21px one. `set_min_inner_size` is logical DIPs, so the physical paddings are
+/// divided back out by the scale factor.
+#[cfg(windows)]
+fn apply_min_window_size(
+    window: &crate::display::window::Window,
+    config: &UiConfig,
+    cell_width: f32,
+    cell_height: f32,
+    sidebar_logical_w: f32,
+) {
+    let scale = window.scale_factor as f32;
+    let pad = config.window.padding(scale);
+    let content_pad = content_pad_x(scale);
+    let min_w = SizeInfo::min_usable_width(
+        cell_width,
+        pad.0 + content_pad + sidebar_width(scale, false, sidebar_logical_w),
+        pad.0 + content_pad,
+    );
+    let min_h = SizeInfo::min_usable_height(
+        cell_height,
+        pad.1 + chrome_reserve(scale),
+        pad.1,
+        pebrel_terminal::term::MIN_SCREEN_LINES,
+    );
+    window
+        .set_min_inner_size(Some(LogicalSize::new((min_w / scale) as f64, (min_h / scale) as f64)));
+}
+
+/// 三条可拖拽的面板分界线（设置·交互的「拖拽调节」开关管辖）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelDragKind {
+    /// 左侧栏右缘：拖宽度。
+    SidebarWidth,
+    /// SSH HOSTS 停靠区顶缘：拖高度。
+    HostsBand,
+    /// 右抽屉左缘：拖宽度。
+    DrawerWidth,
+}
+
+/// 进行中的面板拖拽。侧栏/抽屉的宽度变化会重排终端（PTY 端另有 settle
+/// 延迟），所以应用端按 [`PANEL_DRAG_REFLOW_MS`] 节流：**视觉**几何每帧
+/// 跟手（chrome/抽屉布局读 `target`），**reflow** 用的已应用字段到点才
+/// 同步，松手必同步——拖动过程平滑，网格重排最多 12 次/秒。
+#[derive(Debug, Clone, Copy)]
+pub struct PanelDrag {
+    pub kind: PanelDragKind,
+    /// 拖动中的目标值（逻辑 px）：宽度或停靠区高度。
+    pub target: f32,
+    /// 上次把 `target` 同步进已应用字段的时刻。
+    pub last_apply: std::time::Instant,
+    /// HOSTS 分界专用：按下时缓存的停靠区内容底缘（物理 px）。它只取决于
+    /// 面板几何、与停靠区自身高度无关，所以整场拖拽都不会变——缓存下来，
+    /// 每次指针移动就不必重跑一遍 `chrome_tab_layout`。
+    pub anchor: f32,
+}
+
+/// 拖动期间两次终端 reflow 的最小间隔（毫秒）。
+pub const PANEL_DRAG_REFLOW_MS: u64 = 80;
+
+/// 侧栏拖到比这更窄（逻辑 px）就直接收起，而不是卡在 [`SIDEBAR_W_MIN`]。
+/// 用户裁定：下限的语义是「关掉」不是「最窄」——把边界一路推到左边缘是
+/// 最自然的收起手势。宽度字段保持折叠前的值，重新展开还是原来那么宽。
+pub const SIDEBAR_COLLAPSE_AT: f32 = 120.0;
+
+/// 右抽屉的同款阈值：拖到比这更窄就关掉抽屉。两侧手势必须对称，否则
+/// 「左边拖到头会关、右边拖到头只是卡住」本身就是个 bug（用户 08-02 报）。
+pub const DRAWER_COLLAPSE_AT: f32 = 150.0;
+
+#[derive(Debug, Clone, Copy)]
+struct ResizeHud {
+    columns: usize,
+    rows: usize,
+    opacity: crate::motion::Tween,
+}
+
+impl ResizeHud {
+    fn new(columns: usize, rows: usize) -> Self {
+        let mut opacity = crate::motion::Tween::new(1.0);
+        opacity.animate_to(
+            0.0,
+            Duration::from_millis(900),
+            crate::motion::Easing::Linear,
+            crate::motion::MotionPolicy::Full,
+        );
+        Self { columns, rows, opacity }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SplitReveal {
+    rect: (f32, f32, f32, f32),
+    direction: SplitDirection,
+    motion: crate::motion::Tween,
+}
+
+impl SplitReveal {
+    pub fn new(rect: (f32, f32, f32, f32), direction: SplitDirection) -> Self {
+        let mut motion = crate::motion::Tween::new(0.0);
+        motion.animate_role(
+            1.0,
+            crate::motion::MotionRole::Enter,
+            crate::motion::MotionPolicy::Full,
+        );
+        Self { rect, direction, motion }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NebulaPowerlineIconKind {
+    Folder,
+    GitBranch,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NebulaPowerlineIcon {
+    kind: NebulaPowerlineIconKind,
+    point: Point<usize>,
+}
+
+/// Remove one destination while recording exactly enough list state for Undo.
+/// Kept independent from rendering and Credential Manager so the destructive
+/// state transition can be regression-tested without touching real secrets.
+///
+/// Only config-sourced aliases go to the hidden list: Nebula never edits
+/// `~/.ssh/config`, so hiding is the strongest "delete" available for them.
+/// Nebula-managed hosts are removed outright — parking them in the hidden
+/// section made deletion read as a rename to "hidden".
+fn remove_ssh_host_from_lists(
+    host: &str,
+    from_config: bool,
+    saved: &mut Vec<String>,
+    pinned: &mut Vec<String>,
+    hidden: &mut Vec<String>,
+) -> (Option<usize>, Option<usize>, bool) {
+    let saved_index = saved.iter().position(|entry| entry == host);
+    let pinned_index = pinned.iter().position(|entry| entry == host);
+    let was_hidden = hidden.iter().any(|entry| entry == host);
+    saved.retain(|entry| entry != host);
+    pinned.retain(|entry| entry != host);
+    if from_config && !was_hidden {
+        hidden.push(host.to_owned());
+    }
+    (saved_index, pinned_index, was_hidden)
+}
+
+fn restore_ssh_host_to_lists(
+    host: &str,
+    saved_index: Option<usize>,
+    pinned_index: Option<usize>,
+    was_hidden: bool,
+    saved: &mut Vec<String>,
+    pinned: &mut Vec<String>,
+    hidden: &mut Vec<String>,
+) {
+    saved.retain(|entry| entry != host);
+    if let Some(index) = saved_index {
+        saved.insert(index.min(saved.len()), host.to_owned());
+    }
+    pinned.retain(|entry| entry != host);
+    if let Some(index) = pinned_index {
+        pinned.insert(index.min(pinned.len()), host.to_owned());
+    }
+    if !was_hidden {
+        hidden.retain(|entry| entry != host);
+    }
+}
+
+/// Log replay commands can contain terminal query sequences captured from a
+/// different process. Replying writes those answers into the shell's stdin,
+/// where they become the next command after the replay process exits.
+pub(crate) fn replays_untrusted_terminal_output(line: &str) -> bool {
+    let words: Vec<String> = line
+        .split_whitespace()
+        .take(4)
+        .map(|word| word.trim_matches(['"', '\'']).to_ascii_lowercase())
+        .collect();
+    matches!(
+        words.as_slice(),
+        [docker, logs, ..] if docker == "docker" && logs == "logs"
+    ) || matches!(
+        words.as_slice(),
+        [docker, compose, logs, ..]
+            if docker == "docker" && compose == "compose" && logs == "logs"
+    ) || matches!(
+        words.as_slice(),
+        [podman, logs, ..] if podman == "podman" && logs == "logs"
+    ) || matches!(
+        words.as_slice(),
+        [kubectl, logs, ..] if kubectl == "kubectl" && logs == "logs"
+    ) || matches!(words.as_slice(), [journalctl, ..] if journalctl == "journalctl")
+}
+
+/// Texture ids for chrome logos live far above the inline-image counter
+/// (which starts at 1), so the two id spaces can share the renderer cache.
+const AI_LOGO_ID_BASE: u64 = 1 << 62;
+
+/// The UI font role: the size chrome
+/// typography rasterizes at and the cell chrome layout steps by. Anchored to
+/// the config font at the window's DPI — never to the terminal zoom. Stage 3
+/// exposes family/size as user config.
+#[derive(Clone, Copy, Debug)]
+struct NebulaUiFont {
+    /// Role size in physical px (config size × DPI scale).
+    px: f32,
+    /// Cell the chrome layout steps by, from the role's REAL rasterized
+    /// metrics (`compute_cell_size` over `GlyphCache::set_ui_font_size`).
+    cell: (f32, f32),
+}
+
+pub(crate) fn nebula_debug_log(message: impl AsRef<str>) {
+    crate::logging::debug_log(message);
+}
+
+/// Unconditional variant of [`nebula_debug_log`] for the link-click diagnosis:
+/// clicks are rare (no perf concern), and requiring a relaunch with
+/// NEBULA_DEBUG_LOG=1 would double every remote-debug round-trip. Remove or
+/// downgrade to the gated logger once the link path is verified.
+pub(crate) fn nebula_link_log(message: impl AsRef<str>) {
+    use std::io::Write as _;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| format!("{}.{:03}", d.as_secs(), d.subsec_millis()))
+        .unwrap_or_else(|_| "0.000".to_owned());
+    let path = nebula_data_dir().join("pebrel_debug.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{ts}] {}", message.as_ref());
+    }
+}
+
+/// Directory holding Nebula's persistent state, created on demand. Settings
+/// live here next to the history file managed by [`crate::nebula_history`] and
+/// the session snapshot managed by [`crate::session`].
+///
+/// Per-platform locations and the reasoning behind them live in
+/// [`crate::platform::dirs`] — this is a thin alias kept for its 26 call sites.
+pub(crate) fn nebula_data_dir() -> PathBuf {
+    crate::platform::dirs::data_dir().to_path_buf()
+}
+
+/// Read one raw `key=value` from `nebula_settings.txt` (case-insensitive key).
+/// The typed loader is `settings::nebula_settings_load`; this is for the few
+/// callers (e.g. the default-shell id) that want the raw string verbatim.
+pub(crate) fn nebula_settings_value(key: &str) -> Option<String> {
+    let data = std::fs::read_to_string(pebrel_settings::settings_path()).ok()?;
+    data.lines().find_map(|line| {
+        let (k, v) = line.split_once('=')?;
+        k.trim().eq_ignore_ascii_case(key).then(|| v.trim().to_owned())
+    })
+}
+
+/// 启动时是否回放 `session.json`（设置·高级→会话，默认开）。
+///
+/// 事件循环在建窗之前就要问这一句，那时还没有 `Display`，也没有 `UiConfig`
+/// 之外的东西——所以走原始读取而不是 `settings::nebula_settings_load`：
+/// 后者是 `pub(super)`，且会为了一个 bool 解析整份设置。
+pub(crate) fn restore_session_enabled() -> bool {
+    nebula_settings_value("restore_session")
+        .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(true)
+}
+
+/// 托盘图标开关（设置·高级，默认开）。与 [`restore_session_enabled`] 同一
+/// 处境：托盘在建窗之前初始化，只能走原始设置读取。
+pub(crate) fn tray_enabled() -> bool {
+    nebula_settings_value("tray")
+        .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(true)
+}
+
+/// Truncate/pad `text` to exactly `width` display cells (wide chars count 2;
+/// a wide char that would straddle the boundary is dropped and padded over).
+fn nebula_pad_to_cells(text: &str, width: usize) -> String {
+    let mut out = String::with_capacity(width);
+    let mut used = 0usize;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if w == 0 {
+            continue;
+        }
+        if used + w > width {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    for _ in used..width {
+        out.push(' ');
+    }
+    out
+}
+
+#[derive(Debug)]
+pub enum Error {
+    /// Error with window management.
+    Window(window::Error),
+
+    /// Error dealing with fonts.
+    Font(crossfont::Error),
+
+    /// Error in renderer.
+    Render(renderer::Error),
+
+    /// Error during context operations.
+    Context(glutin::error::Error),
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Window(err) => err.source(),
+            Error::Font(err) => err.source(),
+            Error::Render(err) => err.source(),
+            Error::Context(err) => err.source(),
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Window(err) => err.fmt(f),
+            Error::Font(err) => err.fmt(f),
+            Error::Render(err) => err.fmt(f),
+            Error::Context(err) => err.fmt(f),
+        }
+    }
+}
+
+impl From<window::Error> for Error {
+    fn from(val: window::Error) -> Self {
+        Error::Window(val)
+    }
+}
+
+impl From<crossfont::Error> for Error {
+    fn from(val: crossfont::Error) -> Self {
+        Error::Font(val)
+    }
+}
+
+impl From<renderer::Error> for Error {
+    fn from(val: renderer::Error) -> Self {
+        Error::Render(val)
+    }
+}
+
+impl From<glutin::error::Error> for Error {
+    fn from(val: glutin::error::Error) -> Self {
+        Error::Context(val)
+    }
+}
+
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct DisplayUpdate {
+    pub dirty: bool,
+
+    dimensions: Option<PhysicalSize<u32>>,
+    cursor_dirty: bool,
+    font: Option<Font>,
+    terminal_colors_dirty: bool,
+}
+
+impl DisplayUpdate {
+    pub fn dimensions(&self) -> Option<PhysicalSize<u32>> {
+        self.dimensions
+    }
+
+    pub fn font(&self) -> Option<&Font> {
+        self.font.as_ref()
+    }
+
+    pub fn cursor_dirty(&self) -> bool {
+        self.cursor_dirty
+    }
+
+    pub fn terminal_colors_dirty(&self) -> bool {
+        self.terminal_colors_dirty
+    }
+
+    pub fn set_dimensions(&mut self, dimensions: PhysicalSize<u32>) {
+        self.dimensions = Some(dimensions);
+        self.dirty = true;
+    }
+
+    pub fn set_font(&mut self, font: Font) {
+        self.font = Some(font);
+        self.dirty = true;
+    }
+
+    pub fn set_cursor_dirty(&mut self) {
+        self.cursor_dirty = true;
+        self.dirty = true;
+    }
+
+    fn set_terminal_colors_dirty(&mut self) {
+        self.terminal_colors_dirty = true;
+        self.dirty = true;
+    }
+}
+
+/// The display wraps a window, font rasterizer, and GPU renderer.
+pub struct Display {
+    pub window: Window,
+
+    pub size_info: SizeInfo,
+
+    /// Hint highlighted by the mouse.
+    pub highlighted_hint: Option<HintMatch>,
+    /// Frames since hint highlight was created.
+    highlighted_hint_age: usize,
+
+    /// Hint highlighted by the vi mode cursor.
+    pub vi_highlighted_hint: Option<HintMatch>,
+    /// Frames since hint highlight was created.
+    vi_highlighted_hint_age: usize,
+
+    pub raw_window_handle: RawWindowHandle,
+
+    /// UI cursor visibility for blinking.
+    pub cursor_hidden: bool,
+
+    /// When a split is active, the focused pane's geometry. Input and hint
+    /// hit-testing use this (via `pane_view()`) so mouse coordinates map into
+    /// the focused half-width grid rather than the full window, which would
+    /// otherwise index past the grid and panic.
+    pub nebula_pane_view: Option<SizeInfo>,
+
+    /// Transient "cols × rows" HUD shown briefly after a window resize; it fades
+    /// out over ~0.9s. `None` when nothing is showing.
+    nebula_resize_hud: Option<ResizeHud>,
+
+    /// 每个 pane 的 SSH 连接进度。成功时立刻移除——卡片让位给真实终端，
+    /// 持续重绘也随之停止；失败保留，让用户读得到原因。
+    nebula_ssh_connect: std::collections::HashMap<u64, ssh_connect::SshConnectState>,
+    /// 聚焦 pane 的 id，由绘制流程每帧同步。连接卡片只画在聚焦 pane 里，
+    /// 而 `nebula_pane_view` 只给几何、不给身份。
+    nebula_focused_pane: u64,
+
+    /// Skip the first resize (window creation) so no HUD flashes at startup.
+    nebula_resize_hud_armed: bool,
+
+    /// Indexed, persistent command history used to hint a whole previous
+    /// command from its prefix.
+    nebula_history: crate::nebula_history::NebulaHistory,
+    /// Process-wide frecency model fed only by successful shell cwd reports.
+    directory_history: crate::directory_history::DirectoryHistory,
+    /// Executable commands for first-token completion: PATH executables plus, on
+    /// Windows, the shell's cmdlets/functions/aliases. Filled on a background
+    /// thread so the PowerShell probe never blocks startup.
+    nebula_commands: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// Per-displayed-tab animated draw-x, eased toward the laid-out / drag
+    /// target each frame so tab reorder "make way" slides instead of snapping.
+    nebula_tab_anim: Vec<crate::motion::Spring>,
+    nebula_tab_was_visible: Vec<bool>,
+    /// Active scrollbar drag: the pointer's y-offset inside the thumb captured
+    /// at press time, so the thumb tracks the pointer without jumping.
+    pub nebula_scrollbar_drag: Option<f32>,
+    /// Slide-in reveal for a freshly created split pane: its final rect, the
+    /// split direction and the animation start time. Drawn as a shrinking
+    /// bg-coloured cover in `draw_split_overlays`; cleared when done.
+    pub nebula_split_reveal: Option<SplitReveal>,
+    /// Pending destructive-action confirmation (close with busy children /
+    /// multi-line paste), drawn as a centered modal that owns the keyboard.
+    pub nebula_confirm: Option<NebulaConfirm>,
+    /// Screen rects of the confirm modal's (primary, cancel) buttons, written
+    /// by `draw_confirm_modal` each frame so the mouse hit-test can never
+    /// drift from what was actually drawn. `None` while no modal shows.
+    pub nebula_confirm_buttons: Option<((f32, f32, f32, f32), (f32, f32, f32, f32))>,
+    /// Pending encrypted backup operation; the passphrase remains transient.
+    nebula_backup_operation: Option<BackupOperation>,
+    nebula_backup_passphrase: String,
+    nebula_backup_passphrase_select_all: crate::display::text_input::SelectAllState,
+
+    /// Most recently deleted SSH host while its action is still reversible.
+    nebula_ssh_delete_undo: Option<SshDeleteUndo>,
+    /// 焦点 pane 的助手建议条快照（spec 001）：每帧由 WindowContext 从
+    /// `NebulaPaneState::ai_fix` 同步，绘制层只认自己的字段（撤销条同款）。
+    pub nebula_ai_fix_bar: Option<crate::ai_assistant::AiFixState>,
+    /// Undo button geometry published by the draw pass for exact hit-testing.
+    nebula_ssh_delete_undo_rect: Option<(f32, f32, f32, f32)>,
+    nebula_ssh_delete_undo_hover: bool,
+    /// 在场的轻提示（右下角，自动消失）。见 [`toast`]。
+    nebula_toasts: Vec<toast::Toast>,
+    /// 消息栏关闭按钮：绘制矩形 + 墨色，由终端 pass 发布给 chrome pass。
+    /// 几何来自 `message_bar::message_close_button_rect`，与输入层的命中共用
+    /// 同一个 helper，所以画出来的和点得到的永远是同一块。
+    nebula_message_close: Option<((f32, f32, f32, f32), Rgb)>,
+    nebula_message_close_hover: bool,
+    pub nebula_ssh_editor: Option<SshHostEditor>,
+    pub nebula_ssh_editor_rects: Option<SshEditorRects>,
+    nebula_ssh_editor_open: bool,
+    nebula_ssh_editor_hover: SshEditorHit,
+    /// 正在拖选的字段。鼠标按在输入框里时置位，松开清掉——拖拽的语义是
+    /// "从按下的那个字符拉到现在这个字符"，所以中途划出框外也要继续跟。
+    nebula_ssh_editor_drag: Option<ssh_ui::SshEditorDrag>,
+    /// 「测试连接」点击时暂存的请求；input 层随后取走并交给 SSH runtime。
+    /// display 不持有事件代理，这一格就是点击→网络之间的交接台。
+    nebula_ssh_test_request: Option<crate::ssh_session::SshTestRequest>,
+    /// Monotonic identity for SSH editor test requests. Results must match the
+    /// exact attempt, not merely a destination that a user can edit back to.
+    nebula_ssh_test_seq: u64,
+    /// Inline images visible this frame, collected per pane during
+    /// `draw_pane` (grid lock + pane viewport at hand) and drawn in one
+    /// full-window pass in `present_frame` — mid-pane GL viewport swaps are
+    /// fragile, one batched pass is not.
+    nebula_frame_images: Vec<inline_image::ImageDraw>,
+
+    /// Theme currently painted. In automatic mode this is the light/dark
+    /// member resolved from `nebula_theme_preference` and the system state.
+    pub nebula_theme: NebulaTheme,
+    /// Theme family explicitly selected by the user and written to settings.
+    /// Kept separate from the painted theme so an automatic light switch does
+    /// not forget which dark theme to restore later.
+    nebula_theme_preference: NebulaTheme,
+    pub nebula_follow_system_theme: bool,
+    nebula_system_theme: Option<WinitTheme>,
+    /// User-configured winit decoration override. Automatic Nebula theming
+    /// temporarily clears it because winit only emits `ThemeChanged` while a
+    /// window is following the operating system.
+    nebula_window_theme_override: Option<WinitTheme>,
+    pub nebula_settings_open: bool,
+    pub nebula_special_tab_active: bool,
+    nebula_language_preference: LanguagePreference,
+    nebula_language: UiLanguage,
+    /// Paths from the last successful app configuration generation.
+    nebula_config_paths: Vec<PathBuf>,
+    /// Live profile snapshot used by settings and palette render paths.
+    nebula_profiles: Vec<crate::config::ui_config::Profile>,
+    /// Settings content scroll offset in scaled px (0 = top of the section).
+    nebula_settings_scroll: f32,
+    /// Command palette (Ctrl+Shift+P): fuzzy launcher model + UI state.
+    nebula_palette: command_palette::CommandPalette,
+    /// Installed shells, detected once (registry + filesystem scan) and cached
+    /// for the new-tab dropdown. `None` until the first menu open.
+    nebula_detected_shells: Option<Vec<crate::shell_detect::DetectedShell>>,
+    /// Right-side drawer: directory tree / git status of the focused cwd.
+    pub nebula_side_panel: side_panel::SidePanel,
+    /// Remote file drawer opened from an SSH destination context menu.
+    pub nebula_sftp_panel: Option<sftp_panel::SftpPanel>,
+    /// Shared chrome animation state. All sidebar/drawer transitions step here
+    /// so easing/timing does not get scattered across render code.
+    ui_animations: WindowAnimations,
+    /// Active sidebar section inside the settings panel.
+    nebula_settings_section: NebulaSettingsSection,
+    nebula_chrome_hover: ChromeHit,
+    nebula_sidebar_scroll_drag: Option<chrome::SidebarScrollDrag>,
+    /// Bottom-docked queue affordance. The entry state lives separately from
+    /// Tabs/SSH so real Agent events can be connected without changing chrome
+    /// geometry or input contracts again.
+    nebula_message_queue_entry: message_queue_entry::MessageQueueEntry,
+    nebula_settings_hover: SettingsHit,
+    /// Primary-button settings control currently held down for HTML-like
+    /// toggle active feedback. Cleared on release or when the settings view closes.
+    nebula_settings_pressed: SettingsHit,
+    /// Active settings opacity drag: target plus the screen-space track used
+    /// for pointer-to-value mapping. Values persist only when the drag ends.
+    pub nebula_settings_opacity_drag: Option<(settings::SettingsOpacityTarget, f32, f32)>,
+    /// 背景色调色盘的草稿 HSV。打开浮层时从生效色初始化；拖动期间它是唯一
+    /// 权威——灰/黑/白点的色相经 RGB 往返会坍缩成 0，这里保住用户拨到的值。
+    nebula_bg_picker_hsv: (f32, f32, f32),
+    /// 进行中的调色盘拖拽（SV 面或色相条），值实时应用、松手落盘。
+    pub nebula_bg_picker_drag: Option<settings::BgPickerPart>,
+    /// Unified native right-click menu shared by tab and SSH rows. The menu
+    /// owns its short open/close animation so no input path needs timers.
+    nebula_context_menu: Option<context_menu::ContextMenu>,
+    nebula_tab_labels: Vec<String>,
+    /// 只有当前活动 pane 持有可信会话 ID 且 CLI 支持 fork 时为 true；
+    /// 右键菜单据此决定是否展示“分叉 AI 会话”。
+    nebula_tab_ai_fork: Vec<bool>,
+    /// Per-tab custom accent. `None` follows the live theme accent.
+    nebula_tab_colors: Vec<Option<Rgb>>,
+    nebula_tab_bells: Vec<bool>,
+    /// Per-tab "command is running" flags driving the sidebar spinners.
+    nebula_tab_running: Vec<bool>,
+    /// 每个标签是否停在「等你批准」上，画手掌而不是圆点。
+    nebula_tab_attention: Vec<bool>,
+    /// 每个 tab 的 shell 短标（pwsh / cmd / ubuntu / ssh…），空 = 不显示。
+    /// 静默行（无任何徽章）的右侧亮它，回答"这个 tab 是什么环境"。
+    nebula_tab_shells: Vec<String>,
+    /// 上一条命令非零退出且未被看到，画警示三角。
+    nebula_tab_failed: Vec<bool>,
+    /// 刚成功收尾，正在放对勾闪现（[`BADGE_FLASH`] 之内）。
+    nebula_tab_flashing: Vec<bool>,
+    /// Per-tab real AI brand logo, textured over the icon slot.
+    nebula_tab_logos: Vec<Option<AiLogo>>,
+    /// Decoded (and, where appropriate, theme-tinted) logo pixels with stable renderer texture ids,
+    /// keyed by (logo, ink, target physical size). Decode, tint and high-quality
+    /// downsampling run once per key.
+    nebula_ai_logo_cache: std::collections::HashMap<
+        (AiLogo, [u8; 3], u32),
+        (u64, std::sync::Arc<Vec<u8>>, (u32, u32)),
+    >,
+    /// Decoded shell icons (full-color PNGs) with stable texture ids, keyed by
+    /// shell id (pwsh/cmd/nu/wsl:Ubuntu). Decode runs once per id.
+    nebula_shell_icon_cache:
+        std::collections::HashMap<String, (u64, std::sync::Arc<Vec<u8>>, (u32, u32))>,
+    /// Brand logos staged by the chrome pass, drawn AFTER all chrome text.
+    /// draw_inline_image flips viewport/blend around its draw; interleaving
+    /// it with chrome text kills every glyph batch after it, so the textured
+    /// icons get their own pass at the very end of the frame.
+    nebula_chrome_logo_draws: Vec<(u64, std::sync::Arc<Vec<u8>>, (u32, u32), (f32, f32, f32, f32))>,
+    nebula_active_tab: usize,
+    /// In-progress tab reorder drag, if the pointer is grabbing a tab.
+    nebula_tab_drag: Option<TabDrag>,
+    /// Whether the tab bar may be reordered right now (false during a split,
+    /// where the bar hides a pane and reordering is ambiguous).
+    nebula_tabs_reorderable: bool,
+    /// Whether the tab sidebar is folded away. When collapsed the grid
+    /// reclaims the full width and only a reveal button remains in the top bar.
+    nebula_sidebar_collapsed: bool,
+    /// 左侧栏逻辑宽（拖拽调节的**已应用**值——reflow/持久化读它）。
+    nebula_sidebar_w: f32,
+    /// 右抽屉逻辑宽（同上；布局时仍钳在窗口 42%）。
+    nebula_drawer_w: f32,
+    /// SSH HOSTS 停靠区高度覆盖（逻辑 px），0 = 自动弹性规则。
+    nebula_hosts_band: f32,
+    /// 「拖拽调节侧栏」总开关（设置·交互，默认关，开启需过确认框）。
+    pub nebula_panel_resize: bool,
+    /// 聚焦 pane 的工作目录（shell 通过标题上报），每帧由 `draw` 灌进来。
+    /// 命令面板的「工作目录」组用它：组名右缘挂路径，组里的复制 / 定位 /
+    /// 新建标签页都作用在它身上。`None` = shell 没上报，那一组整组不出现。
+    pub nebula_focused_cwd: Option<std::path::PathBuf>,
+    /// 进行中的面板分界线拖拽（见 [`PanelDrag`]）。
+    pub nebula_panel_drag: Option<PanelDrag>,
+    /// SSH host aliases from `~/.ssh/config` for the sidebar's "SSH HOSTS"
+    /// section, pinned entries first (see `nebula_pinned_hosts`).
+    pub nebula_ssh_hosts: Vec<String>,
+    /// Host names the user pinned to the top (right-click), persisted in the
+    /// runtime settings file so the order survives restarts.
+    nebula_pinned_hosts: Vec<String>,
+    /// Destinations auto-saved from typed `ssh` commands once the connection
+    /// confirmed (see `NebulaPaneState::pending_ssh_host`), most recent
+    /// first, persisted. Merged into `nebula_ssh_hosts` after the pinned
+    /// block, before the `~/.ssh/config` aliases.
+    nebula_saved_hosts: Vec<String>,
+    /// User-deleted SSH config aliases. Config files remain untouched; hiding
+    /// them here makes Delete stable instead of letting the next merge revive
+    /// the row immediately.
+    nebula_hidden_hosts: Vec<String>,
+    /// 地址 → 用户起的显示名，从 `ssh_profiles.json` 缓存而来。侧栏每帧都要
+    /// 画这些行，读文件必须发生在保存那一刻，而不是绘制路径上。
+    nebula_ssh_labels: std::collections::HashMap<String, String>,
+    /// 地址 → 图标 id（`ui::os_icons`），缓存策略同上。缺项 = 自动。
+    nebula_ssh_icons: std::collections::HashMap<String, String>,
+    /// Accordion fold state of the two sidebar sections.
+    nebula_tabs_section_open: bool,
+    nebula_hosts_section_open: bool,
+    /// Per-section scroll offsets, in whole rows (clamped by the layout).
+    nebula_tabs_scroll: usize,
+    nebula_hosts_scroll: usize,
+    /// A grid resize happened whose PTY notification is deferred until the
+    /// interactive resize settles (see `Topic::NebulaResizeSettle`): the
+    /// in-box ConPTY repaints the whole viewport per resize, so notifying it
+    /// on every drag tick floods the scrollback with shredded repaints.
+    pub nebula_pty_resize_pending: bool,
+    /// Whether inline ghost-text suggestions are shown at all.
+    pub nebula_ghost_enabled: bool,
+    /// Which key accepts a ghost suggestion.
+    pub nebula_accept: AcceptKey,
+    /// How completions surface: inline ghost remainder or a popup list.
+    pub nebula_completion_style: CompletionStyle,
+    /// Default executor used by new sessions when no explicit shell is configured.
+    pub nebula_shell: NebulaShell,
+    /// Raw default-shell id when the user picked a detected shell the 2-value
+    /// `nebula_shell` enum can't represent (cmd/pwsh/nu/wsl:X). Drives the
+    /// settings row label and is persisted verbatim.
+    pub nebula_shell_id: Option<String>,
+    /// User-selected working directory for newly created terminal tabs.
+    pub nebula_startup_directory: Option<PathBuf>,
+    /// Whether new sessions print the Nebula welcome/fetch screen.
+    pub nebula_fetch_enabled: bool,
+    /// Whether the injected prompt uses Nebula's powerline segments.
+    pub nebula_powerline_enabled: bool,
+    /// 窗口背景模糊（Windows 11 上是 Mica）。默认开，见 `settings.rs` 的
+    /// 裁定注释。
+    pub nebula_blur: bool,
+    /// Closing a window detaches its panes into the resident process for
+    /// re-attach (multiplexer restore). Off = close kills the shells.
+    pub nebula_keep_session: bool,
+    /// 启动时回放 `session.json`（正常关窗与崩溃恢复共用这一条路）。关掉
+    /// 只是不回放——快照照写，导出工作区与崩溃诊断仍然可用。
+    pub nebula_restore_session: bool,
+    /// 冷恢复时自动接续各 pane 的 AI 对话（claude/codex resume，T1-2）。
+    /// 消费方在 `window_context::resume_agent_sessions`。
+    pub nebula_resume_ai: bool,
+    /// 系统托盘常驻图标 + agent attention 状态（T1-3）。消费方在
+    /// `crate::tray`；这里只是设置页的开关状态。
+    pub nebula_tray: bool,
+    /// Runtime window opacity controlled from Nebula settings.
+    pub nebula_window_opacity: f32,
+    /// Which settings combobox (floating option list) is expanded, if any.
+    /// One field for every dropdown: shell, font, wallpaper fit/alignment,
+    /// language, accept key and cursor shape all share the widget.
+    pub nebula_settings_dropdown: Option<settings::SettingsDropdown>,
+    /// Default cursor shape/blink from settings. Programs may still override
+    /// the shape with DECSCUSR escapes (vim's mode cursor keeps working).
+    pub nebula_cursor_shape: CursorShape,
+    pub nebula_cursor_blink: bool,
+    /// 交互: 选中即复制（copyOnSelect）。关 = 右键复制 / 粘贴。
+    pub nebula_copy_on_select: bool,
+    /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗，#4）。
+    pub nebula_cjk_bold_regular: bool,
+    /// User keybinding overrides, raw `(combo, action)` from
+    /// `nebula_settings.txt` in file order (persisted verbatim).
+    pub(crate) nebula_keybinds: Vec<(String, String)>,
+    /// 快速终端全局快捷键的持久值；系统注册由顶层 Processor 负责。
+    pub nebula_quick_terminal_hotkey: String,
+    /// SSH 出站代理（全局三态）的持久镜像；连接时的真正决策在
+    /// `crate::ssh_proxy`（它直接读设置文件，不经过这里）。
+    pub nebula_ssh_proxy_mode: crate::ssh_proxy::ProxyMode,
+    pub nebula_ssh_proxy_url: String,
+    pub nebula_ssh_proxy_no_proxy: String,
+    /// 等待 Processor 确认注册的新值。设置页不会绕过全局管理器自行假设成功。
+    pub(crate) nebula_quick_hotkey_request: Option<String>,
+    pub(crate) nebula_quick_hotkey_error: Option<String>,
+    /// Parsed override table (newest-first); consulted by
+    /// `process_key_bindings` BEFORE the config table (spec 002).
+    pub nebula_keymap: Vec<crate::config::KeyBinding>,
+    /// When `Some(row)`, the Keymap settings page is capturing a new combo
+    /// for `keymap::EDITABLE_ACTIONS[row]` and the keyboard is owned by it.
+    pub nebula_keymap_capture: Option<usize>,
+    /// 捕获态实时回显：当前按住的修饰键前缀（"Ctrl+Shift+"）。松开清空。
+    pub nebula_keymap_capture_preview: String,
+    /// 与 GPUI 壳共用的标签栏位置。旧壳只负责原样保留，不改变自身布局。
+    pub nebula_tabs_position: pebrel_settings::TabsPositionName,
+    pub nebula_tab_reveal_motion: settings::TabRevealMotion,
+    /// 界面外观预设。紧凑只在既有阶梯上降一档，不引入新的视觉数值
+    /// （ADR-0002）；它不改变终端字体、单元格几何或 shell 输出。
+    pub nebula_density: ui::tokens::Density,
+    /// 新标签插入策略。只在**真正创建标签**时生效；会话恢复与工作区导入
+    /// 保持各自记录的顺序，不读这个值。
+    pub nebula_new_tab_position: settings::NewTabPosition,
+    /// 单元格宽度模式。只作用于终端内容网格；Nebula 原生界面的字体单元格
+    /// 始终按上游的向下取整计算，不随该偏好变化。
+    pub nebula_cell_width_mode: settings::CellWidthMode,
+    pub nebula_font_family: String,
+    nebula_font_families: Vec<String>,
+    /// 系统字体族的惰性缓存：首次展开字体目录时枚举一次，之后复用。
+    /// 放在启动路径上会让每次冷启都付几百个族的等宽查询开销。
+    nebula_system_fonts: Option<Vec<crate::font_install::SystemFontFamily>>,
+    /// 字体目录的「显示全部」临时过滤开关，不持久化。
+    nebula_font_show_all: bool,
+    /// 字体目录的搜索串。匹配列表上显示的那个名字，不维护跨语言别名。
+    /// 只在下拉打开期间存在，关闭即清空，不持久化。
+    nebula_font_query: String,
+    /// 搜索框的光标与选区。与图标搜索框、SSH 表单字段共用同一套模型：
+    /// 新加的输入框继承行为，不必再实现一遍。
+    nebula_font_query_cursor: ui::text_field::TextCursor,
+    nebula_font_popup_scroll: usize,
+    /// 字体弹层滚动条拖拽中的抓取偏移（thumb 内的 y 距离）。
+    nebula_font_popup_drag: Option<f32>,
+    /// 当前正在拖选的设置文本框：0=字体搜索，1=按键搜索，2=SSH 代理，
+    /// 3=AI 供应商。
+    /// 统一在 Display 保存拖选状态，避免鼠标离开输入框后选区停止更新。
+    nebula_settings_text_drag: Option<(u8, usize)>,
+    /// 目录中被判定为非等宽的族（小写名）。界面据此给比例字体警告——
+    /// 固定网格下它们可能重叠或截断，但用户知情后仍可选择。
+    nebula_font_proportional: std::collections::HashSet<String>,
+    nebula_font_notice: Option<String>,
+    /// Optional runtime clear/background color controlled from settings.
+    pub nebula_background: Option<Rgb>,
+    /// Optional background image path drawn as a full-window wallpaper.
+    pub nebula_background_image: Option<String>,
+    /// Wallpaper alpha, separate from the window opacity to preserve text contrast.
+    pub nebula_background_image_opacity: f32,
+    /// Wallpaper sizing and anchor settings (fill / fit / stretch / tile).
+    pub nebula_background_image_fit: BackgroundImageFit,
+    pub nebula_background_image_alignment: BackgroundImageAlignment,
+    /// Off by default: wallpapers stay inside terminal content. Enabling this
+    /// requires an explicit warning confirmation because it reduces chrome contrast.
+    pub nebula_background_image_cover_chrome: bool,
+    nebula_settings_mtime: Option<std::time::SystemTime>,
+    nebula_bg_palette_index: usize,
+    /// 背景色浮层的 16 进制草稿与聚焦态（浮层关闭时归零）。
+    nebula_bg_hex_input: String,
+    pub(crate) nebula_bg_hex_active: bool,
+    /// 设置→高级→同步（WebDAV）的四个输入草稿：url、用户名、WebDAV
+    /// 密码、E2E 口令。密码/口令只是「待保存」缓冲——提交即入凭据
+    /// 管理器并清空，明文从不驻留。
+    nebula_sync_inputs: [String; 4],
+    /// 聚焦的同步输入框（0..4，对应 [`nebula_sync_inputs`] 下标）。
+    pub(crate) nebula_sync_focus: Option<usize>,
+    nebula_sync_auto_pull: bool,
+    /// 凭据管理器里已有 [密码, 口令]（只存在性，绝不回读明文进 UI）。
+    nebula_sync_secret_set: [bool; 2],
+    /// 最近一次同步动作的结果 `(message, is_error)`，画在按钮行下方。
+    pub(crate) nebula_sync_status: Option<(String, bool)>,
+    nebula_sync_busy: bool,
+    /// Provider metadata is safe to keep in the settings model; API keys stay
+    /// behind the OS credential manager and only their masked hint is copied.
+    nebula_providers: crate::ai_providers::ProviderStore,
+    pub(crate) nebula_provider_inputs: [String; 6],
+    nebula_provider_cursors: [ui::text_field::TextCursor; 6],
+    pub(crate) nebula_provider_focus: Option<usize>,
+    pub(crate) nebula_provider_status: Option<(String, bool)>,
+    nebula_provider_test_request: Option<crate::ai_providers::ProviderTestRequest>,
+    nebula_provider_test_seq: u64,
+    nebula_provider_codex_confirm: Option<String>,
+    nebula_backup_selection: crate::encrypted_backup::BackupSelection,
+    pub(crate) nebula_backup_status: Option<(String, bool)>,
+    /// 最近一次备份状态来自远程动作（true）还是本地导出/恢复（false）——
+    /// 状态行画在触发它的那组控件旁边。
+    nebula_backup_status_remote: bool,
+    /// 远程备份协议（`nebula_backup.txt` 的缓存，设置页打开时装载）。
+    nebula_backup_protocol: crate::backup_remote::BackupProtocol,
+    /// 远程备份的 5 个输入槽草稿（语义随协议变化；密文槽只是「待保存」
+    /// 缓冲——提交即入凭据管理器并清空，明文从不驻留）。
+    nebula_backup_remote_inputs: [String; 5],
+    pub(crate) nebula_backup_remote_focus: Option<usize>,
+    /// 当前协议的密文凭据是否已在凭据管理器（占位文案用，不回读明文）。
+    nebula_backup_remote_secret_set: bool,
+    /// 远程备份/恢复动作进行中（后台线程），按钮变灰防重复分发。
+    nebula_backup_busy: bool,
+    /// 聚焦的 SSH 代理输入框（0=代理地址 1=绕过列表；正文直接编辑
+    /// `nebula_ssh_proxy_url` / `nebula_ssh_proxy_no_proxy`，失焦提交落盘）。
+    pub(crate) nebula_ssh_proxy_focus: Option<usize>,
+    /// 手动地址、绕过列表、自定义命令三个输入框的光标/选区。
+    nebula_ssh_proxy_cursor: [ui::text_field::TextCursor; 3],
+    /// 聚焦那一刻的原值快照，Esc 取消编辑时还原。
+    nebula_ssh_proxy_backup: [String; 2],
+    nebula_ssh_proxy_draft: network_proxy_model::ManualProxyDraft,
+    /// 指定代理列表的选中项。非发现项可由持久化 URL 前缀恢复；发现项在
+    /// 后台扫描完成后按 URL 精确匹配，绝不根据端口猜。
+    nebula_ssh_proxy_choice: settings::ProxyChoice,
+    /// 手动地址的协议选择独立保留；地址被清空时不能因为 URL 暂时为空就
+    /// 把用户刚选的 HTTP 悄悄重置成默认 SOCKS5。
+    nebula_ssh_proxy_protocol: settings::ManualProxyProtocol,
+    nebula_local_proxies: Vec<crate::ssh_proxy::LocalProxyEndpoint>,
+    nebula_proxy_scanning: bool,
+    nebula_proxy_scan_request: bool,
+    /// 「跟随系统」探测缓存：`(URL, 来自注册表)`。进网络页 / 切模式时
+    /// 刷新；渲染只读——注册表是跨进程调用，不进逐帧路径。
+    nebula_system_proxy_probe: Option<(String, bool)>,
+    /// 网络页真实出网测试的状态、待发送请求和单调序号。序号用于丢弃用户
+    /// 修改设置后才返回的旧结果。
+    nebula_proxy_test_status: settings::ProxyTestStatus,
+    nebula_proxy_test_request: Option<u64>,
+    nebula_proxy_test_seq: u64,
+    /// 按键映射页搜索框：查询串 + 聚焦态。过滤在读取时按需计算——28 行的
+    /// 字符串匹配量级，不值得为它维护缓存失效。
+    nebula_keymap_query: String,
+    nebula_keymap_query_cursor: ui::text_field::TextCursor,
+    nebula_keymap_search_focus: bool,
+
+    /// Tab rename state: when `Some(index, text)`, a text input is shown over
+    /// tab `index` with the current edit buffer `text`. The user types to edit,
+    /// Enter commits, Esc cancels (double-click to rename).
+    pub nebula_tab_rename: Option<(usize, String)>,
+    /// True for the instant after a rename begins: the whole existing name
+    /// reads as "selected" (nushell-style blue fill) and the first typed
+    /// character replaces it wholesale. Cleared on the first edit.
+    pub nebula_tab_rename_select_all: bool,
+    /// Insertion caret inside the rename buffer, as a CHAR index (0..=chars).
+    /// Click-to-place, arrow keys, and mid-string insert/delete all go
+    /// through this — a rename is a real text field, not append-only.
+    pub nebula_tab_rename_caret: usize,
+    /// Left pixel of the rename buffer's first glyph, stashed by `draw_chrome`
+    /// each frame the box shows. Click-to-place-caret maps pointer X through
+    /// this — recomputing the draw-side layout in the input path would just
+    /// let the two drift.
+    pub nebula_tab_rename_text_x: f32,
+
+    pub visual_bell: VisualBell,
+
+    /// Mapped RGB values for each terminal color.
+    pub colors: List,
+    /// The user's configured color scheme, untouched by theme restyling —
+    /// the base every `apply_term_colors` starts from.
+    nebula_default_colors: List,
+    /// Draw-time adaptation for application-owned RGB colors. The terminal
+    /// grid retains the original values so protocol state and copying are exact.
+    terminal_color_resolver: terminal_color::TerminalColorResolver,
+
+    /// State of the keyboard hints.
+    pub hint_state: HintState,
+
+    /// Unprocessed display updates.
+    pub pending_update: DisplayUpdate,
+
+    /// The renderer update that takes place only once before the actual rendering.
+    pub pending_renderer_update: Option<RendererUpdate>,
+
+    /// The ime on the given display.
+    pub ime: Ime,
+
+    /// The state of the timer for frame scheduling.
+    pub frame_timer: FrameTimer,
+
+    /// Damage tracker for the given display.
+    pub damage_tracker: DamageTracker,
+
+    /// Font size used by the window.
+    pub font_size: FontSize,
+
+    /// UI 字体角色：chrome 排版锚定在这个
+    /// 状态上，永不跟随终端缩放。Ctrl+滚轮 / 设置 spinner 只改
+    /// `font_size`（终端网格与跟随它的文档查看器）。阶段 3 将把
+    /// family/size 暴露为独立配置。
+    nebula_ui_font: NebulaUiFont,
+
+    /// 抽屉视图是否路由到 SFTP（聚焦 pane 的 SSH 身份与面板连接匹配）。
+    /// 见 [`Self::route_side_panel`]。
+    nebula_sftp_routed: bool,
+
+    // Mouse point position when highlighting hints.
+    hint_mouse_point: Option<Point>,
+
+    renderer: ManuallyDrop<Renderer>,
+    renderer_preference: Option<RendererPreference>,
+
+    surface: ManuallyDrop<Surface<WindowSurface>>,
+
+    context: ManuallyDrop<PossiblyCurrentContext>,
+
+    glyph_cache: GlyphCache,
+    meter: Meter,
+}
+
+/// 计算全屏 TUI 在网格之外需要补齐的垂直背景带。内部边缘必须停在 Pane 边界，
+/// 只有接触终端外沿的 Pane 才能继续延伸到圆角卡片边缘。
+fn alt_screen_vertical_padding_bands(
+    window: &SizeInfo,
+    pane: &SizeInfo,
+    card_y: f32,
+    card_height: f32,
+) -> [Option<(f32, f32)>; 2] {
+    const EDGE_EPSILON: f32 = 0.5;
+
+    let window_grid_top = window.padding_y();
+    let window_grid_bottom = window.height() - window.padding_bottom();
+    let pane_top = pane.padding_y();
+    let pane_bottom = pane.height() - pane.padding_bottom();
+    let grid_bottom = pane_top + pane.screen_lines() as f32 * pane.cell_height();
+
+    let band = |start: f32, end: f32| {
+        let height = (end - start).max(0.0);
+        (height > f32::EPSILON).then_some((start, height))
+    };
+
+    let top = if (pane_top - window_grid_top).abs() <= EDGE_EPSILON {
+        band(card_y, pane_top)
+    } else {
+        None
+    };
+    let bottom_limit = if (pane_bottom - window_grid_bottom).abs() <= EDGE_EPSILON {
+        card_y + card_height
+    } else {
+        pane_bottom
+    };
+
+    [top, band(grid_bottom, bottom_limit)]
+}
+
+/// Prefer the event loop's system-wide appearance over the window theme.
+///
+/// On Windows, `Window::theme()` is a cached per-window value and can still
+/// contain the previous manual override immediately after `set_theme(None)`.
+fn system_theme_snapshot(
+    event_loop_theme: Option<WinitTheme>,
+    window_theme: Option<WinitTheme>,
+) -> Option<WinitTheme> {
+    event_loop_theme.or(window_theme)
+}
+
+impl Display {
+    pub fn new(
+        window: Window,
+        gl_context: NotCurrentContext,
+        config: &UiConfig,
+        system_theme: Option<WinitTheme>,
+        _tabbed: bool,
+    ) -> Result<Display, Error> {
+        let raw_window_handle = window.raw_window_handle();
+
+        let scale_factor = window.scale_factor as f32;
+        let settings_init = settings::nebula_settings_load(config);
+        let rasterizer = Rasterizer::new()?;
+        crate::boot_trace("rasterizer ready");
+
+        // 设置里保存过字号则优先生效（逻辑 px × 缩放），否则跟随配置文件；
+        // Ctrl+滚轮 / 设置 spinner 改过的字号因此在重启后保持。
+        let font_size = settings_init
+            .font_size
+            .map(|px| FontSize::from_px(px * scale_factor))
+            .unwrap_or_else(|| config.font.size().scale(scale_factor));
+        // UI 锚定字号始终取配置字号（0.7 默认）：终端字号的持久化缩放不
+        // 影响 chrome。2026-07-28 曾试过锚定 settings 保存字号，实测 16.3px
+        // 让 chrome 明显过大，用户裁定回到 0.7 默认——当时「图标变小」的
+        // 真凶是 ambiguous 宽度缩放误伤 PUA 图标，已在 glyph_cache 排除。
+        let ui_font_px = config.font.size().scale(scale_factor).as_px();
+        #[cfg(windows)]
+        let (rasterizer, required_font_install) = {
+            let mut rasterizer = rasterizer;
+            let installed = GlyphCache::font_family_available(
+                &mut rasterizer,
+                crate::font_install::REQUIRED_FONT_FAMILY,
+                font_size,
+            );
+            let required = (!installed).then(|| NebulaConfirm::InstallRequiredFont {
+                directory: crate::font_install::bundled_font_directory(),
+            });
+            (rasterizer, required)
+        };
+        #[cfg(not(windows))]
+        let required_font_install = None;
+
+        debug!("Loading \"{}\" font", &settings_init.font_family);
+        let font =
+            config.font.clone().with_family(settings_init.font_family.clone()).with_size(font_size);
+        // 保存的字体偏好可能在两次启动之间消失（系统字体被卸载、导入文件
+        // 被删）。那种情况本次回退到内置字体并告警，但**保留原偏好**——
+        // 字体恢复可用后，下次启动自动回到用户的选择。
+        let (mut glyph_cache, font_notice) = match GlyphCache::new(rasterizer, &font) {
+            Ok(cache) => (cache, None),
+            Err(error) => {
+                let fallback = config
+                    .font
+                    .clone()
+                    .with_family(crate::font_install::REQUIRED_FONT_FAMILY.to_owned())
+                    .with_size(font_size);
+                let notice = format!(
+                    "字体「{}」本次不可用（{error}），暂用内置字体；偏好已保留。",
+                    settings_init.font_family
+                );
+                let rasterizer = Rasterizer::new()?;
+                (GlyphCache::new(rasterizer, &fallback)?, Some(notice))
+            },
+        };
+        glyph_cache.wide_bold_use_regular = settings_init.cjk_bold_regular;
+        #[cfg(windows)]
+        let mut nebula_font_families = glyph_cache.private_font_families();
+        #[cfg(not(windows))]
+        let mut nebula_font_families = vec![settings_init.font_family.clone()];
+        nebula_font_families.retain(|family| family != crate::font_install::REQUIRED_FONT_FAMILY);
+        nebula_font_families.insert(0, crate::font_install::REQUIRED_FONT_FAMILY.to_owned());
+        if !nebula_font_families.iter().any(|family| family == &settings_init.font_family) {
+            nebula_font_families.push(settings_init.font_family.clone());
+        }
+        crate::boot_trace("glyph cache (font faces loaded)");
+
+        let metrics = glyph_cache.font_metrics();
+        let (cell_width, cell_height) =
+            compute_cell_size(config, &metrics, settings_init.cell_width_mode);
+
+        // Resize the window to the user-configured size, or a Windows
+        // Terminal-like default when unset. A 116-column by 30-row canvas is
+        // the standard startup size. Two inputs are deliberately excluded:
+        // the session file's saved window size (stale/wrong-domain values
+        // kept resurfacing as near-fullscreen launches), and the persisted
+        // terminal zoom — the startup grid is priced at the CONFIG base font
+        // size, because 116 columns of a Ctrl+wheel-enlarged cell is itself
+        // a near-fullscreen window. The zoomed font still renders; it just
+        // shows fewer columns in the standard-sized window.
+        let dimensions = config
+            .window
+            .dimensions()
+            .unwrap_or(crate::config::window::Dimensions { columns: 116, lines: 30 });
+        let base_font_size = config.font.size().scale(scale_factor);
+        let (base_cell_width, base_cell_height) = glyph_cache
+            .metrics_at(base_font_size)
+            .map(|base_metrics| {
+                compute_cell_size(config, &base_metrics, settings_init.cell_width_mode)
+            })
+            .unwrap_or((cell_width, cell_height));
+        let size = window_size(
+            config,
+            dimensions,
+            base_cell_width,
+            base_cell_height,
+            scale_factor,
+            settings_init.sidebar_w,
+        );
+        window.request_inner_size(size);
+
+        // Create the GL surface to draw into.
+        let surface = platform::create_gl_surface(
+            &gl_context,
+            window.inner_size(),
+            window.raw_window_handle(),
+        )?;
+
+        // Make the context current.
+        let context = gl_context.make_current(&surface)?;
+        crate::boot_trace("surface + context current");
+
+        // Let the OS refuse resizes that would collapse the grid below a usable
+        // column count — without this, dragging narrow turns 2 columns of real
+        // content into hundreds of soft-wrapped rows that overflow the
+        // scrollback (data loss no reflow can undo).
+        #[cfg(windows)]
+        apply_min_window_size(&window, config, cell_width, cell_height, settings_init.sidebar_w);
+
+        // Create renderer.
+        let mut renderer = Renderer::new(&context, config.debug.renderer)?;
+        crate::boot_trace("renderer (shaders compiled)");
+
+        // Load font common glyphs to accelerate rendering.
+        debug!("Filling glyph cache with common glyphs");
+        renderer.with_loader(|mut api| {
+            glyph_cache.reset_glyph_cache(&mut api);
+        });
+        crate::boot_trace("glyph cache warmed");
+
+        let padding = config.window.padding(window.scale_factor as f32);
+        let chrome = chrome_reserve(window.scale_factor as f32);
+        let viewport_size = window.inner_size();
+
+        // Create new size with at least one column and row.
+        // Asymmetric from the start: the sidebar is expanded on launch, so the
+        // left padding carries it while the right keeps the plain content
+        // margin. Dynamic padding is dropped — the sidebar fixes the left edge.
+        let scale = window.scale_factor as f32;
+        let content_pad = content_pad_x(scale);
+        let size_info = SizeInfo::new_fully_asymmetric(
+            viewport_size.width as f32,
+            viewport_size.height as f32,
+            cell_width,
+            cell_height,
+            padding.0 + content_pad + sidebar_width(scale, false, settings_init.sidebar_w),
+            padding.0 + content_pad,
+            padding.1 + chrome,
+            padding.1 + bottom_content_reserve(scale),
+        );
+
+        info!("Cell size: {cell_width} x {cell_height}");
+        info!("Padding: {} x {}", size_info.padding_x(), size_info.padding_y());
+        info!("Width: {}, Height: {}", size_info.width(), size_info.height());
+
+        // Update OpenGL projection.
+        renderer.resize(&size_info);
+
+        // Clear screen.
+        let nebula_window_theme_override = config.window.theme();
+        if settings_init.follow_system_theme {
+            window.set_theme(None);
+        }
+        let nebula_system_theme = system_theme_snapshot(system_theme, window.theme());
+        let nebula_theme = if settings_init.follow_system_theme {
+            nebula_system_theme
+                .map(|theme| {
+                    settings_init.theme.for_system_appearance(matches!(theme, WinitTheme::Light))
+                })
+                .unwrap_or(settings_init.theme)
+        } else {
+            settings_init.theme
+        };
+        let background_color = if settings_init.follow_system_theme {
+            nebula_theme.palette().term_bg
+        } else {
+            settings_init.background.unwrap_or(config.colors.primary.background)
+        };
+        renderer.clear(background_color, settings_init.opacity);
+        window.set_transparent(settings_init.opacity < 1.0);
+        // 背景模糊的开关住在 nebula_settings.txt 里，不是基础配置侧的
+        // `window.blur`——所以要在这里按真正的设置再压一次，否则窗口创建时
+        // 用的是那个字段的默认值。
+        window.set_blur(settings_init.blur);
+
+        // Disable shadows for transparent windows on macOS.
+        #[cfg(target_os = "macos")]
+        window.set_has_shadow(settings_init.opacity >= 1.0);
+
+        let is_wayland = matches!(raw_window_handle, RawWindowHandle::Wayland(_));
+
+        // On Wayland we can safely ignore this call, since the window isn't visible until you
+        // actually draw something into it and commit those changes.
+        if !is_wayland {
+            surface.swap_buffers(&context).expect("failed to swap buffers.");
+            renderer.finish();
+        }
+        crate::boot_trace("first swap done");
+
+        // Set resize increments for the newly created window.
+        if config.window.resize_increments {
+            window.set_resize_increments(Some(PhysicalSize::new(cell_width, cell_height)));
+        }
+
+        window.set_visible(true);
+        crate::boot_trace("window visible");
+
+        // Always focus new windows, even if no Nebula window is currently focused.
+        #[cfg(target_os = "macos")]
+        window.focus_window();
+
+        if !_tabbed {
+            match config.window.startup_mode {
+                #[cfg(target_os = "macos")]
+                StartupMode::SimpleFullscreen => window.set_simple_fullscreen(true),
+                StartupMode::Maximized if !is_wayland => window.set_maximized(true),
+                #[cfg(windows)]
+                StartupMode::Fullscreen => window.set_fullscreen(true),
+                _ => (),
+            }
+        }
+
+        let hint_state = HintState::new(config.hints.alphabet());
+        // Publish the RESTORED theme to the prompt bridge (writing the default
+        // here used to reset the powerline colors on every launch).
+        write_nebula_prompt_theme(nebula_theme);
+
+        let mut damage_tracker = DamageTracker::new(size_info.screen_lines(), size_info.columns());
+        damage_tracker.debug = config.debug.highlight_damage;
+
+        // Disable vsync.
+        if let Err(err) = surface.set_swap_interval(&context, SwapInterval::DontWait) {
+            info!("Failed to disable vsync: {err}");
+        }
+        crate::boot_trace("swap interval set");
+
+        // Terminal color table: the user's configured scheme, restyled by the
+        // restored theme (light themes swap in a readable light ANSI set, and
+        // the background OSC 11 reports must match the theme from frame one).
+        let nebula_default_colors = List::from(&config.colors);
+        let mut initial_colors = nebula_default_colors;
+        nebula_theme.apply_term_colors(&mut initial_colors, &nebula_default_colors);
+
+        let mut display = Self {
+            context: ManuallyDrop::new(context),
+            visual_bell: VisualBell::from(&config.bell),
+            renderer: ManuallyDrop::new(renderer),
+            renderer_preference: config.debug.renderer,
+            surface: ManuallyDrop::new(surface),
+            colors: initial_colors,
+            nebula_default_colors,
+            terminal_color_resolver: Default::default(),
+            frame_timer: FrameTimer::new(),
+            raw_window_handle,
+            damage_tracker,
+            glyph_cache,
+            hint_state,
+            size_info,
+            font_size,
+            nebula_ui_font: NebulaUiFont { px: ui_font_px, cell: (0.0, 0.0) },
+            nebula_sftp_routed: true,
+            window,
+            pending_renderer_update: Default::default(),
+            vi_highlighted_hint_age: Default::default(),
+            highlighted_hint_age: Default::default(),
+            vi_highlighted_hint: Default::default(),
+            highlighted_hint: Default::default(),
+            hint_mouse_point: Default::default(),
+            pending_update: Default::default(),
+            cursor_hidden: Default::default(),
+            nebula_pane_view: None,
+            nebula_resize_hud: None,
+            nebula_ssh_connect: std::collections::HashMap::new(),
+            nebula_focused_pane: 0,
+            nebula_resize_hud_armed: false,
+            nebula_history: {
+                let history = crate::nebula_history::NebulaHistory::load();
+                crate::boot_trace("history loaded");
+                history
+            },
+            directory_history: crate::directory_history::global(),
+            nebula_commands: nebula_commands_handle(),
+            nebula_tab_anim: Vec::new(),
+            nebula_tab_was_visible: vec![true],
+            nebula_scrollbar_drag: None,
+            nebula_split_reveal: None,
+            nebula_confirm: required_font_install,
+            nebula_confirm_buttons: None,
+            nebula_backup_operation: None,
+            nebula_backup_passphrase: String::new(),
+            nebula_backup_passphrase_select_all: Default::default(),
+
+            nebula_ssh_delete_undo: None,
+            nebula_ai_fix_bar: None,
+            nebula_ssh_delete_undo_rect: None,
+            nebula_ssh_delete_undo_hover: false,
+            nebula_toasts: Vec::new(),
+            nebula_message_close: None,
+            nebula_message_close_hover: false,
+            nebula_ssh_editor: None,
+            nebula_ssh_editor_rects: None,
+            nebula_ssh_editor_open: false,
+            nebula_ssh_editor_hover: SshEditorHit::None,
+            nebula_ssh_editor_drag: None,
+            nebula_ssh_test_request: None,
+            nebula_ssh_test_seq: 0,
+            nebula_frame_images: Vec::new(),
+            nebula_theme,
+            nebula_theme_preference: settings_init.theme,
+            nebula_follow_system_theme: settings_init.follow_system_theme,
+            nebula_system_theme,
+            nebula_window_theme_override,
+            nebula_settings_open: false,
+            nebula_special_tab_active: false,
+            nebula_language_preference: settings_init.language,
+            nebula_language: settings_init.language.resolved(),
+            nebula_config_paths: config.config_paths.clone(),
+            nebula_profiles: config.profiles.clone(),
+            nebula_settings_scroll: 0.0,
+            nebula_palette: {
+                let mut palette = command_palette::CommandPalette::new();
+                palette.set_language(settings_init.language.resolved());
+                palette
+            },
+            nebula_detected_shells: None,
+            nebula_side_panel: side_panel::SidePanel::new(),
+            nebula_sftp_panel: None,
+            ui_animations: WindowAnimations::new(),
+            nebula_settings_section: NebulaSettingsSection::default(),
+            nebula_chrome_hover: ChromeHit::None,
+            nebula_sidebar_scroll_drag: None,
+            nebula_message_queue_entry: message_queue_entry::MessageQueueEntry::default(),
+            nebula_settings_hover: SettingsHit::None,
+            nebula_settings_pressed: SettingsHit::None,
+            nebula_settings_opacity_drag: None,
+            nebula_bg_picker_hsv: (220.0, 0.0, 0.0),
+            nebula_bg_picker_drag: None,
+            nebula_context_menu: None,
+            nebula_settings_dropdown: None,
+            nebula_cursor_shape: settings_init.cursor_shape,
+            nebula_cursor_blink: settings_init.cursor_blink,
+            nebula_copy_on_select: settings_init.copy_on_select,
+            nebula_cjk_bold_regular: settings_init.cjk_bold_regular,
+            nebula_keymap: keymap::build_bindings(&settings_init.keybinds),
+            nebula_keybinds: settings_init.keybinds,
+            nebula_quick_terminal_hotkey: settings_init.quick_terminal_hotkey,
+            nebula_ssh_proxy_mode: settings_init.ssh_proxy_mode,
+            nebula_ssh_proxy_url: settings_init.ssh_proxy_url,
+            nebula_ssh_proxy_no_proxy: settings_init.ssh_proxy_no_proxy,
+            nebula_quick_hotkey_request: None,
+            nebula_quick_hotkey_error: None,
+            nebula_keymap_capture: None,
+            nebula_keymap_capture_preview: String::new(),
+            nebula_tabs_position: settings_init.tabs_position,
+            nebula_tab_reveal_motion: settings_init.tab_reveal,
+            nebula_density: settings_init.density,
+            nebula_new_tab_position: settings_init.new_tab_position,
+            nebula_cell_width_mode: settings_init.cell_width_mode,
+            nebula_font_family: settings_init.font_family,
+            nebula_font_families,
+            nebula_system_fonts: None,
+            nebula_font_show_all: false,
+            nebula_font_query: String::new(),
+            nebula_font_query_cursor: Default::default(),
+            nebula_font_popup_scroll: 0,
+            nebula_font_popup_drag: None,
+            nebula_settings_text_drag: None,
+            nebula_font_proportional: std::collections::HashSet::new(),
+            nebula_font_notice: font_notice,
+            nebula_tab_labels: vec![".".to_owned()],
+            nebula_tab_ai_fork: vec![false],
+            nebula_tab_colors: vec![None],
+            nebula_tab_bells: vec![false],
+            nebula_tab_running: vec![false],
+            nebula_tab_attention: vec![false],
+            nebula_tab_shells: vec![String::new()],
+            nebula_tab_failed: vec![false],
+            nebula_tab_flashing: vec![false],
+            nebula_tab_logos: vec![None],
+            nebula_ai_logo_cache: Default::default(),
+            nebula_shell_icon_cache: Default::default(),
+            nebula_chrome_logo_draws: Vec::new(),
+            nebula_active_tab: 0,
+            nebula_tab_drag: None,
+            nebula_tabs_reorderable: true,
+            nebula_sidebar_collapsed: false,
+            nebula_sidebar_w: settings_init.sidebar_w,
+            nebula_drawer_w: settings_init.drawer_w,
+            nebula_hosts_band: settings_init.hosts_band,
+            nebula_panel_resize: settings_init.panel_resize,
+            nebula_focused_cwd: None,
+            nebula_panel_drag: None,
+            nebula_ssh_hosts: merge_ssh_hosts(
+                &settings_init.saved_hosts,
+                &settings_init.pinned_hosts,
+                &settings_init.hidden_hosts,
+            ),
+            nebula_pinned_hosts: settings_init.pinned_hosts.clone(),
+            nebula_saved_hosts: settings_init.saved_hosts.clone(),
+            nebula_hidden_hosts: settings_init.hidden_hosts.clone(),
+            nebula_ssh_labels: crate::ssh_profiles::SshProfiles::load(
+                &nebula_data_dir().join("ssh_profiles.json"),
+            )
+            .map(|profiles| profiles.labels())
+            .unwrap_or_default(),
+            nebula_ssh_icons: crate::ssh_profiles::SshProfiles::load(
+                &nebula_data_dir().join("ssh_profiles.json"),
+            )
+            .map(|profiles| profiles.icons())
+            .unwrap_or_default(),
+            nebula_tabs_section_open: true,
+            nebula_hosts_section_open: true,
+            nebula_tabs_scroll: 0,
+            nebula_hosts_scroll: 0,
+            nebula_tab_rename: None,
+            nebula_tab_rename_select_all: false,
+            nebula_tab_rename_caret: 0,
+            nebula_tab_rename_text_x: 0.0,
+            nebula_pty_resize_pending: false,
+            nebula_ghost_enabled: settings_init.ghost,
+            nebula_accept: settings_init.accept,
+            nebula_completion_style: settings_init.completion_style,
+            nebula_shell: settings_init.shell,
+            nebula_shell_id: settings_init.shell_id.clone(),
+            nebula_startup_directory: settings_init.startup_directory,
+            nebula_fetch_enabled: settings_init.fetch,
+            nebula_powerline_enabled: settings_init.powerline,
+            nebula_blur: settings_init.blur,
+            nebula_keep_session: settings_init.keep_session,
+            nebula_restore_session: settings_init.restore_session,
+            nebula_resume_ai: settings_init.resume_ai,
+            nebula_tray: settings_init.tray,
+            nebula_window_opacity: settings_init.opacity,
+            nebula_background: if settings_init.follow_system_theme {
+                Some(nebula_theme.palette().term_bg)
+            } else {
+                settings_init.background
+            },
+            nebula_background_image: settings_init.background_image,
+            nebula_background_image_opacity: settings_init.background_image_opacity,
+            nebula_background_image_fit: settings_init.background_image_fit,
+            nebula_background_image_alignment: settings_init.background_image_alignment,
+            nebula_background_image_cover_chrome: settings_init.background_image_cover_chrome,
+            nebula_settings_mtime: settings::nebula_settings_mtime(),
+            nebula_bg_palette_index: 0,
+            nebula_bg_hex_input: String::new(),
+            nebula_bg_hex_active: false,
+            nebula_sync_inputs: Default::default(),
+            nebula_sync_focus: None,
+            nebula_sync_auto_pull: false,
+            nebula_sync_secret_set: [false; 2],
+            nebula_sync_status: None,
+            nebula_sync_busy: false,
+            nebula_providers: crate::ai_providers::load(),
+            nebula_provider_inputs: Default::default(),
+            nebula_provider_cursors: Default::default(),
+            nebula_provider_focus: None,
+            nebula_provider_status: None,
+            nebula_provider_test_request: None,
+            nebula_provider_test_seq: 0,
+            nebula_provider_codex_confirm: None,
+            nebula_backup_selection: crate::encrypted_backup::BackupSelection::default(),
+            nebula_backup_status: None,
+            nebula_backup_status_remote: false,
+            nebula_backup_protocol: Default::default(),
+            nebula_backup_remote_inputs: Default::default(),
+            nebula_backup_remote_focus: None,
+            nebula_backup_remote_secret_set: false,
+            nebula_backup_busy: false,
+            nebula_ssh_proxy_focus: None,
+            nebula_ssh_proxy_cursor: Default::default(),
+            nebula_ssh_proxy_backup: Default::default(),
+            nebula_ssh_proxy_draft: Default::default(),
+            nebula_ssh_proxy_choice: settings::ProxyChoice::Manual,
+            nebula_ssh_proxy_protocol: settings::ManualProxyProtocol::Socks5,
+            nebula_local_proxies: Vec::new(),
+            nebula_proxy_scanning: false,
+            nebula_proxy_scan_request: false,
+            nebula_system_proxy_probe: None,
+            nebula_proxy_test_status: settings::ProxyTestStatus::Idle,
+            nebula_proxy_test_request: None,
+            nebula_proxy_test_seq: 0,
+            nebula_keymap_query: String::new(),
+            nebula_keymap_query_cursor: Default::default(),
+            nebula_keymap_search_focus: false,
+            meter: Default::default(),
+            ime: Default::default(),
+        };
+        // A persisted zoom means the very first frame already runs off the UI
+        // base size — the font role must be pinned NOW, not after the first
+        // font change funnels through handle_update.
+        display.refresh_ui_font(config);
+        display.nebula_ssh_proxy_protocol =
+            settings::manual_proxy_parts(&display.nebula_ssh_proxy_url).0;
+        display.nebula_ssh_proxy_choice =
+            if crate::ssh_proxy::jump_target(&display.nebula_ssh_proxy_url).is_some() {
+                settings::ProxyChoice::Jump
+            } else if crate::ssh_proxy::command_target(&display.nebula_ssh_proxy_url).is_some() {
+                settings::ProxyChoice::Command
+            } else {
+                settings::ProxyChoice::Manual
+            };
+        display.refresh_system_proxy_probe();
+        Ok(display)
+    }
+
+    pub fn settings_open(&self) -> bool {
+        self.nebula_settings_open
+    }
+
+    pub fn ui_language(&self) -> UiLanguage {
+        self.nebula_language
+    }
+
+    pub fn settings_section(&self) -> NebulaSettingsSection {
+        self.nebula_settings_section
+    }
+
+    pub fn select_settings_section(&mut self, section: NebulaSettingsSection) {
+        self.close_shell_picker();
+        self.close_font_picker();
+        if self.nebula_settings_section != section {
+            self.nebula_settings_section = section;
+            // Each section starts reading from its top.
+            self.nebula_settings_scroll = 0.0;
+            self.pending_update.dirty = true;
+        }
+        if section == NebulaSettingsSection::Proxy {
+            // 进网络页刷新「跟随系统」探测——跨进程读注册表只发生在点击。
+            self.refresh_system_proxy_probe();
+            if self.nebula_local_proxies.is_empty() {
+                self.request_local_proxy_scan();
+            }
+        }
+        if section == NebulaSettingsSection::Providers {
+            if self.nebula_providers.active_id.is_empty() {
+                if let Some(provider) = self.nebula_providers.providers.first() {
+                    self.nebula_providers.active_id = provider.id.clone();
+                }
+            }
+            self.provider_sync_inputs();
+        }
+        self.update_settings_ime_cursor();
+    }
+
+    /// Scroll the settings content by `delta` px (positive = content moves
+    /// up). Clamped against the active section's overflow; no-op while the
+    /// panel is closed.
+    pub fn settings_scroll_by(&mut self, delta: f32) {
+        if !self.nebula_settings_open {
+            return;
+        }
+        let area = self.terminal_card_rect();
+        let max = settings::settings_max_scroll(
+            &self.size_info,
+            self.window.scale_factor as f32,
+            area,
+            self.nebula_settings_section,
+            self.nebula_hidden_hosts.len(),
+            self.nebula_ssh_hosts.len(),
+            self.nebula_density,
+            self.ssh_proxy_pane_state(),
+            self.keymap_pane_state(),
+            self.nebula_providers.providers.len(),
+        );
+        let next = (self.nebula_settings_scroll + delta).clamp(0.0, max);
+        if (next - self.nebula_settings_scroll).abs() > f32::EPSILON {
+            self.nebula_settings_scroll = next;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn settings_scroll(&self) -> f32 {
+        self.nebula_settings_scroll
+    }
+
+    pub fn doc_view_area(&self) -> (f32, f32, f32, f32) {
+        let (cx, cy, cw, ch) = self.terminal_card_rect();
+        let scale = self.window.scale_factor as f32;
+        (cx + 4.0 * scale, cy + 4.0 * scale, cw - 8.0 * scale, ch - 8.0 * scale)
+    }
+
+    /// Standalone images use the complete card as their viewport. Unlike
+    /// prose, media does not need a reading inset; leaving one produced a
+    /// conspicuous strip beside images that were otherwise fitted to width.
+    pub fn image_view_area(&self) -> (f32, f32, f32, f32) {
+        self.terminal_card_rect()
+    }
+
+    /// Rows in the default-shell dropdown. MUST agree with the list the
+    /// settings view renders (`SettingsView::shells` = detected shells +
+    /// imported quick-launch profiles): the hit test sizes the popup from this
+    /// count, and undercounting made every imported profile's row — drawn and
+    /// hovered — unclickable (导入终端后选不中最后一项).
+    pub fn shell_picker_count(&self) -> usize {
+        self.nebula_detected_shells.as_ref().map_or(0, Vec::len)
+            + self.nebula_profiles.iter().filter(|profile| profile.settings_id().is_some()).count()
+    }
+
+    /// 字体族行 + 两个固定尾行：「显示全部 / 仅等宽」过滤切换，以及「导入字体…」。
+    pub fn font_picker_count(&self) -> usize {
+        self.nebula_font_families.len() + 2
+    }
+
+    /// 「显示全部」当前是否开启（供设置页渲染该行的文案）。
+    pub fn font_show_all(&self) -> bool {
+        self.nebula_font_show_all
+    }
+
+    pub fn hidden_ssh_host_count(&self) -> usize {
+        self.nebula_hidden_hosts.len()
+    }
+
+    pub fn ssh_host_count(&self) -> usize {
+        self.nebula_ssh_hosts.len()
+    }
+
+    /// Re-read the user's SSH config without restarting Nebula. The merge
+    /// function is deliberately shared with startup and delete/restore flows,
+    /// so importing cannot create a second ordering or hidden-host policy.
+    pub fn import_ssh_config(&mut self) {
+        self.nebula_ssh_hosts = merge_ssh_hosts(
+            &self.nebula_saved_hosts,
+            &self.nebula_pinned_hosts,
+            &self.nebula_hidden_hosts,
+        );
+        let count = crate::ssh::ssh_config_hosts()
+            .into_iter()
+            .filter(|host| self.nebula_ssh_hosts.iter().any(|entry| entry == host))
+            .count();
+        self.push_toast(format!("已导入 {count} 个 SSH 主机，立即可用"), ToastKind::Success);
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// Ask before removing a saved destination. Config aliases use different
+    /// wording because Delete hides them inside Nebula and never edits
+    /// `~/.ssh/config` itself.
+    pub fn request_delete_ssh_host(&mut self, index: usize) {
+        let Some(host) = self.nebula_ssh_hosts.get(index).cloned() else { return };
+        let from_config = crate::ssh::ssh_config_hosts().contains(&host);
+        self.nebula_confirm = Some(NebulaConfirm::DeleteSsh { host, from_config });
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// Apply a confirmed deletion and arm a complete, credential-safe Undo.
+    /// Replacing an older Undo finalizes that older credential deletion first.
+    pub fn confirm_delete_ssh_host(&mut self, host: &str) -> bool {
+        if !self.nebula_ssh_hosts.iter().any(|entry| entry == host) {
+            return false;
+        }
+
+        let from_config = crate::ssh::ssh_config_hosts().iter().any(|entry| entry == host);
+
+        // Taking the previous record commits its pending Credential Manager
+        // deletion through Drop. Only the most recent destructive action is
+        // reversible, matching standard snackbar Undo behavior.
+        self.nebula_ssh_delete_undo.take();
+
+        let (saved_index, pinned_index, was_hidden) = remove_ssh_host_from_lists(
+            host,
+            from_config,
+            &mut self.nebula_saved_hosts,
+            &mut self.nebula_pinned_hosts,
+            &mut self.nebula_hidden_hosts,
+        );
+        self.nebula_ssh_hosts = merge_ssh_hosts(
+            &self.nebula_saved_hosts,
+            &self.nebula_pinned_hosts,
+            &self.nebula_hidden_hosts,
+        );
+        self.nebula_ssh_delete_undo = Some(SshDeleteUndo {
+            host: host.to_owned(),
+            saved_index,
+            pinned_index,
+            was_hidden,
+            from_config,
+            started_at: std::time::Instant::now(),
+            delete_credential_on_drop: true,
+        });
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    /// Reverse the complete host-list mutation. The credential was intentionally
+    /// kept alive during the grace period, so disarming Drop restores it without
+    /// ever copying secret bytes into the UI process.
+    pub fn undo_delete_ssh_host(&mut self) -> bool {
+        let Some(mut undo) = self.nebula_ssh_delete_undo.take() else { return false };
+        if undo.started_at.elapsed() >= SSH_DELETE_UNDO_DURATION {
+            // Drop commits the pending credential deletion.
+            return false;
+        }
+
+        undo.delete_credential_on_drop = false;
+        restore_ssh_host_to_lists(
+            &undo.host,
+            undo.saved_index,
+            undo.pinned_index,
+            undo.was_hidden,
+            &mut self.nebula_saved_hosts,
+            &mut self.nebula_pinned_hosts,
+            &mut self.nebula_hidden_hosts,
+        );
+        self.nebula_ssh_hosts = merge_ssh_hosts(
+            &self.nebula_saved_hosts,
+            &self.nebula_pinned_hosts,
+            &self.nebula_hidden_hosts,
+        );
+        self.nebula_ssh_delete_undo_rect = None;
+        self.nebula_ssh_delete_undo_hover = false;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    /// Commit the pending Credential Manager deletion when the Undo timer ends.
+    pub fn expire_ssh_delete_undo(&mut self) {
+        self.nebula_ssh_delete_undo.take();
+        self.nebula_ssh_delete_undo_rect = None;
+        self.nebula_ssh_delete_undo_hover = false;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn ssh_delete_undo_available(&self) -> bool {
+        self.nebula_ssh_delete_undo
+            .as_ref()
+            .is_some_and(|undo| undo.started_at.elapsed() < SSH_DELETE_UNDO_DURATION)
+    }
+
+    pub fn ssh_delete_undo_hit(&self, x: f32, y: f32) -> bool {
+        self.ssh_delete_undo_available()
+            && self.nebula_ssh_delete_undo_rect.is_some_and(|rect| {
+                x >= rect.0 && x < rect.0 + rect.2 && y >= rect.1 && y < rect.1 + rect.3
+            })
+    }
+
+    pub fn set_ssh_delete_undo_hover(&mut self, hovered: bool) {
+        if self.nebula_ssh_delete_undo_hover != hovered {
+            self.nebula_ssh_delete_undo_hover = hovered;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn set_message_close_hover(&mut self, hovered: bool) {
+        if self.nebula_message_close_hover != hovered {
+            self.nebula_message_close_hover = hovered;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    /// 消息栏的关闭按钮。画在 chrome pass 里而不是随消息文本走：横幅是终端
+    /// 文字管线画的，那条路只能放字符，而拼进文本的 `[X]` 会被 CJK 消息挤出
+    /// 屏幕——按钮点得到却看不见，用户因此报告「无法关闭」。
+    ///
+    /// 配色走终端色系（横幅是 yellow/red 底 + 背景色的字），所以墨色由终端
+    /// pass 一并发布，不取 Skin。
+    fn draw_message_close(&mut self) {
+        // Message bars belong to terminal panes. Special tabs (settings,
+        // documents, and images) do not draw the bar, so a close button
+        // published by the previously visible terminal must not leak into
+        // their chrome pass.
+        if self.nebula_special_tab_active {
+            return;
+        }
+        let Some((rect, ink)) = self.nebula_message_close else { return };
+        let size = self.size_info;
+        let scale = self.window.scale_factor as f32;
+        let ink = Rgba::new(ink.r, ink.g, ink.b, 255);
+        // 常态就有一层淡底，按钮才读得出"可点"；hover 加深作为反馈。
+        let fill =
+            Rgba::new(ink.r, ink.g, ink.b, if self.nebula_message_close_hover { 64 } else { 28 });
+
+        let mut quads = Vec::new();
+        ui::widgets::push_close_button(&mut quads, rect, scale, ink, fill);
+        self.renderer.draw_ui(&size, &quads);
+    }
+
+    pub fn set_chrome_tabs(
+        &mut self,
+        labels: Vec<String>,
+        mut colors: Vec<Option<Rgb>>,
+        mut dots: Vec<bool>,
+        mut running: Vec<bool>,
+        mut attention: Vec<bool>,
+        mut failed: Vec<bool>,
+        mut flashing: Vec<bool>,
+        mut logos: Vec<Option<AiLogo>>,
+        mut shells: Vec<String>,
+        mut ai_fork: Vec<bool>,
+        active: usize,
+        reorderable: bool,
+    ) {
+        self.nebula_tab_labels = if labels.is_empty() { vec![".".to_owned()] } else { labels };
+        colors.truncate(self.nebula_tab_labels.len());
+        colors.resize(self.nebula_tab_labels.len(), None);
+        self.nebula_tab_colors = colors;
+        dots.truncate(self.nebula_tab_labels.len());
+        dots.resize(self.nebula_tab_labels.len(), false);
+        self.nebula_tab_bells = dots;
+        running.truncate(self.nebula_tab_labels.len());
+        running.resize(self.nebula_tab_labels.len(), false);
+        self.nebula_tab_running = running;
+        attention.truncate(self.nebula_tab_labels.len());
+        attention.resize(self.nebula_tab_labels.len(), false);
+        self.nebula_tab_attention = attention;
+        failed.truncate(self.nebula_tab_labels.len());
+        failed.resize(self.nebula_tab_labels.len(), false);
+        self.nebula_tab_failed = failed;
+        flashing.truncate(self.nebula_tab_labels.len());
+        flashing.resize(self.nebula_tab_labels.len(), false);
+        self.nebula_tab_flashing = flashing;
+        logos.truncate(self.nebula_tab_labels.len());
+        logos.resize(self.nebula_tab_labels.len(), None);
+        self.nebula_tab_logos = logos;
+        shells.truncate(self.nebula_tab_labels.len());
+        shells.resize(self.nebula_tab_labels.len(), String::new());
+        self.nebula_tab_shells = shells;
+        ai_fork.truncate(self.nebula_tab_labels.len());
+        ai_fork.resize(self.nebula_tab_labels.len(), false);
+        self.nebula_tab_ai_fork = ai_fork;
+        self.nebula_active_tab = active.min(self.nebula_tab_labels.len().saturating_sub(1));
+        self.nebula_tabs_reorderable = reorderable;
+        // A tab count change (close/open) mid-drag invalidates the grabbed slot.
+        if self.nebula_tab_drag.map_or(false, |d| d.source >= self.nebula_tab_labels.len()) {
+            self.nebula_tab_drag = None;
+        }
+    }
+
+    /// 有标签正在放对勾闪现。闪现靠挂钟判定，没有帧驱动它就会停在对勾上
+    /// 直到下一次因为别的原因重绘——所以这段时间要让 chrome 时钟继续走。
+    pub fn any_tab_flashing(&self) -> bool {
+        self.nebula_tab_flashing.iter().any(|f| *f)
+    }
+
+    /// Whether any sidebar tab currently shows a running spinner. Only this
+    /// state raises the chrome clock to display-rate frames.
+    pub fn any_tab_running(&self) -> bool {
+        self.nebula_tab_running.iter().any(|running| *running)
+    }
+
+    /// A chrome text editor (tab rename / drawer filter / commit message / SSH
+    /// host editor / command palette) has keyboard focus — the window context
+    /// bumps the redraw tick to the fast cadence so the insertion caret
+    /// visibly blinks.
+    ///
+    /// 命令面板曾经漏在这个列表外：它的入场动画一结束，画面就静止了，
+    /// 光标停在当时那一相里不再翻转。它自带的 `Pulse` 每帧照常累加，
+    /// 但没有帧可累加——**动画状态推进和帧供给是两件事**，只做前者会得到
+    /// 一个看起来"卡住"的光标。
+    pub fn chrome_editor_active(&self) -> bool {
+        self.nebula_tab_rename.is_some()
+            || self.nebula_palette.is_open()
+            || self.nebula_side_panel.search_focus
+            || self.nebula_side_panel.commit_focus
+            || self.nebula_sftp_panel.as_ref().is_some_and(sftp_panel::SftpPanel::editor_active)
+            || self.ssh_editor_active()
+    }
+
+    /// Decoded (and theme-tinted) pixels for an AI brand logo, plus a stable
+    /// texture id for the renderer's inline cache. Decode + tint run once per
+    /// (logo, ink); the GPU upload happens lazily inside the renderer.
+    fn ai_logo_pixels(
+        &mut self,
+        logo: AiLogo,
+        ink: Rgb,
+        target_size: u32,
+    ) -> Option<(u64, std::sync::Arc<Vec<u8>>, (u32, u32))> {
+        // Color assets keep their source colors. Grok ships official dark
+        // and light marks, selected to match the chrome ink without tinting.
+        let grok_uses_light_mark =
+            u32::from(ink.r) * 299 + u32::from(ink.g) * 587 + u32::from(ink.b) * 114 >= 128_000;
+        let key = match logo {
+            AiLogo::Grok if grok_uses_light_mark => (logo, [255, 255, 255], target_size),
+            AiLogo::OpenAi | AiLogo::OpenCode | AiLogo::Pi | AiLogo::Kimi | AiLogo::Grok => {
+                (logo, [ink.r, ink.g, ink.b], target_size)
+            },
+            _ => (logo, [0, 0, 0], target_size),
+        };
+        if let Some(cached) = self.nebula_ai_logo_cache.get(&key) {
+            return Some(cached.clone());
+        }
+        let (rgba, width, height) = logo.render([ink.r, ink.g, ink.b], target_size)?;
+        let id = AI_LOGO_ID_BASE + self.nebula_ai_logo_cache.len() as u64;
+        let entry = (id, std::sync::Arc::new(rgba), (width, height));
+        self.nebula_ai_logo_cache.insert(key, entry.clone());
+        Some(entry)
+    }
+
+    /// Decoded pixels for a full-color shell icon (128×128 PNG embedded from
+    /// extra/shell-icons), plus a stable texture id for the renderer's inline
+    /// cache. Decode runs once per shell id; the GPU upload happens lazily
+    /// inside the renderer. Returns `None` when the id has no brand asset.
+    fn shell_icon_pixels(
+        &mut self,
+        shell_id: &str,
+    ) -> Option<(u64, std::sync::Arc<Vec<u8>>, (u32, u32))> {
+        if let Some(cached) = self.nebula_shell_icon_cache.get(shell_id) {
+            return Some(cached.clone());
+        }
+        let bytes = crate::shell_detect::color_icon_png(shell_id)?;
+        let (width, height, rgba) = match crate::renderer::image::decode_png_bytes(bytes) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                log::warn!("failed to decode shell icon for {shell_id}: {err}");
+                return None;
+            },
+        };
+        // Shell icons ship in brand colors and are used as-is (no tint).
+        let id = AI_LOGO_ID_BASE + 1000 + self.nebula_shell_icon_cache.len() as u64;
+        let entry = (id, std::sync::Arc::new(rgba), (width, height));
+        self.nebula_shell_icon_cache.insert(shell_id.to_owned(), entry.clone());
+        Some(entry)
+    }
+
+    /// Arm a potential tab drag from a press on displayed tab `source`. Always
+    /// arms (even single-tab), because the release decides between click /
+    /// reorder / dock — selection itself is deferred to the release.
+    pub fn arm_tab_drag(&mut self, source: usize, x: f32, y: f32) {
+        self.nebula_tab_drag =
+            Some(TabDrag { source, origin_x: x, origin: y, current: y, active: false, dock: None });
+    }
+
+    /// Whether a tab drag is currently armed (pressed, possibly not yet moved).
+    pub fn tab_drag_armed(&self) -> bool {
+        self.nebula_tab_drag.is_some()
+    }
+
+    /// Feed the pointer into an armed drag. Y drives the in-sidebar reorder;
+    /// crossing into the terminal area computes the dock side. Returns `true`
+    /// once the drag is active (past threshold on either axis), signalling the
+    /// caller to show the grab cursor and repaint.
+    pub fn update_tab_drag(&mut self, x: f32, y: f32) -> bool {
+        let threshold = 6.0 * self.window.scale_factor as f32;
+        // Compute before the mutable borrow below.
+        let dock = self.dock_nav_at(x, y);
+        match self.nebula_tab_drag.as_mut() {
+            Some(drag) => {
+                drag.current = y;
+                if !drag.active
+                    && ((y - drag.origin).abs() > threshold
+                        || (x - drag.origin_x).abs() > threshold)
+                {
+                    drag.active = true;
+                }
+                if drag.active {
+                    drag.dock = dock;
+                }
+                drag.active
+            },
+            None => false,
+        }
+    }
+
+    /// Dock side for a pointer inside the terminal area, `None` outside it.
+    /// The area is quartered along its diagonals: the nearest edge wins, which
+    /// gives the natural triangular dock zones.
+    fn dock_nav_at(&self, x: f32, y: f32) -> Option<SplitNav> {
+        let gx = self.size_info.padding_x();
+        let gy = self.size_info.padding_y();
+        let gw = self.size_info.width() - gx - self.size_info.padding_right();
+        let gh = self.size_info.height() - gy - self.size_info.padding_bottom();
+        if gw <= 0.0 || gh <= 0.0 || x < gx || y < gy || x > gx + gw || y > gy + gh {
+            return None;
+        }
+        let nx = (x - gx) / gw;
+        let ny = (y - gy) / gh;
+        let (dl, dr, dt, db) = (nx, 1.0 - nx, ny, 1.0 - ny);
+        let min = dl.min(dr).min(dt).min(db);
+        Some(if min == dl {
+            SplitNav::Left
+        } else if min == dr {
+            SplitNav::Right
+        } else if min == dt {
+            SplitNav::Up
+        } else {
+            SplitNav::Down
+        })
+    }
+
+    /// Finish a tab drag, deciding what the release means.
+    pub fn end_tab_drag(&mut self) -> Option<TabDropAction> {
+        let drag = self.nebula_tab_drag.take()?;
+        if !drag.active {
+            // Never moved: a plain click — select on release.
+            return Some(TabDropAction::Click(drag.source));
+        }
+        if let Some(nav) = drag.dock {
+            return Some(TabDropAction::Dock { source: drag.source, nav });
+        }
+        if !self.nebula_tabs_reorderable || self.nebula_tab_labels.len() < 2 {
+            return Some(TabDropAction::Click(drag.source));
+        }
+        let target = self.tab_drop_index(drag.source, drag.current);
+        if target != drag.source
+            && drag.source < self.nebula_tab_anim.len()
+            && target < self.nebula_tab_anim.len()
+        {
+            // Reorder the animated draw-y values alongside the tabs so each
+            // pill keeps its on-screen position and *eases* into its new slot
+            // instead of snapping when the drop commits.
+            let v = self.nebula_tab_anim.remove(drag.source);
+            self.nebula_tab_anim.insert(target, v);
+        }
+        if target != drag.source {
+            Some(TabDropAction::Reorder { from: drag.source, to: target })
+        } else {
+            Some(TabDropAction::Click(drag.source))
+        }
+    }
+
+    /// Displayed slot the grabbed tab would drop into for pointer X: the number
+    /// of *other* tabs whose centre the pointer has passed. This yields the
+    /// correct remove-then-insert target index for a single-tab move.
+    fn tab_drop_index(&self, source: usize, y: f32) -> usize {
+        let scale = self.window.scale_factor as f32;
+        let sidebar_expand = self.left_sidebar_progress();
+        let layout =
+            chrome_tab_layout(&self.ui_size_info(), scale, self.sidebar_model(), sidebar_expand);
+        // `chrome_tab_layout` keeps the storage index stable by representing
+        // scrolled-out rows as zero rectangles. Those placeholders are not
+        // coordinates: counting them here used to move every drop target by
+        // the number of hidden tabs and could even create a reversed clamp
+        // interval in `tab_drag_draw_y`. Build the target in the visible row
+        // coordinate space, then add the scroll window's real start index.
+        let visible: Vec<_> = layout
+            .tabs
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, (_, _, width, height))| *width > 0.0 && *height > 0.0)
+            .collect();
+        tab_drop_index_from_visible_rows(source, y, &visible, self.nebula_tab_labels.len())
+    }
+
+    /// Draw-X for a tab's pill/label during a reorder drag. The grabbed pill
+    /// follows the pointer (clamped to the strip); every other tab between the
+    /// grabbed slot and the current drop target slides one slot toward the
+    /// vacated source, opening a gap for the drop ("让位"). No shift when idle.
+    fn tab_drag_draw_y(&self, index: usize, tab_y: f32, layout: &ChromeTabLayout) -> f32 {
+        let Some(d) = self.nebula_tab_drag.filter(|d| d.active) else { return tab_y };
+
+        // Only visible rows have meaningful screen coordinates. Hidden rows
+        // are zero placeholders used by hit-testing/index bookkeeping.
+        let visible: Vec<_> = layout
+            .tabs
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, (_, _, width, height))| *width > 0.0 && *height > 0.0)
+            .collect();
+        let Some((_, first)) = visible.first() else { return tab_y };
+
+        // The grabbed pill tracks the pointer, clamped to the tab column.
+        if d.source == index {
+            let lo = first.1;
+            let hi = visible.last().map_or(lo, |(_, rect)| rect.1);
+            return (tab_y + d.current - d.origin).clamp(lo, hi);
+        }
+
+        // Other tabs make way. Slot pitch = distance between adjacent rows
+        // (uniform height + gap); needs at least two tabs, which a drag implies.
+        let Some((_, second)) = visible.get(1) else { return tab_y };
+        let slot = second.1 - first.1;
+        let target = self.tab_drop_index(d.source, d.current);
+        if d.source < target && index > d.source && index <= target {
+            tab_y - slot // dragging down: rows in (source, target] slide up
+        } else if d.source > target && index >= target && index < d.source {
+            tab_y + slot // dragging up: rows in [target, source) slide down
+        } else {
+            tab_y
+        }
+    }
+
+    pub fn set_chrome_hover(&mut self, chrome: ChromeHit, settings: SettingsHit) {
+        if self.nebula_chrome_hover != chrome || self.nebula_settings_hover != settings {
+            self.nebula_chrome_hover = chrome;
+            self.nebula_settings_hover = settings;
+            self.pending_update.dirty = true;
+        }
+    }
+
+    /// Remember the settings control under the primary button while the
+    /// pointer is held. The renderer uses this only for the toggle's active
+    /// stretch; hit testing remains owned by [`settings_hit`].
+    pub fn set_settings_pressed(&mut self, hit: SettingsHit) {
+        if self.nebula_settings_pressed != hit {
+            self.nebula_settings_pressed = hit;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn context_menu_interactive(&self) -> bool {
+        self.nebula_context_menu.as_ref().is_some_and(context_menu::ContextMenu::interactive)
+    }
+
+    /// 右键菜单是否已在同一目标上开着（开着就别重开——反复右键不该让菜单
+    /// 因指针位置或底边 clamp 而漂移）。
+    fn context_menu_open_for(&self, target: ContextMenuTarget) -> bool {
+        self.nebula_context_menu
+            .as_ref()
+            .is_some_and(|menu| menu.interactive() && menu.target() == target)
+    }
+
+    /// 侧栏行右键菜单的锚点：贴行矩形右缘、与行顶对齐——菜单与被点的行
+    /// 强相关，而不是跟着指针走。行不存在时回落指针位置。
+    fn sidebar_row_anchor(&self, tab: bool, index: usize, fallback: (f32, f32)) -> (f32, f32) {
+        let size = self.ui_size_info();
+        let scale = self.window.scale_factor as f32;
+        let expand = if self.nebula_sidebar_collapsed { 0.0 } else { 1.0 };
+        let layout = chrome::chrome_tab_layout(&size, scale, self.sidebar_model(), expand);
+        let rows = if tab { &layout.tabs } else { &layout.hosts };
+        rows.get(index).map_or(fallback, |(rx, ry, rw, _)| (rx + rw + 4.0 * scale, *ry))
+    }
+
+    pub fn open_tab_context_menu(&mut self, index: usize, x: f32, y: f32) {
+        if index >= self.nebula_tab_labels.len()
+            || self.context_menu_open_for(ContextMenuTarget::Tab(index))
+        {
+            return;
+        }
+        let anchor = self.sidebar_row_anchor(true, index, (x, y));
+        let color = self.nebula_tab_colors.get(index).copied().flatten();
+        let ai_fork = self.nebula_tab_ai_fork.get(index).copied().unwrap_or(false);
+        self.nebula_context_menu = Some(
+            context_menu::ContextMenu::new(ContextMenuTarget::Tab(index), anchor, color)
+                .with_ai_fork(ai_fork),
+        );
+        self.nebula_tab_drag = None;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn open_ssh_context_menu(&mut self, index: usize, x: f32, y: f32) {
+        if index >= self.nebula_ssh_hosts.len()
+            || self.context_menu_open_for(ContextMenuTarget::Ssh(index))
+        {
+            return;
+        }
+        let anchor = self.sidebar_row_anchor(false, index, (x, y));
+        self.nebula_context_menu =
+            Some(context_menu::ContextMenu::new(ContextMenuTarget::Ssh(index), anchor, None));
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn open_sftp_context_menu(&mut self, index: usize, x: f32, y: f32) {
+        let Some(panel) = self.nebula_sftp_panel.as_ref() else { return };
+        if panel.visible_entry(index).is_none() {
+            return;
+        }
+        self.nebula_context_menu =
+            Some(context_menu::ContextMenu::new(ContextMenuTarget::Sftp(index), (x, y), None));
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 本地文件树行的右键菜单。`..` 导航行不给菜单；打开时把该行设为
+    /// 持久选中，菜单与行的关联在视觉上立得住。
+    pub fn open_file_tree_context_menu(&mut self, row: usize, x: f32, y: f32) {
+        let Some((path, is_dir, is_parent)) = self
+            .nebula_side_panel
+            .visible_row(row)
+            .map(|r| (r.path.clone(), r.is_dir, r.is_parent))
+        else {
+            return;
+        };
+        if is_parent {
+            return;
+        }
+        let target = ContextMenuTarget::FileTree { row, is_dir };
+        if self.context_menu_open_for(target) {
+            return;
+        }
+        self.nebula_side_panel.selected = Some(path);
+        self.nebula_context_menu = Some(context_menu::ContextMenu::new(target, (x, y), None));
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 菜单动作执行时按行索引回查路径（树可能在菜单打开期间被节流刷新，
+    /// 拿不到就当无操作，绝不落在别的行上）。
+    pub fn file_tree_row_path(&self, row: usize) -> Option<(std::path::PathBuf, bool)> {
+        self.nebula_side_panel
+            .visible_row(row)
+            .filter(|r| !r.is_parent)
+            .map(|r| (r.path.clone(), r.is_dir))
+    }
+
+    pub fn request_delete_file_tree(&mut self, row: usize) {
+        let Some((path, is_dir)) = self.file_tree_row_path(row) else { return };
+        self.nebula_confirm = Some(NebulaConfirm::DeleteFileTreePath { path, is_dir });
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 确认后的本地删除：送回收站（`FOF_ALLOWUNDO`），不是永久删除——
+    /// 树紧挨终端、误触成本高，回收站是最后一道保险。
+    pub fn confirm_delete_file_tree(&mut self, path: &std::path::Path) {
+        self.nebula_confirm = None;
+        match send_to_recycle_bin(path) {
+            Ok(()) => self.nebula_side_panel.request_refresh(),
+            Err(err) => self.nebula_side_panel.set_notice(format!("删除失败：{err}")),
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn open_sftp_panel_context_menu(&mut self, x: f32, y: f32) {
+        if self.nebula_sftp_panel.is_none() {
+            return;
+        }
+        self.nebula_context_menu =
+            Some(context_menu::ContextMenu::new(ContextMenuTarget::SftpPanel, (x, y), None));
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn context_menu_hit(&self, x: f32, y: f32) -> ContextMenuHit {
+        self.nebula_context_menu.as_ref().map_or(ContextMenuHit::Outside, |menu| {
+            context_menu::hit_test(menu, self.ui_size_info(), self.window.scale_factor as f32, x, y)
+        })
+    }
+
+    pub fn context_menu_hover(&mut self, x: f32, y: f32) -> ContextMenuHit {
+        let hit = self.context_menu_hit(x, y);
+        let action = match hit {
+            ContextMenuHit::Action(action) => Some(action),
+            ContextMenuHit::Outside | ContextMenuHit::Panel => None,
+        };
+        if self.nebula_context_menu.as_mut().is_some_and(|menu| menu.set_hover(action)) {
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+        hit
+    }
+
+    /// Resolve one menu click and start the close animation. A click inside
+    /// the panel but between targets is swallowed without dismissing it.
+    pub fn context_menu_click(&mut self, x: f32, y: f32) -> ContextMenuHit {
+        let hit = self.context_menu_hit(x, y);
+        if matches!(hit, ContextMenuHit::Action(_) | ContextMenuHit::Outside) {
+            self.close_context_menu();
+        }
+        hit
+    }
+
+    pub fn close_context_menu(&mut self) {
+        if let Some(menu) = self.nebula_context_menu.as_mut() {
+            menu.begin_close();
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn chrome_hit(&self, x: f32, y: f32) -> ChromeHit {
+        // Hit-testing must read the SAME layout the chrome was drawn with —
+        // the UI-anchored SizeInfo — or clicks drift off their targets as
+        // soon as the terminal is zoomed away from the base font size.
+        chrome_hit_with_tabs(
+            &self.ui_size_info(),
+            self.window.scale_factor as f32,
+            self.sidebar_model(),
+            self.nebula_sidebar_collapsed,
+            x,
+            y,
+        )
+    }
+
+    /// Fold the tab sidebar in or out. Toggling changes the grid's usable width,
+    /// so it re-runs the resize/reflow path by re-feeding the current window
+    /// size — `handle_update` then recomputes the asymmetric padding split.
+    pub fn toggle_sidebar(&mut self) {
+        self.nebula_sidebar_collapsed = !self.nebula_sidebar_collapsed;
+        let size = PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+        self.pending_update.set_dimensions(size);
+        self.window.request_redraw();
+        self.pending_update.dirty = true;
+    }
+
+    /// 侧栏的**视觉**逻辑宽：拖动中读 target（每帧跟手），否则读已应用值。
+    /// chrome 布局与卡片几何用它；reflow（`handle_update` 的 padding）只认
+    /// `nebula_sidebar_w`——两者的差就是节流窗口内允许的短暂错位。
+    fn sidebar_w_visual(&self) -> f32 {
+        match self.nebula_panel_drag {
+            Some(d) if d.kind == PanelDragKind::SidebarWidth => d.target,
+            _ => self.nebula_sidebar_w,
+        }
+    }
+
+    /// 右抽屉的视觉逻辑宽（同 [`Self::sidebar_w_visual`] 的拖动语义）。
+    fn drawer_w_visual(&self) -> f32 {
+        match self.nebula_panel_drag {
+            Some(d) if d.kind == PanelDragKind::DrawerWidth => d.target,
+            _ => self.nebula_drawer_w,
+        }
+    }
+
+    /// 指针是否落在三条可拖分界线之一。热区 ±4 逻辑 px；动画进行中不给热区
+    /// ——滑动中的边缘抓不准。
+    ///
+    /// 两条**宽度**分界（侧栏右缘、抽屉左缘）要拖动会重排终端，归「拖拽调节」
+    /// 开关管；SSH HOSTS 分界只在侧栏内部分配高度，不碰网格，所以默认就能拖，
+    /// 不受开关约束（用户 08-02 裁定）。
+    pub fn panel_resize_hit(&self, x: f32, y: f32) -> Option<PanelDragKind> {
+        let scale = self.window.scale_factor as f32;
+        let grip = 4.0 * scale;
+        if self.nebula_panel_resize
+            && self.side_panel_visible()
+            && self.ui_animations.drawer_progress() > 0.996
+        {
+            let (px, py, _, ph) = self.side_panel_layout().panel;
+            if y >= py && y <= py + ph && (x - px).abs() <= grip {
+                return Some(PanelDragKind::DrawerWidth);
+            }
+        }
+        if self.left_sidebar_visible() && self.left_sidebar_progress() > 0.996 {
+            let layout =
+                chrome::chrome_tab_layout(&self.ui_size_info(), scale, self.sidebar_model(), 1.0);
+            let (px, py, pw, ph) = layout.panel;
+            if pw > 0.0 {
+                if self.nebula_panel_resize
+                    && y >= py
+                    && y <= py + ph
+                    && (x - (px + pw)).abs() <= grip
+                {
+                    return Some(PanelDragKind::SidebarWidth);
+                }
+                // HOSTS 分界 = 停靠区标题条的顶缘。
+                let (hx, hy, hw, _) = layout.hosts_header;
+                if self.nebula_hosts_section_open
+                    && hw > 0.0
+                    && x >= hx
+                    && x <= hx + hw
+                    && (y - hy).abs() <= grip
+                {
+                    return Some(PanelDragKind::HostsBand);
+                }
+            }
+        }
+        None
+    }
+
+    /// input 层在分界线上按下时开启一场拖拽。
+    pub fn begin_panel_drag(&mut self, kind: PanelDragKind) {
+        let target = match kind {
+            PanelDragKind::SidebarWidth => self.nebula_sidebar_w,
+            PanelDragKind::DrawerWidth => self.nebula_drawer_w,
+            PanelDragKind::HostsBand => self.nebula_hosts_band.max(HOSTS_BAND_MIN),
+        };
+        let anchor = if kind == PanelDragKind::HostsBand {
+            let scale = self.window.scale_factor as f32;
+            chrome::chrome_tab_layout(&self.ui_size_info(), scale, self.sidebar_model(), 1.0)
+                .dock_content_bottom
+        } else {
+            0.0
+        };
+        self.nebula_panel_drag =
+            Some(PanelDrag { kind, target, last_apply: std::time::Instant::now(), anchor });
+    }
+
+    /// 拖动中的指针移动：换算目标值。HOSTS 分界纯 chrome 内部、即时生效；
+    /// 两个宽度分界的**视觉**几何每帧跟手，真正的 reflow 要同时满足两道闸
+    /// ——[`PANEL_DRAG_REFLOW_MS`] 的时间节流，以及位移至少跨过一个单元格
+    /// 宽度。后者才是重点：网格列数只在跨过整数列时才会变，同一列内反复
+    /// reflow 是纯浪费。返回 true = 需要重绘。
+    pub fn update_panel_drag(&mut self, x: f32, y: f32) -> bool {
+        let scale = self.window.scale_factor as f32;
+        let Some(drag) = self.nebula_panel_drag else { return false };
+        let target = match drag.kind {
+            // chrome_tab_layout：panel_x = margin(8)、panel_w = sw - 8 - 12，
+            // 右缘 = sw - 12 ⇒ sw = x + 12（都在逻辑座标系里算）。
+            PanelDragKind::SidebarWidth => {
+                let raw = x / scale + 12.0;
+                if raw < SIDEBAR_COLLAPSE_AT {
+                    // 推到左边缘 = 收起。这场拖拽就此结束（侧栏没了，分界线
+                    // 也就没了），宽度字段保持不动。
+                    self.nebula_panel_drag = None;
+                    if !self.nebula_sidebar_collapsed {
+                        self.toggle_sidebar();
+                    }
+                    self.persist_nebula_settings();
+                    return true;
+                }
+                raw.clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX)
+            },
+            PanelDragKind::DrawerWidth => {
+                let w = (self.size_info.width() - 8.0 * scale - x) / scale;
+                if w < DRAWER_COLLAPSE_AT {
+                    // 推到右边缘 = 关掉抽屉，与侧栏拖到最左同一手势。宽度
+                    // 字段不动，下次打开还是原来那么宽。不走 close_sftp_panel：
+                    // 那条路会取消正在进行的传输，而这里只是把面板收起来。
+                    self.nebula_panel_drag = None;
+                    if self.nebula_side_panel.open {
+                        self.nebula_side_panel.open = false;
+                        let size = PhysicalSize::new(
+                            self.size_info.width() as u32,
+                            self.size_info.height() as u32,
+                        );
+                        self.pending_update.set_dimensions(size);
+                    }
+                    self.persist_nebula_settings();
+                    self.pending_update.dirty = true;
+                    self.window.request_redraw();
+                    return true;
+                }
+                let cap = DRAWER_W_MAX.min(self.size_info.width() * 0.42 / scale);
+                w.clamp(DRAWER_W_MIN.min(cap), cap)
+            },
+            PanelDragKind::HostsBand => ((drag.anchor - y) / scale).max(HOSTS_BAND_MIN),
+        };
+        // 已应用值：宽度类要用它判断这次位移够不够跨一个单元格。
+        let applied = match drag.kind {
+            PanelDragKind::SidebarWidth => self.nebula_sidebar_w,
+            PanelDragKind::DrawerWidth => self.nebula_drawer_w,
+            PanelDragKind::HostsBand => 0.0,
+        };
+        let cell_w = self.size_info.cell_width().max(1.0);
+        let Some(drag) = self.nebula_panel_drag.as_mut() else { return false };
+        if (target - drag.target).abs() < 0.5 {
+            return false;
+        }
+        drag.target = target;
+        let due = drag.last_apply.elapsed()
+            >= std::time::Duration::from_millis(PANEL_DRAG_REFLOW_MS)
+            && (target - applied).abs() * scale >= cell_w;
+        match drag.kind {
+            PanelDragKind::HostsBand => self.nebula_hosts_band = target,
+            PanelDragKind::SidebarWidth | PanelDragKind::DrawerWidth if due => {
+                drag.last_apply = std::time::Instant::now();
+                self.apply_panel_drag_target();
+            },
+            _ => {},
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    /// 把 target 同步进已应用字段，宽度类走 toggle_sidebar 同款 reflow 触发。
+    fn apply_panel_drag_target(&mut self) {
+        let Some(drag) = self.nebula_panel_drag else { return };
+        match drag.kind {
+            PanelDragKind::SidebarWidth => self.nebula_sidebar_w = drag.target,
+            PanelDragKind::DrawerWidth => self.nebula_drawer_w = drag.target,
+            PanelDragKind::HostsBand => {
+                self.nebula_hosts_band = drag.target;
+                return;
+            },
+        }
+        let size = PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+        self.pending_update.set_dimensions(size);
+    }
+
+    /// 松开：最终应用 + 持久化。返回 true = 确有一场拖拽在收尾。
+    pub fn end_panel_drag(&mut self) -> bool {
+        if self.nebula_panel_drag.is_none() {
+            return false;
+        }
+        self.apply_panel_drag_target();
+        self.nebula_panel_drag = None;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    /// Snapshot of the state the settings render reads, owning the wallpaper
+    /// path so `draw_chrome` can still borrow `&mut renderer` afterwards.
+    fn settings_view(&self) -> settings::SettingsView {
+        settings::SettingsView {
+            area: self.terminal_card_rect(),
+            language_preference: self.nebula_language_preference,
+            language: self.nebula_language,
+            section: self.nebula_settings_section,
+            hover: self.nebula_settings_hover,
+            pressed: self.nebula_settings_pressed,
+            toggle_motion: self.ui_animations.toggle_motion(),
+            theme: self.nebula_theme,
+            follow_system_theme: self.nebula_follow_system_theme,
+            ghost: self.nebula_ghost_enabled,
+            accept: self.nebula_accept,
+            completion_style: self.nebula_completion_style,
+            shell_label: {
+                // Rich picked id (cmd/pwsh/nu/wsl:X) wins; else the 2-value
+                // enum label. Icon comes from the same table the dropdown
+                // rows use, so the setting always mirrors the menu.
+                let id = self.nebula_shell_id.as_deref();
+                let name = id
+                    .and_then(|id| {
+                        self.nebula_profiles
+                            .iter()
+                            .find(|profile| profile.settings_id().as_deref() == Some(id))
+                            .map(|profile| profile.name.clone())
+                    })
+                    .or_else(|| id.map(crate::shell_detect::display_name_for_id))
+                    .unwrap_or_else(|| self.nebula_shell.label().to_owned());
+                let icon = crate::shell_detect::icon_for_id(
+                    id.and_then(|value| {
+                        self.nebula_profiles
+                            .iter()
+                            .find(|profile| profile.settings_id().as_deref() == Some(value))
+                            .and_then(|profile| profile.shell_id.as_deref())
+                    })
+                    .unwrap_or_else(|| id.unwrap_or_else(|| self.nebula_shell.settings_value())),
+                );
+                format!("{icon}  {name}")
+            },
+            dropdown: self.nebula_settings_dropdown,
+            shells: {
+                let mut shells = self
+                    .nebula_detected_shells
+                    .as_ref()
+                    .map(|detected| {
+                        detected
+                            .iter()
+                            .map(|shell| {
+                                (shell.id.clone(), shell.name.clone(), shell.program.clone())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                shells.extend(self.nebula_profiles.iter().filter_map(|profile| {
+                    Some((profile.settings_id()?, profile.name.clone(), profile.command.clone()))
+                }));
+                shells
+            },
+            shell_id: self.nebula_shell_id.clone(),
+            startup_directory: self
+                .nebula_startup_directory
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            providers: self.nebula_providers.providers.clone(),
+            active_provider_id: self.nebula_providers.active_id.clone(),
+            provider_inputs: self.nebula_provider_inputs.clone(),
+            provider_cursors: self.nebula_provider_cursors.clone(),
+            provider_focus: self.nebula_provider_focus,
+            provider_status: self.nebula_provider_status.clone(),
+            font_family: self.nebula_font_family.clone(),
+            font_size_px: self.font_size.as_px() / self.window.scale_factor as f32,
+            fonts: self.nebula_font_families.clone(),
+            font_notice: self.nebula_font_notice.clone(),
+            font_show_all: self.nebula_font_show_all,
+            font_query: self.nebula_font_query.clone(),
+            font_query_cursor: self.nebula_font_query_cursor.clone(),
+            font_popup_scroll: self.nebula_font_popup_scroll,
+            font_popup_dragging: self.nebula_font_popup_drag.is_some(),
+            font_proportional: self.nebula_font_proportional.clone(),
+            hidden_hosts: self.nebula_hidden_hosts.clone(),
+            ssh_hosts: self
+                .nebula_ssh_hosts
+                .iter()
+                .map(|destination| settings::SshSettingsHost {
+                    destination: destination.clone(),
+                    label: self
+                        .nebula_ssh_labels
+                        .get(destination)
+                        .cloned()
+                        .unwrap_or_else(|| destination.clone()),
+                    icon: self
+                        .nebula_ssh_icons
+                        .get(destination)
+                        .cloned()
+                        .unwrap_or_else(|| crate::display::ui::os_icons::DEFAULT_ID.to_owned()),
+                    pinned: self.nebula_pinned_hosts.iter().any(|host| host == destination),
+                })
+                .collect(),
+            fetch: self.nebula_fetch_enabled,
+            powerline: self.nebula_powerline_enabled,
+            blur: self.nebula_blur,
+            keep_session: self.nebula_keep_session,
+            restore_session: self.nebula_restore_session,
+            resume_ai: self.nebula_resume_ai,
+            tray: self.nebula_tray,
+            opacity: self.nebula_window_opacity,
+            dragging_opacity: self.nebula_settings_opacity_drag.map(|(target, _, _)| target),
+            cursor_shape: self.nebula_cursor_shape,
+            cursor_blink: self.nebula_cursor_blink,
+            copy_on_select: self.nebula_copy_on_select,
+            panel_resize: self.nebula_panel_resize,
+            cjk_bold_regular: self.nebula_cjk_bold_regular,
+            tab_reveal: self.nebula_tab_reveal_motion,
+            density: self.nebula_density,
+            new_tab_position: self.nebula_new_tab_position,
+            cell_width_mode: self.nebula_cell_width_mode,
+            preview_bg: self.preview_terminal_bg(),
+            preview_fg: {
+                let bg = self.preview_terminal_bg();
+                // 亮底配深字、暗底配浅字：预览要在任何自定义背景色上可读。
+                let luma = 0.299 * bg.r as f32 + 0.587 * bg.g as f32 + 0.114 * bg.b as f32;
+                if luma > 140.0 { Rgb::new(40, 44, 52) } else { Rgb::new(225, 228, 240) }
+            },
+            background: self.nebula_background,
+            bg_hex_input: self.nebula_bg_hex_input.clone(),
+            bg_hex_active: self.nebula_bg_hex_active,
+            bg_picker_hsv: self.nebula_bg_picker_hsv,
+            background_image: self.nebula_background_image.clone(),
+            background_image_opacity: self.nebula_background_image_opacity,
+            background_image_fit: self.nebula_background_image_fit,
+            background_image_alignment: self.nebula_background_image_alignment,
+            background_image_cover_chrome: self.nebula_background_image_cover_chrome,
+            scroll: self.nebula_settings_scroll,
+            keymap: keymap::EDITABLE_ACTIONS
+                .iter()
+                .map(|(action, ..)| keymap::effective_combo(action, &self.nebula_keymap))
+                .collect(),
+            quick_terminal_hotkey: self.nebula_quick_terminal_hotkey.clone(),
+            quick_hotkey_error: self.nebula_quick_hotkey_error.clone(),
+            keymap_capture: self.nebula_keymap_capture,
+            keymap_capture_preview: self.nebula_keymap_capture_preview.clone(),
+            keymap_query: self.nebula_keymap_query.clone(),
+            keymap_query_cursor: self.nebula_keymap_query_cursor.clone(),
+            keymap_search_focus: self.nebula_keymap_search_focus,
+            keymap_visible: self.keymap_visible_editable(),
+            keymap_readonly_visible: self.keymap_visible_readonly(),
+            keymap_clash_rows: self.keymap_clash_info().0,
+            keymap_clash_note: self.keymap_clash_info().1,
+            sync_inputs: self.nebula_sync_inputs.clone(),
+            sync_focus: self.nebula_sync_focus,
+            sync_auto_pull: self.nebula_sync_auto_pull,
+            sync_secret_set: self.nebula_sync_secret_set,
+            sync_status: self.nebula_sync_status.clone(),
+            sync_busy: self.nebula_sync_busy,
+            ssh_proxy_mode: self.nebula_ssh_proxy_mode,
+            ssh_proxy_inputs: [
+                self.ssh_proxy_field_text(0).to_owned(),
+                self.nebula_ssh_proxy_no_proxy.clone(),
+                crate::ssh_proxy::command_target(&self.nebula_ssh_proxy_url)
+                    .unwrap_or("")
+                    .to_owned(),
+            ],
+            ssh_proxy_cursors: self.nebula_ssh_proxy_cursor.clone(),
+            ssh_proxy_focus: self.nebula_ssh_proxy_focus,
+            ssh_proxy_protocol: self.nebula_ssh_proxy_protocol,
+            ssh_proxy_choice: self.nebula_ssh_proxy_choice,
+            local_proxies: self.nebula_local_proxies.clone(),
+            proxy_scanning: self.nebula_proxy_scanning,
+            system_proxy_probe: self.nebula_system_proxy_probe.clone(),
+            proxy_test_status: self.nebula_proxy_test_status.clone(),
+            ssh_proxy_overrides: Vec::new(),
+            backup_selection: self.nebula_backup_selection,
+            backup_status: self.nebula_backup_status.clone(),
+            backup_status_remote: self.nebula_backup_status_remote,
+            backup_protocol: self.nebula_backup_protocol,
+            backup_remote_inputs: self.nebula_backup_remote_inputs.clone(),
+            backup_remote_focus: self.nebula_backup_remote_focus,
+            backup_remote_secret_set: self.nebula_backup_remote_secret_set,
+            backup_busy: self.nebula_backup_busy,
+        }
+    }
+
+    pub fn toggle_backup_selection(&mut self, index: usize) {
+        match index {
+            0 => self.nebula_backup_selection.appearance = !self.nebula_backup_selection.appearance,
+            1 => self.nebula_backup_selection.config = !self.nebula_backup_selection.config,
+            2 => self.nebula_backup_selection.ssh = !self.nebula_backup_selection.ssh,
+            3 => self.nebula_backup_selection.sync = !self.nebula_backup_selection.sync,
+            4 => self.nebula_backup_selection.assistant = !self.nebula_backup_selection.assistant,
+            5 => self.nebula_backup_selection.session = !self.nebula_backup_selection.session,
+            6 => {
+                self.nebula_backup_selection.directory_history =
+                    !self.nebula_backup_selection.directory_history
+            },
+            7 => {
+                self.nebula_backup_selection.command_history =
+                    !self.nebula_backup_selection.command_history
+            },
+            8 => self.nebula_backup_selection.fonts = !self.nebula_backup_selection.fonts,
+            _ => return,
+        }
+        self.pending_update.dirty = true;
+    }
+
+    // ---- 设置→备份→远程备份 ----
+
+    /// 当前远程备份协议（命中测试要按它裁剪可见输入行）。
+    pub fn backup_protocol(&self) -> crate::backup_remote::BackupProtocol {
+        self.nebula_backup_protocol
+    }
+
+    /// 打开设置时装载远程备份状态：协议与非密文字段来自
+    /// `nebula_backup.txt`，密文只查存在性（明文不进 UI 状态）。
+    pub fn load_backup_remote_state(&mut self) {
+        let cfg = crate::backup_remote::BackupRemoteConfig::load();
+        self.nebula_backup_protocol = cfg.protocol;
+        self.nebula_backup_remote_inputs = Default::default();
+        for (index, input) in self.nebula_backup_remote_inputs.iter_mut().enumerate() {
+            if let Some(value) = cfg.slot(index) {
+                *input = value.to_owned();
+            }
+        }
+        self.nebula_backup_remote_secret_set =
+            crate::backup_remote::protocol_secret_set(cfg.protocol);
+        self.nebula_backup_remote_focus = None;
+    }
+
+    /// 设置页下拉选择远程备份协议：持久化并按新协议重装输入槽。
+    pub fn set_backup_protocol_option(&mut self, index: usize) {
+        let Some(protocol) = settings::BACKUP_PROTOCOL_OPTIONS.get(index).copied() else { return };
+        self.commit_backup_remote_field();
+        let mut cfg = crate::backup_remote::BackupRemoteConfig::load();
+        cfg.protocol = protocol;
+        if let Err(err) = cfg.save() {
+            self.nebula_backup_status = Some((err, true));
+            self.nebula_backup_status_remote = true;
+        }
+        self.load_backup_remote_state();
+        self.close_settings_dropdown();
+        self.pending_update.dirty = true;
+    }
+
+    /// 聚焦某个远程备份输入框；先提交上一个（点击切换即失焦保存）。
+    pub fn focus_backup_remote_field(&mut self, index: usize) {
+        if self.nebula_backup_remote_focus == Some(index) {
+            return;
+        }
+        self.commit_backup_remote_field();
+        let count = crate::backup_remote::field_count(self.nebula_backup_protocol);
+        if count == 0 {
+            return;
+        }
+        self.nebula_backup_remote_focus = Some(index.min(count - 1));
+        self.pending_update.dirty = true;
+    }
+
+    pub fn backup_remote_field_push(&mut self, ch: char) {
+        let Some(index) = self.nebula_backup_remote_focus else { return };
+        if ch.is_control() {
+            return;
+        }
+        // 密文槽允许内部空格（trim 在保存侧）；其余槽拒绝空白——URL、
+        // 路径、区域名里出现空格只会是误粘贴。
+        let secret = crate::backup_remote::secret_field(self.nebula_backup_protocol) == Some(index);
+        if ch.is_whitespace() && !secret {
+            return;
+        }
+        if self.nebula_backup_remote_inputs[index].chars().count() < 512 {
+            self.nebula_backup_remote_inputs[index].push(ch);
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn backup_remote_field_paste(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.backup_remote_field_push(ch);
+        }
+    }
+
+    pub fn backup_remote_field_backspace(&mut self) {
+        let Some(index) = self.nebula_backup_remote_focus else { return };
+        if self.nebula_backup_remote_inputs[index].pop().is_some() {
+            self.pending_update.dirty = true;
+        }
+    }
+
+    /// 失焦提交：普通槽写 `nebula_backup.txt`；密文槽若有输入则存入凭据
+    /// 管理器并清空缓冲。
+    pub fn commit_backup_remote_field(&mut self) {
+        let Some(index) = self.nebula_backup_remote_focus.take() else { return };
+        self.pending_update.dirty = true;
+        let protocol = self.nebula_backup_protocol;
+        if crate::backup_remote::secret_field(protocol) == Some(index) {
+            let secret = std::mem::take(&mut self.nebula_backup_remote_inputs[index]);
+            if secret.trim().is_empty() {
+                return;
+            }
+            let result = match protocol {
+                crate::backup_remote::BackupProtocol::WebDav => {
+                    crate::backup_remote::store_webdav_password(
+                        self.nebula_backup_remote_inputs[1].trim(),
+                        &secret,
+                    )
+                },
+                crate::backup_remote::BackupProtocol::S3 => crate::backup_remote::store_s3_secret(
+                    self.nebula_backup_remote_inputs[3].trim(),
+                    &secret,
+                ),
+                _ => return,
+            };
+            match result {
+                Ok(()) => {
+                    self.nebula_backup_remote_secret_set = true;
+                },
+                Err(err) => {
+                    self.nebula_backup_status = Some((err, true));
+                    self.nebula_backup_status_remote = true;
+                },
+            }
+            return;
+        }
+        let mut cfg = crate::backup_remote::BackupRemoteConfig::load();
+        cfg.protocol = protocol;
+        if cfg.set_slot(index, self.nebula_backup_remote_inputs[index].trim().to_owned()) {
+            if let Err(err) = cfg.save() {
+                self.nebula_backup_status = Some((err, true));
+                self.nebula_backup_status_remote = true;
+            }
+        }
+    }
+
+    /// Esc：丢弃当前草稿并失焦（还原为文件值；密文槽清空）。
+    pub fn cancel_backup_remote_field(&mut self) {
+        let Some(index) = self.nebula_backup_remote_focus.take() else { return };
+        let cfg = crate::backup_remote::BackupRemoteConfig::load();
+        self.nebula_backup_remote_inputs[index] =
+            cfg.slot(index).map(str::to_owned).unwrap_or_default();
+        self.pending_update.dirty = true;
+    }
+
+    /// 「备份到远程 / 从远程恢复」按钮：先行校验配置，通过则弹口令确认。
+    /// 真正的网络动作等口令提交后由事件层在后台线程执行。
+    pub fn start_backup_remote(&mut self, upload: bool) {
+        if self.nebula_backup_busy {
+            return;
+        }
+        self.commit_backup_remote_field();
+        self.nebula_backup_status_remote = true;
+        if upload && self.nebula_backup_selection.is_empty() {
+            self.nebula_backup_status = Some((
+                self.ui_language()
+                    .pick("至少选择一项备份内容", "Select at least one backup item")
+                    .to_owned(),
+                true,
+            ));
+            self.window.request_redraw();
+            return;
+        }
+        if let Err(err) = crate::backup_remote::validate() {
+            self.nebula_backup_status = Some((err, true));
+            self.window.request_redraw();
+            return;
+        }
+        self.nebula_backup_operation =
+            Some(if upload { BackupOperation::RemotePush } else { BackupOperation::RemotePull });
+        self.nebula_backup_passphrase.clear();
+        self.nebula_backup_passphrase_select_all.clear();
+        self.nebula_backup_status = None;
+        self.nebula_confirm = Some(NebulaConfirm::BackupPassphrase { restoring: !upload });
+        self.window.request_redraw();
+    }
+
+    /// 后台远程备份线程收尾（`NebulaBackupRemoteDone`）。
+    pub fn backup_remote_done(&mut self, message: &str, error: bool) {
+        self.nebula_backup_busy = false;
+        self.nebula_backup_status = Some((message.to_owned(), error));
+        self.nebula_backup_status_remote = true;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn start_backup_export(&mut self) {
+        if self.nebula_backup_selection.is_empty() {
+            self.nebula_backup_status = Some((
+                self.ui_language()
+                    .pick("至少选择一项备份内容", "Select at least one backup item")
+                    .to_owned(),
+                true,
+            ));
+            self.nebula_backup_status_remote = false;
+            self.window.request_redraw();
+            return;
+        }
+        let Some(path) = file_dialog::save_backup_file(&self.window) else { return };
+        self.nebula_backup_operation = Some(BackupOperation::Export(path));
+        self.nebula_backup_passphrase.clear();
+        self.nebula_backup_passphrase_select_all.clear();
+        self.nebula_backup_status = None;
+        self.nebula_confirm = Some(NebulaConfirm::BackupPassphrase { restoring: false });
+        self.window.request_redraw();
+    }
+
+    pub fn start_backup_restore(&mut self) {
+        let Some(path) = file_dialog::pick_backup_file(&self.window) else { return };
+        self.nebula_backup_operation = Some(BackupOperation::Restore(path));
+        self.nebula_backup_passphrase.clear();
+        self.nebula_backup_passphrase_select_all.clear();
+        self.nebula_backup_status = None;
+        self.nebula_confirm = Some(NebulaConfirm::BackupPassphrase { restoring: true });
+        self.window.request_redraw();
+    }
+
+    pub fn backup_passphrase_push(&mut self, character: char) {
+        let replacing_selection = self.nebula_backup_passphrase_select_all.is_selected();
+        if !character.is_control()
+            && (replacing_selection || self.nebula_backup_passphrase.chars().count() < 256)
+        {
+            self.nebula_backup_passphrase_select_all
+                .insert(&mut self.nebula_backup_passphrase, &character.to_string());
+            self.nebula_backup_status = None;
+        }
+        self.window.request_redraw();
+    }
+
+    pub fn backup_passphrase_paste(&mut self, text: &str) {
+        let replacing_selection = self.nebula_backup_passphrase_select_all.is_selected();
+        let used =
+            if replacing_selection { 0 } else { self.nebula_backup_passphrase.chars().count() };
+        let incoming: String = text
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(256usize.saturating_sub(used))
+            .collect();
+        self.nebula_backup_passphrase_select_all
+            .insert(&mut self.nebula_backup_passphrase, &incoming);
+        self.nebula_backup_status = None;
+        self.window.request_redraw();
+    }
+
+    pub fn backup_passphrase_backspace(&mut self) {
+        self.nebula_backup_passphrase_select_all.backspace(&mut self.nebula_backup_passphrase);
+        self.nebula_backup_status = None;
+        self.window.request_redraw();
+    }
+
+    pub fn backup_passphrase_select_all(&mut self) {
+        self.nebula_backup_passphrase_select_all.select(&self.nebula_backup_passphrase);
+        self.window.request_redraw();
+    }
+
+    /// 口令确认。本地导出/恢复同步完成（小文件 + Argon2 一次派生）；远程
+    /// 动作返回请求，由调用方发事件到后台线程——网络不进 UI 线程。
+    pub fn complete_backup_operation(&mut self) -> Option<RemoteBackupRequest> {
+        let Some(operation) = self.nebula_backup_operation.clone() else { return None };
+        let passphrase = self.nebula_backup_passphrase.clone();
+        let result = match operation {
+            BackupOperation::Export(path) => {
+                crate::encrypted_backup::collect(self.nebula_backup_selection)
+                    .and_then(|archive| crate::encrypted_backup::seal(&archive, &passphrase))
+                    .and_then(|packet| {
+                        crate::atomic_file::write(&path, &packet).map_err(|error| error.to_string())
+                    })
+            },
+            BackupOperation::Restore(path) => std::fs::read(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|packet| crate::encrypted_backup::restore(&packet, &passphrase)),
+            BackupOperation::RemotePush | BackupOperation::RemotePull => {
+                self.nebula_backup_status_remote = true;
+                if passphrase.chars().count() < 8 {
+                    self.nebula_backup_status = Some((
+                        self.ui_language()
+                            .pick(
+                                "备份操作失败: 口令至少 8 个字符",
+                                "Backup operation failed: passphrase must be at least 8 characters",
+                            )
+                            .to_owned(),
+                        true,
+                    ));
+                    self.nebula_backup_passphrase.clear();
+                    self.nebula_backup_passphrase_select_all.clear();
+                    self.window.request_redraw();
+                    return None;
+                }
+                let upload = matches!(operation, BackupOperation::RemotePush);
+                self.nebula_backup_busy = true;
+                self.nebula_backup_status = Some((
+                    self.ui_language()
+                        .pick(
+                            if upload {
+                                "备份上传中…"
+                            } else {
+                                "正在取回远端备份…"
+                            },
+                            if upload {
+                                "Uploading backup…"
+                            } else {
+                                "Fetching remote backup…"
+                            },
+                        )
+                        .to_owned(),
+                    false,
+                ));
+                self.nebula_confirm = None;
+                self.nebula_backup_operation = None;
+                self.nebula_backup_passphrase.clear();
+                self.nebula_backup_passphrase_select_all.clear();
+                self.window.request_redraw();
+                return Some(RemoteBackupRequest {
+                    upload,
+                    passphrase,
+                    selection: self.nebula_backup_selection,
+                });
+            },
+        };
+        self.nebula_backup_status_remote = false;
+        match result {
+            Ok(()) => {
+                let restoring = matches!(
+                    self.nebula_confirm,
+                    Some(NebulaConfirm::BackupPassphrase { restoring: true })
+                );
+                self.nebula_backup_status = Some((
+                    self.ui_language()
+                        .pick(
+                            if restoring {
+                                "备份已恢复，重启后应用全部设置"
+                            } else {
+                                "备份已导出"
+                            },
+                            if restoring {
+                                "Backup restored; restart to apply all settings"
+                            } else {
+                                "Backup exported"
+                            },
+                        )
+                        .to_owned(),
+                    false,
+                ));
+                self.nebula_confirm = None;
+                self.nebula_backup_operation = None;
+                self.nebula_backup_passphrase.clear();
+                self.nebula_backup_passphrase_select_all.clear();
+            },
+            Err(error) => {
+                self.nebula_backup_status = Some((
+                    format!(
+                        "{}: {error}",
+                        self.ui_language().pick("备份操作失败", "Backup operation failed")
+                    ),
+                    true,
+                ));
+                self.nebula_backup_passphrase.clear();
+                self.nebula_backup_passphrase_select_all.clear();
+            },
+        }
+        self.window.request_redraw();
+        None
+    }
+
+    pub fn cancel_backup_operation(&mut self) {
+        self.nebula_confirm = None;
+        self.nebula_backup_operation = None;
+        self.nebula_backup_passphrase.clear();
+        self.nebula_backup_passphrase_select_all.clear();
+        self.window.request_redraw();
+    }
+
+    pub fn set_settings_tab_active(&mut self, active: bool) {
+        if self.nebula_settings_open == active {
+            if active {
+                // 再次聚焦设置页时布尔状态不会变化，但仍要维持非 Shell
+                // 页面不占用文件抽屉宽度的布局约束。
+                self.close_side_panel_for_special_tab();
+            }
+            return;
+        }
+        self.nebula_settings_open = active;
+        if active {
+            self.nebula_special_tab_active = true;
+            self.close_side_panel_for_special_tab();
+        }
+        if !active {
+            if self.nebula_backup_operation.is_some() {
+                self.cancel_backup_operation();
+            }
+            self.commit_sync_field();
+            self.commit_backup_remote_field();
+            self.nebula_settings_dropdown = None;
+            self.nebula_settings_hover = SettingsHit::None;
+            self.nebula_settings_pressed = SettingsHit::None;
+            self.nebula_keymap_capture = None;
+            self.nebula_settings_text_drag = None;
+        } else {
+            self.load_sync_state();
+            self.load_backup_remote_state();
+            // Each explicit visit starts at a predictable page origin.
+            self.nebula_settings_scroll = 0.0;
+            self.nebula_settings_text_drag = None;
+            if self.nebula_settings_section == NebulaSettingsSection::Proxy {
+                self.refresh_system_proxy_probe();
+            }
+        }
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn set_special_tab_active(&mut self, active: bool) {
+        self.nebula_special_tab_active = active;
+        if active {
+            self.close_side_panel_for_special_tab();
+            // Keep queued messages for the next terminal tab, but invalidate
+            // terminal-only close geometry while a special tab is visible.
+            self.nebula_message_close = None;
+            self.nebula_message_close_hover = false;
+        }
+        if !active {
+            if self.nebula_backup_operation.is_some() {
+                self.cancel_backup_operation();
+            }
+            self.nebula_settings_open = false;
+        }
+    }
+
+    /// 文档/设置页接管内容区时关闭右侧抽屉。这里只隐藏抽屉而不销毁 SFTP
+    /// 控制器，切回 SSH 标签仍可复用连接，同时非终端页面不再被抽屉挤压。
+    fn close_side_panel_for_special_tab(&mut self) {
+        if !self.nebula_side_panel.open {
+            return;
+        }
+        self.nebula_side_panel.search_unfocus(false);
+        self.nebula_side_panel.commit_unfocus();
+        self.nebula_side_panel.open = false;
+        let size = PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+        self.pending_update.set_dimensions(size);
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn set_ui_language(&mut self, preference: LanguagePreference) {
+        if self.nebula_language_preference == preference {
+            return;
+        }
+        self.nebula_language_preference = preference;
+        self.nebula_language = preference.resolved();
+        self.nebula_palette.set_language(self.nebula_language);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    fn apply_nebula_theme(&mut self, theme: NebulaTheme) {
+        let previous_theme = self.nebula_theme;
+        let theme_changed = previous_theme != theme;
+        self.nebula_theme = theme;
+        // A theme carries its terminal background (the light themes are
+        // unusable without it). Switching theme IS choosing the look, so it
+        // overwrites a previous custom color by design.
+        self.nebula_background = Some(theme.palette().term_bg);
+        // Restyle the terminal color table: OSC 11 must report the new
+        // background (TUIs key light/dark off it) and light themes need the
+        // light ANSI set to stay readable.
+        let defaults = self.nebula_default_colors;
+        theme.apply_term_colors(&mut self.colors, &defaults);
+        if theme_changed {
+            // 旧 pane 可能持有应用通过 OSC 写入的上一主题颜色；交给窗口层在
+            // 未持有任何终端锁时统一清理，避免只刷新当前焦点 pane。
+            self.terminal_color_resolver
+                .theme_changed(previous_theme.palette().term_bg, theme.palette().term_bg);
+            self.pending_update.set_terminal_colors_dirty();
+        }
+        write_nebula_prompt_theme(theme);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn select_nebula_theme(&mut self, theme: NebulaTheme) {
+        self.nebula_theme_preference = theme;
+        // Clicking a concrete theme is an explicit manual choice. Automatic
+        // mode must step aside instead of changing it again on the next OS
+        // appearance event.
+        self.nebula_follow_system_theme = false;
+        self.window.set_theme(self.nebula_window_theme_override);
+        self.apply_nebula_theme(theme);
+        self.persist_nebula_settings();
+        // Panel stays open so users can adjust several settings at once.
+    }
+
+    pub fn toggle_system_theme_following(&mut self) {
+        self.nebula_follow_system_theme = !self.nebula_follow_system_theme;
+        if self.nebula_follow_system_theme {
+            // winit explicitly suppresses ThemeChanged for overridden
+            // windows, so automatic mode must let the OS own this value.
+            self.window.set_theme(None);
+            self.nebula_system_theme =
+                system_theme_snapshot(self.nebula_system_theme, self.window.theme());
+        } else {
+            self.window.set_theme(self.nebula_window_theme_override);
+        }
+        let theme = if self.nebula_follow_system_theme {
+            self.nebula_system_theme
+                .map(|system| {
+                    self.nebula_theme_preference
+                        .for_system_appearance(matches!(system, WinitTheme::Light))
+                })
+                .unwrap_or(self.nebula_theme_preference)
+        } else {
+            self.nebula_theme_preference
+        };
+        self.apply_nebula_theme(theme);
+        self.persist_nebula_settings();
+    }
+
+    /// Apply a live operating-system appearance change without rewriting the
+    /// stored theme family. This is intentionally a no-op in manual mode.
+    pub fn system_theme_changed(&mut self, system_theme: WinitTheme) {
+        self.sync_system_theme(Some(system_theme));
+    }
+
+    /// Refresh the system appearance independently from the window's cached
+    /// theme. This also keeps manual-mode windows ready to switch immediately
+    /// when the user enables automatic following.
+    pub fn sync_system_theme(&mut self, system_theme: Option<WinitTheme>) {
+        let Some(system_theme) = system_theme else { return };
+        if self.nebula_system_theme == Some(system_theme) {
+            return;
+        }
+
+        self.nebula_system_theme = Some(system_theme);
+        if self.nebula_follow_system_theme {
+            let theme = self
+                .nebula_theme_preference
+                .for_system_appearance(matches!(system_theme, WinitTheme::Light));
+            self.apply_nebula_theme(theme);
+        }
+    }
+
+    /// Remember a reloaded window-decoration preference without allowing it
+    /// to suppress OS theme notifications while automatic mode is enabled.
+    pub fn update_window_theme_override(&mut self, theme: Option<WinitTheme>) {
+        self.nebula_window_theme_override = theme;
+        self.window.set_theme(if self.nebula_follow_system_theme { None } else { theme });
+    }
+
+    pub fn toggle_ghost(&mut self) {
+        self.nebula_ghost_enabled = !self.nebula_ghost_enabled;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// Cycle the three completion modes (palette /
+    /// keybinding path; the settings page goes through
+    /// [`Self::set_completion_style_option`]).
+    pub fn cycle_completion_style(&mut self) {
+        self.nebula_completion_style = self.nebula_completion_style.cycle();
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn set_completion_style_option(&mut self, index: usize) {
+        if let Some(style) = settings::COMPLETION_STYLE_OPTIONS.get(index) {
+            self.nebula_completion_style = *style;
+            self.persist_nebula_settings();
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    /// Open the "默认 Shell" picker (the settings row click): the same
+    /// Toggle the inline shell picker in settings (expand/collapse the list).
+    /// Toggle a settings combobox. All dropdowns share one field so opening
+    /// one always closes the others.
+    pub fn toggle_settings_dropdown(&mut self, dropdown: settings::SettingsDropdown) {
+        if self.nebula_settings_dropdown == Some(dropdown) {
+            self.nebula_settings_dropdown = None;
+        } else {
+            if dropdown == settings::SettingsDropdown::Shell {
+                // Ensure shells are detected before opening.
+                let _ = self
+                    .nebula_detected_shells
+                    .get_or_insert_with(crate::shell_detect::detect_shells);
+            }
+            if dropdown == settings::SettingsDropdown::Font {
+                self.nebula_font_notice = None;
+                self.nebula_font_popup_scroll = 0;
+            }
+            self.nebula_settings_dropdown = Some(dropdown);
+        }
+        self.pending_update.dirty = true;
+    }
+
+    pub fn close_settings_dropdown(&mut self) -> bool {
+        if self.nebula_settings_dropdown.take().is_none() {
+            return false;
+        }
+        self.nebula_bg_hex_active = false;
+        // 搜索是这次展开的临时状态：关掉就清空，下次打开从完整目录开始。
+        if !self.nebula_font_query.is_empty() {
+            self.nebula_font_query.clear();
+            self.nebula_font_query_cursor = Default::default();
+            self.rebuild_font_catalog();
+        }
+        self.nebula_font_popup_scroll = 0;
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    pub fn set_background_image_fit_option(&mut self, index: usize) {
+        if let Some(fit) = settings::BACKGROUND_FIT_OPTIONS.get(index) {
+            self.nebula_background_image_fit = *fit;
+            self.persist_nebula_settings();
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    pub fn set_background_image_alignment_option(&mut self, index: usize) {
+        if let Some(alignment) = settings::BACKGROUND_ALIGNMENT_OPTIONS.get(index) {
+            self.nebula_background_image_alignment = *alignment;
+            self.persist_nebula_settings();
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    pub fn set_accept_option(&mut self, index: usize) {
+        if let Some(accept) = settings::ACCEPT_OPTIONS.get(index) {
+            self.nebula_accept = *accept;
+            self.persist_nebula_settings();
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    pub fn set_tab_reveal_option(&mut self, index: usize) {
+        if let Some(motion) = settings::TAB_REVEAL_OPTIONS.get(index) {
+            self.nebula_tab_reveal_motion = *motion;
+            self.persist_nebula_settings();
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    /// 切换界面外观预设。密度只影响 Nebula 原生界面的留白、行高与圆角；
+    /// 终端字体、单元格几何与 shell 输出一概不受影响，但界面让出的空间会
+    /// 让终端行列数增加——那正是紧凑档的收益。
+    pub fn set_density_option(&mut self, index: usize) {
+        if let Some(density) = settings::DENSITY_OPTIONS.get(index).copied()
+            && density != self.nebula_density
+        {
+            self.nebula_density = density;
+            self.persist_nebula_settings();
+            // 与折叠侧栏同样的重排路径：界面尺寸变了，网格与 PTY 要跟上。
+            let size =
+                PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+            self.pending_update.set_dimensions(size);
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn set_new_tab_position_option(&mut self, index: usize) {
+        if let Some(position) = settings::NEW_TAB_POSITION_OPTIONS.get(index) {
+            self.nebula_new_tab_position = *position;
+            self.persist_nebula_settings();
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    /// 切换单元格宽度模式。列宽取整方式变了就必须重算单元格——重推当前
+    /// 字体让字体更新路径走一遍，网格、viewport、pane 与 PTY 随之一致更新，
+    /// 无需重启。字号、字体家族与行高都不变。
+    pub fn set_cell_width_mode_option(&mut self, index: usize, base: &Font) {
+        if let Some(mode) = settings::CELL_WIDTH_MODE_OPTIONS.get(index)
+            && *mode != self.nebula_cell_width_mode
+        {
+            self.nebula_cell_width_mode = *mode;
+            self.persist_nebula_settings();
+            let font = self.effective_font(base).with_size(self.font_size);
+            self.pending_update.set_font(font);
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    /// Returns true when the default cursor style changed (the caller then
+    /// pushes the new default into every live terminal).
+    pub fn set_cursor_shape_option(&mut self, index: usize) -> bool {
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+        let Some(shape) = settings::CURSOR_SHAPE_OPTIONS.get(index).copied() else {
+            return false;
+        };
+        if self.nebula_cursor_shape == shape {
+            return false;
+        }
+        self.nebula_cursor_shape = shape;
+        self.persist_nebula_settings();
+        true
+    }
+
+    pub fn toggle_cursor_blink(&mut self) {
+        self.nebula_cursor_blink = !self.nebula_cursor_blink;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn toggle_copy_on_select(&mut self) {
+        self.nebula_copy_on_select = !self.nebula_copy_on_select;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 同步拉到新历史后热加载（spec 003）：ghost 补全的内存副本只在
+    /// 启动时 load，这里手动重读一次。
+    pub fn reload_nebula_history(&mut self) {
+        self.nebula_history = crate::nebula_history::NebulaHistory::load();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn toggle_cjk_bold_regular(&mut self) {
+        self.nebula_cjk_bold_regular = !self.nebula_cjk_bold_regular;
+        self.glyph_cache.wide_bold_use_regular = self.nebula_cjk_bold_regular;
+        // 已缓存的 bold CJK 位图立即作废：切换要当场可见，不能等重启。
+        self.reset_glyph_cache();
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// The default cursor style (shape + blink) every terminal should fall
+    /// back to when no escape has overridden it.
+    pub fn nebula_default_cursor_style(&self) -> pebrel_terminal::vte::ansi::CursorStyle {
+        pebrel_terminal::vte::ansi::CursorStyle {
+            shape: self.nebula_cursor_shape,
+            blinking: self.nebula_cursor_blink,
+        }
+    }
+
+    /// Terminal background color the live settings preview should show: the
+    /// custom background wins, else the active theme's terminal background.
+    fn preview_terminal_bg(&self) -> Rgb {
+        self.nebula_background.unwrap_or(self.nebula_theme.palette().term_bg)
+    }
+
+    pub fn toggle_shell_picker(&mut self) {
+        self.toggle_settings_dropdown(settings::SettingsDropdown::Shell);
+    }
+
+    pub fn close_shell_picker(&mut self) {
+        if self.nebula_settings_dropdown == Some(settings::SettingsDropdown::Shell) {
+            self.close_settings_dropdown();
+        }
+    }
+
+    pub fn pick_startup_directory(&mut self) {
+        let Some(path) = file_dialog::pick_startup_directory(&self.window) else { return };
+        if !path.is_dir() {
+            return;
+        }
+
+        self.nebula_startup_directory = Some(path);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn clear_startup_directory(&mut self) {
+        if self.nebula_startup_directory.take().is_none() {
+            return;
+        }
+
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn import_terminal_directory(&mut self) -> bool {
+        let Some(directory) = file_dialog::pick_terminal_directory(&self.window) else {
+            return false;
+        };
+        let found = match crate::terminal_profiles::scan_directory(&directory) {
+            Ok(found) => found,
+            Err(error) => {
+                self.push_toast(format!("无法扫描终端目录: {error}"), ToastKind::Warning);
+                return false;
+            },
+        };
+        if found.is_empty() {
+            self.push_toast("目录中未找到受支持的终端程序", ToastKind::Warning);
+            return false;
+        }
+
+        let mut profiles = match crate::terminal_profiles::TerminalProfiles::load() {
+            Ok(profiles) => profiles,
+            Err(error) => {
+                self.push_toast(format!("无法读取终端配置: {error}"), ToastKind::Warning);
+                return false;
+            },
+        };
+        let count = found.len();
+        for profile in found {
+            if let Err(error) = profiles.upsert(profile) {
+                self.push_toast(format!("无法导入终端: {error}"), ToastKind::Warning);
+                return false;
+            }
+        }
+        match profiles.save() {
+            Ok(()) => {
+                self.push_toast(format!("已导入 {count} 个终端，立即可用"), ToastKind::Success);
+                true
+            },
+            Err(error) => {
+                self.push_toast(format!("无法保存终端配置: {error}"), ToastKind::Warning);
+                false
+            },
+        }
+    }
+
+    pub(crate) fn startup_directory(&self) -> Option<PathBuf> {
+        self.nebula_startup_directory.as_ref().filter(|path| path.is_dir()).cloned()
+    }
+
+    pub fn toggle_font_picker(&mut self) {
+        // 首次展开才枚举系统字体——这是整个功能里唯一昂贵的一步，放在
+        // 用户已经预期有一次加载的时刻。
+        if self.nebula_settings_dropdown != Some(settings::SettingsDropdown::Font) {
+            self.ensure_font_catalog();
+        }
+        self.toggle_settings_dropdown(settings::SettingsDropdown::Font);
+    }
+
+    /// 惰性装配**字体目录**：系统族与导入族合并去重、按当前过滤条件筛选，
+    /// 当前生效字体始终保留。
+    fn ensure_font_catalog(&mut self) {
+        #[cfg(windows)]
+        if self.nebula_system_fonts.is_none() {
+            self.nebula_system_fonts = Some(self.glyph_cache.system_font_families());
+        }
+        self.rebuild_font_catalog();
+    }
+
+    fn rebuild_font_catalog(&mut self) {
+        let system = self.nebula_system_fonts.clone().unwrap_or_default();
+        #[cfg(windows)]
+        let imported = self.glyph_cache.private_font_families();
+        #[cfg(not(windows))]
+        let imported: Vec<String> = Vec::new();
+        // 多级 fallback 列表（issue #33）在目录里以主族身份参与匹配与高亮；
+        // 链本身仍原样保存在设置值里。
+        let primary_family =
+            crate::renderer::primary_font_family(&self.nebula_font_family).to_owned();
+        let catalog = crate::font_install::font_catalog(
+            &system,
+            &imported,
+            self.nebula_font_show_all,
+            &self.nebula_font_query,
+            &primary_family,
+        );
+        self.nebula_font_proportional = catalog
+            .iter()
+            .filter(|entry| !entry.monospaced)
+            .map(|entry| entry.name.to_lowercase())
+            .collect();
+        let mut families: Vec<String> = catalog.into_iter().map(|entry| entry.name).collect();
+        // 内置字体永远排在最前，与上游一致。
+        families.retain(|family| family != crate::font_install::REQUIRED_FONT_FAMILY);
+        families.insert(0, crate::font_install::REQUIRED_FONT_FAMILY.to_owned());
+        if !families.iter().any(|family| family == &primary_family) {
+            families.push(primary_family);
+        }
+        self.nebula_font_families = families;
+        // 候选集合变了，旧滚动位置无意义；回到顶部避免窗口悬在越界偏移上。
+        self.nebula_font_popup_scroll = 0;
+    }
+
+    /// 搜索框里文本的起点 x 与单元格宽——鼠标定位光标要用它换算落点。
+    /// 与渲染同源（[`settings::font_search_field_rect`]），两边不会漂。
+    pub fn font_search_text_origin(&self) -> (f32, f32) {
+        let scale = self.window.scale_factor as f32;
+        let cell_w = self.size_info.cell_width();
+        let field = settings::font_search_field_rect(
+            &self.size_info,
+            scale,
+            self.terminal_card_rect(),
+            self.nebula_settings_section,
+            self.nebula_settings_scroll,
+            self.nebula_settings_dropdown,
+            self.font_picker_count(),
+            self.nebula_font_popup_scroll,
+            self.nebula_hidden_hosts.len(),
+            self.ssh_host_count(),
+            self.nebula_density,
+        );
+        (field.map_or(0.0, |rect| rect.0 + 12.0 * scale), cell_w)
+    }
+
+    pub fn font_query(&self) -> &str {
+        &self.nebula_font_query
+    }
+
+    /// 插入文本，或 `None` 表示退格。查询串一变就重建目录——列表跟着打字走，
+    /// 才是「所见即所搜」。
+    pub fn font_query_edit(&mut self, insert: Option<&str>) {
+        match insert {
+            Some(text) => {
+                let clean: String = text.chars().filter(|ch| !ch.is_control()).collect();
+                if clean.is_empty() {
+                    return;
+                }
+                self.nebula_font_query_cursor.insert(&mut self.nebula_font_query, &clean);
+            },
+            None => self.nebula_font_query_cursor.backspace(&mut self.nebula_font_query),
+        }
+        self.rebuild_font_catalog();
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn font_query_delete_forward(&mut self) {
+        self.nebula_font_query_cursor.delete_forward(&mut self.nebula_font_query);
+        self.rebuild_font_catalog();
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn font_query_move(&mut self, forward: bool, extend: bool) {
+        let text = self.nebula_font_query.clone();
+        self.nebula_font_query_cursor.step(&text, forward, extend);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn font_query_jump(&mut self, to_end: bool, extend: bool) {
+        let text = self.nebula_font_query.clone();
+        self.nebula_font_query_cursor.jump(&text, to_end, extend);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn font_query_select_all(&mut self) {
+        let text = self.nebula_font_query.clone();
+        self.nebula_font_query_cursor.select_all(&text);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn font_query_selected_text(&self) -> Option<String> {
+        self.nebula_font_query_cursor.selected_text(&self.nebula_font_query)
+    }
+
+    /// 按点击落点定位光标。`offset_x` 是相对文本起点的距离。
+    pub fn font_query_place(&mut self, offset_x: f32, cell_w: f32, extend: bool) {
+        let text = self.nebula_font_query.clone();
+        let index = ui::text_field::index_at(&text, offset_x, cell_w);
+        if extend {
+            self.nebula_font_query_cursor.extend_to(&text, index);
+        } else {
+            self.nebula_font_query_cursor.place(&text, index);
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn begin_font_query_drag(&mut self, offset_x: f32, cell_w: f32, extend: bool) {
+        self.font_query_place(offset_x, cell_w, extend);
+        self.nebula_settings_text_drag = Some((0, 0));
+        self.update_settings_ime_cursor();
+    }
+
+    pub fn begin_keymap_search_drag(&mut self, offset_x: f32, cell_w: f32, extend: bool) {
+        self.keymap_search_place(offset_x, cell_w, extend);
+        self.nebula_settings_text_drag = Some((1, 0));
+        self.update_settings_ime_cursor();
+    }
+
+    pub fn begin_ssh_proxy_drag(&mut self, index: usize, x: f32, extend: bool) {
+        self.ssh_proxy_field_place(index, x, extend);
+        self.nebula_settings_text_drag = Some((2, index.min(1)));
+        self.update_settings_ime_cursor();
+    }
+
+    pub fn settings_text_drag_to(&mut self, x: f32) -> bool {
+        let Some((kind, index)) = self.nebula_settings_text_drag else { return false };
+        match kind {
+            0 => {
+                let (text_x, cell_w) = self.font_search_text_origin();
+                self.font_query_place(x - text_x, cell_w, true);
+            },
+            1 => {
+                let (text_x, cell_w) = self.keymap_search_text_origin();
+                self.keymap_search_place(x - text_x, cell_w, true);
+            },
+            2 => self.ssh_proxy_field_place(index, x, true),
+            3 => self.provider_field_place(index, x, true),
+            _ => return false,
+        }
+        self.update_settings_ime_cursor();
+        true
+    }
+
+    pub fn end_settings_text_drag(&mut self) -> bool {
+        self.nebula_settings_text_drag.take().is_some()
+    }
+
+    /// 将输入法候选窗锚到当前自绘字段的 caret。终端网格的 caret 仍由主渲染
+    /// 路径维护；设置页是另一套坐标系，若不在这里重推，中文候选窗会飘到
+    /// 终端左上角，看起来就像输入框没有获得焦点。
+    pub(crate) fn update_settings_ime_cursor(&self) {
+        if !self.nebula_settings_open {
+            self.window.reset_ime_cursor_area_cache();
+            return;
+        }
+        let scale = self.window.scale_factor as f32;
+        let cell_w = self.size_info.cell_width();
+        let cell_h = self.size_info.cell_height();
+        let caret = |text: &str, cursor: &ui::text_field::TextCursor| {
+            ui::text_field::columns_before(text, cursor.caret(text)) as f32 * cell_w
+        };
+        if self.nebula_settings_dropdown == Some(settings::SettingsDropdown::Font) {
+            if let Some(field) = settings::font_search_field_rect(
+                &self.size_info,
+                scale,
+                self.terminal_card_rect(),
+                self.nebula_settings_section,
+                self.nebula_settings_scroll,
+                self.nebula_settings_dropdown,
+                self.font_picker_count(),
+                self.nebula_font_popup_scroll,
+                self.nebula_hidden_hosts.len(),
+                self.ssh_host_count(),
+                self.nebula_density,
+            ) {
+                self.window.set_ime_cursor_area_px(
+                    field.0
+                        + 12.0 * scale
+                        + caret(&self.nebula_font_query, &self.nebula_font_query_cursor),
+                    field.1,
+                    cell_w,
+                    field.3.max(cell_h),
+                );
+            }
+        } else if self.keymap_search_active() {
+            let field = settings::keymap_search_rect(
+                &self.size_info,
+                scale,
+                self.terminal_card_rect(),
+                self.nebula_settings_scroll,
+                self.nebula_hidden_hosts.len(),
+                self.ssh_host_count(),
+                self.nebula_density,
+                self.keymap_pane_state(),
+            );
+            self.window.set_ime_cursor_area_px(
+                field.0
+                    + 12.0 * scale
+                    + caret(&self.nebula_keymap_query, &self.nebula_keymap_query_cursor),
+                field.1,
+                cell_w,
+                field.3.max(cell_h),
+            );
+        } else if let Some(index) = self.nebula_ssh_proxy_focus {
+            let field = settings::ssh_proxy_input_rect(
+                &self.size_info,
+                scale,
+                self.terminal_card_rect(),
+                self.nebula_settings_scroll,
+                self.nebula_hidden_hosts.len(),
+                self.ssh_host_count(),
+                self.nebula_density,
+                self.ssh_proxy_pane_state(),
+                index,
+            );
+            let text = self.ssh_proxy_field_text(index);
+            self.window.set_ime_cursor_area_px(
+                field.0 + 12.0 * scale + caret(text, &self.nebula_ssh_proxy_cursor[index.min(1)]),
+                field.1,
+                cell_w,
+                field.3.max(cell_h),
+            );
+        } else if let Some(index) = self.nebula_provider_focus {
+            if let Some(field) = settings::provider_input_rect(
+                &self.size_info,
+                scale,
+                self.terminal_card_rect(),
+                self.nebula_settings_scroll,
+                self.nebula_hidden_hosts.len(),
+                self.ssh_host_count(),
+                self.nebula_density,
+                self.nebula_providers.providers.len(),
+                index,
+            ) {
+                let text = &self.nebula_provider_inputs[index];
+                self.window.set_ime_cursor_area_px(
+                    field.0 + 12.0 * scale + caret(text, &self.nebula_provider_cursors[index]),
+                    field.1,
+                    cell_w,
+                    field.3.max(cell_h),
+                );
+            }
+        }
+    }
+
+    pub fn font_popup_scroll(&self) -> usize {
+        self.nebula_font_popup_scroll
+    }
+
+    pub fn font_popup_scroll_by(&mut self, delta: i32) -> bool {
+        let total = settings::font_popup_row_count(self.nebula_font_families.len());
+        let max_scroll = total.saturating_sub(8);
+        let next =
+            (self.nebula_font_popup_scroll as i32 + delta).clamp(0, max_scroll as i32) as usize;
+        if next == self.nebula_font_popup_scroll {
+            return false;
+        }
+        self.nebula_font_popup_scroll = next;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    /// 字体弹层滚动条几何（绘制/命中同源）与最大候选偏移。
+    fn font_popup_scrollbar(&self) -> Option<(ui::widgets::OverlayScrollbar, usize)> {
+        settings::font_popup_scrollbar(
+            &self.size_info,
+            self.window.scale_factor as f32,
+            self.terminal_card_rect(),
+            self.nebula_settings_section,
+            self.nebula_settings_scroll,
+            self.nebula_settings_dropdown,
+            self.font_picker_count(),
+            self.nebula_font_popup_scroll,
+            self.nebula_hidden_hosts.len(),
+            self.ssh_host_count(),
+            self.nebula_density,
+        )
+    }
+
+    /// 按下：命中 track/thumb 即接管拖拽并立即滚到目标。返回是否消费。
+    pub fn font_popup_scrollbar_press(&mut self, x: f32, y: f32) -> bool {
+        let Some((bar, max)) = self.font_popup_scrollbar() else { return false };
+        if !bar.hit_test(x, y) {
+            return false;
+        }
+        let grab = if contains_rect(bar.thumb, x, y) { y - bar.thumb.1 } else { bar.thumb.3 * 0.5 };
+        self.nebula_font_popup_drag = Some(grab);
+        self.nebula_font_popup_scroll = bar.target_offset(y, grab, max);
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    pub fn font_popup_scrollbar_drag_to(&mut self, y: f32) -> bool {
+        let Some(grab) = self.nebula_font_popup_drag else { return false };
+        let Some((bar, max)) = self.font_popup_scrollbar() else { return false };
+        let target = bar.target_offset(y, grab, max);
+        if target != self.nebula_font_popup_scroll {
+            self.nebula_font_popup_scroll = target;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+        true
+    }
+
+    pub fn font_popup_scrollbar_dragging(&self) -> bool {
+        self.nebula_font_popup_drag.is_some()
+    }
+
+    pub fn end_font_popup_scrollbar_drag(&mut self) -> bool {
+        self.nebula_font_popup_drag.take().is_some()
+    }
+
+    /// 切换「显示全部」并重建目录。这是临时过滤，不写入设置。
+    pub fn toggle_font_show_all(&mut self) {
+        self.nebula_font_show_all = !self.nebula_font_show_all;
+        self.ensure_font_catalog();
+        self.nebula_font_popup_scroll = 0;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn close_font_picker(&mut self) {
+        if self.nebula_settings_dropdown == Some(settings::SettingsDropdown::Font) {
+            self.close_settings_dropdown();
+        }
+    }
+
+    pub fn effective_font(&self, base: &Font) -> Font {
+        base.clone().with_family(self.nebula_font_family.clone())
+    }
+
+    /// 事务性地切换字体族：先确认它真能加载，成功才更新生效字体与持久化
+    /// 偏好；失败保留原字体与原偏好，并给出可理解的错误。
+    ///
+    /// 上游此前「先持久化再加载」是安全的——那时目录里只有内置字体与已经
+    /// 成功导入过的族，个个都预先验证过。系统字体枚举打破了这个不变量，
+    /// 所以这道预检是本功能自带的安全网，不是顺手修的既有缺陷。
+    fn apply_font_family(&mut self, family: String, base: &Font) {
+        if !self.glyph_cache.family_loads(&family, self.font_size) {
+            self.nebula_font_notice = Some(format!("字体无法加载：{family}"));
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+            return;
+        }
+        // 字体选择器只换主族；用户手写的多级 fallback 链（逗号分隔，
+        // issue #33）原样保留在新值后面。
+        let family = {
+            let rest: Vec<&str> = crate::renderer::split_font_families(&self.nebula_font_family)
+                .into_iter()
+                .skip(1)
+                .filter(|fallback| *fallback != family)
+                .collect();
+            if rest.is_empty() { family } else { format!("{family}, {}", rest.join(", ")) }
+        };
+        self.nebula_font_family = family;
+        self.nebula_font_notice = None;
+        let font = self.effective_font(base).with_size(self.font_size);
+        self.pending_update.set_font(font);
+        self.persist_nebula_settings();
+        self.window.request_redraw();
+    }
+
+    pub fn set_terminal_font_by_index(&mut self, index: usize, base: &Font) {
+        if let Some(family) = self.nebula_font_families.get(index).cloned() {
+            self.apply_font_family(family, base);
+            self.nebula_settings_dropdown = None;
+            return;
+        }
+        // 倒数第二行：临时过滤切换，不关闭下拉——用户通常要接着挑字体。
+        if index == self.nebula_font_families.len() {
+            self.toggle_font_show_all();
+            return;
+        }
+        if index != self.nebula_font_families.len() + 1 {
+            return;
+        }
+
+        #[cfg(windows)]
+        {
+            let Some(source) = file_dialog::pick_font_file(&self.window) else { return };
+            let stored = match crate::font_install::store_imported_font(&source) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    self.nebula_font_notice = Some(error);
+                    self.nebula_settings_dropdown = None;
+                    self.pending_update.dirty = true;
+                    return;
+                },
+            };
+            match self.glyph_cache.add_private_font(&stored.path) {
+                Ok(families) => {
+                    for family in &families {
+                        if !self.nebula_font_families.iter().any(|known| known == family) {
+                            self.nebula_font_families.push(family.clone());
+                        }
+                    }
+                    self.nebula_font_families[1..]
+                        .sort_by_key(|family| family.to_ascii_lowercase());
+                    if let Some(family) = families.into_iter().next() {
+                        self.apply_font_family(family, base);
+                    }
+                },
+                Err(error) => {
+                    if stored.created {
+                        let _ = std::fs::remove_file(&stored.path);
+                    }
+                    self.nebula_font_notice = Some(format!("字体无法加载：{error}"));
+                    self.pending_update.dirty = true;
+                },
+            }
+            self.nebula_settings_dropdown = None;
+        }
+        #[cfg(not(windows))]
+        self.open_user_config_file();
+    }
+
+    /// Default-shell picker (command palette mode). Kept for compatibility.
+    /// detected-shell dropdown as the "+" chevron, but confirming SETS the
+    /// default instead of launching a tab. Replaces the old 2-value cycle.
+    pub fn open_default_shell_picker(&mut self) {
+        let shells =
+            self.nebula_detected_shells.get_or_insert_with(crate::shell_detect::detect_shells);
+        let profiles: Vec<_> = self
+            .nebula_profiles
+            .iter()
+            .filter(|profile| profile.settings_id().is_some())
+            .cloned()
+            .collect();
+        let default_shell =
+            self.nebula_shell_id.as_deref().unwrap_or_else(|| self.nebula_shell.settings_value());
+        self.nebula_palette.set_default_shell_menu(shells, &profiles, default_shell);
+        self.nebula_palette.open_default_picker();
+        self.pending_update.dirty = true;
+    }
+
+    /// Apply a picked default shell: keep the raw id for persistence and the
+    /// spawn override, and track the PTY-integrated executor family in the
+    /// enum so the prompt bootstrap picks the right base.
+    pub fn set_default_shell(&mut self, shell: &crate::shell_detect::DetectedShell) {
+        if let Some(family) = NebulaShell::from_settings(&shell.id) {
+            self.nebula_shell = family;
+        }
+        self.nebula_shell_id = Some(shell.id.clone());
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// Persist an imported terminal profile as the default shell. The profile
+    /// key resolves back to the live config on the next tab creation, while
+    /// the actual command and arguments remain owned by the imported store.
+    pub fn set_default_profile(&mut self, profile: &crate::config::ui_config::Profile) {
+        let Some(id) = profile.settings_id() else { return };
+        if let Some(family) = profile.shell_id.as_deref().and_then(NebulaShell::from_settings) {
+            self.nebula_shell = family;
+        }
+        self.nebula_shell_id = Some(id);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn set_default_shell_by_index(&mut self, index: usize) {
+        let detected_count = self.nebula_detected_shells.as_ref().map_or(0, Vec::len);
+        let shell =
+            self.nebula_detected_shells.as_ref().and_then(|shells| shells.get(index)).cloned();
+        if let Some(shell) = shell {
+            self.set_default_shell(&shell);
+        } else if let Some(profile) = self
+            .nebula_profiles
+            .iter()
+            .filter(|profile| profile.settings_id().is_some())
+            .nth(index.saturating_sub(detected_count))
+            .cloned()
+        {
+            self.set_default_profile(&profile);
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+    }
+
+    /// Restore a destination after the short Undo period. Config aliases only
+    /// need to leave `hidden_hosts`; manually saved addresses are re-added to
+    /// the saved list. Expired credentials intentionally remain deleted.
+    pub fn restore_hidden_ssh_host(&mut self, index: usize) {
+        let Some(host) = self.nebula_hidden_hosts.get(index).cloned() else { return };
+        let pending_same_host =
+            self.nebula_ssh_delete_undo.as_ref().is_some_and(|undo| undo.host == host);
+        if pending_same_host && self.undo_delete_ssh_host() {
+            return;
+        }
+
+        self.nebula_hidden_hosts.retain(|entry| entry != &host);
+        let from_config = crate::ssh::ssh_config_hosts().iter().any(|entry| entry == &host);
+        if !from_config && !self.nebula_saved_hosts.iter().any(|entry| entry == &host) {
+            self.nebula_saved_hosts.insert(0, host);
+        }
+        self.nebula_ssh_hosts = merge_ssh_hosts(
+            &self.nebula_saved_hosts,
+            &self.nebula_pinned_hosts,
+            &self.nebula_hidden_hosts,
+        );
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn toggle_fetch(&mut self) {
+        self.nebula_fetch_enabled = !self.nebula_fetch_enabled;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn toggle_powerline(&mut self) {
+        self.nebula_powerline_enabled = !self.nebula_powerline_enabled;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 界面→背景模糊。直接作用到窗口本身：DWM 的 backdrop 是**窗口属性**，
+    /// 不经过我们的渲染循环，所以标脏重绘是等不到它的。
+    pub fn toggle_blur(&mut self) {
+        self.nebula_blur = !self.nebula_blur;
+        self.window.set_blur(self.nebula_blur);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 高级→会话: whether closing a window keeps its shells in the resident
+    /// process (detach / re-attach restore) or kills them outright.
+    pub fn toggle_keep_session(&mut self) {
+        self.nebula_keep_session = !self.nebula_keep_session;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 高级→会话: 启动时是否回放上次的标签。写进设置文件即可——真正读它的
+    /// 是下次启动的 `create_initial_window`。
+    pub fn toggle_restore_session(&mut self) {
+        self.nebula_restore_session = !self.nebula_restore_session;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn begin_settings_opacity_drag(&mut self, target: SettingsOpacityTarget, pointer_x: f32) {
+        let slider = settings::opacity_slider_rect(
+            &self.ui_size_info(),
+            self.window.scale_factor as f32,
+            self.terminal_card_rect(),
+            self.nebula_settings_scroll,
+            target,
+            self.nebula_density,
+        );
+        self.nebula_settings_opacity_drag = Some((target, slider.0, slider.2));
+        self.update_settings_opacity_drag(pointer_x);
+    }
+
+    pub fn update_settings_opacity_drag(&mut self, pointer_x: f32) -> bool {
+        let Some((target, track_x, track_width)) = self.nebula_settings_opacity_drag else {
+            return false;
+        };
+        let value = settings::opacity_from_pointer(pointer_x, (track_x, 0.0, track_width, 0.0));
+        match target {
+            SettingsOpacityTarget::Terminal => {
+                if (self.nebula_window_opacity - value).abs() <= f32::EPSILON {
+                    return true;
+                }
+                self.nebula_window_opacity = value;
+                self.update_window_transparency();
+            },
+            SettingsOpacityTarget::BackgroundImage => {
+                if (self.nebula_background_image_opacity - value).abs() <= f32::EPSILON {
+                    return true;
+                }
+                self.nebula_background_image_opacity = value;
+                self.update_window_transparency();
+            },
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    pub fn finish_settings_opacity_drag(&mut self) -> bool {
+        if self.nebula_settings_opacity_drag.take().is_none() {
+            return false;
+        }
+        // 拖动过程只刷新画面，松手后集中落盘，避免连续写设置文件。
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        true
+    }
+
+    /// 键盘快捷键仍可循环预设背景色（与色盘同一色板）。
+    pub fn cycle_background_color(&mut self) {
+        self.nebula_bg_palette_index =
+            (self.nebula_bg_palette_index + 1) % settings::BACKGROUND_SWATCHES.len();
+        self.nebula_background = Some(settings::BACKGROUND_SWATCHES[self.nebula_bg_palette_index]);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 打开/关闭背景色浮层（调色盘 + 色板 + 16 进制输入），草稿预填当前
+    /// 生效色。灰/黑/白的色相在 RGB 里是缺失的：那时保留上一次的色相，
+    /// 用户把明度拨回来时不会发现色相被重置到红色。
+    pub fn open_background_color_picker(&mut self) {
+        let current = self.nebula_background.unwrap_or(self.colors[NamedColor::Background]);
+        self.nebula_bg_hex_input = format!("#{:02X}{:02X}{:02X}", current.r, current.g, current.b);
+        self.nebula_bg_hex_active = false;
+        let (h, s, v) = settings::rgb_to_hsv(current);
+        if s > f32::EPSILON && v > f32::EPSILON {
+            self.nebula_bg_picker_hsv = (h, s, v);
+        } else {
+            self.nebula_bg_picker_hsv = (self.nebula_bg_picker_hsv.0, s, v);
+        }
+        self.toggle_settings_dropdown(settings::SettingsDropdown::BackgroundColor);
+    }
+
+    /// 点选色板某格：应用、落盘并收起浮层。
+    pub fn set_background_color_option(&mut self, index: usize) {
+        if let Some(color) = settings::BACKGROUND_SWATCHES.get(index) {
+            self.nebula_bg_palette_index = index;
+            self.nebula_background = Some(*color);
+            self.nebula_bg_picker_hsv = settings::rgb_to_hsv(*color);
+            self.persist_nebula_settings();
+        }
+        self.close_settings_dropdown();
+        self.pending_update.dirty = true;
+    }
+
+    /// 调色盘按下：记录拖拽目标并立即按指针位置取一次色。
+    pub fn begin_bg_picker_drag(&mut self, part: settings::BgPickerPart, x: f32, y: f32) {
+        self.nebula_bg_picker_drag = Some(part);
+        self.update_bg_picker_drag(x, y);
+    }
+
+    /// 调色盘拖拽中：指针 → HSV → 实时应用为背景色（不落盘）。
+    /// 预览卡、终端和 hex 草稿同步跟随，松手才写设置文件。
+    pub fn update_bg_picker_drag(&mut self, x: f32, y: f32) -> bool {
+        let Some(part) = self.nebula_bg_picker_drag else {
+            return false;
+        };
+        let (sv, hue) = settings::background_color_picker_rects(
+            &self.ui_size_info(),
+            self.window.scale_factor as f32,
+            self.terminal_card_rect(),
+            self.nebula_settings_scroll,
+            self.nebula_density,
+        );
+        let (h, s, v) = &mut self.nebula_bg_picker_hsv;
+        match part {
+            settings::BgPickerPart::Sv => {
+                *s = ((x - sv.0) / sv.2.max(1.0)).clamp(0.0, 1.0);
+                *v = (1.0 - (y - sv.1) / sv.3.max(1.0)).clamp(0.0, 1.0);
+            },
+            settings::BgPickerPart::Hue => {
+                *h = ((x - hue.0) / hue.2.max(1.0)).clamp(0.0, 1.0) * 360.0;
+            },
+        }
+        let color = settings::hsv_to_rgb(*h, *s, *v);
+        self.nebula_background = Some(color);
+        self.nebula_bg_hex_input = format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b);
+        self.nebula_bg_hex_active = false;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    /// 调色盘松手：集中落盘（拖动过程只刷新画面，避免连续写设置文件）。
+    pub fn finish_bg_picker_drag(&mut self) -> bool {
+        if self.nebula_bg_picker_drag.take().is_none() {
+            return false;
+        }
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        true
+    }
+
+    pub fn focus_bg_hex_input(&mut self) {
+        self.nebula_bg_hex_active = true;
+        self.pending_update.dirty = true;
+    }
+
+    /// 追加 hex 字符：只收 `#` 与 16 进制位，总长 ≤ 7（`#RRGGBB`）。
+    pub fn bg_hex_push(&mut self, ch: char) {
+        let ok = ch == '#' || ch.is_ascii_hexdigit();
+        if ok && self.nebula_bg_hex_input.chars().count() < 7 {
+            self.nebula_bg_hex_input.push(ch);
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn bg_hex_backspace(&mut self) {
+        if self.nebula_bg_hex_input.pop().is_some() {
+            self.pending_update.dirty = true;
+        }
+    }
+
+    /// 回车应用 16 进制草稿；解析失败保持浮层与草稿原样。
+    pub fn bg_hex_commit(&mut self) -> bool {
+        let Some(color) = settings::parse_hex_rgb(self.nebula_bg_hex_input.trim()) else {
+            return false;
+        };
+        self.nebula_background = Some(color);
+        self.nebula_bg_picker_hsv = settings::rgb_to_hsv(color);
+        self.persist_nebula_settings();
+        self.close_settings_dropdown();
+        self.pending_update.dirty = true;
+        true
+    }
+
+    // ---- 设置→高级→同步（WebDAV） ----
+
+    /// 打开设置时装载同步状态：url/username/auto_pull 来自
+    /// `nebula_sync.txt`，密码/口令只查存在性（明文不进 UI 状态）。
+    pub fn load_sync_state(&mut self) {
+        let cfg = crate::sync::SyncConfig::load();
+        self.nebula_sync_inputs[0] = cfg.url;
+        self.nebula_sync_inputs[1] = cfg.username;
+        self.nebula_sync_inputs[2].clear();
+        self.nebula_sync_inputs[3].clear();
+        self.nebula_sync_auto_pull = cfg.auto_pull;
+        self.nebula_sync_secret_set = [crate::sync::has_password(), crate::sync::has_passphrase()];
+        self.nebula_sync_focus = None;
+    }
+
+    /// 聚焦某个同步输入框；先提交上一个（点击切换即失焦保存）。
+    pub fn focus_sync_field(&mut self, index: usize) {
+        if self.nebula_sync_focus == Some(index) {
+            return;
+        }
+        self.commit_sync_field();
+        self.nebula_sync_focus = Some(index.min(3));
+        self.pending_update.dirty = true;
+    }
+
+    pub fn sync_field_push(&mut self, ch: char) {
+        let Some(index) = self.nebula_sync_focus else { return };
+        if ch.is_control() {
+            return;
+        }
+        // url/username 拒绝空白；密码/口令允许内部空格（trim 在保存侧）。
+        if index < 2 && ch.is_whitespace() {
+            return;
+        }
+        if self.nebula_sync_inputs[index].chars().count() < 256 {
+            self.nebula_sync_inputs[index].push(ch);
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn sync_field_paste(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.sync_field_push(ch);
+        }
+    }
+
+    pub fn sync_field_backspace(&mut self) {
+        let Some(index) = self.nebula_sync_focus else { return };
+        if self.nebula_sync_inputs[index].pop().is_some() {
+            self.pending_update.dirty = true;
+        }
+    }
+
+    /// 失焦提交：url/username 写 `nebula_sync.txt`；密码/口令若有输入则
+    /// 存入凭据管理器并清空缓冲。口令被弱口令闸拒绝时留在状态行。
+    pub fn commit_sync_field(&mut self) {
+        let Some(index) = self.nebula_sync_focus.take() else { return };
+        self.pending_update.dirty = true;
+        match index {
+            0 | 1 => {
+                let mut cfg = crate::sync::SyncConfig::load();
+                cfg.url = self.nebula_sync_inputs[0].trim().to_owned();
+                cfg.username = self.nebula_sync_inputs[1].trim().to_owned();
+                cfg.auto_pull = self.nebula_sync_auto_pull;
+                if let Err(err) = cfg.save() {
+                    self.nebula_sync_status = Some((err, true));
+                }
+            },
+            2 | 3 => {
+                let secret = std::mem::take(&mut self.nebula_sync_inputs[index]);
+                if secret.trim().is_empty() {
+                    return;
+                }
+                let username = self.nebula_sync_inputs[1].trim().to_owned();
+                let result = if index == 2 {
+                    crate::sync::store_password(&username, &secret)
+                } else {
+                    crate::sync::store_passphrase(&username, &secret)
+                };
+                match result {
+                    Ok(()) => {
+                        self.nebula_sync_secret_set[index - 2] = true;
+                        self.nebula_sync_status = Some((
+                            if index == 2 {
+                                "WebDAV 密码已保存到凭据管理器".to_owned()
+                            } else {
+                                "同步口令已保存到凭据管理器".to_owned()
+                            },
+                            false,
+                        ));
+                    },
+                    Err(err) => self.nebula_sync_status = Some((err, true)),
+                }
+            },
+            _ => {},
+        }
+    }
+
+    // ---- 设置→供应商 ----
+
+    fn provider_edit_index(&self) -> Option<usize> {
+        self.nebula_providers
+            .providers
+            .iter()
+            .position(|provider| provider.id == self.nebula_providers.active_id)
+    }
+
+    pub(crate) fn provider_sync_inputs(&mut self) {
+        let Some(index) = self.provider_edit_index() else {
+            self.nebula_provider_inputs = Default::default();
+            self.nebula_provider_cursors = Default::default();
+            self.nebula_provider_focus = None;
+            return;
+        };
+        let provider = &self.nebula_providers.providers[index];
+        self.nebula_provider_inputs[0] = provider.name.clone();
+        self.nebula_provider_inputs[1] = provider.note.clone();
+        self.nebula_provider_inputs[2] = provider.website_url.clone();
+        self.nebula_provider_inputs[3] = provider.base_url.clone();
+        self.nebula_provider_inputs[4] = provider.model.clone();
+        self.nebula_provider_inputs[5].clear();
+        for (text, cursor) in
+            self.nebula_provider_inputs.iter().zip(self.nebula_provider_cursors.iter_mut())
+        {
+            cursor.collapse_to_end(text);
+        }
+        self.nebula_provider_focus = None;
+    }
+
+    pub fn provider_select(&mut self, index: usize) {
+        let Some(id) =
+            self.nebula_providers.providers.get(index).map(|provider| provider.id.clone())
+        else {
+            return;
+        };
+        self.commit_provider_field();
+        self.nebula_providers.active_id = id;
+        self.nebula_provider_test_seq = self.nebula_provider_test_seq.wrapping_add(1);
+        self.nebula_provider_test_request = None;
+        self.nebula_provider_codex_confirm = None;
+        self.nebula_provider_status = None;
+        let _ = crate::ai_providers::save(&self.nebula_providers);
+        self.provider_sync_inputs();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_add(&mut self) {
+        self.commit_provider_field();
+        let id = crate::ai_providers::next_custom_id(&self.nebula_providers);
+        let provider =
+            crate::ai_providers::AiProvider::preset(crate::ai_providers::ProviderKind::Custom, &id);
+        self.nebula_providers.active_id = id;
+        self.nebula_providers.providers.push(provider);
+        self.nebula_provider_codex_confirm = None;
+        self.nebula_provider_status = None;
+        self.provider_sync_inputs();
+        let _ = crate::ai_providers::save(&self.nebula_providers);
+        self.nebula_provider_codex_confirm = None;
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_toggle_codex_goals(&mut self) {
+        let Some(index) = self.provider_edit_index() else { return };
+        let provider = &mut self.nebula_providers.providers[index];
+        provider.codex_goals = !provider.codex_goals;
+        self.nebula_provider_codex_confirm = None;
+        let _ = crate::ai_providers::save(&self.nebula_providers);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_toggle_codex_remote(&mut self) {
+        let Some(index) = self.provider_edit_index() else { return };
+        let provider = &mut self.nebula_providers.providers[index];
+        provider.codex_remote_compaction = !provider.codex_remote_compaction;
+        self.nebula_provider_codex_confirm = None;
+        let _ = crate::ai_providers::save(&self.nebula_providers);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_apply_codex(&mut self) {
+        self.commit_provider_field();
+        let Some(index) = self.provider_edit_index() else { return };
+        let provider = self.nebula_providers.providers[index].clone();
+        if self.nebula_provider_codex_confirm.as_deref() != Some(provider.id.as_str()) {
+            self.nebula_provider_codex_confirm = Some(provider.id);
+            self.nebula_provider_status = Some((
+                self.ui_language()
+                    .pick(
+                        "再次点击确认：API Key 将明文写入 Codex auth.json（原文件会备份）",
+                        "Click again: the API key will be written to Codex auth.json in plaintext (with backup)",
+                    )
+                    .to_owned(),
+                false,
+            ));
+            self.pending_update.dirty = true;
+            return;
+        }
+        self.nebula_provider_codex_confirm = None;
+        self.nebula_provider_status = Some(match crate::codex_config::apply_provider(&provider) {
+            Ok(path) => (
+                self.ui_language().pick("已应用到 Codex：", "Applied to Codex: ").to_owned()
+                    + &path.display().to_string(),
+                false,
+            ),
+            Err(error) => (error, true),
+        });
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_toggle_enabled(&mut self) {
+        let Some(index) = self.provider_edit_index() else { return };
+        self.nebula_providers.providers[index].enabled =
+            !self.nebula_providers.providers[index].enabled;
+        let _ = crate::ai_providers::save(&self.nebula_providers);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn focus_provider_field(&mut self, index: usize) {
+        if index >= self.nebula_provider_inputs.len() {
+            return;
+        }
+        if self.nebula_provider_focus != Some(index) {
+            self.commit_provider_field();
+            self.nebula_provider_focus = Some(index);
+            self.nebula_provider_cursors[index]
+                .collapse_to_end(&self.nebula_provider_inputs[index]);
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn provider_field_push(&mut self, ch: char) {
+        let mut buffer = [0; 4];
+        self.provider_field_paste(ch.encode_utf8(&mut buffer));
+    }
+
+    pub fn provider_field_backspace(&mut self) {
+        let Some(index) = self.nebula_provider_focus else { return };
+        self.nebula_provider_cursors[index].backspace(&mut self.nebula_provider_inputs[index]);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_field_paste(&mut self, text: &str) {
+        let Some(index) = self.nebula_provider_focus else { return };
+        let available = 512usize.saturating_sub(self.nebula_provider_inputs[index].chars().count());
+        let clean: String = text
+            .chars()
+            .filter(|ch| !ch.is_control() && (index == 1 || !ch.is_whitespace()))
+            .take(available)
+            .collect();
+        self.nebula_provider_cursors[index].insert(&mut self.nebula_provider_inputs[index], &clean);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_field_delete_forward(&mut self) {
+        let Some(index) = self.nebula_provider_focus else { return };
+        self.nebula_provider_cursors[index].delete_forward(&mut self.nebula_provider_inputs[index]);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_field_move(&mut self, forward: bool, extend: bool) {
+        let Some(index) = self.nebula_provider_focus else { return };
+        let text = self.nebula_provider_inputs[index].clone();
+        self.nebula_provider_cursors[index].step(&text, forward, extend);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_field_jump(&mut self, to_end: bool, extend: bool) {
+        let Some(index) = self.nebula_provider_focus else { return };
+        let text = self.nebula_provider_inputs[index].clone();
+        self.nebula_provider_cursors[index].jump(&text, to_end, extend);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_field_select_all(&mut self) {
+        let Some(index) = self.nebula_provider_focus else { return };
+        let text = self.nebula_provider_inputs[index].clone();
+        self.nebula_provider_cursors[index].select_all(&text);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_field_selected_text(&self) -> Option<String> {
+        let index = self.nebula_provider_focus?;
+        // Secret fields accept paste but never expose cleartext to Clipboard.
+        (index != 5).then(|| {
+            self.nebula_provider_cursors[index].selected_text(&self.nebula_provider_inputs[index])
+        })?
+    }
+
+    pub fn provider_field_cut(&mut self) -> Option<String> {
+        let selected = self.provider_field_selected_text()?;
+        self.provider_field_backspace();
+        Some(selected)
+    }
+
+    pub fn provider_field_place(&mut self, index: usize, pointer_x: f32, extend: bool) {
+        if self.nebula_provider_focus != Some(index) {
+            return;
+        }
+        let scale = self.window.scale_factor as f32;
+        let Some(field) = settings::provider_input_rect(
+            &self.size_info,
+            scale,
+            self.terminal_card_rect(),
+            self.nebula_settings_scroll,
+            self.nebula_hidden_hosts.len(),
+            self.ssh_host_count(),
+            self.nebula_density,
+            self.nebula_providers.providers.len(),
+            index,
+        ) else {
+            return;
+        };
+        let text = self.nebula_provider_inputs[index].clone();
+        let at = ui::text_field::index_at(
+            &text,
+            pointer_x - field.0 - 12.0 * scale,
+            self.size_info.cell_width(),
+        );
+        if extend {
+            self.nebula_provider_cursors[index].extend_to(&text, at);
+        } else {
+            self.nebula_provider_cursors[index].place(&text, at);
+        }
+        self.pending_update.dirty = true;
+    }
+
+    pub fn begin_provider_field_drag(&mut self, index: usize, pointer_x: f32, extend: bool) {
+        self.provider_field_place(index, pointer_x, extend);
+        self.nebula_settings_text_drag = Some((3, index));
+        self.update_settings_ime_cursor();
+    }
+
+    pub fn commit_provider_field(&mut self) {
+        let Some(field) = self.nebula_provider_focus.take() else { return };
+        let Some(index) = self.provider_edit_index() else { return };
+        let provider = &mut self.nebula_providers.providers[index];
+        let value = self.nebula_provider_inputs[field].trim().to_owned();
+        match field {
+            0 => provider.name = value,
+            1 => provider.note = value,
+            2 => provider.website_url = value,
+            3 => provider.base_url = value,
+            4 => provider.model = value,
+            5 => {
+                if !value.is_empty() {
+                    match crate::ai_providers::store_provider_api_key(provider, &value) {
+                        Ok(()) => {
+                            self.nebula_provider_status = Some((
+                                self.ui_language()
+                                    .pick(
+                                        "API Key 已保存到凭据管理器",
+                                        "API key saved to the credential manager",
+                                    )
+                                    .to_owned(),
+                                false,
+                            ));
+                        },
+                        Err(err) => self.nebula_provider_status = Some((err.to_string(), true)),
+                    }
+                }
+                self.nebula_provider_inputs[5].clear();
+            },
+            _ => {},
+        }
+        let _ = crate::ai_providers::save(&self.nebula_providers);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_save(&mut self) {
+        self.commit_provider_field();
+        if let Err(err) = crate::ai_providers::save(&self.nebula_providers) {
+            self.nebula_provider_status = Some((err.to_string(), true));
+        } else {
+            self.nebula_provider_status = Some((
+                self.ui_language().pick("供应商配置已保存", "Provider saved").to_owned(),
+                false,
+            ));
+        }
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_test(&mut self) {
+        self.commit_provider_field();
+        let Some(index) = self.provider_edit_index() else { return };
+        let provider = self.nebula_providers.providers[index].clone();
+        let valid_url =
+            provider.base_url.starts_with("http://") || provider.base_url.starts_with("https://");
+        if !valid_url
+            || provider.model.trim().is_empty()
+            || (provider.kind.requires_api_key() && !provider.api_key_set)
+        {
+            self.nebula_provider_status = Some((
+                self.ui_language()
+                    .pick(
+                        "请填写有效的请求地址、模型并保存 API Key",
+                        "Enter an endpoint and model, then save an API key",
+                    )
+                    .to_owned(),
+                true,
+            ));
+            self.pending_update.dirty = true;
+            return;
+        }
+        self.nebula_provider_test_seq = self.nebula_provider_test_seq.wrapping_add(1);
+        let request_id = self.nebula_provider_test_seq;
+        self.nebula_provider_test_request =
+            Some(crate::ai_providers::ProviderTestRequest { request_id, provider });
+        self.nebula_provider_status = Some((
+            self.ui_language().pick("正在测试连接…", "Testing connection...").to_owned(),
+            false,
+        ));
+        self.pending_update.dirty = true;
+    }
+
+    pub(crate) fn take_provider_test_request(
+        &mut self,
+    ) -> Option<crate::ai_providers::ProviderTestRequest> {
+        self.nebula_provider_test_request.take()
+    }
+
+    pub(crate) fn provider_test_done(
+        &mut self,
+        request_id: u64,
+        provider_id: &str,
+        outcome: &crate::provider_test::ProviderTestOutcome,
+        elapsed_ms: u64,
+    ) {
+        if request_id != self.nebula_provider_test_seq
+            || provider_id != self.nebula_providers.active_id
+        {
+            return;
+        }
+        self.nebula_provider_status = Some((
+            format!("{} · {elapsed_ms} ms", self.ui_language().provider_test_message(outcome)),
+            !outcome.is_success(),
+        ));
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_delete(&mut self) {
+        let Some(index) = self.provider_edit_index() else { return };
+        let id = self.nebula_providers.providers[index].id.clone();
+        self.nebula_provider_test_seq = self.nebula_provider_test_seq.wrapping_add(1);
+        self.nebula_provider_test_request = None;
+        self.nebula_provider_codex_confirm = None;
+        self.nebula_provider_status =
+            match crate::ai_providers::remove_provider(&mut self.nebula_providers, &id) {
+                Ok(()) => {
+                    self.provider_sync_inputs();
+                    Some((
+                        self.ui_language().pick("供应商已删除", "Provider deleted").to_owned(),
+                        false,
+                    ))
+                },
+                Err(error) => Some((error.to_string(), true)),
+            };
+        self.pending_update.dirty = true;
+    }
+
+    pub fn provider_count(&self) -> usize {
+        self.nebula_providers.providers.len()
+    }
+
+    /// Esc：丢弃当前草稿并失焦（url/username 还原为文件值）。
+    pub fn cancel_sync_field(&mut self) {
+        let Some(index) = self.nebula_sync_focus.take() else { return };
+        let cfg = crate::sync::SyncConfig::load();
+        match index {
+            0 => self.nebula_sync_inputs[0] = cfg.url,
+            1 => self.nebula_sync_inputs[1] = cfg.username,
+            _ => self.nebula_sync_inputs[index].clear(),
+        }
+        self.pending_update.dirty = true;
+    }
+
+    /// 设置→网络代理：选择全局模式（下拉行序 =
+    /// [`settings::SSH_PROXY_MODE_OPTIONS`]），落盘即生效——连接侧每次
+    /// 建连都重读设置文件。
+    pub fn set_ssh_proxy_mode(&mut self, index: usize) {
+        if let Some(mode) = settings::SSH_PROXY_MODE_OPTIONS.get(index) {
+            if self.nebula_ssh_proxy_mode != *mode {
+                self.nebula_ssh_proxy_mode = *mode;
+                self.invalidate_proxy_test();
+                self.persist_nebula_settings();
+                if *mode == crate::ssh_proxy::ProxyMode::System {
+                    // 切到跟随系统时刷新「当前读到」——只在点击时读注册表。
+                    self.refresh_system_proxy_probe();
+                }
+            }
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 网络页几何的动态输入（滚动上限与命中测试的调用方取用）。
+    pub fn ssh_proxy_pane_state(&self) -> settings::ProxyPaneState {
+        settings::ProxyPaneState {
+            mode: self.nebula_ssh_proxy_mode,
+            choice: self.nebula_ssh_proxy_choice,
+            found_count: self.nebula_local_proxies.len(),
+            scanning: self.nebula_proxy_scanning,
+            override_count: 0,
+        }
+    }
+
+    /// 刷新「跟随系统」探测缓存。注册表读取是跨进程调用，只允许由
+    /// 进网络页 / 切模式 / 启动这几个离散事件触发，绝不逐帧。
+    pub fn refresh_system_proxy_probe(&mut self) {
+        self.nebula_system_proxy_probe = crate::ssh_proxy::probe_system_proxy()
+            .map(|(url, source)| (url, source == crate::ssh_proxy::SystemProxySource::Registry));
+    }
+
+    fn invalidate_proxy_test(&mut self) {
+        self.nebula_proxy_test_seq = self.nebula_proxy_test_seq.wrapping_add(1);
+        self.nebula_proxy_test_request = None;
+        self.nebula_proxy_test_status = settings::ProxyTestStatus::Idle;
+    }
+
+    /// 先提交当前输入，再把测试请求交给事件层的共享 SSH runtime。测试线程
+    /// 会重新读取落盘配置，因此验证的就是下一条真实连接会使用的值。
+    pub fn request_proxy_test(&mut self) {
+        self.commit_ssh_proxy_field();
+        if matches!(self.nebula_proxy_test_status, settings::ProxyTestStatus::Running) {
+            return;
+        }
+        self.nebula_proxy_test_seq = self.nebula_proxy_test_seq.wrapping_add(1);
+        let request_id = self.nebula_proxy_test_seq;
+        self.nebula_proxy_test_request = Some(request_id);
+        self.nebula_proxy_test_status = settings::ProxyTestStatus::Running;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub(crate) fn take_proxy_test_request(&mut self) -> Option<u64> {
+        self.nebula_proxy_test_request.take()
+    }
+
+    pub(crate) fn proxy_test_done(
+        &mut self,
+        request_id: u64,
+        outcome: crate::proxy_test::ProxyTestOutcome,
+        elapsed_ms: u64,
+    ) {
+        if request_id != self.nebula_proxy_test_seq
+            || !matches!(self.nebula_proxy_test_status, settings::ProxyTestStatus::Running)
+        {
+            return;
+        }
+        self.nebula_proxy_test_status = settings::ProxyTestStatus::Complete { outcome, elapsed_ms };
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 指定代理列表选择：发现项在前，随后依次为手动、SSH 跳板、自定义
+    /// 命令。切换方式时清空共享 URL，避免解析层拾取已不可见的残值。
+    pub fn set_ssh_proxy_link_pick(&mut self, index: usize) {
+        let found_count = self.nebula_local_proxies.len();
+        let choice = if index < found_count {
+            settings::ProxyChoice::Detected(index)
+        } else {
+            match index - found_count {
+                0 => settings::ProxyChoice::Manual,
+                1 => settings::ProxyChoice::Jump,
+                2 => settings::ProxyChoice::Command,
+                _ => return,
+            }
+        };
+        if self.nebula_ssh_proxy_choice != choice {
+            self.nebula_ssh_proxy_choice = choice;
+            self.nebula_ssh_proxy_draft.clear();
+            self.nebula_ssh_proxy_focus = None;
+            self.nebula_ssh_proxy_url = match choice {
+                settings::ProxyChoice::Detected(found) => self
+                    .nebula_local_proxies
+                    .get(found)
+                    .map(|proxy| proxy.url())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            if choice == settings::ProxyChoice::Manual {
+                self.nebula_ssh_proxy_protocol = settings::ManualProxyProtocol::Socks5;
+            }
+            self.persist_nebula_settings();
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn request_local_proxy_scan(&mut self) {
+        if self.nebula_proxy_scanning {
+            return;
+        }
+        self.nebula_proxy_scanning = true;
+        self.nebula_proxy_scan_request = true;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub(crate) fn take_local_proxy_scan_request(&mut self) -> bool {
+        std::mem::take(&mut self.nebula_proxy_scan_request)
+    }
+
+    pub fn local_proxy_scan_done(&mut self, proxies: Vec<crate::ssh_proxy::LocalProxyEndpoint>) {
+        self.nebula_proxy_scanning = false;
+        self.nebula_local_proxies = proxies;
+        if self.nebula_ssh_proxy_mode == crate::ssh_proxy::ProxyMode::Custom
+            && self.nebula_ssh_proxy_url.trim().is_empty()
+            && !self.nebula_local_proxies.is_empty()
+        {
+            self.nebula_ssh_proxy_choice = settings::ProxyChoice::Detected(0);
+            self.nebula_ssh_proxy_url = self.nebula_local_proxies[0].url();
+            self.persist_nebula_settings();
+        }
+        self.nebula_ssh_proxy_choice = self
+            .nebula_local_proxies
+            .iter()
+            .position(|proxy| proxy.url() == self.nebula_ssh_proxy_url)
+            .map(settings::ProxyChoice::Detected)
+            .unwrap_or_else(|| {
+                if crate::ssh_proxy::jump_target(&self.nebula_ssh_proxy_url).is_some() {
+                    settings::ProxyChoice::Jump
+                } else if crate::ssh_proxy::command_target(&self.nebula_ssh_proxy_url).is_some() {
+                    settings::ProxyChoice::Command
+                } else {
+                    settings::ProxyChoice::Manual
+                }
+            });
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 跳板下拉选择：写 `jump:<destination>` 并立即落盘（连接侧每次建连
+    /// 重读设置文件，无需再通知）。
+    pub fn set_ssh_proxy_jump_host(&mut self, index: usize) {
+        if let Some(destination) = self.nebula_ssh_hosts.get(index) {
+            let value = format!("jump:{destination}");
+            if self.nebula_ssh_proxy_url != value {
+                self.nebula_ssh_proxy_url = value;
+                self.persist_nebula_settings();
+            }
+        }
+        self.nebula_settings_dropdown = None;
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 每主机覆盖行 → 打开该主机的编辑器。`index` 是覆盖列表下标，过滤
+    /// 顺序与视图构建完全一致（同一迭代 + 同一谓词）。
+    pub fn edit_ssh_proxy_override(&mut self, index: usize) {
+        let _ = index;
+    }
+
+    // ---- 按键映射页：搜索与冲突 ----
+
+    /// 搜索框是否接管键盘（捕获态优先于搜索）。
+    pub fn keymap_search_active(&self) -> bool {
+        self.nebula_settings_open
+            && self.nebula_keymap_search_focus
+            && self.nebula_keymap_capture.is_none()
+    }
+
+    pub fn focus_keymap_search(&mut self) {
+        self.nebula_keymap_search_focus = true;
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn blur_keymap_search(&mut self) {
+        if self.nebula_keymap_search_focus {
+            self.nebula_keymap_search_focus = false;
+            self.update_settings_ime_cursor();
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn keymap_search_push(&mut self, ch: char) {
+        if ch.is_control() {
+            return;
+        }
+        self.nebula_keymap_query_cursor.insert(&mut self.nebula_keymap_query, &ch.to_string());
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_edit(&mut self, text: &str) {
+        let clean: String = text.chars().filter(|ch| !ch.is_control()).collect();
+        if clean.is_empty() {
+            return;
+        }
+        self.nebula_keymap_query_cursor.insert(&mut self.nebula_keymap_query, &clean);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_backspace(&mut self) {
+        self.nebula_keymap_query_cursor.backspace(&mut self.nebula_keymap_query);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_delete_forward(&mut self) {
+        self.nebula_keymap_query_cursor.delete_forward(&mut self.nebula_keymap_query);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_move(&mut self, forward: bool, extend: bool) {
+        let text = self.nebula_keymap_query.clone();
+        self.nebula_keymap_query_cursor.step(&text, forward, extend);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_jump(&mut self, to_end: bool, extend: bool) {
+        let text = self.nebula_keymap_query.clone();
+        self.nebula_keymap_query_cursor.jump(&text, to_end, extend);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_select_all(&mut self) {
+        let text = self.nebula_keymap_query.clone();
+        self.nebula_keymap_query_cursor.select_all(&text);
+        self.update_settings_ime_cursor();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// 搜索框文本起点 x 与单元格宽；与渲染同源，点击定位不会漂。
+    pub fn keymap_search_text_origin(&self) -> (f32, f32) {
+        let scale = self.window.scale_factor as f32;
+        let rect = settings::keymap_search_rect(
+            &self.size_info,
+            scale,
+            self.terminal_card_rect(),
+            self.nebula_settings_scroll,
+            self.nebula_hidden_hosts.len(),
+            self.ssh_host_count(),
+            self.nebula_density,
+            self.keymap_pane_state(),
+        );
+        (rect.0 + 12.0 * scale, self.size_info.cell_width())
+    }
+
+    pub fn keymap_search_place(&mut self, offset_x: f32, cell_w: f32, extend: bool) {
+        let text = self.nebula_keymap_query.clone();
+        let index = ui::text_field::index_at(&text, offset_x, cell_w);
+        if extend {
+            self.nebula_keymap_query_cursor.extend_to(&text, index);
+        } else {
+            self.nebula_keymap_query_cursor.place(&text, index);
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn keymap_search_selected_text(&self) -> Option<String> {
+        self.nebula_keymap_query_cursor.selected_text(&self.nebula_keymap_query)
+    }
+
+    /// Esc 两段式：先清词，词已空则退出聚焦——与字体弹层搜索一致。
+    pub fn keymap_search_escape(&mut self) {
+        if self.nebula_keymap_query.is_empty() {
+            self.nebula_keymap_search_focus = false;
+        } else {
+            self.nebula_keymap_query.clear();
+            self.nebula_keymap_query_cursor = Default::default();
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// flat 行的可搜索文本：动作名（中英）+ 当前键位展示串。
+    fn keymap_row_haystack(&self, flat: usize) -> String {
+        let combo = if flat == keymap::QUICK_TERMINAL_ROW {
+            keymap::display_stored_combo(&self.nebula_quick_terminal_hotkey)
+        } else {
+            keymap::EDITABLE_ACTIONS
+                .get(flat - 1)
+                .and_then(|(action, ..)| keymap::effective_combo(action, &self.nebula_keymap))
+                .map(|(combo, _)| combo)
+                .unwrap_or_default()
+        };
+        let (zh, en) = if flat == keymap::QUICK_TERMINAL_ROW {
+            ("快速终端", "Quick terminal")
+        } else {
+            keymap::EDITABLE_ACTIONS.get(flat - 1).map(|(_, zh, en)| (*zh, *en)).unwrap_or(("", ""))
+        };
+        format!("{zh} {en} {combo}").to_lowercase()
+    }
+
+    /// 过滤后的可见行（flat 下标，升序）。空查询 = 全部。
+    pub fn keymap_visible_editable(&self) -> Vec<usize> {
+        let query = self.nebula_keymap_query.trim().to_lowercase();
+        (0..keymap::editable_row_count())
+            .filter(|flat| query.is_empty() || self.keymap_row_haystack(*flat).contains(&query))
+            .collect()
+    }
+
+    fn keymap_visible_readonly(&self) -> Vec<usize> {
+        let query = self.nebula_keymap_query.trim().to_lowercase();
+        keymap::READONLY_ROWS
+            .iter()
+            .enumerate()
+            .filter(|(_, (zh, en, combo))| {
+                query.is_empty() || format!("{zh} {en} {combo}").to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 冲突检测：同一 combo 绑了多个动作 → 每行标记 + 一句提示。只报第一组
+    /// ——修完一组再报下一组，提示条不该自己变成列表。
+    fn keymap_clash_info(&self) -> (Vec<bool>, Option<String>) {
+        let total = keymap::editable_row_count();
+        let mut combos: Vec<Option<String>> = Vec::with_capacity(total);
+        for flat in 0..total {
+            let combo = if flat == keymap::QUICK_TERMINAL_ROW {
+                Some(keymap::display_stored_combo(&self.nebula_quick_terminal_hotkey))
+            } else {
+                keymap::EDITABLE_ACTIONS
+                    .get(flat - 1)
+                    .and_then(|(action, ..)| keymap::effective_combo(action, &self.nebula_keymap))
+                    .map(|(combo, _)| combo)
+            };
+            combos.push(combo.filter(|combo| !combo.is_empty()));
+        }
+        let mut rows = vec![false; total];
+        let mut note = None;
+        let name = |flat: usize| -> String {
+            if flat == keymap::QUICK_TERMINAL_ROW {
+                self.nebula_language.pick("快速终端", "Quick terminal").to_owned()
+            } else {
+                keymap::EDITABLE_ACTIONS
+                    .get(flat - 1)
+                    .map(|row| keymap::action_label(row, self.nebula_language).to_owned())
+                    .unwrap_or_default()
+            }
+        };
+        for a in 0..total {
+            let Some(combo_a) = combos[a].clone() else { continue };
+            for b in (a + 1)..total {
+                let Some(combo_b) = &combos[b] else { continue };
+                if !combo_a.eq_ignore_ascii_case(combo_b) {
+                    continue;
+                }
+                rows[a] = true;
+                rows[b] = true;
+                if note.is_none() {
+                    let (a_name, b_name) = (name(a), name(b));
+                    let zh = format!(
+                        "{combo_a} 同时绑定了「{a_name}」与「{b_name}」——只有排前面的「{a_name}」会触发"
+                    );
+                    let en = format!(
+                        "{combo_a} is bound to both {a_name} and {b_name} — only {a_name}, listed first, fires"
+                    );
+                    note = Some(self.nebula_language.pick(&zh, &en).to_owned());
+                }
+            }
+        }
+        (rows, note)
+    }
+
+    /// 按键映射页几何输入（滚动上限与命中测试的调用方取用）。
+    pub fn keymap_pane_state(&self) -> settings::KeymapPaneState {
+        let visible = self.keymap_visible_editable();
+        let mut pane = settings::KeymapPaneState {
+            readonly_visible: self.keymap_visible_readonly().len() as u8,
+            clash: self.keymap_clash_info().1.is_some(),
+            ..Default::default()
+        };
+        let mut start = 0usize;
+        for (group, (.., count)) in keymap::GROUPS.iter().enumerate() {
+            let end = start + count;
+            pane.visible[group] =
+                visible.iter().filter(|flat| (start..end).contains(*flat)).count() as u8;
+            start = end;
+        }
+        pane
+    }
+
+    /// 可见槽位 → flat 行（点击命中带的是过滤后的槽位）。
+    pub fn keymap_slot_to_flat(&self, slot: usize) -> Option<usize> {
+        self.keymap_visible_editable().get(slot).copied()
+    }
+
+    pub fn keymap_begin_capture_slot(&mut self, slot: usize) {
+        if let Some(flat) = self.keymap_slot_to_flat(slot) {
+            self.nebula_keymap_search_focus = false;
+            self.keymap_begin_capture(flat);
+        }
+    }
+
+    pub fn toggle_sync_auto_pull(&mut self) {
+        self.nebula_sync_auto_pull = !self.nebula_sync_auto_pull;
+        let mut cfg = crate::sync::SyncConfig::load();
+        cfg.url = self.nebula_sync_inputs[0].trim().to_owned();
+        cfg.username = self.nebula_sync_inputs[1].trim().to_owned();
+        cfg.auto_pull = self.nebula_sync_auto_pull;
+        if let Err(err) = cfg.save() {
+            self.nebula_sync_status = Some((err, true));
+        }
+        self.pending_update.dirty = true;
+    }
+
+    /// 推/拉按钮按下：提交草稿、置忙。实际网络动作由调用侧发事件。
+    pub fn begin_sync_action(&mut self) -> bool {
+        if self.nebula_sync_busy {
+            return false;
+        }
+        self.commit_sync_field();
+        self.nebula_sync_busy = true;
+        self.nebula_sync_status = Some(("同步中…".to_owned(), false));
+        self.pending_update.dirty = true;
+        true
+    }
+
+    /// 后台同步线程回报（`NebulaSyncDone`）。
+    pub fn sync_action_done(&mut self, message: &str, error: bool) {
+        self.nebula_sync_busy = false;
+        self.nebula_sync_status = Some((message.to_owned(), error));
+        // 拉取可能改写了设置文件的凭据外字段；存在性也可能被首存翻转。
+        self.nebula_sync_secret_set = [crate::sync::has_password(), crate::sync::has_passphrase()];
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// Pick a background image through the OS file dialog, then persist it and
+    /// refresh the renderer's cached wallpaper. On non-Windows platforms the
+    /// native dialog isn't wired up, so we fall back to opening the settings
+    /// file for the path to be entered by hand.
+    /// Native save dialog for a workspace export, pre-filled with
+    /// `default_name`. `None` when the user cancels.
+    pub fn save_workspace_dialog(&self, default_name: &str) -> Option<std::path::PathBuf> {
+        file_dialog::save_workspace_file(&self.window, default_name)
+    }
+
+    /// Native open dialog for a workspace import. `None` when cancelled.
+    pub fn pick_workspace_dialog(&self) -> Option<std::path::PathBuf> {
+        file_dialog::pick_workspace_file(&self.window)
+    }
+
+    pub fn pick_background_image(&mut self) {
+        #[cfg(windows)]
+        {
+            if let Some(path) = file_dialog::pick_image_file(&self.window) {
+                self.nebula_background_image = Some(path);
+                self.persist_nebula_settings();
+                self.renderer.invalidate_background_image();
+                self.update_window_transparency();
+                self.pending_update.dirty = true;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            self.open_user_config_file();
+        }
+    }
+
+    pub fn clear_background_image(&mut self) {
+        if self.nebula_background_image.take().is_some() {
+            self.persist_nebula_settings();
+            self.renderer.invalidate_background_image();
+            self.update_window_transparency();
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn request_toggle_background_image_cover_chrome(&mut self) {
+        if self.nebula_background_image_cover_chrome {
+            self.nebula_background_image_cover_chrome = false;
+            self.persist_nebula_settings();
+        } else {
+            self.nebula_confirm = Some(NebulaConfirm::EnableBackgroundImageCoverChrome);
+        }
+        self.pending_update.dirty = true;
+    }
+
+    /// 设置·交互「拖拽调节侧栏」开关。关→开要过一次确认框（宽度拖动会
+    /// 实时重排终端，用户裁定必须明确告知）；开→关直接生效。
+    pub fn request_toggle_panel_resize(&mut self) {
+        if self.nebula_panel_resize {
+            self.nebula_panel_resize = false;
+            self.persist_nebula_settings();
+        } else {
+            self.nebula_confirm = Some(NebulaConfirm::EnablePanelResize);
+        }
+        self.pending_update.dirty = true;
+    }
+
+    /// 确认框「是」：真正开启拖拽调节。
+    pub fn confirm_panel_resize(&mut self) {
+        self.nebula_confirm = None;
+        self.nebula_panel_resize = true;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn confirm_background_image_cover_chrome(&mut self) {
+        self.nebula_confirm = None;
+        self.nebula_background_image_cover_chrome = true;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn open_user_config_file(&mut self) {
+        self.persist_nebula_settings();
+        let active_lua = self.nebula_config_paths.first().filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
+        });
+        let path = active_lua.cloned().or_else(|| crate::config::source::default_lua_path().ok());
+        let Some(path) = path else {
+            log::error!(
+                target: crate::logging::LOG_TARGET_CONFIG,
+                "Unable to determine Lua config path"
+            );
+            return;
+        };
+        if !path.exists() {
+            let language = crate::config::template::resolve_template_language(
+                Some(self.nebula_language_preference.as_str()),
+                None,
+                crate::config::template::system_locale().as_deref(),
+            )
+            .unwrap_or(crate::config::template::TemplateLanguage::EnUs);
+            if let Err(error) = crate::config::template::ensure_user_lua_config(&path, language) {
+                log::error!(
+                    target: crate::logging::LOG_TARGET_CONFIG,
+                    "Unable to create Lua config {:?}: {error}",
+                    path
+                );
+                return;
+            }
+        }
+        #[cfg(windows)]
+        let _ = std::process::Command::new("notepad.exe").arg(&path).spawn();
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open").arg(&path).spawn();
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn reset_appearance_settings(&mut self) {
+        self.nebula_theme_preference = NebulaTheme::default();
+        self.nebula_follow_system_theme = false;
+        self.window.set_theme(self.nebula_window_theme_override);
+        self.nebula_theme = self.nebula_theme_preference;
+        let defaults = self.nebula_default_colors;
+        self.nebula_theme.apply_term_colors(&mut self.colors, &defaults);
+        write_nebula_prompt_theme(self.nebula_theme);
+        self.nebula_window_opacity = 1.0;
+        self.nebula_background = None;
+        self.nebula_background_image = None;
+        self.nebula_background_image_opacity = 0.38;
+        self.nebula_background_image_fit = BackgroundImageFit::default();
+        self.nebula_background_image_alignment = BackgroundImageAlignment::default();
+        self.nebula_background_image_cover_chrome = false;
+        self.window.set_transparent(false);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// Toggle the command palette (Ctrl+Shift+P). `profiles` are the config's
+    /// quick-launch profile names, refreshed on every open so live config
+    /// reloads are reflected.
+    pub fn toggle_command_palette(&mut self, profiles: &[crate::config::ui_config::Profile]) {
+        self.nebula_palette.set_profiles(profiles);
+        // 打开这一刻取一次窗口状态：「工作目录」组作用在哪个目录上、两个
+        // 开关命令各自的勾选态。取样而不是每帧回读，见 `PaletteContext`。
+        self.nebula_palette.set_context(command_palette::PaletteContext {
+            cwd: self.nebula_focused_cwd.clone(),
+            sidebar: !self.nebula_sidebar_collapsed,
+            panel_resize: self.nebula_panel_resize,
+            new_tab_inherits_cwd: self.startup_directory().is_none(),
+        });
+        self.nebula_palette.toggle();
+        self.pending_update.dirty = true;
+    }
+
+    /// 在系统文件管理器里打开聚焦 pane 的工作目录。目录未知时什么也不做
+    /// ——命令面板里那条命令此时根本不出现，这里只是兜底。
+    pub fn reveal_focused_cwd(&mut self) {
+        let Some(path) = self.nebula_focused_cwd.clone() else { return };
+        #[cfg(windows)]
+        let _ = std::process::Command::new("explorer.exe").arg(&path).spawn();
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open").arg(&path).spawn();
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        self.pending_update.dirty = true;
+    }
+
+    /// 聚焦 pane 的工作目录，给「复制路径」用（剪贴板在输入层，不在这里）。
+    pub fn focused_cwd_string(&self) -> Option<String> {
+        self.nebula_focused_cwd.as_ref().map(|path| path.display().to_string())
+    }
+
+    /// 默认 shell 的短标（settings 覆盖优先），给 `TabLaunch::Default` 的行用。
+    pub fn default_shell_tag(&self) -> String {
+        let id =
+            self.nebula_shell_id.as_deref().unwrap_or_else(|| self.nebula_shell.settings_value());
+        crate::shell_detect::shell_short_tag(id)
+    }
+
+    /// 「恢复 AI 会话」面板：原生 Claude/Codex 档案与 Nebula hook 索引
+    /// 合并去重；只展示已验证有 resume 语法的来源。
+    pub fn open_ai_session_palette(&mut self) {
+        let language = self.ui_language();
+        let mut rows = Vec::new();
+        for session in crate::ai_sessions::scan(30) {
+            // 右列 = 「位置 · 相对时间」。来源不再挤进这段文字——行首
+            // 品牌 logo + 右缘 chip 已经把 claude/codex 标满了。
+            let time = crate::ai_sessions::relative_label(session.modified, language);
+            let place = session.place_label();
+            let hint = if place.is_empty() { time } else { format!("{place} · {time}") };
+            let search =
+                format!("{} {} {}", session.title, session.project, session.source.label());
+            let Some(resume) = session.resume_command() else {
+                continue;
+            };
+            rows.push(command_palette::AiSessionRow {
+                label: session.title.clone(),
+                hint: hint.clone(),
+                search: format!("恢复 resume {search}"),
+                command: resume,
+                source: session.source,
+            });
+            if let Some(command) = session.fork_command() {
+                rows.push(command_palette::AiSessionRow {
+                    label: language.format(
+                        crate::i18n::Message::WorkspaceForkLabel,
+                        &[("title", &session.title)],
+                    ),
+                    hint,
+                    search: format!("分叉 fork {search}"),
+                    command,
+                    source: session.source,
+                });
+            }
+        }
+        self.nebula_palette.open_ai_sessions(rows);
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// Open the new-tab dropdown: detected shells (installed-shell order) plus
+    /// any config profiles. Detection runs once and is cached — the chevron
+    /// beside the "+" opens this — the familiar profile menu.
+    pub fn open_shell_menu(&mut self, profiles: &[crate::config::ui_config::Profile]) {
+        let ssh_rows: Vec<(String, String, String)> = self
+            .nebula_ssh_hosts
+            .iter()
+            .map(|host| {
+                let label =
+                    self.nebula_ssh_labels.get(host).cloned().unwrap_or_else(|| host.clone());
+                let icon = self
+                    .nebula_ssh_icons
+                    .get(host)
+                    .cloned()
+                    .unwrap_or_else(|| crate::display::ui::os_icons::DEFAULT_ID.to_owned());
+                (label, host.clone(), icon)
+            })
+            .collect();
+        let shells =
+            self.nebula_detected_shells.get_or_insert_with(crate::shell_detect::detect_shells);
+        let default_shell =
+            self.nebula_shell_id.as_deref().unwrap_or_else(|| self.nebula_shell.settings_value());
+        self.nebula_palette.set_shell_menu(shells, profiles, default_shell);
+        self.nebula_palette.set_ssh_hosts_with_icons(&ssh_rows);
+        self.nebula_palette.open_profiles();
+        self.pending_update.dirty = true;
+    }
+
+    /// Ctrl+K：开/关 shell picker——与 "+" 旁 chevron 打开的是同一份列表
+    /// （settings 页的 shell 下拉是另一回事，见 `toggle_shell_picker`）。
+    /// 已开着的 shell picker 再按一次收起；其他 palette 模式则切换过来。
+    pub fn toggle_shell_menu(&mut self, profiles: &[crate::config::ui_config::Profile]) {
+        let picker_open = self.nebula_palette.is_picker()
+            && !self.nebula_palette.is_picking_default()
+            && !self.nebula_palette.is_picking_directory();
+        if picker_open {
+            self.nebula_palette.close();
+            self.pending_update.dirty = true;
+        } else {
+            self.open_shell_menu(profiles);
+        }
+    }
+
+    /// Open a terminal-directory picker backed by the same frecency model as
+    /// ghost text and filesystem completion. No shell command is installed.
+    pub fn open_directory_picker(&mut self) {
+        let paths = self.directory_history.search("", 128);
+        self.nebula_palette.set_directories(paths);
+        self.nebula_palette.open_directories();
+        self.pending_update.dirty = true;
+    }
+
+    fn refresh_directory_picker(&mut self) {
+        if !self.nebula_palette.is_picking_directory() {
+            return;
+        }
+        let query = self.nebula_palette.query().to_owned();
+        let paths = self.directory_history.search(&query, 128);
+        self.nebula_palette.set_directories(paths);
+    }
+
+    pub fn command_palette_open(&self) -> bool {
+        self.nebula_palette.is_open()
+    }
+
+    /// One geometry contract for palette rendering and pointer input. Picker
+    /// height depends on the live filtered row count, so callers must not
+    /// reconstruct this from window dimensions alone.
+    pub(super) fn command_palette_workspace_bounds(&self) -> Option<(f32, f32)> {
+        if !self.nebula_palette.is_open() {
+            return None;
+        }
+        let scale = self.window.scale_factor as f32;
+        let width = self.ui_size_info().width();
+        // 快捷面板族只占默认终端工作区：左侧 Tabs 与右侧文件抽屉都保留。
+        // 三个面板共用这条边界，切换快捷键时宽度与水平基准才不会跳变。
+        let sidebar = (self.sidebar_w_visual() * scale).round();
+        let left = (sidebar - 4.0 * scale).round().clamp(0.0, width);
+        let drawer = (self.drawer_w_visual() * scale).min(width * 0.42);
+        let right = (width - drawer - 8.0 * scale).round().clamp(left, width);
+        (right > left).then_some((left, right))
+    }
+
+    pub fn command_palette_layout(&self) -> command_palette::PaletteLayout {
+        let size = self.ui_size_info();
+        command_palette::palette_layout_with_workspace_bounds(
+            &self.nebula_palette,
+            size.width(),
+            size.height(),
+            self.window.scale_factor as f32,
+            size.cell_width(),
+            self.nebula_density,
+            self.command_palette_workspace_bounds(),
+        )
+    }
+
+    pub fn command_palette_picking_default(&self) -> bool {
+        self.nebula_palette.is_picking_default()
+    }
+
+    pub fn command_palette_picker_open(&self) -> bool {
+        self.nebula_palette.is_picker()
+    }
+
+    pub fn close_command_palette(&mut self) {
+        self.nebula_palette.close();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_input_char(&mut self, c: char) {
+        self.nebula_palette.input_char(c);
+        self.refresh_directory_picker();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_input_text(&mut self, text: &str) {
+        self.nebula_palette.input_text(text);
+        self.refresh_directory_picker();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_select_all(&mut self) {
+        self.nebula_palette.select_all();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_selected_text(&self) -> Option<String> {
+        self.nebula_palette.selected_text()
+    }
+
+    pub fn palette_backspace(&mut self) {
+        self.nebula_palette.backspace();
+        self.refresh_directory_picker();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_move(&mut self, delta: i32) {
+        let max_rows = self.command_palette_layout().max_rows;
+        self.nebula_palette.move_selection(delta, max_rows);
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_tab(&mut self, delta: i32) {
+        if !self.nebula_palette.cycle_launcher_filter(delta) {
+            self.palette_move(delta);
+            return;
+        }
+        self.pending_update.dirty = true;
+    }
+
+    pub fn palette_select_launcher_filter(
+        &mut self,
+        filter: command_palette::LauncherFilter,
+    ) -> bool {
+        if self.nebula_palette.set_launcher_filter(filter) {
+            self.pending_update.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn palette_scroll_by(&mut self, rows: i32, max_rows: usize) -> bool {
+        if self.nebula_palette.scroll_by(rows, max_rows) {
+            self.pending_update.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn palette_scrollbar_press(
+        &mut self,
+        x: f32,
+        y: f32,
+        layout: &command_palette::PaletteLayout,
+    ) -> bool {
+        let Some(scrollbar) = layout.scrollbar else { return false };
+        if self.nebula_palette.scrollbar_press(x, y, layout.max_rows, scrollbar) {
+            self.pending_update.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn palette_scrollbar_dragging(&self) -> bool {
+        self.nebula_palette.scrollbar_dragging()
+    }
+
+    pub fn palette_scrollbar_drag_to(&mut self, y: f32) -> bool {
+        let layout = self.command_palette_layout();
+        let Some(scrollbar) = layout.scrollbar else { return false };
+        if self.nebula_palette.scrollbar_drag_to(y, layout.max_rows, scrollbar) {
+            self.pending_update.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn end_palette_scrollbar_drag(&mut self) -> bool {
+        self.nebula_palette.end_scrollbar_drag()
+    }
+
+    /// Confirm the palette selection; returns the action for the input layer to
+    /// dispatch (only it can reach both the display and the window context).
+    pub fn palette_confirm(&mut self) -> Option<command_palette::PaletteAction> {
+        let action = self.nebula_palette.confirm();
+        self.pending_update.dirty = true;
+        action
+    }
+
+    /// Mouse click on the palette's visible row `row` (0 = topmost visible):
+    /// select and confirm it, returning the action to dispatch.
+    pub fn palette_click(
+        &mut self,
+        row: usize,
+        max_rows: usize,
+    ) -> Option<command_palette::PaletteAction> {
+        let action = self.nebula_palette.click(row, max_rows);
+        self.pending_update.dirty = true;
+        action
+    }
+
+    /// Update palette hover state. `row` is the visual row index, or `None` when
+    /// the mouse left the palette area.
+    pub fn palette_hover(
+        &mut self,
+        pos: (f32, f32),
+        row: Option<usize>,
+        chip: Option<command_palette::LauncherFilter>,
+    ) -> bool {
+        if self.nebula_palette.pointer_hover(pos, row, chip) {
+            self.pending_update.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    /// Toggle the right-side drawer (directory tree / git status).
+    ///
+    /// Special tabs (settings / document / image) own the whole content area,
+    /// so the drawer stays shut there. Guarding here rather than at each of the
+    /// callers — sidebar button, panel header, keybinding, command palette —
+    /// is what keeps a newly added entry point from reintroducing the squeeze.
+    pub fn toggle_side_panel(&mut self, view: side_panel::PanelView) {
+        if self.nebula_special_tab_active {
+            return;
+        }
+        let was_open = self.nebula_side_panel.open;
+        if self.nebula_sftp_panel.take().is_some() {
+            self.nebula_side_panel.open = true;
+            self.nebula_side_panel.view = view;
+        } else {
+            self.nebula_side_panel.toggle(view);
+        }
+        // The drawer reserves real grid width, so opening/closing it (not
+        // just switching views) must reflow the grid like the left sidebar.
+        if self.nebula_side_panel.open != was_open {
+            let size =
+                PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+            self.pending_update.set_dimensions(size);
+        }
+        self.window.request_redraw();
+        self.pending_update.dirty = true;
+    }
+
+    // ---- tab rename caret editing (the rename box is a real text field) ----
+
+    /// Insert `text` at the caret. A pending select-all is replaced wholesale
+    /// (type-to-overwrite), matching every native text field.
+    pub fn tab_rename_insert(&mut self, text: &str) {
+        let text: String = text.chars().filter(|character| !character.is_control()).collect();
+        if text.is_empty() {
+            return;
+        }
+        let select_all = self.nebula_tab_rename_select_all;
+        let caret = self.nebula_tab_rename_caret;
+        let Some((_, buf)) = self.nebula_tab_rename.as_mut() else { return };
+        if select_all {
+            buf.clear();
+            self.nebula_tab_rename_select_all = false;
+            self.nebula_tab_rename_caret = 0;
+        }
+        let caret = if select_all { 0 } else { caret.min(buf.chars().count()) };
+        let byte = buf.char_indices().nth(caret).map(|(b, _)| b).unwrap_or(buf.len());
+        buf.insert_str(byte, &text);
+        self.nebula_tab_rename_caret = caret + text.chars().count();
+        self.pending_update.dirty = true;
+    }
+
+    /// Backspace at the caret; a pending select-all clears the whole name.
+    pub fn tab_rename_backspace(&mut self) {
+        let select_all = self.nebula_tab_rename_select_all;
+        let caret = self.nebula_tab_rename_caret;
+        let Some((_, buf)) = self.nebula_tab_rename.as_mut() else { return };
+        if select_all {
+            buf.clear();
+            self.nebula_tab_rename_select_all = false;
+            self.nebula_tab_rename_caret = 0;
+        } else if caret > 0 {
+            let caret = caret.min(buf.chars().count());
+            if let Some((byte, _)) = buf.char_indices().nth(caret - 1) {
+                buf.remove(byte);
+                self.nebula_tab_rename_caret = caret - 1;
+            }
+        }
+        self.pending_update.dirty = true;
+    }
+
+    pub fn tab_rename_select_all(&mut self) {
+        if let Some((_, text)) = self.nebula_tab_rename.as_ref() {
+            self.nebula_tab_rename_select_all = !text.is_empty();
+            self.nebula_tab_rename_caret = text.chars().count();
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn tab_rename_selected_text(&self) -> Option<String> {
+        self.nebula_tab_rename_select_all
+            .then(|| self.nebula_tab_rename.as_ref().map(|(_, text)| text.clone()))
+            .flatten()
+    }
+
+    /// Move the caret by `delta` chars. A select-all collapses to the matching
+    /// end first (left → start, right → end) without moving further.
+    pub fn tab_rename_move_caret(&mut self, delta: i32) {
+        let Some((_, buf)) = self.nebula_tab_rename.as_ref() else { return };
+        let len = buf.chars().count();
+        if self.nebula_tab_rename_select_all {
+            self.nebula_tab_rename_select_all = false;
+            self.nebula_tab_rename_caret = if delta < 0 { 0 } else { len };
+        } else {
+            let caret = self.nebula_tab_rename_caret.min(len) as i64 + delta as i64;
+            self.nebula_tab_rename_caret = caret.clamp(0, len as i64) as usize;
+        }
+        self.pending_update.dirty = true;
+    }
+
+    /// Jump the caret to the start/end (Home/End).
+    pub fn tab_rename_caret_edge(&mut self, end: bool) {
+        let Some((_, buf)) = self.nebula_tab_rename.as_ref() else { return };
+        self.nebula_tab_rename_select_all = false;
+        self.nebula_tab_rename_caret = if end { buf.chars().count() } else { 0 };
+        self.pending_update.dirty = true;
+    }
+
+    /// Place the caret from a pointer press at window-space `x`: map the
+    /// pixel offset from the buffer's first glyph (stashed by `draw_chrome`)
+    /// into a char index, honoring CJK double-width glyphs. This is what lets
+    /// users click where they want to edit instead of retyping the name.
+    pub fn tab_rename_click(&mut self, x: f32) {
+        let text_x = self.nebula_tab_rename_text_x;
+        let cell_w = self.size_info.cell_width();
+        let Some((_, buf)) = self.nebula_tab_rename.as_ref() else { return };
+        let mut col = ((x - text_x) / cell_w).round().max(0.0) as usize;
+        let mut caret = 0usize;
+        for c in buf.chars() {
+            let w = c.width().unwrap_or(0).max(1);
+            if col < w {
+                break;
+            }
+            col -= w;
+            caret += 1;
+        }
+        self.nebula_tab_rename_select_all = false;
+        self.nebula_tab_rename_caret = caret;
+        self.pending_update.dirty = true;
+    }
+
+    /// Adopt the focused pane's cwd into the drawer (per drawn frame; cheap
+    /// no-op unless the drawer is open and something changed).
+    pub fn side_panel_sync(&mut self, cwd: Option<std::path::PathBuf>) {
+        if self.sftp_view_active() {
+            return;
+        }
+        if self.nebula_side_panel.sync(cwd) {
+            self.pending_update.dirty = true;
+        }
+    }
+
+    /// Whether the drawer currently shows the SFTP view. The SFTP panel is a
+    /// window-level object, but its VIEW follows the focused pane: focusing a
+    /// local tab flips the drawer back to the directory tree (the SFTP
+    /// connection stays warm for the next switch), so the tree keeps
+    /// following tab switches instead of being captured by one SSH session.
+    pub(crate) fn sftp_view_active(&self) -> bool {
+        self.nebula_sftp_panel.is_some() && self.nebula_sftp_routed
+    }
+
+    /// Re-route the drawer to the focused pane's identity, called every draw.
+    /// `focused_ssh` is the pane's stable SSH destination, `None` for local
+    /// panes.
+    pub fn route_side_panel(&mut self, focused_ssh: Option<&str>) {
+        let routed = match (self.nebula_sftp_panel.as_ref(), focused_ssh) {
+            (Some(panel), Some(destination)) => panel.snapshot().destination == destination,
+            _ => false,
+        };
+        if self.nebula_sftp_routed != routed {
+            self.nebula_sftp_routed = routed;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn choose_side_panel_directory(&mut self) {
+        let Some(path) = file_dialog::pick_side_panel_directory(&self.window) else {
+            return;
+        };
+        if self.nebula_side_panel.set_custom_root(path) {
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    pub fn follow_focused_directory(&mut self) {
+        if self.nebula_side_panel.clear_custom_root() {
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    /// Geometry of the drawer for the current window size.
+    pub fn side_panel_layout(&self) -> side_panel::PanelLayout {
+        let size = self.size_info;
+        let scale = self.window.scale_factor as f32;
+        let reserve = chrome_reserve(scale);
+        side_panel::panel_layout(
+            size.width(),
+            size.height(),
+            reserve,
+            reserve,
+            scale,
+            self.ui_animations.drawer_progress(),
+            self.drawer_w_visual(),
+        )
+    }
+
+    pub fn open_sftp_panel(
+        &mut self,
+        destination: String,
+        proxy: winit::event_loop::EventLoopProxy<crate::event::Event>,
+    ) -> Result<(), String> {
+        // Same content-area contract as `toggle_side_panel`: a special tab is
+        // never the right place to raise the remote browser, and opening it
+        // here would also strand the controller behind a hidden drawer.
+        if self.nebula_special_tab_active {
+            return Ok(());
+        }
+        let was_open = self.nebula_side_panel.open;
+        // 控制器只拿一个"响一声"的闭包；把事件代理和窗口 id 捆进闭包是宿主的
+        // 活儿，远端浏览器本身对消息循环一无所知。
+        let window_id = self.window.id();
+        let wake: crate::ssh_sftp::WakeFn = std::sync::Arc::new(move || {
+            let _ = proxy.send_event(crate::event::Event::new(
+                crate::event::EventType::SftpUpdated,
+                window_id,
+            ));
+        });
+        let controller = crate::ssh_sftp::SftpController::new(destination, wake)
+            .map_err(|err| format!("无法打开 SFTP: {err}"))?;
+        self.nebula_side_panel.search_unfocus(false);
+        self.nebula_side_panel.commit_unfocus();
+        self.nebula_side_panel.open = true;
+        self.nebula_sftp_panel = Some(sftp_panel::SftpPanel::new(controller));
+        if !was_open {
+            let size =
+                PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+            self.pending_update.set_dimensions(size);
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        Ok(())
+    }
+
+    pub fn close_sftp_panel(&mut self) {
+        if let Some(panel) = self.nebula_sftp_panel.take() {
+            panel.cancel_transfer();
+        }
+        if self.nebula_side_panel.open {
+            self.nebula_side_panel.open = false;
+            let size =
+                PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+            self.pending_update.set_dimensions(size);
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn sftp_layout(&self) -> sftp_panel::SftpLayout {
+        sftp_panel::layout(&self.side_panel_layout(), self.window.scale_factor as f32)
+    }
+
+    pub fn sftp_hit(&self, x: f32, y: f32) -> sftp_panel::SftpHit {
+        // A hidden SFTP view (drawer re-routed to a local pane) must not eat
+        // clicks that belong to the directory tree drawn in its place.
+        if !self.sftp_view_active() {
+            return sftp_panel::SftpHit::None;
+        }
+        let Some(panel) = self.nebula_sftp_panel.as_ref() else {
+            return sftp_panel::SftpHit::None;
+        };
+        let working = panel.snapshot().phase == crate::ssh_sftp::SftpPhase::Working;
+        sftp_panel::hit_test(&self.sftp_layout(), working, x, y)
+    }
+
+    pub fn sftp_set_hover(&mut self, hit: sftp_panel::SftpHit) -> bool {
+        self.nebula_sftp_panel.as_mut().is_some_and(|panel| panel.set_hover(hit))
+    }
+
+    pub fn sftp_click(&mut self, hit: sftp_panel::SftpHit) {
+        use sftp_panel::SftpHit;
+        match hit {
+            SftpHit::Close => self.close_sftp_panel(),
+            SftpHit::Path => {
+                if let Some(panel) = self.nebula_sftp_panel.as_mut() {
+                    panel.begin_path();
+                }
+            },
+            SftpHit::Filter => {
+                if let Some(panel) = self.nebula_sftp_panel.as_mut() {
+                    panel.begin_filter();
+                }
+            },
+            SftpHit::Row(index) => {
+                let selected =
+                    self.nebula_sftp_panel.as_mut().and_then(|panel| panel.select_row(index));
+                if let Some((entry, true)) = selected {
+                    let navigated =
+                        self.nebula_sftp_panel.as_mut().is_some_and(|panel| panel.navigate(&entry));
+                    if !navigated {
+                        self.sftp_download_entry(entry);
+                    }
+                }
+            },
+            SftpHit::Cancel => {
+                if let Some(panel) = self.nebula_sftp_panel.as_ref() {
+                    panel.cancel_transfer();
+                }
+            },
+            SftpHit::None | SftpHit::Inside => {},
+        }
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub fn sftp_refresh(&mut self) {
+        if let Some(panel) = self.nebula_sftp_panel.as_ref() {
+            panel.refresh();
+        }
+    }
+
+    pub fn sftp_pick_upload_files(&mut self) {
+        let paths = file_dialog::pick_upload_files(&self.window);
+        if !paths.is_empty()
+            && let Some(panel) = self.nebula_sftp_panel.as_ref()
+        {
+            panel.upload_paths(paths);
+        }
+    }
+
+    pub fn sftp_pick_upload_directory(&mut self) {
+        if let Some(path) = file_dialog::pick_upload_directory(&self.window)
+            && let Some(panel) = self.nebula_sftp_panel.as_ref()
+        {
+            panel.upload_paths(vec![path]);
+        }
+    }
+
+    pub fn sftp_begin_create_directory(&mut self) {
+        if let Some(panel) = self.nebula_sftp_panel.as_mut() {
+            panel.begin_create_directory();
+        }
+    }
+
+    pub fn sftp_upload_dropped_paths(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
+        if paths.is_empty() {
+            return false;
+        }
+        let Some(panel) = self.nebula_sftp_panel.as_ref() else { return false };
+        panel.upload_paths(paths);
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+        true
+    }
+
+    pub fn sftp_download_row(&mut self, index: usize) {
+        if let Some(entry) =
+            self.nebula_sftp_panel.as_ref().and_then(|panel| panel.visible_entry(index))
+        {
+            self.sftp_download_entry(entry);
+        }
+    }
+
+    fn sftp_download_entry(&mut self, entry: crate::ssh_sftp::SftpEntry) {
+        let Some(directory) = file_dialog::pick_download_directory(&self.window) else {
+            return;
+        };
+        if let Some(panel) = self.nebula_sftp_panel.as_ref() {
+            panel.download(entry, directory);
+        }
+    }
+
+    pub fn sftp_begin_rename_row(&mut self, index: usize) {
+        let entry = self.nebula_sftp_panel.as_ref().and_then(|panel| panel.visible_entry(index));
+        if let (Some(panel), Some(entry)) = (self.nebula_sftp_panel.as_mut(), entry) {
+            panel.begin_rename(entry);
+        }
+    }
+
+    pub fn sftp_request_delete_row(&mut self, index: usize) {
+        if let Some(entry) =
+            self.nebula_sftp_panel.as_ref().and_then(|panel| panel.visible_entry(index))
+        {
+            self.nebula_confirm = Some(NebulaConfirm::DeleteSftp { entry });
+        }
+    }
+
+    pub fn sftp_confirm_delete(&mut self, entry: crate::ssh_sftp::SftpEntry) {
+        self.nebula_confirm = None;
+        if let Some(panel) = self.nebula_sftp_panel.as_ref() {
+            panel.delete(entry);
+        }
+    }
+
+    fn settings_toggle_targets(&self) -> [bool; settings::SETTINGS_TOGGLE_COUNT] {
+        let provider =
+            self.provider_edit_index().and_then(|index| self.nebula_providers.providers.get(index));
+        [
+            self.nebula_follow_system_theme,
+            self.nebula_ghost_enabled,
+            self.nebula_cursor_blink,
+            self.nebula_copy_on_select,
+            self.nebula_panel_resize,
+            self.nebula_cjk_bold_regular,
+            self.nebula_fetch_enabled,
+            self.nebula_powerline_enabled,
+            self.nebula_blur,
+            self.nebula_keep_session,
+            self.nebula_restore_session,
+            self.nebula_sync_auto_pull,
+            self.nebula_background_image_cover_chrome,
+            provider.is_some_and(|provider| provider.codex_goals),
+            provider.is_some_and(|provider| provider.codex_remote_compaction),
+            self.nebula_resume_ai,
+            self.nebula_tray,
+        ]
+    }
+
+    /// 高级：「常驻托盘图标」开关。翻转即生效：托盘线程收到 enable/disable
+    /// 后立刻挂上或摘掉通知区图标。
+    pub fn toggle_tray(&mut self) {
+        self.nebula_tray = !self.nebula_tray;
+        crate::tray::set_enabled(self.nebula_tray);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 高级·会话：「恢复时接续 AI 对话」开关。
+    pub fn toggle_resume_ai(&mut self) {
+        self.nebula_resume_ai = !self.nebula_resume_ai;
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    pub fn step_chrome_anims(&mut self) {
+        let toggle_targets = self.settings_toggle_targets();
+        self.ui_animations.step(
+            !self.nebula_sidebar_collapsed,
+            self.nebula_side_panel.open,
+            self.nebula_ssh_editor_open,
+            toggle_targets,
+            settings::settings_toggle_slot(self.nebula_settings_pressed),
+            settings::settings_toggle_slot(self.nebula_settings_hover),
+        );
+    }
+
+    pub fn chrome_animating(&self) -> bool {
+        self.ui_animations.animating(
+            !self.nebula_sidebar_collapsed,
+            self.nebula_side_panel.open,
+            self.settings_toggle_targets(),
+            settings::settings_toggle_slot(self.nebula_settings_pressed),
+            settings::settings_toggle_slot(self.nebula_settings_hover),
+        )
+    }
+
+    pub fn left_sidebar_progress(&self) -> f32 {
+        self.ui_animations.sidebar_progress()
+    }
+
+    pub fn left_sidebar_visible(&self) -> bool {
+        self.ui_animations.sidebar_visible(!self.nebula_sidebar_collapsed)
+    }
+
+    /// DPI 变化时按同一比例重标 UI 角色字号（等价于配置字号 × 新缩放）。
+    /// Apply a monitor scale change after any native move transaction has
+    /// settled. Keeping this in Display makes the immediate and deferred paths
+    /// use exactly the same font/UI invalidation sequence.
+    pub(crate) fn apply_scale_factor_change(&mut self, scale_factor: f64, config: &UiConfig) {
+        let old_scale_factor = mem::replace(&mut self.window.scale_factor, scale_factor);
+        if (old_scale_factor - scale_factor).abs() <= f64::EPSILON {
+            return;
+        }
+
+        let font_scale = scale_factor as f32 / old_scale_factor as f32;
+        self.font_size = self.font_size.scale(font_scale);
+        self.rescale_ui_font(font_scale);
+
+        let font = self.effective_font(&config.font);
+        let font_size = self.font_size;
+        self.pending_update.set_font(font.with_size(font_size));
+    }
+
+    pub(crate) fn rescale_ui_font(&mut self, factor: f32) {
+        if factor.is_finite() && factor > 0.0 {
+            self.nebula_ui_font.px *= factor;
+        }
+    }
+
+    /// UI 角色字号相对当前终端字号的比率。仅供尚未角色化的历史缩放路径
+    /// （`begin_chrome_text_scaled`、链接预览的手动锚定）使用；新代码一律
+    /// 走 `draw_chrome_text*` / `draw_ui_text*`，它们直接从字体角色取真实
+    /// 字号与 metrics。
+    pub(crate) fn ui_text_scale(&self) -> f32 {
+        let cur = self.font_size.as_px();
+        if cur <= 0.0 || self.nebula_ui_font.px <= 0.0 {
+            return 1.0;
+        }
+        self.nebula_ui_font.px / cur
+    }
+
+    /// [`Self::size_info`] 的 UI 版本：cell 尺寸来自 UI 字体角色的真实
+    /// 栅格 metrics（[`Self::refresh_ui_font`] 量取）。chrome / 设置 /
+    /// 浮层的布局与命中测试统一用它，与按同一角色栅格化的 UI 文本严格
+    /// 同源；终端网格、damage、光标继续用原 `size_info`。
+    pub(crate) fn ui_size_info(&self) -> SizeInfo {
+        let mut ui = self.size_info;
+        let (cell_w, cell_h) = self.nebula_ui_font.cell;
+        ui.cell_width = cell_w;
+        ui.cell_height = cell_h;
+        ui
+    }
+
+    /// Pin the glyph cache's UI font role to the anchor size and refresh the
+    /// cell the chrome layout steps by. Runs at construction and on every
+    /// terminal font change — zoom, family, DPI all funnel through the font
+    /// update, so this is the single place the role can go stale.
+    fn refresh_ui_font(&mut self, config: &UiConfig) {
+        let ui_size = FontSize::from_px(self.nebula_ui_font.px);
+        let metrics = self.glyph_cache.set_ui_font_size(ui_size);
+        // 原生界面的字体单元格不受单元格宽度模式影响——该偏好只控制终端
+        // 内容网格的列宽。这里固定用上游的向下取整。
+        self.nebula_ui_font.cell =
+            compute_cell_size(config, &metrics, settings::CellWidthMode::Compact);
+        // 同步把 UI 域的生效列宽交给 glyph_cache，使 UI 文本里的内建
+        // 字形（光标形状预览的 │ █ ▁）与 chrome 网格列宽对齐。
+        self.glyph_cache.set_ui_cell_width(self.nebula_ui_font.cell.0 as usize);
+        let ratio = self.ui_text_scale();
+        // Unconditional breadcrumb (tiny, a handful of lines per session):
+        // diagnosing "the sidebar zooms with the terminal" reports needs this
+        // from USER instances, which never run with NEBULA_DEBUG_LOG set.
+        let line = format!(
+            "[{}] ui_anchor ratio={ratio:.3} ui_font_px={:.1} font_px={:.1} scale={:.2} term_cell={}x{} ui_cell={:?}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            self.nebula_ui_font.px,
+            self.font_size.as_px(),
+            self.window.scale_factor,
+            self.size_info.cell_width,
+            self.size_info.cell_height,
+            self.nebula_ui_font.cell
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(nebula_data_dir().join("ui_anchor.log"))
+        {
+            use std::io::Write as _;
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+
+    /// Geometry of the rounded terminal card in physical pixels `(x, y, w, h)`.
+    /// The card floats on the shell backdrop: flush-ish against the sidebar on
+    /// the left and the top bar above (they share the shell color, so no seam
+    /// is needed there), with a visible [`UI_CARD_SEAM_LOGICAL`] gap of shell
+    /// color on the right and bottom edges. The grid's own padding
+    /// (`content_pad_x` / `chrome_reserve`) is larger than the card inset, so
+    /// all cell content lands inside the card.
+    pub(crate) fn terminal_card_rect(&self) -> (f32, f32, f32, f32) {
+        let scale = self.window.scale_factor as f32;
+        let s = |v: f32| (v * scale).round();
+        let seam = s(UI_CARD_SEAM_LOGICAL);
+        // Left edge rides the sidebar's fold animation (same swift-out cubic
+        // as the panel slide in `chrome_tab_layout`), so collapsing the
+        // sidebar reads as the terminal card gliding left to claim the space
+        // instead of snapping. Resting expanded: just past the sidebar
+        // panel's right edge (`sw - 12` logical, see `chrome_tab_layout`);
+        // resting collapsed: the chrome margin.
+        let t = self.left_sidebar_progress().clamp(0.0, 1.0);
+        let sw = (self.sidebar_w_visual() * scale).round();
+        let x = s(8.0) + t * (sw - s(4.0) - s(8.0));
+        // Top edge: the top bar's bottom (margin 8 + bar height 40, matching
+        // `draw_chrome`), plus a seam so the card visibly floats below it.
+        let y = s(8.0 + 40.0) + seam;
+        // Right edge follows the file/git drawer the same way: as it slides
+        // in, the card cedes its width (drawer width + margin) plus the seam.
+        let dt = self.ui_animations.drawer_progress().clamp(0.0, 1.0);
+        let drawer =
+            dt * ((self.drawer_w_visual() * scale).min(self.size_info.width() * 0.42) + s(8.0));
+        let w = (self.size_info.width() - drawer - seam - x).max(0.0);
+        let h = (self.size_info.height() - seam - y).max(0.0);
+        (x, y, w, h)
+    }
+
+    pub fn side_panel_visible(&self) -> bool {
+        self.ui_animations.drawer_visible(self.nebula_side_panel.open)
+    }
+
+    /// Sidebar content model for `chrome_tab_layout` — the single place the
+    /// section states are read, so drawing / hit-testing / wheel agree.
+    pub(super) fn sidebar_model(&self) -> chrome::SidebarModel {
+        chrome::SidebarModel {
+            tab_count: self.nebula_tab_labels.len().max(1),
+            // Saved SSH destinations belong in the launcher/settings. The
+            // home tab rail is reserved for actual sessions, so no second
+            // SSH HOSTS section is laid out underneath TABS.
+            host_count: 0,
+            tabs_open: self.nebula_tabs_section_open,
+            hosts_open: false,
+            tabs_scroll: self.nebula_tabs_scroll,
+            hosts_scroll: self.nebula_hosts_scroll,
+            sidebar_w: self.sidebar_w_visual(),
+            hosts_band: self.nebula_hosts_band,
+        }
+    }
+
+    /// Toggle a sidebar section's accordion fold (click on its caption).
+    pub fn toggle_sidebar_section(&mut self, hosts: bool) {
+        if hosts {
+            self.nebula_hosts_section_open = !self.nebula_hosts_section_open;
+        } else {
+            self.nebula_tabs_section_open = !self.nebula_tabs_section_open;
+        }
+        self.pending_update.dirty = true;
+    }
+
+    /// Toggle the queue entry now; the expanded panel will consume the same
+    /// state in the next integration stage, so the entry's hit contract does
+    /// not need to change when real queue content lands.
+    pub fn toggle_message_queue_entry(&mut self) {
+        self.nebula_message_queue_entry.toggle();
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    /// Route a mouse-wheel tick over the sidebar into the section under the
+    /// pointer. Returns true when consumed (pointer was over a section band).
+    pub fn sidebar_wheel(&mut self, x: f32, y: f32, rows: i32) -> bool {
+        if !self.left_sidebar_visible() {
+            return false;
+        }
+        let layout = chrome_tab_layout(
+            &self.ui_size_info(),
+            self.window.scale_factor as f32,
+            self.sidebar_model(),
+            self.left_sidebar_progress(),
+        );
+        let (px, _, pw, _) = layout.panel;
+        if pw <= 0.0 || x < px || x > px + pw {
+            return false;
+        }
+        let scroll =
+            |cur: usize, max: usize| -> usize { (cur as i32 + rows).clamp(0, max as i32) as usize };
+        // Band membership includes each section's header so the wheel works
+        // right up against the caption.
+        if y >= layout.tabs_header.1 && y <= layout.tabs_band.1 {
+            self.nebula_tabs_scroll = scroll(self.nebula_tabs_scroll, layout.tabs_max_scroll);
+        } else if y >= layout.hosts_header.1
+            && y <= layout.hosts_band.1.max(layout.hosts_header.1 + layout.hosts_header.3)
+        {
+            self.nebula_hosts_scroll = scroll(self.nebula_hosts_scroll, layout.hosts_max_scroll);
+        } else {
+            return false;
+        }
+        self.pending_update.dirty = true;
+        true
+    }
+
+    pub fn sidebar_scrollbar_press(&mut self, x: f32, y: f32) -> bool {
+        if !self.left_sidebar_visible() {
+            return false;
+        }
+        let layout = chrome_tab_layout(
+            &self.ui_size_info(),
+            self.window.scale_factor as f32,
+            self.sidebar_model(),
+            self.left_sidebar_progress(),
+        );
+        let (kind, bar, max) =
+            if let Some(bar) = layout.tabs_scrollbar.filter(|bar| bar.hit_test(x, y)) {
+                (chrome::SidebarScrollKind::Tabs, bar, layout.tabs_max_scroll)
+            } else if let Some(bar) = layout.hosts_scrollbar.filter(|bar| bar.hit_test(x, y)) {
+                (chrome::SidebarScrollKind::Hosts, bar, layout.hosts_max_scroll)
+            } else {
+                return false;
+            };
+        let grab = if contains_rect(bar.thumb, x, y) { y - bar.thumb.1 } else { bar.thumb.3 * 0.5 };
+        self.nebula_sidebar_scroll_drag = Some(chrome::SidebarScrollDrag { kind, grab });
+        let target = bar.target_offset(y, grab, max);
+        match kind {
+            chrome::SidebarScrollKind::Tabs => self.nebula_tabs_scroll = target,
+            chrome::SidebarScrollKind::Hosts => self.nebula_hosts_scroll = target,
+        }
+        self.pending_update.dirty = true;
+        true
+    }
+
+    pub fn sidebar_scrollbar_drag_to(&mut self, y: f32) -> bool {
+        let Some(drag) = self.nebula_sidebar_scroll_drag else { return false };
+        let layout = chrome_tab_layout(
+            &self.ui_size_info(),
+            self.window.scale_factor as f32,
+            self.sidebar_model(),
+            self.left_sidebar_progress(),
+        );
+        let (bar, max, current) = match drag.kind {
+            chrome::SidebarScrollKind::Tabs => {
+                (layout.tabs_scrollbar, layout.tabs_max_scroll, self.nebula_tabs_scroll)
+            },
+            chrome::SidebarScrollKind::Hosts => {
+                (layout.hosts_scrollbar, layout.hosts_max_scroll, self.nebula_hosts_scroll)
+            },
+        };
+        let Some(bar) = bar else { return false };
+        let target = bar.target_offset(y, drag.grab, max);
+        if target == current {
+            return false;
+        }
+        match drag.kind {
+            chrome::SidebarScrollKind::Tabs => self.nebula_tabs_scroll = target,
+            chrome::SidebarScrollKind::Hosts => self.nebula_hosts_scroll = target,
+        }
+        self.pending_update.dirty = true;
+        true
+    }
+
+    pub fn sidebar_scrollbar_dragging(&self) -> bool {
+        self.nebula_sidebar_scroll_drag.is_some()
+    }
+
+    pub fn end_sidebar_scrollbar_drag(&mut self) -> bool {
+        self.nebula_sidebar_scroll_drag.take().is_some()
+    }
+
+    /// Auto-save an SSH destination the user typed and successfully connected
+    /// to — armed at OSC 133;C, confirmed by a remote `NEBULA|` title or a
+    /// session that outlived [`crate::ssh::SAVE_MIN_SESSION`]. Recents: most recent first, deduped, capped. An already-listed host
+    /// only refreshes its recency (for the next launch) — the visible list
+    /// never jumps while the user is looking at it.
+    pub fn nebula_save_ssh_host(&mut self, host: &str) {
+        const SAVED_HOSTS_CAP: usize = 20;
+        if host.is_empty() {
+            return;
+        }
+        self.nebula_saved_hosts.retain(|h| h != host);
+        self.nebula_hidden_hosts.retain(|h| h != host);
+        self.nebula_saved_hosts.insert(0, host.to_owned());
+        self.nebula_saved_hosts.truncate(SAVED_HOSTS_CAP);
+        if !self.nebula_ssh_hosts.iter().any(|h| h == host) {
+            // New host: insert below the pinned block, above everything else.
+            let at = self
+                .nebula_ssh_hosts
+                .iter()
+                .take_while(|h| self.nebula_pinned_hosts.contains(h))
+                .count();
+            self.nebula_ssh_hosts.insert(at, host.to_owned());
+        }
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    // ---- 键位自定义（spec 002）----
+
+    /// 设置页点击某行的 keycap：进入捕获态（下一次按键成为新绑定）。
+    pub fn keymap_begin_capture(&mut self, row: usize) {
+        if row < keymap::editable_row_count() {
+            self.nebula_keymap_capture = Some(row);
+            self.nebula_keymap_capture_preview.clear();
+            self.nebula_quick_hotkey_error = None;
+            self.pending_update.dirty = true;
+        }
+    }
+
+    pub fn keymap_cancel_capture(&mut self) {
+        if self.nebula_keymap_capture.take().is_some() {
+            self.nebula_keymap_capture_preview.clear();
+            self.pending_update.dirty = true;
+        }
+    }
+
+    /// 捕获态的实时修饰键回显（ModifiersChanged 与纯修饰键按下都会走到
+    /// 这里）：按住 Ctrl 立即显示 "Ctrl+…"，全部松开回到占位提示。
+    pub fn keymap_capture_preview(&mut self, mods: winit::keyboard::ModifiersState) {
+        if self.nebula_keymap_capture.is_none() {
+            return;
+        }
+        let prefix = keymap::mods_prefix(mods);
+        if self.nebula_keymap_capture_preview != prefix {
+            self.nebula_keymap_capture_preview = prefix;
+            self.pending_update.dirty = true;
+            self.window.request_redraw();
+        }
+    }
+
+    /// Apply the shared rebinding policy, then refresh the editor.
+    pub fn keymap_assign(&mut self, row: usize, combo: String) {
+        if row == keymap::QUICK_TERMINAL_ROW {
+            self.nebula_keymap_capture = None;
+            self.nebula_keymap_capture_preview.clear();
+            self.nebula_quick_terminal_hotkey = combo;
+            self.nebula_quick_hotkey_error = None;
+            self.nebula_quick_hotkey_request = Some(self.nebula_quick_terminal_hotkey.clone());
+            self.persist_nebula_settings();
+            self.pending_update.dirty = true;
+            return;
+        }
+        let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
+        keymap::rebind_action(&mut self.nebula_keybinds, action, combo);
+        self.keymap_commit();
+    }
+
+    pub fn active_tab_index(&self) -> usize {
+        self.nebula_active_tab
+    }
+
+    /// Bare Backspace disables the action, preserving pass-through on reload.
+    pub fn keymap_clear_custom(&mut self, row: usize) {
+        if row == keymap::QUICK_TERMINAL_ROW {
+            self.nebula_keymap_capture = None;
+            self.nebula_keymap_capture_preview.clear();
+            self.nebula_quick_terminal_hotkey.clear();
+            self.nebula_quick_hotkey_error = None;
+            self.nebula_quick_hotkey_request = Some(self.nebula_quick_terminal_hotkey.clone());
+            self.persist_nebula_settings();
+            self.pending_update.dirty = true;
+            return;
+        }
+        let action_row = row.saturating_sub(1);
+        let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(action_row) else { return };
+        keymap::clear_action(&mut self.nebula_keybinds, action);
+        self.keymap_commit();
+    }
+
+    fn keymap_commit(&mut self) {
+        self.nebula_keymap_capture = None;
+        self.nebula_keymap_capture_preview.clear();
+        self.nebula_keymap = keymap::build_bindings(&self.nebula_keybinds);
+        self.persist_nebula_settings();
+        self.pending_update.dirty = true;
+    }
+
+    /// 取走一次性全局快捷键更新请求，由输入层送到 Processor 的全局管理器。
+    pub(crate) fn take_quick_hotkey_request(&mut self) -> Option<String> {
+        self.nebula_quick_hotkey_request.take()
+    }
+
+    /// Processor 完成注册后的确认/回滚。失败时恢复磁盘与界面中的旧值，
+    /// 防止设置页把未注册的组合误显示成当前快捷键。
+    pub(crate) fn quick_hotkey_registration_done(
+        &mut self,
+        requested: &str,
+        accepted: bool,
+        error: Option<&str>,
+        fallback: &str,
+    ) {
+        if accepted {
+            self.nebula_quick_hotkey_error = None;
+            return;
+        }
+        if self.nebula_quick_terminal_hotkey == requested {
+            self.nebula_quick_terminal_hotkey = fallback.to_owned();
+            self.persist_nebula_settings();
+        }
+        self.nebula_quick_hotkey_error = error.map(str::to_owned);
+        self.pending_update.dirty = true;
+        self.window.request_redraw();
+    }
+
+    pub(crate) fn persist_nebula_settings(&mut self) {
+        settings::nebula_settings_write(&settings::NebulaRuntimeSettings {
+            language: self.nebula_language_preference,
+            ghost: self.nebula_ghost_enabled,
+            accept: self.nebula_accept,
+            completion_style: self.nebula_completion_style,
+            shell: self.nebula_shell,
+            shell_id: self.nebula_shell_id.clone(),
+            startup_directory: self.nebula_startup_directory.clone(),
+            font_family: self.nebula_font_family.clone(),
+            fetch: self.nebula_fetch_enabled,
+            powerline: self.nebula_powerline_enabled,
+            blur: self.nebula_blur,
+            keep_session: self.nebula_keep_session,
+            restore_session: self.nebula_restore_session,
+            resume_ai: self.nebula_resume_ai,
+            tray: self.nebula_tray,
+            opacity: self.nebula_window_opacity,
+            background: self.nebula_background,
+            background_image: self.nebula_background_image.clone(),
+            background_image_opacity: self.nebula_background_image_opacity,
+            background_image_fit: self.nebula_background_image_fit,
+            background_image_alignment: self.nebula_background_image_alignment,
+            background_image_cover_chrome: self.nebula_background_image_cover_chrome,
+            font_size: Some(self.font_size.as_px() / self.window.scale_factor as f32),
+            cursor_shape: self.nebula_cursor_shape,
+            cursor_blink: self.nebula_cursor_blink,
+            copy_on_select: self.nebula_copy_on_select,
+            cjk_bold_regular: self.nebula_cjk_bold_regular,
+            tabs_position: self.nebula_tabs_position,
+            tab_reveal: self.nebula_tab_reveal_motion,
+            density: self.nebula_density,
+            new_tab_position: self.nebula_new_tab_position,
+            cell_width_mode: self.nebula_cell_width_mode,
+            theme: self.nebula_theme_preference,
+            follow_system_theme: self.nebula_follow_system_theme,
+            pinned_hosts: self.nebula_pinned_hosts.clone(),
+            saved_hosts: self.nebula_saved_hosts.clone(),
+            hidden_hosts: self.nebula_hidden_hosts.clone(),
+            panel_resize: self.nebula_panel_resize,
+            sidebar_w: self.nebula_sidebar_w,
+            drawer_w: self.nebula_drawer_w,
+            hosts_band: self.nebula_hosts_band,
+            keybinds: self.nebula_keybinds.clone(),
+            quick_terminal_hotkey: self.nebula_quick_terminal_hotkey.clone(),
+            ssh_proxy_mode: self.nebula_ssh_proxy_mode,
+            ssh_proxy_url: self.nebula_ssh_proxy_url.clone(),
+            ssh_proxy_no_proxy: self.nebula_ssh_proxy_no_proxy.clone(),
+        });
+        self.nebula_settings_mtime = settings::nebula_settings_mtime();
+    }
+
+    fn reload_nebula_settings_if_changed(&mut self, config: &UiConfig) {
+        let mtime = settings::nebula_settings_mtime();
+        if mtime == self.nebula_settings_mtime {
+            return;
+        }
+
+        let settings = settings::nebula_settings_load(config);
+        self.nebula_language_preference = settings.language;
+        self.nebula_language = settings.language.resolved();
+        self.nebula_palette.set_language(self.nebula_language);
+        let image_changed = settings.background_image != self.nebula_background_image;
+        let font_changed = settings.font_family != self.nebula_font_family;
+        self.nebula_theme_preference = settings.theme;
+        let follow_system_changed = self.nebula_follow_system_theme != settings.follow_system_theme;
+        self.nebula_follow_system_theme = settings.follow_system_theme;
+        if follow_system_changed {
+            self.window.set_theme(if settings.follow_system_theme {
+                None
+            } else {
+                self.nebula_window_theme_override
+            });
+            if settings.follow_system_theme {
+                self.nebula_system_theme =
+                    system_theme_snapshot(self.nebula_system_theme, self.window.theme());
+            }
+        }
+        let active_theme = if settings.follow_system_theme {
+            self.nebula_system_theme
+                .map(|system| {
+                    settings.theme.for_system_appearance(matches!(system, WinitTheme::Light))
+                })
+                .unwrap_or(settings.theme)
+        } else {
+            settings.theme
+        };
+        if active_theme != self.nebula_theme {
+            // Hand-edited theme or automatic-mode setting: apply and publish
+            // it exactly like an in-panel selection would.
+            self.apply_nebula_theme(active_theme);
+        }
+        self.nebula_ghost_enabled = settings.ghost;
+        self.nebula_accept = settings.accept;
+        self.nebula_completion_style = settings.completion_style;
+        self.nebula_shell = settings.shell;
+        self.nebula_shell_id = settings.shell_id;
+        self.nebula_startup_directory = settings.startup_directory;
+        self.nebula_font_family = settings.font_family;
+        if font_changed {
+            #[cfg(windows)]
+            {
+                self.nebula_font_families = self.glyph_cache.refresh_private_fonts();
+                self.nebula_font_families
+                    .retain(|family| family != crate::font_install::REQUIRED_FONT_FAMILY);
+                self.nebula_font_families
+                    .insert(0, crate::font_install::REQUIRED_FONT_FAMILY.to_owned());
+            }
+            let font = self.effective_font(&config.font).with_size(self.font_size);
+            self.pending_update.set_font(font);
+        }
+        self.nebula_fetch_enabled = settings.fetch;
+        self.nebula_powerline_enabled = settings.powerline;
+        self.nebula_blur = settings.blur;
+        self.nebula_keep_session = settings.keep_session;
+        self.nebula_restore_session = settings.restore_session;
+        self.nebula_resume_ai = settings.resume_ai;
+        if self.nebula_tray != settings.tray {
+            self.nebula_tray = settings.tray;
+            crate::tray::set_enabled(settings.tray);
+        }
+        self.nebula_panel_resize = settings.panel_resize;
+        // 手改文件把宽度调了的话，和拖拽一样要触发一次 reflow。
+        let panel_dims_changed = (self.nebula_sidebar_w - settings.sidebar_w).abs() > 0.5
+            || (self.nebula_drawer_w - settings.drawer_w).abs() > 0.5;
+        self.nebula_sidebar_w = settings.sidebar_w;
+        self.nebula_drawer_w = settings.drawer_w;
+        self.nebula_hosts_band = settings.hosts_band;
+        if panel_dims_changed {
+            let size =
+                PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
+            self.pending_update.set_dimensions(size);
+        }
+        if self.nebula_cjk_bold_regular != settings.cjk_bold_regular {
+            // 字形层策略变了：已缓存的 bold CJK 位图作废，清缓存重栅格。
+            self.nebula_cjk_bold_regular = settings.cjk_bold_regular;
+            self.glyph_cache.wide_bold_use_regular = settings.cjk_bold_regular;
+            self.reset_glyph_cache();
+        }
+        self.nebula_tabs_position = settings.tabs_position;
+        self.nebula_tab_reveal_motion = settings.tab_reveal;
+        self.nebula_density = settings.density;
+        self.nebula_new_tab_position = settings.new_tab_position;
+        self.nebula_cell_width_mode = settings.cell_width_mode;
+        self.nebula_window_opacity = settings.opacity;
+        self.nebula_background = if settings.follow_system_theme {
+            Some(active_theme.palette().term_bg)
+        } else {
+            settings.background
+        };
+        self.nebula_background_image = settings.background_image;
+        self.nebula_background_image_opacity = settings.background_image_opacity;
+        self.nebula_background_image_fit = settings.background_image_fit;
+        self.nebula_background_image_alignment = settings.background_image_alignment;
+        self.nebula_background_image_cover_chrome = settings.background_image_cover_chrome;
+        // Sync the host lists too: another window shares the settings file,
+        // and skipping this would let this window's next persist overwrite a
+        // host that window just saved or pinned.
+        self.nebula_pinned_hosts = settings.pinned_hosts;
+        self.nebula_saved_hosts = settings.saved_hosts;
+        self.nebula_hidden_hosts = settings.hidden_hosts;
+        // Hand-edited keybind lines take effect on the next keypress; an
+        // in-flight capture is dropped so it can't overwrite the file edit.
+        self.nebula_keymap = keymap::build_bindings(&settings.keybinds);
+        self.nebula_keybinds = settings.keybinds;
+        if self.nebula_quick_terminal_hotkey != settings.quick_terminal_hotkey {
+            self.nebula_quick_terminal_hotkey = settings.quick_terminal_hotkey.clone();
+            self.nebula_quick_hotkey_request = Some(self.nebula_quick_terminal_hotkey.clone());
+            self.nebula_quick_hotkey_error = None;
+        }
+        self.nebula_keymap_capture = None;
+        // 代理键也参与「手改文件即生效」：下一次连接读到的就是新值，这里
+        // 只需让设置页与下一次 persist 不吐回旧值。
+        let proxy_changed = self.nebula_ssh_proxy_mode != settings.ssh_proxy_mode
+            || self.nebula_ssh_proxy_url != settings.ssh_proxy_url
+            || self.nebula_ssh_proxy_no_proxy != settings.ssh_proxy_no_proxy;
+        self.nebula_ssh_proxy_mode = settings.ssh_proxy_mode;
+        self.nebula_ssh_proxy_url = settings.ssh_proxy_url;
+        self.nebula_ssh_proxy_no_proxy = settings.ssh_proxy_no_proxy;
+        if proxy_changed {
+            self.nebula_ssh_proxy_draft.clear();
+            self.invalidate_proxy_test();
+        }
+        self.nebula_ssh_proxy_protocol = settings::manual_proxy_parts(&self.nebula_ssh_proxy_url).0;
+        self.nebula_ssh_proxy_choice = self
+            .nebula_local_proxies
+            .iter()
+            .position(|proxy| proxy.url() == self.nebula_ssh_proxy_url)
+            .map(settings::ProxyChoice::Detected)
+            .unwrap_or_else(|| {
+                if crate::ssh_proxy::jump_target(&self.nebula_ssh_proxy_url).is_some() {
+                    settings::ProxyChoice::Jump
+                } else if crate::ssh_proxy::command_target(&self.nebula_ssh_proxy_url).is_some() {
+                    settings::ProxyChoice::Command
+                } else {
+                    settings::ProxyChoice::Manual
+                }
+            });
+        if self.nebula_ssh_proxy_mode == crate::ssh_proxy::ProxyMode::System {
+            self.refresh_system_proxy_probe();
+        }
+        self.nebula_ssh_hosts = merge_ssh_hosts(
+            &self.nebula_saved_hosts,
+            &self.nebula_pinned_hosts,
+            &self.nebula_hidden_hosts,
+        );
+        if image_changed {
+            self.renderer.invalidate_background_image();
+        }
+        self.nebula_settings_mtime = mtime;
+        self.update_window_transparency();
+        self.pending_update.dirty = true;
+    }
+
+    fn draw_background_image(&mut self) {
+        let Some(path) = self.nebula_background_image.as_deref() else {
+            return;
+        };
+        let path = path.trim().trim_matches('"');
+        if path.is_empty() {
+            return;
+        }
+
+        // Keep PNG wallpaper loading in the renderer cache. The setting stores a
+        // user path verbatim (usually `D:\...` on Windows); `cover` scaling and
+        // alpha are handled by the image renderer.
+        let target = if self.nebula_background_image_cover_chrome {
+            (0.0, 0.0, self.size_info.width(), self.size_info.height())
+        } else {
+            self.terminal_card_rect()
+        };
+        // 卡片模式必须携带卡片圆角：矩形壁纸盖上去会吃掉终端卡的圆角。
+        let clip_radius = if self.nebula_background_image_cover_chrome {
+            0.0
+        } else {
+            (UI_SHELL_RADIUS_LOGICAL * self.window.scale_factor as f32).round()
+        };
+        self.renderer.draw_background_image(
+            &self.size_info,
+            Path::new(path),
+            self.nebula_background_image_opacity,
+            self.nebula_background_image_fit,
+            self.nebula_background_image_alignment,
+            target,
+            target,
+            clip_radius,
+        );
+    }
+
+    /// Compose the stable frame backdrop once per frame.
+    ///
+    /// 层模型（2026-07-24 修订）：清屏完全透明，终端卡底永远先铺主题底
+    /// 色（用户透明度），壁纸再以自身不透明度叠在其上——降低壁纸不透
+    /// 明度时图片淡向主题底色（浅色主题→白、深色主题→黑），而不是透出
+    /// 窗口后面的桌面（旧模型有壁纸时不画卡底，深色主题下低不透明度会
+    /// 透出刺眼的白）。卡以外的壳由 chrome pass 的一体化壳层负责（同一
+    /// 用户透明度）。
+    /// 壳层合成色：panel 预合成在 shell_bg 上（保住面板 token 的调子），
+    /// alpha 直接取用户不透明度。chrome 的条带与 backdrop 的凹角/清屏兜底
+    /// **必须同源**取这一个值——各算各的迟早漂出色差接缝。
+    pub(crate) fn shell_frame_color(&self) -> Rgba {
+        let palette = self.nebula_theme.palette();
+        let shell_alpha =
+            surface_opacity::SurfaceOpacityPolicy::new(self.nebula_window_opacity).chrome;
+        let pa = palette.panel.a as f32 / 255.0;
+        let comp = |p: u8, b: u8| (p as f32 * pa + b as f32 * (1.0 - pa)).round() as u8;
+        Rgba::new(
+            comp(palette.panel.r, palette.shell_bg.r),
+            comp(palette.panel.g, palette.shell_bg.g),
+            comp(palette.panel.b, palette.shell_bg.b),
+            (shell_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+        )
+    }
+
+    fn draw_window_backdrop(&mut self, terminal_background: Rgb) {
+        // rgb 兜底取壳合成色（panel-over-shell_bg）：不透明窗口下 DWM 忽略
+        // alpha，尚未被壳/卡覆盖的像素本来就在壳区，取纯 shell_bg 会比
+        // 条带暗一档，正是四角亮线里混进的那个杂色。
+        let shell = self.shell_frame_color();
+        self.renderer.clear(Rgb::new(shell.r, shell.g, shell.b), 0.0);
+        {
+            let (card_x, card_y, card_w, card_h) = self.terminal_card_rect();
+            let scale = self.window.scale_factor as f32;
+            let alpha = (self.nebula_window_opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+            // 与 chrome 壳层同径同 round：半径差出小数像素就是一圈错位细缝。
+            let radius =
+                (UI_SHELL_RADIUS_LOGICAL * scale).round().min(card_w * 0.5).min(card_h * 0.5);
+            // 2026-08-09 白角根因修复：凹角补片从 chrome 壳层挪到这里、画在
+            // 卡片**之前**。原先卡与补片是两条独立 AA 弧按顺序 over，弧上
+            // 必然残留 i(1-i)·清屏色 的交叉项——四角浮出一圈亮线，透明窗
+            // 直接漏桌面。补片先把角块铺满壳色，卡的凸圆角向「已铺满的壳」
+            // 过渡，成为唯一可见 AA 边，交叉项从结构上消失。
+            let mut quads = Vec::with_capacity(5);
+            if radius > 0.0 && card_w > 0.0 && card_h > 0.0 {
+                quads.push(UiQuad::concave_corner(card_x, card_y, radius, 0, shell));
+                quads.push(UiQuad::concave_corner(
+                    card_x + card_w - radius,
+                    card_y,
+                    radius,
+                    1,
+                    shell,
+                ));
+                quads.push(UiQuad::concave_corner(
+                    card_x + card_w - radius,
+                    card_y + card_h - radius,
+                    radius,
+                    2,
+                    shell,
+                ));
+                quads.push(UiQuad::concave_corner(
+                    card_x,
+                    card_y + card_h - radius,
+                    radius,
+                    3,
+                    shell,
+                ));
+            }
+            quads.push(UiQuad::solid(
+                card_x,
+                card_y,
+                card_w,
+                card_h,
+                radius,
+                Rgba::new(
+                    terminal_background.r,
+                    terminal_background.g,
+                    terminal_background.b,
+                    alpha,
+                ),
+            ));
+            self.renderer.draw_ui(&self.size_info, &quads);
+        }
+
+        // The image is intentionally independent of the terminal tint: its own
+        // opacity means image strength, not a value that disappears at 100%
+        // terminal opacity.
+        self.draw_background_image();
+    }
+
+    /// Whether a wallpaper path is configured for the terminal card.
+    fn has_background_image(&self) -> bool {
+        self.nebula_background_image
+            .as_deref()
+            .map(|p| !p.trim().trim_matches('"').is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Sync the OS transparency flag with the user opacity slider. 壁纸不
+    /// 透明度不再参与：卡底永远先铺主题底色，壁纸变淡是淡向主题色而非
+    /// 透出窗口后面的桌面。
+    fn update_window_transparency(&mut self) {
+        let transparent = self.nebula_window_opacity < 1.0;
+        self.window.set_transparent(transparent);
+        #[cfg(target_os = "macos")]
+        self.window.set_has_shadow(!transparent);
+    }
+
+    #[inline]
+    pub fn gl_context(&self) -> &PossiblyCurrentContext {
+        &self.context
+    }
+
+    pub fn make_not_current(&mut self) {
+        if self.context.is_current() {
+            self.context.make_not_current_in_place().expect("failed to disable context");
+        }
+    }
+
+    pub fn make_current(&mut self) {
+        let is_current = self.context.is_current();
+
+        // Attempt to make the context current if it's not.
+        let context_loss = if is_current {
+            self.renderer.was_context_reset()
+        } else {
+            match self.context.make_current(&self.surface) {
+                Err(err) if err.error_kind() == ErrorKind::ContextLost => {
+                    info!("Context lost for window {:?}", self.window.id());
+                    true
+                },
+                _ => false,
+            }
+        };
+
+        if !context_loss {
+            return;
+        }
+
+        let gl_display = self.context.display();
+        let gl_config = self.context.config();
+        let raw_window_handle = Some(self.window.raw_window_handle());
+        let context = platform::create_gl_context(&gl_display, &gl_config, raw_window_handle)
+            .expect("failed to recreate context.");
+
+        // Drop the old context and renderer.
+        unsafe {
+            ManuallyDrop::drop(&mut self.renderer);
+            ManuallyDrop::drop(&mut self.context);
+        }
+
+        // Activate new context.
+        let context = context.treat_as_possibly_current();
+        self.context = ManuallyDrop::new(context);
+        self.context.make_current(&self.surface).expect("failed to reativate context after reset.");
+
+        // Recreate renderer.
+        let renderer = Renderer::new(&self.context, self.renderer_preference)
+            .expect("failed to recreate renderer after reset");
+        self.renderer = ManuallyDrop::new(renderer);
+
+        // Resize the renderer.
+        self.renderer.resize(&self.size_info);
+
+        self.reset_glyph_cache();
+        self.damage_tracker.frame().mark_fully_damaged();
+
+        debug!("Recovered window {:?} from gpu reset", self.window.id());
+    }
+
+    fn swap_buffers(&self) {
+        #[allow(clippy::single_match)]
+        let res = match (self.surface.deref(), &self.context.deref()) {
+            #[cfg(not(any(target_os = "macos", windows)))]
+            (Surface::Egl(surface), PossiblyCurrentContext::Egl(context))
+                if matches!(self.raw_window_handle, RawWindowHandle::Wayland(_))
+                    && !self.damage_tracker.debug =>
+            {
+                let damage = self.damage_tracker.shape_frame_damage(self.size_info.into());
+                surface.swap_buffers_with_damage(context, &damage)
+            },
+            (surface, context) => surface.swap_buffers(context),
+        };
+        if let Err(err) = res {
+            debug!("error calling swap_buffers: {err}");
+        }
+    }
+
+    /// Update font size and cell dimensions.
+    ///
+    /// This will return a tuple of the cell width and height.
+    fn update_font_size(
+        glyph_cache: &mut GlyphCache,
+        config: &UiConfig,
+        font: &Font,
+        cell_width_mode: settings::CellWidthMode,
+    ) -> (f32, f32) {
+        let _ = glyph_cache.update_font_size(font);
+
+        // Compute new cell sizes.
+        let cell_dimensions =
+            compute_cell_size(config, &glyph_cache.font_metrics(), cell_width_mode);
+
+        // The built-in box-drawing / Powerline glyphs fill exactly the
+        // effective cell width; pin it so they stop re-flooring the advance
+        // (a 1px drift under the relaxed mode that splits lines into dashes).
+        glyph_cache.set_cell_width(cell_dimensions.0 as usize);
+
+        cell_dimensions
+    }
+
+    /// Re-derive the OS-enforced window floor from the current cell size and
+    /// chrome, so the grid can never be dragged below
+    /// [`SizeInfo::MIN_USABLE_COLUMNS`].
+    ///
+    /// Must be re-applied whenever the cell size or sidebar width changes: a
+    /// floor computed for a 7px cell stops protecting anything once the user
+    /// zooms to a 21px one.
+    #[cfg(windows)]
+    fn apply_min_window_size(&self, config: &UiConfig, cell_width: f32, cell_height: f32) {
+        apply_min_window_size(&self.window, config, cell_width, cell_height, self.nebula_sidebar_w);
+    }
+
+    /// Reset glyph cache.
+    fn reset_glyph_cache(&mut self) {
+        let cache = &mut self.glyph_cache;
+        self.renderer.with_loader(|mut api| {
+            cache.reset_glyph_cache(&mut api);
+        });
+    }
+
+    // XXX: this function must not call to any `OpenGL` related tasks. Renderer updates are
+    // performed in [`Self::process_renderer_update`] right before drawing.
+    //
+    /// Process update events.
+    pub fn handle_update<T>(
+        &mut self,
+        // Grid resizes are committed together with the PTY by the window
+        // context (leading edge / settle); the handle stays in the signature
+        // so the call sites don't churn if an immediate path returns.
+        _terminal: &mut Term<T>,
+        // PTY resizes are deferred to the settle timer (see
+        // `nebula_pty_resize_pending`); the handle stays in the signature so
+        // the call sites don't churn if an immediate path returns.
+        _pty_resize_handle: &mut dyn OnResize,
+        message_buffer: &MessageBuffer,
+        search_state: &mut SearchState,
+        config: &UiConfig,
+    ) where
+        T: EventListener,
+    {
+        let pending_update = mem::take(&mut self.pending_update);
+
+        let (mut cell_width, mut cell_height) =
+            (self.size_info.cell_width(), self.size_info.cell_height());
+
+        if pending_update.font().is_some() || pending_update.cursor_dirty() {
+            let renderer_update = self.pending_renderer_update.get_or_insert(Default::default());
+            renderer_update.clear_font_cache = true
+        }
+
+        // Update font size and cell dimensions.
+        if let Some(font) = pending_update.font() {
+            let cell_width_mode = self.nebula_cell_width_mode;
+            let cell_dimensions =
+                Self::update_font_size(&mut self.glyph_cache, config, font, cell_width_mode);
+            cell_width = cell_dimensions.0;
+            cell_height = cell_dimensions.1;
+
+            info!("Cell size: {cell_width} x {cell_height}");
+
+            // The window floor is derived from the cell size, so it has to be
+            // re-derived here or zooming in would leave the old (smaller) floor
+            // in place and reopen the narrow-collapse hole.
+            #[cfg(windows)]
+            self.apply_min_window_size(config, cell_width, cell_height);
+
+            // Every zoom / font / DPI change funnels through a font update,
+            // so this is the single point where the UI font role can go
+            // stale.
+            self.refresh_ui_font(config);
+
+            // Mark entire terminal as damaged since glyph size could change without cell size
+            // changes.
+            self.damage_tracker.frame().mark_fully_damaged();
+        }
+
+        let (mut width, mut height) = (self.size_info.width(), self.size_info.height());
+        if let Some(dimensions) = pending_update.dimensions() {
+            width = dimensions.width as f32;
+            height = dimensions.height as f32;
+        }
+
+        let padding = config.window.padding(self.window.scale_factor as f32);
+        let chrome = chrome_reserve(self.window.scale_factor as f32);
+
+        let scale = self.window.scale_factor as f32;
+        let content_pad = content_pad_x(scale);
+        let sidebar = sidebar_width(scale, self.nebula_sidebar_collapsed, self.nebula_sidebar_w);
+        // The file/git drawer occupies real layout space: the grid cedes its
+        // width (plus the window margin) on the right, exactly like the left
+        // sidebar reserve — it does not float over the terminal.
+        let drawer = if self.nebula_side_panel.open {
+            ((self.nebula_drawer_w * scale).min(width * 0.42) + 8.0 * scale).round()
+        } else {
+            0.0
+        };
+        let mut new_size = SizeInfo::new_fully_asymmetric(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            padding.0 + content_pad + sidebar,
+            padding.0 + content_pad + drawer,
+            padding.1 + chrome,
+            padding.1 + bottom_content_reserve(scale),
+        );
+
+        // Update number of column/lines in the viewport.
+        let search_active = search_state.history_index.is_some();
+        let message_bar_lines = message_buffer.message().map_or(0, |m| m.text(&new_size).len());
+        let search_lines = usize::from(search_active);
+        new_size.reserve_lines(message_bar_lines + search_lines);
+
+        // Update resize increments.
+        if config.window.resize_increments {
+            let increments = self
+                .window
+                .allows_drag_resize()
+                .then_some(PhysicalSize::new(cell_width, cell_height));
+            self.window.set_resize_increments(increments);
+        }
+
+        // Update the visible terminal viewport when its dimensions have changed.
+        if self.size_info.screen_lines() != new_size.screen_lines
+            || self.size_info.columns() != new_size.columns()
+        {
+            // Defer the PTY resize to the settle timer instead of notifying
+            // per tick: the in-box ConPTY repaints its entire viewport on
+            // every resize, so drag-resizing would flood the scrollback with
+            // dozens of shredded repaints (and TUIs like Claude Code redraw
+            // storms).  The window context commits the grid and ConPTY
+            // together at the leading/trailing edges; until then rendering is
+            // clipped to the last committed grid, so both sides retain the
+            // same reflow history.
+            self.nebula_pty_resize_pending = true;
+
+            // Resize damage tracking.
+            self.damage_tracker.resize(new_size.screen_lines(), new_size.columns());
+
+            // Flash a transient "cols × rows" HUD, skipping the first (startup)
+            // resize so nothing flashes when the window is first created.
+            if self.nebula_resize_hud_armed {
+                self.nebula_resize_hud =
+                    Some(ResizeHud::new(new_size.columns(), new_size.screen_lines()));
+            }
+            self.nebula_resize_hud_armed = true;
+            nebula_link_log(format!(
+                "viewport_resize {}x{} px={width}x{height} pad_x={} pad_r={} pad_y={} \
+                 cell={cell_width}x{cell_height} drawer={drawer} sidebar={sidebar} \
+                 reserved={}",
+                new_size.columns(),
+                new_size.screen_lines(),
+                new_size.padding_x(),
+                new_size.padding_right(),
+                new_size.padding_y(),
+                message_bar_lines + search_lines,
+            ));
+        }
+
+        // Check if dimensions have changed.
+        if new_size != self.size_info {
+            // Queue renderer update.
+            let renderer_update = self.pending_renderer_update.get_or_insert(Default::default());
+            renderer_update.resize = true;
+
+            // Clear focused search match.
+            search_state.clear_focused_match();
+        }
+        self.size_info = new_size;
+    }
+
+    // NOTE: Renderer updates are split off, since platforms like Wayland require resize and other
+    // OpenGL operations to be performed right before rendering. Otherwise they could lock the
+    // back buffer and render with the previous state. This also solves flickering during resizes.
+    //
+    /// Update the state of the renderer.
+    pub fn process_renderer_update(&mut self) {
+        let renderer_update = match self.pending_renderer_update.take() {
+            Some(renderer_update) => renderer_update,
+            _ => return,
+        };
+
+        // Resize renderer.
+        if renderer_update.resize {
+            let width = NonZeroU32::new(self.size_info.width() as u32).unwrap();
+            let height = NonZeroU32::new(self.size_info.height() as u32).unwrap();
+            self.surface.resize(&self.context, width, height);
+        }
+
+        // Ensure we're modifying the correct OpenGL context.
+        self.make_current();
+
+        if renderer_update.clear_font_cache {
+            self.reset_glyph_cache();
+        }
+
+        self.renderer.resize(&self.size_info);
+
+        info!("Padding: {} x {}", self.size_info.padding_x(), self.size_info.padding_y());
+        info!("Width: {}, Height: {}", self.size_info.width(), self.size_info.height());
+    }
+
+    /// Draw the screen.
+    ///
+    /// A reference to Term whose state is being drawn must be provided.
+    ///
+    /// This call may block if vsync is enabled.
+    /// Render a single terminal into the region described by `view`.
+    ///
+    /// This paints grid cells, cursor, overlays (search/IME/message bar) and the
+    /// inline ghost suggestion, but it does NOT clear (unless `clear_first`),
+    /// draw the window chrome, or present — those are the caller's job so that
+    /// multiple panes can share one frame. `force_focus` overrides the terminal's
+    /// own focus state for split panes (`None` keeps the real window focus).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_pane<T: EventListener>(
+        &mut self,
+        mut terminal: MutexGuard<'_, Term<T>>,
+        message_buffer: &MessageBuffer,
+        config: &UiConfig,
+        search_state: &mut SearchState,
+        pane_state: &mut NebulaPaneState,
+        view: SizeInfo,
+        force_focus: Option<bool>,
+        clear_first: bool,
+    ) {
+        // Override focus for split panes so the unfocused side shows a hollow
+        // cursor; in single-pane mode keep the real window focus state.
+        if let Some(focused) = force_focus {
+            terminal.is_focused = focused;
+        }
+
+        // 把设置页的光标默认值同步进每一个被渲染的终端。事件路径只覆盖
+        // "当前聚焦"的那一个 Term，新建 tab、分屏或后台 pane 都会漏掉；
+        // set_default_cursor_style 内部有相等短路，逐帧调用无重绘代价。
+        terminal.set_default_cursor_style(self.nebula_default_cursor_style());
+
+        // Tell the renderer the full window height so pane viewports flip
+        // correctly into OpenGL's bottom-left origin — matters for top/bottom
+        // splits, where panes occupy different vertical bands of the window.
+        self.renderer.set_window_height(self.size_info.height());
+
+        // Collect renderable content before the terminal is dropped.
+        let custom_background = self.nebula_background;
+        let clickable_matches = hint::visible_clickable_matches(&terminal, config);
+        let mut content = RenderableContent::new(config, self, &terminal, search_state, &view);
+        let mut grid_cells = Vec::new();
+        let mut grid_pad_bg = None;
+        for cell in &mut content {
+            if grid_pad_bg.is_none() && cell.bg_alpha > 0.0 {
+                grid_pad_bg = Some(cell.bg);
+            }
+            grid_cells.push(cell);
+        }
+        let selection_range = content.selection_range();
+        nebula_debug_log(format!(
+            "render_pane clear_first={clear_first} view={}x{} pad=({:.0},{:.0},{:.0},{:.0}) selection={selection_range:?}",
+            view.width(),
+            view.height(),
+            view.padding_x(),
+            view.padding_right(),
+            view.padding_y(),
+            view.padding_bottom(),
+        ));
+        let foreground_color = content.color(NamedColor::Foreground as usize);
+        let background_color =
+            custom_background.unwrap_or_else(|| content.color(NamedColor::Background as usize));
+        let display_offset = content.display_offset();
+        let viewport_origin = content.viewport_origin();
+        let cursor = content.cursor();
+
+        let cursor_point = terminal.grid().cursor.point;
+        // Ghost text is suppressed on the alt screen (vim/less/etc.).
+        let alt_screen = terminal.mode().contains(TermMode::ALT_SCREEN);
+        let total_lines = terminal.grid().total_lines();
+        let metrics = self.glyph_cache.font_metrics();
+        let size_info = view;
+
+        let vi_mode = terminal.mode().contains(TermMode::VI);
+        let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
+        #[cfg(windows)]
+        let line_override = if alt_screen || vi_mode || search_state.regex().is_some() {
+            None
+        } else {
+            nebula_input_from_raw_grid(
+                &terminal,
+                cursor_point,
+                &pane_state.line_buf,
+                &pane_state.suggest_env,
+            )
+        };
+        #[cfg(windows)]
+        let row_preview = if alt_screen || vi_mode || search_state.regex().is_some() {
+            None
+        } else {
+            Some(nebula_raw_grid_row_preview(&terminal, cursor_point))
+        };
+
+        // 打字（含 IME 组词）不影响网格内容，扫描保持开启；一旦这里随
+        // preedit 关断，中文输入的每次拼音组合都会让全部公式闪回原文。
+        //
+        // 扫描不按 AI CLI 进程名门控：WSL/SSH 中只能看到 wsl.exe/ssh.exe。
+        // 四类标准定界符使用同一内容判定；Vi、搜索和选区仍由终端接管。
+        let terminal_math_overlays =
+            if !vi_mode && search_state.regex().is_none() && selection_range.is_none() {
+                // 光标所在逻辑行是活动输入，扫描必须放过它，否则正在敲的
+                // 命令会被当成公式替换掉。备用屏幕里同样要放过：编辑器
+                // （vim/nvim 看 .tex/.md）的光标就压在你要改的那一行上，
+                // 把它换成渲染图等于让人没法编辑自己的源码。
+                let visible_cursor = term::point_to_viewport_from(viewport_origin, cursor_point)
+                    .filter(|point| {
+                        point.line < view.screen_lines() && point.column.0 < view.columns()
+                    });
+                terminal_math::scan_visible(
+                    &mut pane_state.terminal_math,
+                    &terminal,
+                    &view,
+                    &grid_cells,
+                    alt_screen,
+                    visible_cursor,
+                    foreground_color,
+                    |_| true,
+                )
+            } else {
+                Vec::new()
+            };
+        let math_pixel_size = self.glyph_cache.font_size.as_px();
+        let math_pixels_per_point = crate::math::pixels_per_point(self.window.scale_factor as f32);
+        let prepared_math = terminal_math::prepare_overlays(
+            &mut pane_state.terminal_math,
+            &terminal_math_overlays,
+            &view,
+            math_pixel_size,
+            math_pixels_per_point,
+        );
+        let math_coverage =
+            terminal_math::CoverageMask::build(&terminal_math_overlays, &prepared_math);
+        // A normal shell line may reflow its suffix around a compact formula.
+        // Full-screen TUIs own fixed grid geometry (sidebars, cards, status
+        // bands), so moving every cell after an inline formula would also move
+        // those ANSI backgrounds and tear the interface into coloured blocks.
+        pane_state.terminal_math.update_projection(
+            &terminal_math_overlays,
+            &prepared_math,
+            !alt_screen,
+        );
+        let frame_images = inline_image::capture(
+            &terminal,
+            &mut pane_state.inline_images,
+            &view,
+            &pane_state.terminal_math,
+        );
+
+        // Add damage from the terminal, keeping a pane-local copy: the shared
+        // tracker gets flooded with a full-window mark every frame further
+        // down, so "did the grid actually change?" (hint invalidation) must
+        // be judged from the terminal's own report captured here.
+        let mut term_damage_full = false;
+        let mut term_damage_lines = Vec::new();
+        match terminal.damage() {
+            TermDamage::Full => {
+                term_damage_full = true;
+                self.damage_tracker.frame().mark_fully_damaged();
+            },
+            TermDamage::Partial(damaged_lines) => {
+                for damage in damaged_lines {
+                    self.damage_tracker.frame().damage_line(damage);
+                    term_damage_lines.push(damage);
+                }
+            },
+        }
+        terminal.reset_damage();
+
+        // Drop terminal as early as possible to free lock.
+        drop(terminal);
+
+        // Invalidate highlighted hints if grid has changed. Only the pane
+        // that owns the hover may judge that: `highlighted_hint` is hit-tested
+        // against the focused pane, so a background pane's output (build log,
+        // `top`) must not tear down the foreground's highlight.
+        if force_focus != Some(false) {
+            self.validate_hint_highlights(viewport_origin, term_damage_full, &term_damage_lines);
+        }
+
+        self.nebula_frame_images.extend(frame_images);
+
+        // Refresh the inline ghost-text suggestion. On Windows the input is read
+        // off the grid (screen truth, never desyncs); elsewhere the tracked
+        // `line_buf` is used. Only on the primary screen, never during vi/search
+        // overlays.
+        if alt_screen || vi_mode || search_state.regex().is_some() {
+            pane_state.completion_popup_requested = false;
+            pane_state.clear_completion_hints();
+        } else {
+            #[cfg(windows)]
+            {
+                // No prompt arrow before the cursor (or a mid-line edit) means we
+                // cannot trust a hint here — clear it rather than guess.
+                if !pane_state.line_buf.is_empty()
+                    || line_override.as_ref().is_some_and(|s| !s.is_empty())
+                {
+                    nebula_debug_log(format!(
+                        "grid_input cwd={:?} line_buf={:?} raw={:?} cursor=line:{} col:{} row={:?}",
+                        pane_state.cwd,
+                        pane_state.line_buf,
+                        line_override,
+                        cursor_point.line.0,
+                        cursor_point.column.0,
+                        row_preview
+                    ));
+                }
+                match line_override {
+                    Some(line) => {
+                        pane_state.screen_line = line.clone();
+                        self.nebula_update_suggestion(pane_state, Some(line));
+                    },
+                    None => {
+                        pane_state.screen_line.clear();
+                        pane_state.completion_popup_requested = false;
+                        pane_state.clear_completion_hints();
+                    },
+                }
+            }
+            #[cfg(not(windows))]
+            self.nebula_update_suggestion(pane_state, None);
+        }
+
+        // Add damage from nebula's UI elements overlapping terminal.
+
+        // Nebula always redraws and presents the full window: the chrome
+        // (clock, ambient glow, gradient border) is painted every frame, and
+        // partial damage would leave terminal content (prompt, scrollback)
+        // stale after the window is occluded or sent to the background.
+        let _ = (self.visual_bell.intensity(), self.hint_state.active(), search_state.regex());
+        self.damage_tracker.frame().mark_fully_damaged();
+        self.damage_tracker.next_frame().mark_fully_damaged();
+
+        let vi_cursor_viewport_point = vi_cursor_point.and_then(|cursor| {
+            term::point_to_viewport_from(viewport_origin, cursor).filter(|point| {
+                point.line < size_info.screen_lines() && point.column.0 < size_info.columns()
+            })
+        });
+        self.damage_tracker.damage_vi_cursor(vi_cursor_viewport_point);
+        self.damage_tracker.damage_selection(selection_range, display_offset);
+
+        // Make sure this window's OpenGL context is active. The caller is
+        // expected to have already activated it; calling again is cheap and
+        // keeps `draw_pane` safe to invoke standalone.
+        self.make_current();
+
+        // Only the first pane of a frame clears the whole window; subsequent
+        // panes paint on top of the shared, already-cleared backdrop.
+        if clear_first {
+            // Layer model: the window clears to the opaque shell color (the
+            // chrome backdrop), then the terminal is painted as a rounded
+            // `term_bg` card floating on it. Default-background cells draw no
+            // background of their own (bg_alpha == 0), so they show the card.
+            nebula_debug_log(format!(
+                "render_clear path=pane window={}x{} alpha={:.3}",
+                self.size_info.width(),
+                self.size_info.height(),
+                self.nebula_window_opacity,
+            ));
+            self.draw_window_backdrop(background_color);
+        }
+
+        // 分屏渲染时每个 pane 都有独立的 viewport/projection；否则右侧内容会沿用上一帧
+        // 或左侧 pane 的坐标系，最终叠到左边而不是显示在右边。
+        self.renderer.resize(&size_info);
+
+        let mut lines = RenderLines::new();
+
+        // Optimize loop hint comparator.
+        let has_highlighted_hint =
+            self.highlighted_hint.is_some() || self.vi_highlighted_hint.is_some();
+
+        // Draw grid.
+        let mut powerline_icons = Vec::new();
+        {
+            let _sampler = self.meter.sampler();
+
+            // Ensure macOS hasn't reset our viewport.
+            #[cfg(target_os = "macos")]
+            self.renderer.set_viewport(&size_info);
+
+            let glyph_cache = &mut self.glyph_cache;
+            let highlighted_hint = &self.highlighted_hint;
+            let vi_highlighted_hint = &self.vi_highlighted_hint;
+            let damage_tracker = &mut self.damage_tracker;
+            let mut clickable_index = 0usize;
+
+            let cells = grid_cells.into_iter().filter_map(|mut cell| {
+                let source_point = cell.point;
+                // Hide formula source glyphs while retaining each terminal
+                // cell's resolved background.
+                let formula_source =
+                    !math_coverage.is_empty() && math_coverage.covers(source_point);
+                if formula_source {
+                    cell.character = ' ';
+                    cell.flags.remove(Flags::ALL_UNDERLINES | Flags::STRIKEOUT);
+                    cell.extra = None;
+                }
+                // 这里只改 RenderableCell 副本的屏幕列，terminal grid 中的
+                // 源列始终不动；宽字符、背景和装饰随后都会读取同一个 point。
+                cell.point = if formula_source {
+                    pane_state
+                        .terminal_math
+                        .project_formula_background(source_point, size_info.columns())?
+                } else {
+                    pane_state.terminal_math.project_cell(source_point, size_info.columns())?
+                };
+                match cell.character {
+                    NEBULA_FOLDER_ICON_MARKER => {
+                        powerline_icons.push(NebulaPowerlineIcon {
+                            kind: NebulaPowerlineIconKind::Folder,
+                            point: cell.point,
+                        });
+                        cell.character = ' ';
+                    },
+                    NEBULA_GIT_BRANCH_ICON_MARKER => {
+                        powerline_icons.push(NebulaPowerlineIcon {
+                            kind: NebulaPowerlineIconKind::GitBranch,
+                            point: cell.point,
+                        });
+                        cell.character = ' ';
+                    },
+                    _ => (),
+                }
+
+                let point = term::viewport_to_point_from(viewport_origin, source_point);
+                while clickable_matches
+                    .get(clickable_index)
+                    .is_some_and(|bounds| bounds.end() < &point)
+                {
+                    clickable_index += 1;
+                }
+                let is_clickable = clickable_matches
+                    .get(clickable_index)
+                    .is_some_and(|bounds| bounds.contains(&point));
+                if is_clickable {
+                    // 点击目标的虚线直接继承每个 cell 的文字色；不能统一成主题色，
+                    // 否则 ls 的目录/可执行文件颜色语义会被下划线悄悄抹平。
+                    cell.flags.remove(Flags::ALL_UNDERLINES);
+                    cell.flags.insert(Flags::DASHED_UNDERLINE);
+                    cell.underline = cell.fg;
+                }
+
+                // Underline hints hovered by mouse or vi mode cursor. Persistent
+                // clickable ranges stay dashed; other hint states retain the
+                // stronger solid underline used by keyboard/vi highlighting.
+                if has_highlighted_hint {
+                    let hyperlink = cell.extra.as_ref().and_then(|extra| extra.hyperlink.as_ref());
+
+                    let should_highlight = |hint: &Option<HintMatch>| {
+                        hint.as_ref().is_some_and(|hint| hint.should_highlight(point, hyperlink))
+                    };
+                    if should_highlight(highlighted_hint) || should_highlight(vi_highlighted_hint) {
+                        damage_tracker.frame().damage_point(source_point);
+                        if !is_clickable {
+                            cell.flags.insert(Flags::UNDERLINE);
+                        }
+                    }
+                }
+
+                // Update underline/strikeout.
+                lines.update(&cell);
+
+                Some(cell)
+            });
+            self.renderer.draw_cells(&size_info, glyph_cache, cells);
+        }
+
+        let mut rects = lines.rects(&metrics, &size_info);
+
+        if alt_screen {
+            if let Some(pad_bg) = grid_pad_bg {
+                let (_, card_y, _, card_h) = self.terminal_card_rect();
+                let x = size_info.padding_x();
+                let w = size_info.width() - size_info.padding_x() - size_info.padding_right();
+                // 备用屏幕会给整张网格着色。补齐背景时只能填当前 Pane 的边缘；
+                // 下方 Pane 若从整张卡片顶部开始填，会在最后绘制时盖住上方 Pane。
+                for (y, height) in
+                    alt_screen_vertical_padding_bands(&self.size_info, &size_info, card_y, card_h)
+                        .into_iter()
+                        .flatten()
+                {
+                    rects.push(RenderRect::new(x, y, w, height, pad_bg, 1.0));
+                }
+            }
+        }
+
+        if let Some(vi_cursor_point) = vi_cursor_point {
+            // Indicate vi mode by showing the cursor's position in the top right corner.
+            let line = (-vi_cursor_point.line.0 + size_info.bottommost_line().0) as usize;
+            let obstructed_column = Some(vi_cursor_point)
+                .filter(|point| point.line == -(display_offset as i32))
+                .map(|point| point.column);
+            self.draw_line_indicator(config, total_lines, obstructed_column, line);
+        } else if search_state.regex().is_some() {
+            // Show current display offset in vi-less search to indicate match position.
+            self.draw_line_indicator(config, total_lines, None, display_offset);
+        };
+
+        // Draw cursor.
+        rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+
+        // Push visual bell after url/underline/strikeout rects.
+        let visual_bell_intensity = self.visual_bell.intensity();
+        if visual_bell_intensity != 0. {
+            let visual_bell_rect = RenderRect::new(
+                0.,
+                0.,
+                size_info.width(),
+                size_info.height(),
+                config.bell.color,
+                visual_bell_intensity as f32,
+            );
+            rects.push(visual_bell_rect);
+        }
+
+        // Handle IME positioning and search bar rendering.
+        let ime_position = match search_state.regex() {
+            Some(regex) => {
+                let search_label = match search_state.direction() {
+                    Direction::Right => FORWARD_SEARCH_LABEL,
+                    Direction::Left => BACKWARD_SEARCH_LABEL,
+                };
+
+                let search_text = Self::format_search(regex, search_label, size_info.columns());
+
+                // Render the search bar.
+                self.draw_search(config, &search_text);
+
+                // Draw search bar cursor.
+                let line = size_info.screen_lines();
+                let column = Column(search_text.chars().count() - 1);
+
+                // Add cursor to search bar if IME is not active.
+                if self.ime.preedit().is_none() {
+                    let fg = config.colors.footer_bar_foreground();
+                    let shape = CursorShape::Underline;
+                    let cursor_width = NonZeroU32::new(1).unwrap();
+                    let cursor =
+                        RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
+                    rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+                }
+
+                Some(Point::new(line, column))
+            },
+            None => {
+                let num_lines = size_info.screen_lines();
+                match vi_cursor_viewport_point {
+                    None => term::point_to_viewport_from(viewport_origin, cursor_point).filter(
+                        |point| point.line < num_lines && point.column.0 < size_info.columns(),
+                    ),
+                    point => point,
+                }
+            },
+        };
+
+        // Handle IME.
+        if self.ime.is_enabled() {
+            if let Some(point) = ime_position {
+                let (fg, bg) = if search_state.regex().is_some() {
+                    (config.colors.footer_bar_foreground(), config.colors.footer_bar_background())
+                } else {
+                    (foreground_color, background_color)
+                };
+
+                self.draw_ime_preview(point, fg, bg, &mut rects, config);
+            }
+        }
+
+        if let Some(message) = message_buffer.message() {
+            let search_offset = usize::from(search_state.regex().is_some());
+            let text = message.text(&size_info);
+
+            // Create a new rectangle for the background.
+            let start_line = size_info.screen_lines() + search_offset;
+            let bar = message_bar::message_bar_rect(&size_info, search_offset != 0);
+
+            let bg = match message.ty() {
+                MessageType::Error => config.colors.normal.red,
+                MessageType::Warning => config.colors.normal.yellow,
+            };
+
+            let x = bar.x as i32;
+            let y = bar.y as i32;
+            let width = bar.width as i32;
+            let height = bar.height as i32;
+            let message_bar_rect = RenderRect::new(bar.x, bar.y, bar.width, bar.height, bg, 1.);
+
+            // Push message_bar in the end, so it'll be above all other content.
+            rects.push(message_bar_rect);
+
+            // Always damage message bar, since it could have messages of the same size in it.
+            self.damage_tracker.frame().add_viewport_rect(&size_info, x, y, width, height);
+
+            // Draw rectangles.
+            self.renderer.draw_rects(&size_info, &metrics, rects);
+
+            // Relay messages to the user.
+            let glyph_cache = &mut self.glyph_cache;
+            let fg = config.colors.primary.background;
+            for (i, message_text) in text.iter().enumerate() {
+                let point = Point::new(start_line + i, Column(0));
+                self.renderer.draw_string(
+                    point,
+                    fg,
+                    bg,
+                    message_text.chars(),
+                    &size_info,
+                    glyph_cache,
+                );
+            }
+
+            // 关闭按钮交给 chrome pass 自绘：这里是终端文字管线，画不了圆角
+            // 底和图标墨迹。发布几何 + 墨色，`draw_message_close` 随后照着画，
+            // 与 `message_close_button_rect` 共用同一份矩形。
+            self.nebula_message_close =
+                message_bar::message_close_button_rect(&size_info, search_offset != 0)
+                    .map(|rect| ((rect.x, rect.y, rect.width, rect.height), fg));
+        } else {
+            self.nebula_message_close = None;
+            self.nebula_message_close_hover = false;
+            // Draw rectangles.
+            self.renderer.draw_rects(&size_info, &metrics, rects);
+        }
+
+        terminal_math::draw_overlays(
+            &mut self.renderer,
+            &mut self.glyph_cache,
+            &mut pane_state.terminal_math,
+            &terminal_math_overlays,
+            &prepared_math,
+            &size_info,
+            math_pixels_per_point,
+        );
+
+        self.draw_powerline_icons(&powerline_icons, size_info);
+        // `draw_powerline_icons` uses the full-window UI renderer and restores
+        // a full-window viewport; bind the pane projection again before drawing
+        // the inline ghost suggestion.
+        self.renderer.resize(&size_info);
+
+        // Draw inline ghost-text autosuggestion directly after the cursor,
+        // once everything else for the cell row is on screen. The color is
+        // the theme's faintest ink (not a fixed gray), so on light themes it
+        // stays clearly weaker than the near-black real input instead of
+        // colliding with it.
+        if !pane_state.suggestion.is_empty() && self.ime.preedit().is_none() {
+            if let Some(point) = term::point_to_viewport_from(viewport_origin, cursor_point)
+                .filter(|p| p.line < size_info.screen_lines() && p.column.0 < size_info.columns())
+            {
+                let avail = size_info.columns() - point.column.0;
+                let ghost: String = pane_state.suggestion.chars().take(avail).collect();
+                let ghost_fg = self.nebula_theme.skin().ink_faint;
+                let glyph_cache = &mut self.glyph_cache;
+                self.renderer.draw_string(
+                    point,
+                    ghost_fg,
+                    background_color,
+                    ghost.chars(),
+                    &size_info,
+                    glyph_cache,
+                );
+            }
+        }
+
+        // Popup-style completion list (弹窗补齐): candidate rows anchored to
+        // the prompt cursor, keyboard-selected. Mutually exclusive with the
+        // ghost above by construction; same IME suppression.
+        if !pane_state.completion_items.is_empty() && self.ime.preedit().is_none() {
+            if let Some(anchor) = term::point_to_viewport_from(viewport_origin, cursor_point)
+                .filter(|p| p.line < size_info.screen_lines() && p.column.0 < size_info.columns())
+            {
+                self.draw_completion_popup(
+                    &pane_state.completion_items,
+                    pane_state.completion_selected,
+                    anchor,
+                    &size_info,
+                    background_color,
+                );
+            }
+        }
+
+        self.draw_render_timer(config);
+
+        // Draw hyperlink uri preview.
+        if has_highlighted_hint {
+            let cursor_point = vi_cursor_point.or(Some(cursor_point));
+            self.draw_hyperlink_preview(config, cursor_point, viewport_origin);
+        }
+
+        // Overlay scrollbar on the right edge while scrolled into history.
+        self.draw_scrollbar(&size_info, display_offset, total_lines);
+    }
+
+    /// Draw the screen for a single, full-window terminal.
+    ///
+    /// A reference to the Term whose state is being drawn must be provided.
+    /// This call may block if vsync is enabled.
+    pub fn draw<T: EventListener>(
+        &mut self,
+        terminal: MutexGuard<'_, Term<T>>,
+        scheduler: &mut Scheduler,
+        message_buffer: &MessageBuffer,
+        config: &UiConfig,
+        search_state: &mut SearchState,
+        pane_state: &mut NebulaPaneState,
+    ) {
+        let view = self.size_info;
+        self.make_current();
+        self.reload_nebula_settings_if_changed(config);
+        // 光标聚焦态以 winit 的窗口焦点为唯一权威：`Term::is_focused` 是由
+        // Focused 事件维护的缓存，只写"当时聚焦"的那一个 Term——切 tab /
+        // 分屏又并回后残留旧值，表现为聚焦窗口里光标随机空心、不闪。每帧
+        // 用真实焦点覆盖，残留状态无处藏身。
+        self.draw_pane(
+            terminal,
+            message_buffer,
+            config,
+            search_state,
+            pane_state,
+            view,
+            Some(self.window.has_focus()),
+            true,
+        );
+        self.present_frame(scheduler);
+    }
+
+    /// Begin a multi-pane frame: bind the GL context and refresh themed
+    /// settings before the per-pane draws.
+    pub fn begin_pane_frame(&mut self, config: &UiConfig) {
+        self.reload_nebula_settings_if_changed(config);
+        self.make_current();
+    }
+
+    /// Draw a document-viewer tab's frame: the shell backdrop and terminal
+    /// card exactly like a pane frame (same layer model), then the document
+    /// instead of a grid, then the normal chrome via `present_frame`.
+    pub fn draw_doc_frame(
+        &mut self,
+        doc: &mut markdown_view::DocView,
+        _view: SizeInfo,
+        scheduler: &mut Scheduler,
+    ) {
+        self.renderer.set_window_height(self.size_info.height());
+
+        nebula_debug_log(format!(
+            "render_clear path=document window={}x{} alpha={:.3}",
+            self.size_info.width(),
+            self.size_info.height(),
+            self.nebula_window_opacity,
+        ));
+        let card_bg = self.nebula_background.unwrap_or(self.colors[NamedColor::Background]);
+        self.draw_window_backdrop(card_bg);
+        let scale = self.window.scale_factor as f32;
+        let area = self.doc_view_area();
+        let skin = self.nebula_theme.skin();
+        let size = self.size_info;
+        markdown_view::draw(
+            doc,
+            &mut self.renderer,
+            &mut self.glyph_cache,
+            &size,
+            &skin,
+            area,
+            scale,
+            doc.scrollbar_hover(),
+        );
+
+        self.present_frame(scheduler);
+    }
+
+    pub fn draw_image_frame(
+        &mut self,
+        image: &image_viewer::ImageView,
+        _view: SizeInfo,
+        scheduler: &mut Scheduler,
+    ) {
+        self.renderer.set_window_height(self.size_info.height());
+        let card_bg = self.nebula_background.unwrap_or(self.colors[NamedColor::Background]);
+        self.draw_window_backdrop(card_bg);
+        let scale = self.window.scale_factor as f32;
+        let area = self.image_view_area();
+        image.draw(&mut self.renderer, &self.size_info, area, scale);
+        self.present_frame(scheduler);
+    }
+
+    /// Draw the Settings special tab. Its controls are emitted by the chrome
+    /// pass so they retain the same hit geometry and icon texture pipeline as
+    /// the rest of Nebula, but the base is a normal tab content card.
+    pub fn draw_settings_frame(&mut self, scheduler: &mut Scheduler) {
+        self.renderer.set_window_height(self.size_info.height());
+
+        nebula_debug_log(format!(
+            "render_clear path=settings window={}x{} alpha={:.3}",
+            self.size_info.width(),
+            self.size_info.height(),
+            self.nebula_window_opacity,
+        ));
+        let card_bg = self.nebula_background.unwrap_or(self.colors[NamedColor::Background]);
+        self.draw_window_backdrop(card_bg);
+
+        self.present_frame(scheduler);
+    }
+
+    /// Draw one pane of a multi-pane layout into `view`. `clear_first` clears
+    /// the whole window before the first pane; later panes paint on top.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_pane_view<T: EventListener>(
+        &mut self,
+        terminal: MutexGuard<'_, Term<T>>,
+        message_buffer: &MessageBuffer,
+        config: &UiConfig,
+        search_state: &mut SearchState,
+        pane_state: &mut NebulaPaneState,
+        view: SizeInfo,
+        focused: bool,
+        clear_first: bool,
+    ) {
+        self.draw_pane(
+            terminal,
+            message_buffer,
+            config,
+            search_state,
+            pane_state,
+            view,
+            Some(focused),
+            clear_first,
+        );
+    }
+
+    /// Overlay split chrome over the drawn panes: dim every unfocused pane and
+    /// paint divider hairlines. Rectangles are screen-space `(x, y, w, h)` with
+    /// a top-left origin. Focus reads as a brightness difference
+    /// `unfocused-split-opacity`) rather than an outline.
+    pub fn draw_split_overlays(
+        &mut self,
+        dim_rects: &[(f32, f32, f32, f32)],
+        divider_rects: &[(f32, f32, f32, f32)],
+    ) {
+        let palette = self.nebula_theme.palette();
+        let veil = Rgba::new(0, 0, 0, 0).with_alpha(NEBULA_UNFOCUSED_SPLIT_DIM);
+        let line_color = palette.edge_l.with_alpha(0.35);
+
+        let mut quads: Vec<UiQuad> = Vec::with_capacity(dim_rects.len() + divider_rects.len() + 1);
+        for &(x, y, w, h) in dim_rects {
+            if w > 0.0 && h > 0.0 {
+                quads.push(UiQuad::solid(x, y, w, h, 0.0, veil));
+            }
+        }
+        for &(x, y, w, h) in divider_rects {
+            if w > 0.0 && h > 0.0 {
+                quads.push(UiQuad::solid(x, y, w, h, 0.0, line_color));
+            }
+        }
+
+        // Freshly split pane slides in: a bg-coloured cover anchored at the
+        // pane's far edge shrinks away over ~160ms (ease-out), so the new pane
+        // wipes in from the divider instead of popping. Timestamp-derived, no
+        // per-frame allocation (same discipline as the quick-terminal slide).
+        if let Some(mut reveal) = self.nebula_split_reveal {
+            reveal.motion.step(self.ui_animations.frame());
+            let e = reveal.motion.value();
+            if !reveal.motion.is_active() {
+                self.nebula_split_reveal = None;
+            } else {
+                self.nebula_split_reveal = Some(reveal);
+                let (x, y, w, h) = reveal.rect;
+                let bg = self.nebula_background.unwrap_or(Rgb::new(15, 17, 26));
+                let cover = Rgba::new(bg.r, bg.g, bg.b, 255);
+                let (cx, cy, cw, chh) = match reveal.direction {
+                    SplitDirection::LeftRight => (x + w * e, y, w * (1.0 - e), h),
+                    SplitDirection::TopBottom => (x, y + h * e, w, h * (1.0 - e)),
+                };
+                if cw > 0.5 && chh > 0.5 {
+                    quads.push(UiQuad::solid(cx, cy, cw, chh, 0.0, cover));
+                }
+                self.window.request_redraw();
+            }
+        }
+
+        self.renderer.draw_ui(&self.size_info, &quads);
+    }
+
+    /// Finish a multi-pane frame: draw window chrome and present.
+    pub fn finish_pane_frame(&mut self, scheduler: &mut Scheduler) {
+        self.present_frame(scheduler);
+    }
+
+    /// Paint the divider between two split panes and dim the unfocused one.
+    /// (Removed: superseded by `draw_split_overlays` + the layout tree in
+    /// `window_context/split.rs`.)
+    #[cfg(any())]
+    fn _removed_split_helpers() {}
+
+    /// Overlay scrollbar on the right edge of a pane, shown only while scrolled
+    /// up into the scrollback (auto-hides at the bottom).
+    /// overlay-style `scrollbar`: a thin, semi-transparent thumb floating over
+    /// the grid's right edge, sized to the visible fraction of total content.
+    fn draw_scrollbar(&mut self, view: &SizeInfo, display_offset: usize, total_lines: usize) {
+        let Some(geo) = self.scrollbar_geometry(view, display_offset, total_lines) else { return };
+        let (thumb_x, thumb_y, thumb_w, thumb_h) = geo;
+
+        // Skinned so it reads as chrome on both light and dark themes; a bit
+        // more opaque while grabbed so the drag has visible feedback.
+        let alpha = if self.nebula_scrollbar_drag.is_some() { 0.62 } else { 0.40 };
+        let thumb_color = self.nebula_theme.skin().scrollbar_thumb.with_alpha(alpha);
+        let quad = UiQuad::solid(thumb_x, thumb_y, thumb_w, thumb_h, thumb_w * 0.5, thumb_color);
+        self.renderer.draw_ui(&self.size_info, &[quad]);
+    }
+
+    /// Scrollbar thumb rect `(x, y, w, h)` for a pane `view` — the single
+    /// source of truth shared by rendering and input hit-testing. `None` while
+    /// the bar is hidden (at the bottom, or no history).
+    fn scrollbar_geometry(
+        &self,
+        view: &SizeInfo,
+        display_offset: usize,
+        total_lines: usize,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let screen_lines = view.screen_lines();
+        // Nothing to show when sitting at the bottom or when there's no history.
+        if display_offset == 0 || total_lines <= screen_lines {
+            return None;
+        }
+
+        let scale = self.window.scale_factor as f32;
+        let total = total_lines as f32;
+        let track_top = view.padding_y();
+        let track_h = screen_lines as f32 * view.cell_height();
+        if track_h <= 1.0 {
+            return None;
+        }
+
+        // Thumb height = visible fraction of total content, with a sane minimum.
+        let min_thumb = (24.0 * scale).min(track_h);
+        let thumb_h = (track_h * (screen_lines as f32 / total)).clamp(min_thumb, track_h);
+
+        // Lines of history above the current viewport top (0 = top, history = bottom).
+        let history = total_lines - screen_lines;
+        let above = (history - display_offset) as f32;
+        let max_y = (track_h - thumb_h).max(0.0);
+        let thumb_y = track_top + (track_h * (above / total)).clamp(0.0, max_y);
+
+        // Float over the grid's right edge (overlay style, like macOS scrollbars).
+        let thumb_w = (4.0 * scale).max(2.0);
+        let grid_right = view.padding_x() + view.columns() as f32 * view.cell_width();
+        let thumb_x = grid_right - thumb_w;
+
+        Some((thumb_x, thumb_y, thumb_w, thumb_h))
+    }
+
+    /// Hit-test a press against the scrollbar. The 4px thumb gets a widened
+    /// grab zone; a hit returns the pointer's y-offset inside the thumb so the
+    /// drag doesn't jump. A press on the track (above/below the thumb) recenters
+    /// the thumb there (`grab = thumb_h / 2`).
+    pub fn scrollbar_grab(
+        &self,
+        view: &SizeInfo,
+        display_offset: usize,
+        total_lines: usize,
+        x: f32,
+        y: f32,
+    ) -> Option<f32> {
+        let (thumb_x, thumb_y, thumb_w, thumb_h) =
+            self.scrollbar_geometry(view, display_offset, total_lines)?;
+        let scale = self.window.scale_factor as f32;
+        let slop = 8.0 * scale;
+        // Horizontal band around the thumb column.
+        if x < thumb_x - slop || x > thumb_x + thumb_w + slop {
+            return None;
+        }
+        // Vertical: inside the track at all?
+        let track_top = view.padding_y();
+        let track_h = view.screen_lines() as f32 * view.cell_height();
+        if y < track_top || y > track_top + track_h {
+            return None;
+        }
+        if y >= thumb_y && y <= thumb_y + thumb_h {
+            Some(y - thumb_y) // grab inside the thumb
+        } else {
+            Some(thumb_h / 2.0) // track press: jump so the thumb centers on it
+        }
+    }
+
+    /// Map a dragged pointer `y` back to a scrollback `display_offset`,
+    /// inverting the thumb-position math (`grab` = offset captured at press).
+    pub fn scrollbar_target_offset(
+        &self,
+        view: &SizeInfo,
+        total_lines: usize,
+        y: f32,
+        grab: f32,
+    ) -> usize {
+        let screen_lines = view.screen_lines();
+        let history = total_lines.saturating_sub(screen_lines);
+        if history == 0 {
+            return 0;
+        }
+        let track_top = view.padding_y();
+        let track_h = (screen_lines as f32 * view.cell_height()).max(1.0);
+        let above = ((y - grab - track_top) / track_h * total_lines as f32).round();
+        let above = above.clamp(0.0, history as f32) as usize;
+        history - above
+    }
+
+    /// Centered modal for confirmations and mandatory setup gates.
+    fn draw_confirm_modal(&mut self) {
+        let Some(confirm) = self.nebula_confirm.clone() else {
+            self.nebula_confirm_buttons = None;
+            return;
+        };
+        let size = self.ui_size_info();
+        let scale = self.window.scale_factor as f32;
+        let s = |v: f32| v * scale;
+        let cell_w = size.cell_width();
+        let cell_h = size.cell_height();
+
+        // Same tokens as the settings shell (design discipline: one flat
+        // surface, hairline stroke, semantic color only on the primary
+        // action). Danger red for destructive closes, theme accent for paste.
+        // All from the theme skin, so light themes get a pale card + dark ink.
+        let sk = self.nebula_theme.skin();
+        let accent = Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, 255);
+        let txt = sk.ink;
+        let dim = sk.ink_dim;
+
+        let (title, body, danger) = confirmation_text::text_for(&confirm, self.ui_language());
+
+        let is_backup_passphrase = matches!(confirm, NebulaConfirm::BackupPassphrase { .. });
+        let body = if is_backup_passphrase {
+            match &self.nebula_backup_status {
+                Some((message, true)) => format!("{body} {message}"),
+                _ => body,
+            }
+        } else {
+            body
+        };
+
+        let text_w = |t: &str| -> f32 {
+            let cols: usize = t.chars().map(|c| c.width().unwrap_or(1)).sum();
+            cols as f32 * cell_w
+        };
+
+        // Buttons: right-aligned row, primary rightmost (Windows order). 文案
+        // 统一"是 / 否"（2026-07-23 用户裁定）。
+        //
+        // 2026-07-27 用户反馈：Enter / Esc 一直生效，但按钮上只有"是""否"
+        // 两个字，键位从没画出来——同文件的 SSH 撤销条却老实写着 Ctrl+Z，
+        // 标准不一致。`can_dismiss()` 恒真，故两个键位都名副其实。
+        //
+        // 键位画成键帽（描边小方框）而不是裸文字：v0.5/v0.6 起 welcome 页的
+        // 快捷键就是灰底药丸 + 亮墨的键帽（`welcome.rs` 的 `kbd`），用户记
+        // 的"白色的框"就是它。那边是终端文本（ANSI + powerline 圆头字形），
+        // 这里走 draw_ui + chrome text，因此使用本文件既有的惯用法
+        // 手画：外圈描边 quad + 内层填充 quad，只露 1px 圆环。描边取按钮
+        // 自己的墨色，深色主题下自然读作白框，浅色主题下是深框。
+        let language = self.ui_language();
+        let primary_label = language.text(crate::i18n::Message::CommonYes);
+        let cancel_label = language.text(crate::i18n::Message::CommonNo);
+        let primary_key = "Enter";
+        let cancel_key = "Esc";
+        let btn_h = s(34.0);
+        let btn_pad = s(18.0);
+        let btn_min_w = s(88.0);
+        // Keycap: text plus breathing room, and a hair taller than the glyph so
+        // the ring never clips ascenders. Gap sits between label and cap.
+        let cap_pad = s(6.0);
+        let cap_h = cell_h + s(6.0);
+        let key_gap = s(8.0);
+        let cap_w = |key: &str| text_w(key) + 2.0 * cap_pad;
+        let btn_w = |label: &str, key: &str| -> f32 {
+            (text_w(label) + key_gap + cap_w(key) + 2.0 * btn_pad).max(btn_min_w)
+        };
+        let primary_w = btn_w(primary_label, primary_key);
+        let cancel_w = btn_w(cancel_label, cancel_key);
+
+        // Card sized to title/buttons, clamped into the window, and capped at
+        // 520 logical px: a long body WRAPS instead of stretching the card
+        // into a full-width banner (2026-07-23 用户反馈"警告框太宽").
+        let pad = s(26.0);
+        let head_w = text_w(&title).max(primary_w + s(12.0) + cancel_w);
+        let box_w = (head_w + 2.0 * pad).max(s(380.0)).min(s(520.0)).min(size.width() - s(32.0));
+        let body_cols = (((box_w - 2.0 * pad) / cell_w).floor() as usize).max(8);
+        let body_lines = wrap_display_cols(&body, body_cols);
+        let line_h = cell_h + s(6.0);
+        let body_h = body_lines.len() as f32 * line_h - s(6.0);
+        let input_h = if is_backup_passphrase { s(38.0) } else { 0.0 };
+        let input_space = if is_backup_passphrase { input_h + s(14.0) } else { 0.0 };
+        let box_h = pad + cell_h + s(10.0) + body_h + input_space + s(24.0) + btn_h + pad * 0.75;
+        let bx = ((size.width() - box_w) * 0.5).max(s(16.0));
+        let by = ((size.height() - box_h) * 0.5).max(s(16.0));
+
+        // 确认框是 Modal：它要求一个决策、有后果、必须应答，所以画遮罩。
+        // 面板底、遮罩、外阴影、同心描边、圆角全部来自同一个配方，与命令
+        // 面板/右键菜单共用——此前这里是手写的「遮罩 + 描边 + 填充」三件套，
+        // 圆角 12/13 与别处的 8 对不上，而且**根本没有外阴影**：一个要求
+        // 用户停下来应答的东西，却比随手开关的命令面板浮得还低。
+        let mut quads = Vec::new();
+        ui::surface::push_surface(
+            &mut quads,
+            (bx, by, box_w, box_h),
+            (size.width(), size.height()),
+            scale,
+            &sk,
+            self.nebula_density,
+            ui::surface::Elevation::Modal,
+            1.0,
+        );
+
+        let backup_input_rect = is_backup_passphrase.then(|| {
+            (bx + pad, by + pad + cell_h + s(10.0) + body_h + s(14.0), box_w - 2.0 * pad, input_h)
+        });
+        if let Some(input_rect) = backup_input_rect {
+            ui::surface::push_stroke(
+                &mut quads,
+                input_rect,
+                s(ui::tokens::radius::CONTROL),
+                scale,
+                sk.hairline,
+            );
+            quads.push(UiQuad::solid(
+                input_rect.0,
+                input_rect.1,
+                input_rect.2,
+                input_rect.3,
+                s(ui::tokens::radius::CONTROL),
+                sk.input,
+            ));
+            if self.nebula_backup_passphrase_select_all.is_selected()
+                && !self.nebula_backup_passphrase.is_empty()
+            {
+                quads.push(UiQuad::solid(
+                    input_rect.0 + s(8.0),
+                    input_rect.1 + s(6.0),
+                    (self.nebula_backup_passphrase.chars().count() as f32 * cell_w)
+                        .min(input_rect.2 - s(16.0)),
+                    input_rect.3 - s(12.0),
+                    ui::tokens::radius::CHIP * scale,
+                    sk.accent_soft,
+                ));
+            }
+        }
+
+        // Button geometry (kept for the mouse hit-test).
+        let btn_y = by + box_h - pad * 0.75 - btn_h;
+        let primary_x = bx + box_w - pad + s(2.0) - primary_w;
+        let cancel_x = primary_x - s(12.0) - cancel_w;
+        let primary_rect = (primary_x, btn_y, primary_w, btn_h);
+        let cancel_rect = (cancel_x, btn_y, cancel_w, btn_h);
+        self.nebula_confirm_buttons = Some((primary_rect, cancel_rect));
+
+        let primary_fill = if danger { sk.danger } else { accent };
+        // Ink first: the keycap ring is derived from the ink it wraps, so both
+        // buttons' text colors have to exist before the quads are built.
+        let on_primary = if danger { Rgb::new(255, 244, 246) } else { sk.ink_on_accent };
+        // Keycap geometry, shared by the ring quads and the glyph runs below.
+        let cap_y = btn_y + (btn_h - cap_h) / 2.0;
+        let cancel_cap_x = cancel_x + btn_pad + text_w(cancel_label) + key_gap;
+        let primary_cap_x = primary_x + btn_pad + text_w(primary_label) + key_gap;
+
+        // Cancel: quiet ghost button (hairline + faint fill).
+        let control_r = s(ui::tokens::radius::CONTROL);
+        ui::surface::push_stroke(&mut quads, cancel_rect, control_r, scale, sk.hairline);
+        quads.push(UiQuad::solid(cancel_x, btn_y, cancel_w, btn_h, control_r, sk.panel));
+        quads.push(UiQuad::solid(cancel_x, btn_y, cancel_w, btn_h, control_r, sk.surface));
+        // Primary: the single loud element on the card.
+        quads.push(UiQuad::solid(primary_x, btn_y, primary_w, btn_h, control_r, primary_fill));
+
+        // Keycaps: 图8 键帽规范（2026-07-29）——与 Ctrl+K/设置页共用
+        // `keycap::push_chip` 配方（hairline 圈 + panel/surface 叠底），
+        // 不再按按钮墨色自造描边圈。该配方只用于中性底的取消键；中性
+        // panel 在深色主题里近黑，放到 accent 主按钮上会读成一块突兀的
+        // 深色（issue #35），主键帽因此改走 `push_chip_on_fill`：底与
+        // 底边从按钮自己的墨（`on_primary`）派生，深浅主题都成立。
+        let cap = |x: f32, key: &str| -> Vec<UiQuad> {
+            let mut out = Vec::new();
+            ui::keycap::push_chip(&mut out, &sk, x, cap_y, cap_w(key), cap_h, scale);
+            out
+        };
+        quads.extend(cap(cancel_cap_x, cancel_key));
+        ui::keycap::push_chip_on_fill(
+            &mut quads,
+            on_primary,
+            primary_cap_x,
+            cap_y,
+            cap_w(primary_key),
+            cap_h,
+            scale,
+        );
+        self.renderer.draw_ui(&size, &quads);
+
+        // Text: free-pixel chrome text (no opaque cell backgrounds), left
+        // aligned like a native Windows dialog.
+        let glyph_cache = &mut self.glyph_cache;
+        let tx = bx + pad;
+        self.renderer.draw_chrome_text(&size, tx, by + pad, txt, &title, glyph_cache);
+        let btn_text_y = btn_y + (btn_h - cell_h) / 2.0;
+        // Body wraps to the card's inner width; lines carry a small leading.
+        let mut line_y = by + pad + cell_h + s(10.0);
+        for line in &body_lines {
+            self.renderer.draw_chrome_text(&size, tx, line_y, dim, line, glyph_cache);
+            line_y += line_h;
+        }
+        self.renderer.draw_chrome_text(
+            &size,
+            cancel_x + btn_pad,
+            btn_text_y,
+            txt,
+            cancel_label,
+            glyph_cache,
+        );
+        if let Some(input_rect) = backup_input_rect {
+            let max_cols = (((input_rect.2 - s(20.0)) / cell_w) as usize).max(1);
+            let count = self.nebula_backup_passphrase.chars().count();
+            let (masked, input_ink) = if count == 0 {
+                (language.pick("输入口令", "Passphrase").to_owned(), sk.ink_faint)
+            } else if count > max_cols {
+                (format!("…{}", "•".repeat(max_cols.saturating_sub(1))), sk.ink)
+            } else {
+                ("•".repeat(count), sk.ink)
+            };
+            self.renderer.draw_chrome_text(
+                &size,
+                input_rect.0 + s(10.0),
+                input_rect.1 + (input_rect.3 - cell_h) / 2.0,
+                input_ink,
+                &masked,
+                glyph_cache,
+            );
+        }
+
+        // Key text is centered in its cap. The cap shares the button's text
+        // centerline by construction, so `btn_text_y` needs no adjustment.
+        // Ink stays full strength: the ring already marks this run as a key,
+        // dimming it too would push it under the contrast floor.
+        self.renderer.draw_chrome_text(
+            &size,
+            cancel_cap_x + cap_pad,
+            btn_text_y,
+            txt,
+            cancel_key,
+            glyph_cache,
+        );
+        // Danger keeps pale ink (red is dark in both modes); the accent
+        // button contrast flips with the theme.
+        self.renderer.draw_chrome_text(
+            &size,
+            primary_x + btn_pad,
+            btn_text_y,
+            on_primary,
+            primary_label,
+            glyph_cache,
+        );
+        // 主键帽文字随键帽底走按钮墨（`on_primary`）：键帽底就是这支墨的
+        // 低透明度洗色，满强度的同一支墨在其上必然可读；取消键帽仍是中性
+        // chip + sk.ink。
+        self.renderer.draw_chrome_text(
+            &size,
+            primary_cap_x + cap_pad,
+            btn_text_y,
+            on_primary,
+            primary_key,
+            glyph_cache,
+        );
+    }
+
+    /// Bottom-center reversible-action bar for SSH deletion. Its action rect is
+    /// published to input after layout, keeping hover/click geometry identical
+    /// to the pixels on screen.
+    /// 助手建议条（spec 001）：底部居中浮条，SSH 撤销条同款组件语言（中性
+    /// 壳、accent/danger 只在 ✦/⚠ 一处，渐变预算不动）。Pending 一行"正在
+    /// 分析"，Ready 是图标 + 命令 + 暗色解释 + 键位提示；一律只贴不执行。
+    /// 撤销条在场时让位——它 8 秒自清，之后建议条自然浮现。
+    fn draw_ai_fix_bar(&mut self) {
+        use crate::ai_assistant::AiFixState;
+        if self.nebula_ssh_delete_undo.is_some() {
+            return;
+        }
+        let Some(state) = self.nebula_ai_fix_bar.clone() else { return };
+
+        let size = self.ui_size_info();
+        let scale = self.window.scale_factor as f32;
+        let s = |value: f32| value * scale;
+        let cell_w = size.cell_width();
+        let cell_h = size.cell_height();
+        let sk = self.nebula_theme.skin();
+        let language = self.ui_language();
+        let text_cols =
+            |text: &str| -> usize { text.chars().map(|ch| ch.width().unwrap_or(1).max(1)).sum() };
+
+        let accent = Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, 255);
+        let (icon, icon_color, command, explain, hint) = match &state {
+            AiFixState::Pending { .. } => (
+                "✦",
+                accent,
+                language.pick("正在分析失败原因…", "Analyzing failure…").to_owned(),
+                String::new(),
+                String::new(),
+            ),
+            AiFixState::Ready { fix, .. } => (
+                if fix.danger { "⚠" } else { "✦" },
+                if fix.danger { sk.danger } else { accent },
+                fix.command.clone(),
+                fix.explain.clone(),
+                language.pick("Ctrl+. 贴入 · Esc 关闭", "Ctrl+. paste · Esc dismiss").to_owned(),
+            ),
+        };
+
+        // Budget: icon + command are non-negotiable; the explain is the first
+        // thing dropped, then the command itself is HEAD-truncated (unlike
+        // paths, a command's identity lives at its start).
+        let pad = s(14.0);
+        let gap = s(10.0);
+        let max_w = size.width() - s(24.0);
+        let fixed = pad * 2.0 + cell_w * 2.0 + gap + text_cols(&hint) as f32 * cell_w;
+        let cmd_budget = (((max_w - fixed) / cell_w) as usize).max(12);
+        let command = truncate_tab_label(&command, cmd_budget.min(96));
+        let explain_budget =
+            cmd_budget.saturating_sub(text_cols(&command)).saturating_sub(3).min(60);
+        let explain =
+            if text_cols(&explain) + 8 > explain_budget { String::new() } else { explain };
+
+        let mut content_cols = 2 + text_cols(&command);
+        if !explain.is_empty() {
+            content_cols += 3 + text_cols(&explain);
+        }
+        if !hint.is_empty() {
+            content_cols += 2 + text_cols(&hint);
+        }
+        let bar_h = s(44.0).max(cell_h + s(12.0));
+        let bar_w = (pad * 2.0 + content_cols as f32 * cell_w).max(s(320.0)).min(max_w);
+        let bar_x = (size.width() - bar_w) * 0.5;
+        let bar_y = size.height() - bar_h - s(18.0);
+
+        // 通知条是 Menu 层级的浮层：贴着窗口底边、不阻断交互，靠真外阴影
+        // 与内容分层。此前这里是 `UiQuad::glow` 冒充阴影——glow 向外扩散
+        // 亮度而不是压暗，在浅色主题上只会让条子四周发灰。
+        let mut quads = Vec::new();
+        ui::surface::push_surface(
+            &mut quads,
+            (bar_x, bar_y, bar_w, bar_h),
+            (size.width(), size.height()),
+            scale,
+            &sk,
+            self.nebula_density,
+            ui::surface::Elevation::Menu,
+            1.0,
+        );
+        self.renderer.draw_ui(&size, &quads);
+
+        let text_y = bar_y + (bar_h - cell_h) * 0.5;
+        let mut x = bar_x + pad;
+        let gc = &mut self.glyph_cache;
+        self.renderer.draw_chrome_text(
+            &size,
+            x,
+            text_y,
+            Rgb::new(icon_color.r, icon_color.g, icon_color.b),
+            icon,
+            gc,
+        );
+        x += cell_w * 2.0;
+        self.renderer.draw_chrome_text(&size, x, text_y, sk.ink_strong, &command, gc);
+        x += text_cols(&command) as f32 * cell_w;
+        if !explain.is_empty() {
+            self.renderer.draw_chrome_text(
+                &size,
+                x + cell_w,
+                text_y,
+                sk.ink_dim,
+                &format!("— {explain}"),
+                gc,
+            );
+            x += (3 + text_cols(&explain)) as f32 * cell_w;
+        }
+        if !hint.is_empty() {
+            let hint_x = (bar_x + bar_w - pad - text_cols(&hint) as f32 * cell_w).max(x + gap);
+            self.renderer.draw_chrome_text(&size, hint_x, text_y, sk.ink_dim, &hint, gc);
+        }
+    }
+
+    fn draw_ssh_delete_undo(&mut self) {
+        let Some(undo) = self.nebula_ssh_delete_undo.as_ref() else {
+            self.nebula_ssh_delete_undo_rect = None;
+            self.nebula_ssh_delete_undo_hover = false;
+            return;
+        };
+        if undo.started_at.elapsed() >= SSH_DELETE_UNDO_DURATION {
+            self.expire_ssh_delete_undo();
+            return;
+        }
+
+        let size = self.ui_size_info();
+        let scale = self.window.scale_factor as f32;
+        let s = |value: f32| value * scale;
+        let cell_w = size.cell_width();
+        let cell_h = size.cell_height();
+        let sk = self.nebula_theme.skin();
+
+        let fixed_cols = 20usize;
+        let host_budget = (((size.width() - s(300.0)).max(cell_w * 8.0) / cell_w) as usize)
+            .saturating_sub(fixed_cols)
+            .max(8);
+        let host = truncate_tab_label(&undo.host, host_budget.min(28));
+        let message = if undo.from_config {
+            format!("已隐藏 {host}（SSH config 未修改）")
+        } else {
+            format!("已移除 {host}")
+        };
+        let hint = "Ctrl+Z";
+        let action = "撤销";
+        let text_cols =
+            |text: &str| -> usize { text.chars().map(|ch| ch.width().unwrap_or(1).max(1)).sum() };
+
+        let pad = s(14.0);
+        let gap = s(12.0);
+        let action_w = s(76.0);
+        let bar_h = s(48.0).max(cell_h + s(12.0));
+        let content_w = (text_cols(&message) + text_cols(hint) + 2) as f32 * cell_w;
+        let bar_w =
+            (pad * 2.0 + content_w + gap + action_w).max(s(360.0)).min(size.width() - s(24.0));
+        let bar_x = (size.width() - bar_w) * 0.5;
+        let bar_y = size.height() - bar_h - s(18.0);
+        let action_rect =
+            (bar_x + bar_w - pad - action_w, bar_y + (bar_h - s(34.0)) * 0.5, action_w, s(34.0));
+        self.nebula_ssh_delete_undo_rect = Some(action_rect);
+
+        // 撤销条同上：Menu 层级的浮层配方，真外阴影而不是 glow。
+        let mut quads = Vec::new();
+        ui::surface::push_surface(
+            &mut quads,
+            (bar_x, bar_y, bar_w, bar_h),
+            (size.width(), size.height()),
+            scale,
+            &sk,
+            self.nebula_density,
+            ui::surface::Elevation::Menu,
+            1.0,
+        );
+        quads.push(UiQuad::solid(
+            action_rect.0,
+            action_rect.1,
+            action_rect.2,
+            action_rect.3,
+            s(ui::tokens::radius::CONTROL),
+            if self.nebula_ssh_delete_undo_hover { sk.hover_strong } else { sk.surface },
+        ));
+        if self.nebula_ssh_delete_undo_hover {
+            quads.push(UiQuad::solid(
+                action_rect.0,
+                action_rect.1 + action_rect.3 - s(2.0),
+                action_rect.2,
+                s(2.0),
+                s(1.0),
+                Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, 220),
+            ));
+        }
+        self.renderer.draw_ui(&size, &quads);
+
+        let text_y = bar_y + (bar_h - cell_h) * 0.5;
+        let message_x = bar_x + pad;
+        self.renderer.draw_chrome_text(
+            &size,
+            message_x,
+            text_y,
+            sk.ink,
+            &message,
+            &mut self.glyph_cache,
+        );
+        let hint_x = action_rect.0 - gap - text_cols(hint) as f32 * cell_w;
+        self.renderer.draw_chrome_text(
+            &size,
+            hint_x,
+            text_y,
+            sk.ink_faint,
+            hint,
+            &mut self.glyph_cache,
+        );
+        let action_x = action_rect.0 + (action_rect.2 - text_cols(action) as f32 * cell_w) * 0.5;
+        let action_y = action_rect.1 + (action_rect.3 - cell_h) * 0.5;
+        self.renderer.draw_chrome_text_styled(
+            &size,
+            action_x,
+            action_y,
+            if self.nebula_ssh_delete_undo_hover { sk.ink_strong } else { sk.accent },
+            pebrel_terminal::term::cell::Flags::BOLD,
+            action,
+            &mut self.glyph_cache,
+        );
+    }
+
+    /// Draw the window chrome and present the accumulated frame.
+    /// Overlay a transient, fading "cols × rows" HUD centered in the window,
+    /// shown briefly after a resize (a resize overlay HUD). Keeps requesting
+    /// redraws until it fades out, then clears itself.
+    /// 每帧同步聚焦 pane 的身份。连接卡片据此决定画在哪个 pane 里——
+    /// `nebula_pane_view` 只给几何，不给身份。
+    pub fn set_focused_pane(&mut self, pane: u64) {
+        self.nebula_focused_pane = pane;
+    }
+
+    /// 后台 SSH runtime 上报的连接阶段。
+    ///
+    /// `Ready` 直接移除状态：卡片退场，持续重绘随之停止，不会留下一个连完
+    /// 还在后台跑粒子的 tab。
+    pub fn ssh_connect_stage(
+        &mut self,
+        pane: u64,
+        destination: String,
+        stage: crate::ssh_session::SshStage,
+    ) {
+        if matches!(stage, crate::ssh_session::SshStage::Ready) {
+            self.nebula_ssh_connect.remove(&pane);
+            return;
+        }
+        match self.nebula_ssh_connect.entry(pane) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut().set_stage(stage),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                // 只有 `Resolve` 能开一张新卡片。`Ready` 时状态已被移除，若
+                // 任何后续阶段都能重建，一次会话中途断线就会让连接卡片在一
+                // 个用了半天的终端上凭空复活。
+                if matches!(stage, crate::ssh_session::SshStage::Resolve) {
+                    entry.insert(ssh_connect::SshConnectState::new(destination));
+                }
+            },
+        }
+    }
+
+    /// pane 关闭时丢弃它的连接状态。
+    pub fn forget_ssh_connect(&mut self, pane: u64) {
+        self.nebula_ssh_connect.remove(&pane);
+    }
+
+    /// 卡片当前占据的矩形 = 聚焦 pane 的内容区。绘制与命中共用它，两者不会
+    /// 漂移。
+    fn ssh_connect_rect(&self) -> (f32, f32, f32, f32) {
+        let view = self.pane_view();
+        (
+            view.padding_x(),
+            view.padding_y(),
+            view.width() - view.padding_x() - view.padding_right(),
+            view.height() - view.padding_y() - view.padding_bottom(),
+        )
+    }
+
+    /// 聚焦 pane 是否正被连接卡片接管（遮罩已经在画了）。
+    pub fn ssh_connect_active(&self) -> bool {
+        self.nebula_ssh_connect.get(&self.nebula_focused_pane).is_some_and(|state| state.visible())
+    }
+
+    /// 遮罩盖住整个 pane，所以卡片在场时 pane 内的一切点击都归卡片，不能
+    /// 漏进终端去起拖选——侧栏拖拽残影那个 bug 的同类。
+    pub fn ssh_connect_covers(&self, x: f32, y: f32) -> bool {
+        self.ssh_connect_active() && ssh_connect::covers(self.ssh_connect_rect(), x, y)
+    }
+
+    pub fn ssh_connect_hit(&self, x: f32, y: f32) -> ssh_connect::SshConnectHit {
+        let Some(state) = self.nebula_ssh_connect.get(&self.nebula_focused_pane) else {
+            return ssh_connect::SshConnectHit::None;
+        };
+        if !state.visible() {
+            return ssh_connect::SshConnectHit::None;
+        }
+        ssh_connect::hit_test(
+            state,
+            &self.ui_size_info(),
+            self.ssh_connect_rect(),
+            self.window.scale_factor as f32,
+            self.nebula_language,
+            self.nebula_density,
+            x,
+            y,
+        )
+    }
+
+    /// 更新悬停并返回是否需要重绘。
+    pub fn ssh_connect_set_hover(&mut self, hit: ssh_connect::SshConnectHit) -> bool {
+        let pane = self.nebula_focused_pane;
+        self.nebula_ssh_connect.get_mut(&pane).is_some_and(|state| state.set_hover(hit))
+    }
+
+    /// Logs 折叠是纯显示状态，就地处理；其余动作要关 pane 或重连，交给
+    /// `window_context`。
+    pub fn ssh_connect_toggle_logs(&mut self) {
+        let pane = self.nebula_focused_pane;
+        if let Some(state) = self.nebula_ssh_connect.get_mut(&pane) {
+            state.toggle_logs();
+        }
+    }
+
+    /// 聚焦 pane 的连接目标，供"重试"重新发起同一个连接。
+    pub fn ssh_connect_destination(&self) -> Option<String> {
+        self.nebula_ssh_connect
+            .get(&self.nebula_focused_pane)
+            .map(|state| state.destination().to_owned())
+    }
+
+    /// SSH 连接卡片：星云轨道 + 粒子流，画在聚焦 pane 内的浮层。
+    fn draw_ssh_connect(&mut self) {
+        let pane = self.nebula_focused_pane;
+        if !self.nebula_ssh_connect.contains_key(&pane) {
+            return;
+        }
+        let delta = self.ui_animations.frame().delta;
+        // 借用分离：绘制要同时摸 renderer 与 glyph_cache，先把状态摘出来。
+        let mut states = std::mem::take(&mut self.nebula_ssh_connect);
+        if let Some(state) = states.get_mut(&pane) {
+            state.step(delta);
+            if state.visible() {
+                let size = self.ui_size_info();
+                let scale = self.window.scale_factor as f32;
+                let view = self.pane_view();
+                // pane 的内容矩形：padding 编码了 pane 在窗口里的位置，
+                // 分屏时左右两半的 padding 是非对称的。
+                let rect = (
+                    view.padding_x(),
+                    view.padding_y(),
+                    view.width() - view.padding_x() - view.padding_right(),
+                    view.height() - view.padding_y() - view.padding_bottom(),
+                );
+                let mut quads = Vec::new();
+                // 遮罩用 pane 的真实底色，这样卡片浮在一块与终端同色的板上，
+                // 而不是凭空多出一层灰。
+                let bg = self.nebula_background.unwrap_or(self.colors[NamedColor::Background]);
+                let backdrop = crate::renderer::ui::Rgba::opaque(bg);
+                let language = self.nebula_language;
+                ssh_connect::push_quads(
+                    state,
+                    &self.nebula_theme,
+                    &mut quads,
+                    &size,
+                    rect,
+                    scale,
+                    language,
+                    self.nebula_density,
+                    backdrop,
+                );
+                self.renderer.draw_ui(&size, &quads);
+                let glyph_cache = &mut self.glyph_cache;
+                ssh_connect::draw_text(
+                    state,
+                    &self.nebula_theme,
+                    language,
+                    &mut self.renderer,
+                    glyph_cache,
+                    &size,
+                    rect,
+                    scale,
+                    self.nebula_density,
+                );
+            }
+            // 门槛期内也要保持帧循环，否则永远到不了该显示的那一帧。
+            // 失败态不再有动画，交给事件驱动即可。
+            if !state.failed() {
+                self.window.request_redraw();
+            }
+        }
+        self.nebula_ssh_connect = states;
+    }
+
+    fn draw_resize_hud(&mut self) {
+        let Some(mut hud) = self.nebula_resize_hud else { return };
+        hud.opacity.step(self.ui_animations.frame());
+        if !hud.opacity.is_active() {
+            self.nebula_resize_hud = None;
+            return;
+        }
+        self.nebula_resize_hud = Some(hud);
+        let cols = hud.columns;
+        let rows = hud.rows;
+        let fade = hud.opacity.value().clamp(0.0, 1.0);
+
+        // UI-anchored metrics: the HUD is chrome, so its box and label must
+        // not inflate with the terminal zoom it is reporting.
+        let size = self.ui_size_info();
+        let scale = self.window.scale_factor as f32;
+        let cw = size.cell_width();
+        let ch = size.cell_height();
+
+        let text = format!("{cols} × {rows}");
+        let text_cols: usize = text.chars().map(|c| c.width().unwrap_or(1)).sum();
+
+        // Centered translucent rounded box (fades out), skinned by the theme
+        // so it reads as chrome on light panels too.
+        let sk = self.nebula_theme.skin();
+        let hud_rgb = Rgb::new(sk.panel.r, sk.panel.g, sk.panel.b);
+        let pad = 12.0 * scale;
+        let box_w = text_cols as f32 * cw + 2.0 * pad;
+        let box_h = ch + 2.0 * pad;
+        let box_x = ((size.width() - box_w) * 0.5).max(0.0);
+        let box_y = ((size.height() - box_h) * 0.5).max(0.0);
+        let bg = Rgba::new(hud_rgb.r, hud_rgb.g, hud_rgb.b, 0).with_alpha(0.85 * fade);
+        let quad = UiQuad::solid(box_x, box_y, box_w, box_h, 8.0 * scale, bg);
+        self.renderer.draw_ui(&size, &[quad]);
+
+        // The label shares the box's pixel coordinate system — the old
+        // grid-cell placement centered on the TERMINAL area (whose origin
+        // carries the asymmetric sidebar padding), so the text drifted out of
+        // the window-centered box whenever the sidebar was open. Ink fades
+        // with the box by mixing toward the panel color.
+        let mix = |a: u8, b: u8| (a as f32 * fade + b as f32 * (1.0 - fade)).round() as u8;
+        let ink = Rgb::new(
+            mix(sk.ink_strong.r, hud_rgb.r),
+            mix(sk.ink_strong.g, hud_rgb.g),
+            mix(sk.ink_strong.b, hud_rgb.b),
+        );
+        let glyph_cache = &mut self.glyph_cache;
+        self.renderer.draw_chrome_text(&size, box_x + pad, box_y + pad, ink, &text, glyph_cache);
+
+        // Keep the frame loop alive so the HUD animates out.
+        self.window.request_redraw();
+    }
+
+    fn present_frame(&mut self, scheduler: &mut Scheduler) {
+        // 本帧的 UI 锚定比率：chrome/设置/浮层文本按它反向补偿终端缩放。
+        // 终端网格与文档正文不经过 chrome-text 路径，不受影响。
+        let ui_scale = self.ui_text_scale();
+        self.renderer.set_ui_text_scale(ui_scale);
+        nebula_debug_log(format!(
+            "render_present window={}x{} pane_view={} frame_images={} chrome_logos={}",
+            self.size_info.width(),
+            self.size_info.height(),
+            self.nebula_pane_view.is_some(),
+            self.nebula_frame_images.len(),
+            self.nebula_chrome_logo_draws.len(),
+        ));
+        // OSC 1337 inline images collected by the pane passes: draw above the
+        // cells, below the chrome/modals.
+        inline_image::paint(
+            &mut self.renderer,
+            &self.size_info,
+            std::mem::take(&mut self.nebula_frame_images),
+        );
+
+        // Draw Nebula window chrome (title bar and tab sidebar).
+        chrome::draw_chrome(self);
+
+        // AI brand logos staged by the chrome pass: drawn only now, after the
+        // last chrome text flush, because draw_inline_image's viewport/blend
+        // round-trip poisons any glyph batch that follows it.
+        if !self.nebula_chrome_logo_draws.is_empty() {
+            let size = self.size_info;
+            let logos = std::mem::take(&mut self.nebula_chrome_logo_draws);
+            for (id, rgba, px, rect) in &logos {
+                self.renderer.draw_inline_image(&size, *id, rgba, *px, *rect);
+            }
+        }
+
+        // SSH 连接卡片：在 chrome 之上，resize HUD 之下。
+        self.draw_ssh_connect();
+
+        // Transient resize HUD painted on top of the chrome.
+        self.draw_resize_hud();
+        context_menu::draw(self);
+        self.draw_ssh_delete_undo();
+        // 消息栏的关闭按钮：横幅由终端 pass 画，按钮必须在它之上。
+        self.draw_message_close();
+        // 轻提示：右下角，在浮条之上、模态之下（模态要求决策，不该被提示压住）。
+        toast::draw(self);
+        self.draw_ai_fix_bar();
+        self.draw_ssh_editor_modal();
+        self.draw_confirm_modal();
+
+        // Notify winit that we're about to present.
+        self.window.pre_present_notify();
+
+        // Highlight damage for debugging.
+        if self.damage_tracker.debug {
+            let metrics = self.glyph_cache.font_metrics();
+            let damage = self.damage_tracker.shape_frame_damage(self.size_info.into());
+            let mut rects = Vec::with_capacity(damage.len());
+            self.highlight_damage(&mut rects);
+            self.renderer.draw_rects(&self.size_info, &metrics, rects);
+        }
+
+        // Clearing debug highlights from the previous frame requires full redraw.
+        self.swap_buffers();
+
+        if matches!(self.raw_window_handle, RawWindowHandle::Xcb(_) | RawWindowHandle::Xlib(_)) {
+            // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
+            // will block to synchronize (this is `glClear` in Nebula), which causes a
+            // permanent one frame delay.
+            self.renderer.finish();
+        }
+
+        // XXX: Request the new frame after swapping buffers, so the
+        // time to finish OpenGL operations is accounted for in the timeout.
+        if !matches!(self.raw_window_handle, RawWindowHandle::Wayland(_)) {
+            self.request_frame(scheduler);
+        }
+
+        self.damage_tracker.swap_damage();
+    }
+
+    /// Geometry that input and hint hit-testing should use: the focused pane's
+    /// half-width view when a split is active, otherwise the full window.
+    #[inline]
+    pub fn pane_view(&self) -> SizeInfo {
+        self.nebula_pane_view.unwrap_or(self.size_info)
+    }
+
+    /// Update to a new configuration.
+    pub fn update_config(&mut self, config: &UiConfig) {
+        self.nebula_config_paths.clone_from(&config.config_paths);
+        self.nebula_profiles.clone_from(&config.profiles);
+        self.damage_tracker.debug = config.debug.highlight_damage;
+        self.visual_bell.update_config(&config.bell);
+        // Refresh the base scheme, then re-apply the active theme's restyle.
+        self.nebula_default_colors = List::from(&config.colors);
+        let defaults = self.nebula_default_colors;
+        self.nebula_theme.apply_term_colors(&mut self.colors, &defaults);
+    }
+
+    /// Update the mouse/vi mode cursor hint highlighting.
+    ///
+    /// This will return whether the highlighted hints changed.
+    pub fn update_highlighted_hints<T>(
+        &mut self,
+        term: &Term<T>,
+        config: &UiConfig,
+        mouse: &Mouse,
+        point: Point,
+        modifiers: ModifiersState,
+    ) -> bool {
+        // Update vi mode cursor hint.
+        let vi_highlighted_hint = if term.mode().contains(TermMode::VI) {
+            let mods = ModifiersState::all();
+            let point = term.vi_mode_cursor.point;
+            hint::highlighted_at(term, config, point, mods)
+        } else {
+            None
+        };
+        let mut dirty = vi_highlighted_hint != self.vi_highlighted_hint;
+        self.vi_highlighted_hint = vi_highlighted_hint;
+        self.vi_highlighted_hint_age = 0;
+
+        // Force full redraw if the vi mode highlight was cleared.
+        if dirty {
+            self.damage_tracker.frame().mark_fully_damaged();
+        }
+
+        // Abort if mouse highlighting conditions are not met.
+        if !self.window.mouse_visible()
+            || !mouse.inside_text_area
+            || !term.selection.as_ref().is_none_or(Selection::is_empty)
+        {
+            if self.highlighted_hint.take().is_some() {
+                self.damage_tracker.frame().mark_fully_damaged();
+                dirty = true;
+            }
+            return dirty;
+        }
+
+        // `point` has already passed through the focused pane's math projection,
+        // so hover and click resolve the same immutable source cell.
+        let highlighted_hint = hint::highlighted_at(term, config, point, modifiers);
+
+        // Update cursor shape.
+        if highlighted_hint.is_some() {
+            // If mouse changed the line, we should update the hyperlink preview, since the
+            // highlighted hint could be disrupted by the old preview.
+            dirty = self.hint_mouse_point.is_some_and(|p| p.line != point.line);
+            self.hint_mouse_point = Some(point);
+            self.window.set_mouse_cursor(CursorIcon::Pointer);
+        } else if self.highlighted_hint.is_some() {
+            self.hint_mouse_point = None;
+            if term.mode().intersects(TermMode::MOUSE_MODE) && !term.mode().contains(TermMode::VI) {
+                self.window.set_mouse_cursor(CursorIcon::Default);
+            } else {
+                // Nebula: normal arrow over the terminal area (no I-beam).
+                self.window.set_mouse_cursor(CursorIcon::Default);
+            }
+        }
+
+        let mouse_highlight_dirty = self.highlighted_hint != highlighted_hint;
+        dirty |= mouse_highlight_dirty;
+        self.highlighted_hint = highlighted_hint;
+        self.highlighted_hint_age = 0;
+
+        // Force full redraw if the mouse cursor highlight was changed.
+        if mouse_highlight_dirty {
+            self.damage_tracker.frame().mark_fully_damaged();
+        }
+
+        dirty
+    }
+
+    /// Render the popup completion list on the terminal cell grid: one padded
+    /// row per candidate directly below the cursor (above when the prompt sits
+    /// near the bottom), the selected row on the theme accent. Cell-grid
+    /// `draw_string` keeps this inside the pane projection — no chrome quads,
+    /// so splits and scrolled panes behave like the ghost text does.
+    fn draw_completion_popup(
+        &mut self,
+        items: &[NebulaCompletionItem],
+        selected: Option<usize>,
+        anchor: Point<usize>,
+        size_info: &SizeInfo,
+        term_bg: Rgb,
+    ) {
+        let columns = size_info.columns();
+        let screen_lines = size_info.screen_lines();
+        if columns < 12 || screen_lines < 2 {
+            return;
+        }
+
+        // Rows: prefer the space below the cursor, else above; clamp count.
+        let below = screen_lines.saturating_sub(anchor.line + 1);
+        let above = anchor.line;
+        let want = items.len().min(8);
+        let (rows, start_line) = if below >= want || below >= above {
+            (want.min(below), anchor.line + 1)
+        } else {
+            (want.min(above), anchor.line - want.min(above))
+        };
+        if rows == 0 {
+            return;
+        }
+        // When the list is cut short keep an explicitly selected row visible.
+        let selected = selected.filter(|index| *index < items.len());
+        let offset =
+            selected.filter(|index| *index >= rows).map(|index| index + 1 - rows).unwrap_or(0);
+
+        let language = self.nebula_language;
+        let tag = |kind: NebulaCompletionKind| -> &'static str {
+            match kind {
+                NebulaCompletionKind::History => language.pick("历史", "hist"),
+                NebulaCompletionKind::Command => language.pick("命令", "cmd"),
+                NebulaCompletionKind::Dir => language.pick("目录", "dir"),
+                NebulaCompletionKind::File => language.pick("文件", "file"),
+            }
+        };
+        let icon = |kind: NebulaCompletionKind| -> char {
+            match kind {
+                NebulaCompletionKind::History => '↶',
+                NebulaCompletionKind::Command => '›',
+                NebulaCompletionKind::Dir => '/',
+                NebulaCompletionKind::File => '·',
+            }
+        };
+        let cell_width =
+            |text: &str| -> usize { text.chars().map(|c| c.width().unwrap_or(0)).sum() };
+
+        let visible = &items[offset..(offset + rows).min(items.len())];
+        let tag_w = visible.iter().map(|item| cell_width(tag(item.kind))).max().unwrap_or(0);
+        let label_w_max = visible.iter().map(|item| cell_width(&item.label)).max().unwrap_or(0);
+
+        // ` label  tag ` — 1 cell padding each side, 2 cells between.
+        let mut start_col = anchor.column.0;
+        let mut avail = columns - start_col;
+        let full_w = label_w_max + tag_w + 4;
+        if full_w > avail {
+            // Slide left rather than shrink first; narrow panes then clamp.
+            let slide = (full_w - avail).min(start_col);
+            start_col -= slide;
+            avail += slide;
+        }
+        let width = full_w.min(avail);
+        let label_w = width.saturating_sub(tag_w + 4);
+        if label_w == 0 {
+            return;
+        }
+
+        let sk = self.nebula_theme.skin();
+        let opaque = |c: Rgb| Rgba::new(c.r, c.g, c.b, 255);
+        let rgb = |c: Rgba| Rgb::new(c.r, c.g, c.b);
+        let row_bg = rgb(ui::icons::blend_over(opaque(term_bg), sk.panel));
+        let scale = self.window.scale_factor as f32;
+        let cell_w = size_info.cell_width();
+        let cell_h = size_info.cell_height();
+        let content_x = size_info.padding_x() + start_col as f32 * cell_w;
+        let content_y = size_info.padding_y() + start_line as f32 * cell_h;
+        let content_w = width as f32 * cell_w;
+        let content_h = rows as f32 * cell_h;
+        let panel_pad = (4.0 * scale).round();
+        let panel = (
+            content_x - panel_pad,
+            content_y - panel_pad,
+            content_w + panel_pad * 2.0,
+            content_h + panel_pad * 2.0,
+        );
+        let mut quads = Vec::with_capacity(4);
+        ui::surface::push_surface_with_radius(
+            &mut quads,
+            panel,
+            (0.0, 0.0, size_info.width(), size_info.height()),
+            0.0,
+            scale,
+            &sk,
+            ui::surface::Elevation::Menu,
+            1.0,
+            8.0,
+        );
+        if let Some(selected) = selected.filter(|index| *index >= offset && *index < offset + rows)
+        {
+            let row = selected - offset;
+            quads.push(UiQuad::solid(
+                content_x,
+                content_y + row as f32 * cell_h,
+                content_w,
+                cell_h,
+                6.0 * scale,
+                sk.accent_soft,
+            ));
+        }
+        self.renderer.draw_ui(size_info, &quads);
+
+        for (row, item) in visible.iter().enumerate() {
+            let line = start_line + row;
+            if line >= screen_lines {
+                break;
+            }
+            let is_selected = Some(offset + row) == selected;
+            let (label_fg, tag_fg, style) = if is_selected {
+                (sk.ink_strong, sk.ink_strong, Flags::BOLD)
+            } else {
+                (sk.ink, sk.ink_faint, Flags::empty())
+            };
+            let label =
+                format!("{} {}", icon(item.kind), nebula_pad_to_cells(&item.label, label_w + 1));
+            let tag_text = format!("{} ", nebula_pad_to_cells(tag(item.kind), tag_w));
+            let glyph_cache = &mut self.glyph_cache;
+            self.renderer.draw_string_styled(
+                Point::new(line, Column(start_col)),
+                label_fg,
+                row_bg,
+                label.chars(),
+                style,
+                0.0,
+                size_info,
+                glyph_cache,
+            );
+            // Fits by construction (start_col + width <= columns); the
+            // renderer clips at the grid edge regardless.
+            let tag_col = start_col + 1 + label_w + 2;
+            let glyph_cache = &mut self.glyph_cache;
+            self.renderer.draw_string_styled(
+                Point::new(line, Column(tag_col)),
+                tag_fg,
+                row_bg,
+                tag_text.chars(),
+                Flags::empty(),
+                0.0,
+                size_info,
+                glyph_cache,
+            );
+        }
+    }
+
+    fn draw_powerline_icons(&mut self, icons: &[NebulaPowerlineIcon], view: SizeInfo) {
+        if icons.is_empty() {
+            return;
+        }
+
+        let size = view;
+        let cell_w = size.cell_width();
+        let cell_h = size.cell_height();
+        let pad_x = size.padding_x();
+        let pad_y = size.padding_y();
+        let palette = self.nebula_theme.palette();
+        let folder_color = Rgb::new(palette.edge_r.r, palette.edge_r.g, palette.edge_r.b);
+        let branch_color = Rgb::new(palette.edge_l.r, palette.edge_l.g, palette.edge_l.b);
+
+        let mut quads = Vec::with_capacity(icons.len() * 8);
+        for icon in icons {
+            if icon.point.line >= size.screen_lines() {
+                continue;
+            }
+
+            let x = pad_x + icon.point.column.0 as f32 * cell_w;
+            let y = pad_y + icon.point.line as f32 * cell_h;
+
+            match icon.kind {
+                NebulaPowerlineIconKind::Folder => {
+                    Self::push_folder_icon(&mut quads, x, y, cell_w, cell_h, folder_color);
+                },
+                NebulaPowerlineIconKind::GitBranch => {
+                    Self::push_git_branch_icon(&mut quads, x, y, cell_w, cell_h, branch_color);
+                },
+            }
+        }
+
+        self.renderer.draw_ui(&self.size_info, &quads);
+    }
+
+    fn push_folder_icon(
+        quads: &mut Vec<UiQuad>,
+        cell_x: f32,
+        cell_y: f32,
+        cell_w: f32,
+        cell_h: f32,
+        color: Rgb,
+    ) {
+        let icon_w = (cell_w * 1.18).clamp(8.0, cell_h * 0.72);
+        let icon_h = (icon_w * 0.74).clamp(6.0, cell_h * 0.58);
+        let x = cell_x + (cell_w - icon_w) * 0.5;
+        let y = cell_y + (cell_h - icon_h) * 0.5 + cell_h * 0.02;
+        let radius = (icon_h * 0.16).max(1.4);
+
+        let glow = Self::rgba_from_rgb(color, 46);
+        let main = Self::rgba_towards_white(color, 0.16, 236);
+        let light = Self::rgba_towards_white(color, 0.34, 246);
+        let shade = Self::rgba_towards_black(color, 0.16, 230);
+        let shine = Rgba::new(255, 255, 255, 82);
+
+        quads.push(UiQuad::glow(
+            x - icon_w * 0.20,
+            y - icon_h * 0.22,
+            icon_w * 1.40,
+            icon_h * 1.45,
+            glow,
+        ));
+        quads.push(UiQuad::gradient(
+            x + icon_w * 0.03,
+            y + icon_h * 0.08,
+            icon_w * 0.48,
+            icon_h * 0.30,
+            radius * 0.70,
+            light,
+            main,
+            Gradient::Axis([0.9, 0.35]),
+        ));
+        quads.push(UiQuad::gradient(
+            x,
+            y + icon_h * 0.25,
+            icon_w,
+            icon_h * 0.68,
+            radius,
+            main,
+            shade,
+            Gradient::Axis([0.85, 0.45]),
+        ));
+        quads.push(UiQuad::solid(
+            x + icon_w * 0.14,
+            y + icon_h * 0.48,
+            icon_w * 0.72,
+            (cell_h * 0.035).max(1.0),
+            0.8,
+            shine,
+        ));
+    }
+
+    fn push_git_branch_icon(
+        quads: &mut Vec<UiQuad>,
+        cell_x: f32,
+        cell_y: f32,
+        cell_w: f32,
+        cell_h: f32,
+        color: Rgb,
+    ) {
+        let icon = (cell_w * 1.12).clamp(7.0, cell_h * 0.68);
+        let x = cell_x + (cell_w - icon) * 0.5;
+        let y = cell_y + (cell_h - icon) * 0.5;
+        let stroke = (icon * 0.13).clamp(1.15, 2.4);
+        let node = (icon * 0.27).clamp(2.8, 5.0);
+        let radius = node * 0.5;
+
+        let main = Self::rgba_towards_white(color, 0.12, 240);
+        let glow = Self::rgba_from_rgb(color, 42);
+        let line = Self::rgba_towards_black(color, 0.08, 218);
+
+        let trunk_x = x + icon * 0.34;
+        let top_y = y + icon * 0.23;
+        let mid_y = y + icon * 0.43;
+        let bottom_y = y + icon * 0.78;
+        let branch_x = x + icon * 0.70;
+
+        quads.push(UiQuad::glow(x - icon * 0.20, y - icon * 0.18, icon * 1.42, icon * 1.40, glow));
+        Self::push_icon_line(quads, trunk_x, top_y, trunk_x, bottom_y, stroke, line);
+        Self::push_icon_line(quads, trunk_x, mid_y, branch_x, top_y, stroke, line);
+
+        for (cx, cy) in [(trunk_x, top_y), (branch_x, top_y), (trunk_x, bottom_y)] {
+            quads.push(UiQuad::solid(cx - node * 0.5, cy - node * 0.5, node, node, radius, main));
+        }
+    }
+
+    fn push_icon_line(
+        quads: &mut Vec<UiQuad>,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        width: f32,
+        color: Rgba,
+    ) {
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len <= f32::EPSILON {
+            return;
+        }
+
+        let nx = -dy / len * width * 0.5;
+        let ny = dx / len * width * 0.5;
+        quads.push(UiQuad::poly(
+            [[x0 + nx, y0 + ny], [x0 - nx, y0 - ny], [x1 + nx, y1 + ny], [x1 - nx, y1 - ny]],
+            color,
+            color,
+            Gradient::None,
+        ));
+    }
+
+    fn rgba_from_rgb(color: Rgb, alpha: u8) -> Rgba {
+        Rgba::new(color.r, color.g, color.b, alpha)
+    }
+
+    fn rgba_towards_white(color: Rgb, amount: f32, alpha: u8) -> Rgba {
+        Self::rgba_mix(color, Rgb::new(255, 255, 255), amount, alpha)
+    }
+
+    fn rgba_towards_black(color: Rgb, amount: f32, alpha: u8) -> Rgba {
+        Self::rgba_mix(color, Rgb::new(0, 0, 0), amount, alpha)
+    }
+
+    fn rgba_mix(from: Rgb, to: Rgb, amount: f32, alpha: u8) -> Rgba {
+        let t = amount.clamp(0.0, 1.0);
+        let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+        Rgba::new(mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b), alpha)
+    }
+
+    #[inline(never)]
+    fn draw_ime_preview(
+        &mut self,
+        point: Point<usize>,
+        fg: Rgb,
+        bg: Rgb,
+        rects: &mut Vec<RenderRect>,
+        config: &UiConfig,
+    ) {
+        let preedit = match self.ime.preedit() {
+            Some(preedit) => preedit,
+            None => {
+                // In case we don't have preedit, just set the popup point.
+                self.window.update_ime_position(point, &self.size_info);
+                return;
+            },
+        };
+
+        let num_cols = self.size_info.columns();
+
+        // Get the visible preedit.
+        let visible_text: String = match (preedit.cursor_byte_offset, preedit.cursor_end_offset) {
+            (Some(byte_offset), Some(end_offset)) if end_offset.0 > num_cols => StrShortener::new(
+                &preedit.text[byte_offset.0..],
+                num_cols,
+                ShortenDirection::Right,
+                Some(SHORTENER),
+            ),
+            _ => {
+                StrShortener::new(&preedit.text, num_cols, ShortenDirection::Left, Some(SHORTENER))
+            },
+        }
+        .collect();
+
+        let visible_len = visible_text.chars().count();
+
+        let end = cmp::min(point.column.0 + visible_len, num_cols);
+        let start = end.saturating_sub(visible_len);
+
+        let start = Point::new(point.line, Column(start));
+        let end = Point::new(point.line, Column(end - 1));
+
+        let glyph_cache = &mut self.glyph_cache;
+        let metrics = glyph_cache.font_metrics();
+
+        self.renderer.draw_string(
+            start,
+            fg,
+            bg,
+            visible_text.chars(),
+            &self.size_info,
+            glyph_cache,
+        );
+
+        // Damage preedit inside the terminal viewport.
+        if point.line < self.size_info.screen_lines() {
+            let damage = LineDamageBounds::new(start.line, 0, num_cols);
+            self.damage_tracker.frame().damage_line(damage);
+            self.damage_tracker.next_frame().damage_line(damage);
+        }
+
+        // Add underline for preedit text.
+        let underline = RenderLine { start, end, color: fg };
+        rects.extend(underline.rects(Flags::UNDERLINE, &metrics, &self.size_info));
+
+        let ime_popup_point = match preedit.cursor_end_offset {
+            Some(cursor_end_offset) => {
+                // Use hollow block when multiple characters are changed at once.
+                let (shape, width) = if let Some(width) =
+                    NonZeroU32::new((cursor_end_offset.0 - cursor_end_offset.1) as u32)
+                {
+                    (CursorShape::HollowBlock, width)
+                } else {
+                    (CursorShape::Beam, NonZeroU32::new(1).unwrap())
+                };
+
+                let cursor_column = Column(
+                    (end.column.0 as isize - cursor_end_offset.0 as isize + 1).max(0) as usize,
+                );
+                let cursor_point = Point::new(point.line, cursor_column);
+                let cursor = RenderableCursor::new(cursor_point, shape, fg, width);
+                rects.extend(cursor.rects(&self.size_info, config.cursor.thickness()));
+                cursor_point
+            },
+            _ => end,
+        };
+
+        self.window.update_ime_position(ime_popup_point, &self.size_info);
+    }
+
+    /// Format search regex to account for the cursor and fullwidth characters.
+    fn format_search(search_regex: &str, search_label: &str, max_width: usize) -> String {
+        let label_len = search_label.len();
+
+        // Skip `search_regex` formatting if only label is visible.
+        if label_len > max_width {
+            return search_label[..max_width].to_owned();
+        }
+
+        // The search string consists of `search_label` + `search_regex` + `cursor`.
+        let mut bar_text = String::from(search_label);
+        bar_text.extend(StrShortener::new(
+            search_regex,
+            max_width.wrapping_sub(label_len + 1),
+            ShortenDirection::Left,
+            Some(SHORTENER),
+        ));
+
+        // Add place for cursor.
+        bar_text.push(' ');
+
+        bar_text
+    }
+
+    /// Draw preview for the currently highlighted `Hyperlink`.
+    #[inline(never)]
+    /// Draw a compact "open this link" tooltip near the hovered hint.
+    ///
+    /// 2026-07-23 用户反馈重构：上一版是整行 opaque `draw_string`，锚在鼠
+    /// 标 cell 上——指针沿链接滑动时提示逐格跳动（被感知为"闪烁"），路
+    /// 径还能占满整行（"显示太长"）。现在锚定到 hint 自己的起始 cell（指
+    /// 针滑动时纹丝不动）、提示词压缩为 `Ctrl+点击`，并以 0.85× UI 锚定
+    /// 字号画进圆角小气泡。
+    ///
+    /// 2026-07-26 用户反馈"显示不全"三连修：① file URI percent-decode 后
+    /// 再展示（见 [`strip_file_scheme`]）；② 48 列硬帽退役，预算放开到整
+    /// 个视口宽（fit_tail 仍兜底真溢出）；③ 气泡宽度按渲染器真实步进
+    /// `average_advance × scale` 量取——`cell_w` 是 floor 后的值，48 列累
+    /// 积下来尾部文字会戳出气泡右缘。
+    fn draw_hyperlink_preview(
+        &mut self,
+        config: &UiConfig,
+        _cursor_point: Option<Point>,
+        viewport_origin: Line,
+    ) {
+        let num_cols = self.size_info.columns();
+
+        // The destination under the mouse (first highlighted hint with a URI)
+        // plus that hint's start cell as the anchor.
+        let Some((uri, hint_start)) =
+            self.highlighted_hint.iter().chain(&self.vi_highlighted_hint).find_map(|hint| {
+                hint.hyperlink().map(|h| (h.uri().to_owned(), *hint.bounds().start()))
+            })
+        else {
+            return;
+        };
+        // Hint start scrolled out of the viewport → fall back to the mouse cell.
+        let anchor = term::point_to_viewport_from(viewport_origin, hint_start).or_else(|| {
+            self.hint_mouse_point.and_then(|p| term::point_to_viewport_from(viewport_origin, p))
+        });
+        let Some(anchor) = anchor else {
+            return;
+        };
+
+        // Strip the `file://` scheme (and its leading slash before a Windows
+        // drive) so a local path reads as a path, not a URL.
+        let target = strip_file_scheme(&uri);
+        const HINT: &str = " · Ctrl+点击";
+        let width = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
+        let hint_w = width(HINT);
+        let target_budget = num_cols.saturating_sub(hint_w + 1);
+        let target = fit_tail(&target, target_budget);
+        let label = format!("{target}{HINT}");
+
+        // Position: one row below the hint's first cell, or above on the last row.
+        let line = if anchor.line + 1 < self.size_info.screen_lines() {
+            anchor.line + 1
+        } else {
+            anchor.line.saturating_sub(1)
+        };
+
+        // Damage every row the bubble touches, this frame and next (it can
+        // appear/vanish). The bubble is taller than one cell row (0.85·cell
+        // plus padding and border, centered on its row), so it bleeds into
+        // both neighbours — an un-damaged neighbour ghosts the bubble's edges
+        // on partial-present paths.
+        let last_line = self.size_info.screen_lines().saturating_sub(1);
+        for touched in line.saturating_sub(1)..=(line + 1).min(last_line) {
+            let damage = LineDamageBounds::new(touched, 0, num_cols);
+            self.damage_tracker.frame().damage_line(damage);
+            self.damage_tracker.next_frame().damage_line(damage);
+        }
+
+        let scale_px = self.window.scale_factor as f32;
+        let s = |v: f32| v * scale_px;
+        let text_scale = 0.85 * self.ui_text_scale();
+        let cell_w = self.size_info.cell_width();
+        let cell_h = self.size_info.cell_height();
+        // Measure with the renderer's REAL step for scaled doc text — the
+        // unfloored design advance (`draw_doc_text_tracked` walks
+        // `average_advance × scale`). `cell_w` is that advance floored; the
+        // fraction lost per column made long labels poke out of the bubble.
+        let advance = self.glyph_cache.font_metrics().average_advance as f32 * text_scale;
+        let label_px = width(&label) as f32 * advance;
+        let pad_x = s(8.0);
+        let bubble_w = label_px + 2.0 * pad_x;
+        let bubble_h = cell_h * text_scale + s(8.0);
+        let max_x = (self.size_info.width() - self.size_info.padding_right() - bubble_w).max(0.0);
+        let x = (self.size_info.padding_x() + anchor.column.0 as f32 * cell_w).min(max_x);
+        let y = self.size_info.padding_y() + line as f32 * cell_h + (cell_h - bubble_h) * 0.5;
+
+        let fg = config.colors.footer_bar_foreground();
+        let bg = config.colors.footer_bar_background();
+        let quads = [
+            UiQuad::solid(
+                x - s(1.0),
+                y - s(1.0),
+                bubble_w + s(2.0),
+                bubble_h + s(2.0),
+                s(7.0),
+                Rgba::new(fg.r, fg.g, fg.b, 46),
+            ),
+            UiQuad::solid(x, y, bubble_w, bubble_h, s(6.0), Rgba::new(bg.r, bg.g, bg.b, 240)),
+        ];
+        self.renderer.draw_ui(&self.size_info, &quads);
+
+        let glyph_cache = &mut self.glyph_cache;
+        let size = self.size_info;
+        self.renderer.draw_doc_text_tracked(
+            &size,
+            x + pad_x,
+            y + (bubble_h - cell_h * text_scale) * 0.5,
+            text_scale,
+            0.0,
+            fg,
+            Flags::empty(),
+            &label,
+            glyph_cache,
+        );
+    }
+
+    /// Draw current search regex.
+    #[inline(never)]
+    fn draw_search(&mut self, config: &UiConfig, text: &str) {
+        // Assure text length is at least num_cols.
+        let num_cols = self.size_info.columns();
+        let text = format!("{text:<num_cols$}");
+
+        let point = Point::new(self.size_info.screen_lines(), Column(0));
+
+        let fg = config.colors.footer_bar_foreground();
+        let bg = config.colors.footer_bar_background();
+
+        self.renderer.draw_string(
+            point,
+            fg,
+            bg,
+            text.chars(),
+            &self.size_info,
+            &mut self.glyph_cache,
+        );
+    }
+
+    /// Draw render timer.
+    #[inline(never)]
+    fn draw_render_timer(&mut self, config: &UiConfig) {
+        if !config.debug.render_timer {
+            return;
+        }
+
+        let timing = format!("{:.3} usec", self.meter.average());
+        let point = Point::new(self.size_info.screen_lines().saturating_sub(2), Column(0));
+        let fg = config.colors.primary.background;
+        let bg = config.colors.normal.red;
+
+        // Damage render timer for current and next frame.
+        let damage = LineDamageBounds::new(point.line, point.column.0, timing.len());
+        self.damage_tracker.frame().damage_line(damage);
+        self.damage_tracker.next_frame().damage_line(damage);
+
+        let glyph_cache = &mut self.glyph_cache;
+        self.renderer.draw_string(point, fg, bg, timing.chars(), &self.size_info, glyph_cache);
+    }
+
+    /// Draw an indicator for the position of a line in history.
+    #[inline(never)]
+    fn draw_line_indicator(
+        &mut self,
+        config: &UiConfig,
+        total_lines: usize,
+        obstructed_column: Option<Column>,
+        line: usize,
+    ) {
+        let columns = self.size_info.columns();
+        let text = format!("[{}/{}]", line, total_lines - 1);
+        let column = Column(self.size_info.columns().saturating_sub(text.len()));
+        let point = Point::new(0, column);
+
+        // Damage the line indicator for current and next frame.
+        let damage = LineDamageBounds::new(point.line, point.column.0, columns - 1);
+        self.damage_tracker.frame().damage_line(damage);
+        self.damage_tracker.next_frame().damage_line(damage);
+
+        let colors = &config.colors;
+        let fg = colors.line_indicator.foreground.unwrap_or(colors.primary.background);
+        let bg = colors.line_indicator.background.unwrap_or(colors.primary.foreground);
+
+        // Do not render anything if it would obscure the vi mode cursor.
+        if obstructed_column.is_none_or(|obstructed_column| obstructed_column < column) {
+            let glyph_cache = &mut self.glyph_cache;
+            self.renderer.draw_string(point, fg, bg, text.chars(), &self.size_info, glyph_cache);
+        }
+    }
+
+    /// Highlight damaged rects.
+    ///
+    /// This function is for debug purposes only.
+    fn highlight_damage(&self, render_rects: &mut Vec<RenderRect>) {
+        for damage_rect in &self.damage_tracker.shape_frame_damage(self.size_info.into()) {
+            let x = damage_rect.x as f32;
+            let height = damage_rect.height as f32;
+            let width = damage_rect.width as f32;
+            let y = damage_y_to_viewport_y(&self.size_info, damage_rect) as f32;
+            let render_rect = RenderRect::new(x, y, width, height, DAMAGE_RECT_COLOR, 0.5);
+
+            render_rects.push(render_rect);
+        }
+    }
+
+    /// Check whether a hint highlight needs to be cleared.
+    ///
+    /// 2026-07-26 闪烁根因：这里原本拿共享 damage tracker 的 `intersects`
+    /// 判断"hint 底下的网格变没变"，可 Nebula 每帧把 frame/next_frame 都标
+    /// 成全窗 damage（全窗重绘呈现模型），`intersects` 的 `full ||` 短路恒
+    /// 真——悬停高亮活不过两帧就被掐灭，鼠标一动重新点亮又立刻熄灭，ls
+    /// 里扫过文件时下划线和气泡狂闪。改判终端自己上报的本帧 damage
+    /// （`draw_pane` 在污染 tracker 之前捕获），语义回到上游本意。
+    fn validate_hint_highlights(
+        &mut self,
+        viewport_origin: Line,
+        term_damage_full: bool,
+        term_damage_lines: &[LineDamageBounds],
+    ) {
+        let hints = [
+            (&mut self.highlighted_hint, &mut self.highlighted_hint_age, true),
+            (&mut self.vi_highlighted_hint, &mut self.vi_highlighted_hint_age, false),
+        ];
+
+        let num_lines = self.size_info.screen_lines();
+        for (hint, hint_age, reset_mouse) in hints {
+            let (start, end) = match hint {
+                Some(hint) => (*hint.bounds().start(), *hint.bounds().end()),
+                None => continue,
+            };
+
+            // Ignore hints that were created this frame.
+            *hint_age += 1;
+            if *hint_age == 1 {
+                continue;
+            }
+
+            // Convert hint bounds to viewport coordinates.
+            let start = term::point_to_viewport_from(viewport_origin, start)
+                .filter(|point| point.line < num_lines)
+                .unwrap_or_default();
+            let end = term::point_to_viewport_from(viewport_origin, end)
+                .filter(|point| point.line < num_lines)
+                .unwrap_or_else(|| Point::new(num_lines - 1, self.size_info.last_column()));
+
+            // Clear hints whose underlying grid content actually changed.
+            let grid_changed = term_damage_full
+                || term_damage_lines.iter().any(|l| {
+                    l.line >= start.line
+                        && l.line <= end.line
+                        // On the hint's first/last line only the hint's own
+                        // column span counts; interior lines count wholly.
+                        && (l.line != start.line || l.right >= start.column.0)
+                        && (l.line != end.line || l.left <= end.column.0)
+                });
+            if grid_changed {
+                if reset_mouse {
+                    self.window.set_mouse_cursor(CursorIcon::Default);
+                }
+                self.damage_tracker.frame().mark_fully_damaged();
+                *hint = None;
+            }
+        }
+    }
+
+    /// Request a new frame for a window on Wayland.
+    fn request_frame(&mut self, scheduler: &mut Scheduler) {
+        // Mark that we've used a frame.
+        self.window.has_frame = false;
+
+        // Get the display vblank interval.
+        let monitor_vblank_interval = 1_000_000.
+            / self
+                .window
+                .current_monitor()
+                .and_then(|monitor| monitor.refresh_rate_millihertz())
+                .unwrap_or(60_000) as f64;
+
+        // Now convert it to micro seconds.
+        let monitor_vblank_interval =
+            Duration::from_micros((1000. * monitor_vblank_interval) as u64);
+
+        let swap_timeout = self.frame_timer.compute_timeout(monitor_vblank_interval);
+
+        let window_id = self.window.id();
+        let timer_id = TimerId::new(Topic::Frame, window_id);
+        let event = Event::new(EventType::Frame, window_id);
+
+        scheduler.schedule(event, swap_timeout, false, timer_id);
+    }
+}
+
+/// Map a pointer position in the currently visible tab rows back to the
+/// storage index used by the pane list. The layout intentionally keeps hidden
+/// rows as zero rectangles, so this function's input must already be filtered
+/// to positive-size rows; keeping that invariant explicit prevents the two
+/// coordinate spaces from being mixed again.
+fn tab_drop_index_from_visible_rows(
+    source: usize,
+    y: f32,
+    visible: &[(usize, (f32, f32, f32, f32))],
+    tab_count: usize,
+) -> usize {
+    let Some((visible_start, _)) = visible.first() else { return source };
+    let passed = visible
+        .iter()
+        .filter(|(index, rect)| *index != source && y > rect.1 + rect.3 * 0.5)
+        .count();
+    visible_start.saturating_add(passed).min(tab_count.saturating_sub(1))
+}
+
+impl Drop for Display {
+    fn drop(&mut self) {
+        // Switch OpenGL context before dropping, otherwise objects (like programs) from other
+        // contexts might be deleted when dropping renderer.
+        self.make_current();
+        unsafe {
+            ManuallyDrop::drop(&mut self.renderer);
+            ManuallyDrop::drop(&mut self.context);
+            ManuallyDrop::drop(&mut self.surface);
+        }
+    }
+}
+
+/// Input method state.
+#[derive(Debug, Default)]
+pub struct Ime {
+    /// Whether the IME is enabled.
+    enabled: bool,
+
+    /// Current IME preedit.
+    preedit: Option<Preedit>,
+}
+
+impl Ime {
+    #[inline]
+    pub fn set_enabled(&mut self, is_enabled: bool) {
+        if is_enabled {
+            self.enabled = is_enabled
+        } else {
+            // Clear state when disabling IME.
+            *self = Default::default();
+        }
+    }
+
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[inline]
+    pub fn set_preedit(&mut self, preedit: Option<Preedit>) {
+        self.preedit = preedit;
+    }
+
+    #[inline]
+    pub fn preedit(&self) -> Option<&Preedit> {
+        self.preedit.as_ref()
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Preedit {
+    /// The preedit text.
+    text: String,
+
+    /// Byte offset for cursor start into the preedit text.
+    ///
+    /// `None` means that the cursor is invisible.
+    cursor_byte_offset: Option<(usize, usize)>,
+
+    /// The cursor offset from the end of the start of the preedit in char width.
+    cursor_end_offset: Option<(usize, usize)>,
+}
+
+impl Preedit {
+    pub fn new(text: String, cursor_byte_offset: Option<(usize, usize)>) -> Self {
+        let cursor_end_offset = if let Some(byte_offset) = cursor_byte_offset {
+            // Convert byte offset into char offset.
+            let start_to_end_offset =
+                text[byte_offset.0..].chars().fold(0, |acc, ch| acc + ch.width().unwrap_or(1));
+            let end_to_end_offset =
+                text[byte_offset.1..].chars().fold(0, |acc, ch| acc + ch.width().unwrap_or(1));
+
+            Some((start_to_end_offset, end_to_end_offset))
+        } else {
+            None
+        };
+
+        Self { text, cursor_byte_offset, cursor_end_offset }
+    }
+}
+
+/// Pending renderer updates.
+///
+/// All renderer updates are cached to be applied just before rendering, to avoid platform-specific
+/// rendering issues.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct RendererUpdate {
+    /// Should resize the window.
+    resize: bool,
+
+    /// Clear font caches.
+    clear_font_cache: bool,
+}
+
+/// The frame timer state.
+pub struct FrameTimer {
+    /// Base timestamp used to compute sync points.
+    base: Instant,
+
+    /// The last timestamp we synced to.
+    last_synced_timestamp: Instant,
+
+    /// The refresh rate we've used to compute sync timestamps.
+    refresh_interval: Duration,
+}
+
+impl FrameTimer {
+    pub fn new() -> Self {
+        let now = Instant::now();
+        Self { base: now, last_synced_timestamp: now, refresh_interval: Duration::ZERO }
+    }
+
+    /// Compute the delay that we should use to achieve the target frame
+    /// rate.
+    pub fn compute_timeout(&mut self, refresh_interval: Duration) -> Duration {
+        let now = Instant::now();
+
+        // Handle refresh rate change.
+        if self.refresh_interval != refresh_interval {
+            self.base = now;
+            self.last_synced_timestamp = now;
+            self.refresh_interval = refresh_interval;
+            return refresh_interval;
+        }
+
+        let next_frame = self.last_synced_timestamp + self.refresh_interval;
+
+        if next_frame < now {
+            // Redraw immediately if we haven't drawn in over `refresh_interval` microseconds.
+            let elapsed_micros = (now - self.base).as_micros() as u64;
+            let refresh_micros = self.refresh_interval.as_micros() as u64;
+            self.last_synced_timestamp =
+                now - Duration::from_micros(elapsed_micros % refresh_micros);
+            Duration::ZERO
+        } else {
+            // Redraw on the next `refresh_interval` clock tick.
+            self.last_synced_timestamp = next_frame;
+            next_frame - now
+        }
+    }
+}
+
+/// Calculate the cell dimensions based on font metrics.
+///
+/// This will return a tuple of the cell width and height.
+#[inline]
+fn compute_cell_size(
+    config: &UiConfig,
+    metrics: &crossfont::Metrics,
+    cell_width_mode: settings::CellWidthMode,
+) -> (f32, f32) {
+    let offset_x = f64::from(config.font.offset.x);
+    let offset_y = f64::from(config.font.offset.y);
+    // 宽度取整方式由单元格宽度模式决定；高度始终向下取整，两种模式必须
+    // 得到逐位相同的高度——该偏好只控制列宽。
+    let raw_width = metrics.average_advance + offset_x;
+    let width = match cell_width_mode {
+        settings::CellWidthMode::Compact => raw_width.floor(),
+        settings::CellWidthMode::Relaxed => raw_width.round(),
+    };
+    (width.max(1.) as f32, (metrics.line_height + offset_y).floor().max(1.) as f32)
+}
+
+/// Calculate the size of the window given padding, terminal dimensions and cell size.
+fn window_size(
+    config: &UiConfig,
+    dimensions: Dimensions,
+    cell_width: f32,
+    cell_height: f32,
+    scale_factor: f32,
+    sidebar_w: f32,
+) -> PhysicalSize<u32> {
+    let padding = config.window.padding(scale_factor);
+    let chrome = chrome_reserve(scale_factor);
+
+    let grid_width = cell_width * dimensions.columns.max(MIN_COLUMNS) as f32;
+    let grid_height = cell_height * dimensions.lines.max(MIN_SCREEN_LINES) as f32;
+
+    // Left absorbs the sidebar (expanded by default), right is the plain
+    // content margin, matching the asymmetric grid the sidebar produces.
+    // 侧栏宽被拖宽过的话窗口相应更宽——启动公式仍是「字号 × 116 × 30」，
+    // 列数不因侧栏变化而缩水。
+    let pad_left =
+        padding.0 + content_pad_x(scale_factor) + sidebar_width(scale_factor, false, sidebar_w);
+    let pad_right = padding.0 + content_pad_x(scale_factor);
+    let width = (grid_width + pad_left + pad_right).floor();
+    let pad_top = padding.1 + chrome;
+    let pad_bottom = padding.1 + bottom_content_reserve(scale_factor);
+    let height = (pad_top + grid_height + pad_bottom).floor();
+
+    PhysicalSize::new(width as u32, height as u32)
+}
+
+#[cfg(test)]
+mod nebula_ux_tests {
+    use pebrel_terminal::grid::Dimensions;
+    use winit::window::Theme as WinitTheme;
+
+    use super::{
+        AiLogo, NebulaConfirm, SizeInfo, ai_logo, alt_screen_vertical_padding_bands,
+        compute_cell_size, extract_program, nebula_pad_to_cells, percent_decode_lossy,
+        prepare_ai_logo_texture, program_icon, remove_ssh_host_from_lists,
+        replays_untrusted_terminal_output, restore_ssh_host_to_lists, strip_file_scheme,
+        system_theme_snapshot,
+    };
+    use crate::config::UiConfig;
+    use crate::display::settings::CellWidthMode;
+
+    /// 受控字体度量：只有 advance 与 line_height 参与单元格尺寸计算，
+    /// 其余字段取任意合法值。
+    fn metrics(average_advance: f64, line_height: f64) -> crossfont::Metrics {
+        crossfont::Metrics {
+            average_advance,
+            line_height,
+            descent: -4.0,
+            underline_position: -2.0,
+            underline_thickness: 1.0,
+            strikeout_position: 5.0,
+            strikeout_thickness: 1.0,
+        }
+    }
+
+    #[test]
+    fn relaxed_cell_width_rounds_up_the_fraction_compact_floors_it() {
+        let config = UiConfig::default();
+        // Maple Mono NF CN 这类字体的平均 advance 常落在 .5 以上，紧凑向下
+        // 取整因此会少一像素——宽松就是为补这一像素而设。
+        let m = metrics(9.6, 20.0);
+        assert_eq!(compute_cell_size(&config, &m, CellWidthMode::Compact).0, 9.0);
+        assert_eq!(compute_cell_size(&config, &m, CellWidthMode::Relaxed).0, 10.0);
+    }
+
+    #[test]
+    fn a_fraction_below_half_stays_on_the_same_column_width_in_both_modes() {
+        let config = UiConfig::default();
+        let m = metrics(9.4, 20.0);
+        assert_eq!(compute_cell_size(&config, &m, CellWidthMode::Compact).0, 9.0);
+        assert_eq!(compute_cell_size(&config, &m, CellWidthMode::Relaxed).0, 9.0);
+    }
+
+    #[test]
+    fn the_exact_half_boundary_rounds_away_from_zero_in_relaxed_mode() {
+        let config = UiConfig::default();
+        let m = metrics(9.5, 20.0);
+        assert_eq!(compute_cell_size(&config, &m, CellWidthMode::Compact).0, 9.0);
+        assert_eq!(compute_cell_size(&config, &m, CellWidthMode::Relaxed).0, 10.0);
+    }
+
+    #[test]
+    fn both_modes_compute_the_same_cell_height() {
+        let config = UiConfig::default();
+        // 该偏好只控制列宽；高度必须逐位相同，否则行距会随模式漂移。
+        for (advance, line_height) in [(9.6, 20.7), (7.5, 16.5), (12.2, 25.9)] {
+            let m = metrics(advance, line_height);
+            let compact = compute_cell_size(&config, &m, CellWidthMode::Compact);
+            let relaxed = compute_cell_size(&config, &m, CellWidthMode::Relaxed);
+            assert_eq!(compact.1, relaxed.1, "line_height {line_height} 的高度在两模式间漂移");
+        }
+    }
+
+    #[test]
+    fn both_modes_share_the_same_minimum_cell_width() {
+        let config = UiConfig::default();
+        // 退化度量（字体加载异常）不能产出 0 宽单元格——那会让网格除零。
+        let m = metrics(0.3, 0.4);
+        let compact = compute_cell_size(&config, &m, CellWidthMode::Compact);
+        let relaxed = compute_cell_size(&config, &m, CellWidthMode::Relaxed);
+        assert_eq!(compact.0, 1.0);
+        assert_eq!(relaxed.0, 1.0);
+        assert_eq!(compact.1, relaxed.1, "退化度量下高度也不得随模式漂移");
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn file_uri_tooltip_shows_decoded_path() {
+        // `ls --hyperlink` percent-encodes CJK names; the tooltip must not.
+        assert_eq!(
+            strip_file_scheme("file:///D:/%E6%98%9F%E9%9B%B2/read%20me.txt"),
+            "D:/星雲/read me.txt"
+        );
+        // Non-file URIs keep their encoding — it is part of their identity.
+        assert_eq!(strip_file_scheme("https://a.b/c%20d"), "https://a.b/c%20d");
+        // Malformed escapes and non-UTF-8 decodes survive verbatim.
+        assert_eq!(percent_decode_lossy("100%"), "100%");
+        assert_eq!(percent_decode_lossy("%zz"), "%zz");
+        assert_eq!(percent_decode_lossy("%ff%fe"), "%ff%fe");
+    }
+
+    #[test]
+    fn log_replay_commands_do_not_receive_terminal_query_answers() {
+        for command in [
+            "docker logs app",
+            "docker compose logs -f api",
+            "podman logs app",
+            "kubectl logs pod/api",
+            "journalctl -f -u nebula",
+        ] {
+            assert!(replays_untrusted_terminal_output(command), "{command}");
+        }
+        for command in ["docker run app", "kubectl exec pod -- sh", "cargo test", "nvim"] {
+            assert!(!replays_untrusted_terminal_output(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn popup_pad_counts_display_cells_and_drops_straddling_wide_chars() {
+        assert_eq!(nebula_pad_to_cells("ab", 4), "ab  ");
+        assert_eq!(nebula_pad_to_cells("目录", 4), "目录");
+        // 第二个全宽字符放不进 3 格：丢弃并用空格补齐。
+        assert_eq!(nebula_pad_to_cells("目录", 3), "目 ");
+        assert_eq!(nebula_pad_to_cells("abcd", 3), "abc");
+    }
+
+    #[test]
+    fn popup_label_elides_from_the_left() {
+        assert_eq!(super::suggest_engine::elide_left("short", 10), "short");
+        assert_eq!(super::suggest_engine::elide_left("abcdefgh", 5), "…efgh");
+    }
+
+    #[test]
+    fn system_theme_snapshot_beats_a_stale_window_override() {
+        assert_eq!(
+            system_theme_snapshot(Some(WinitTheme::Dark), Some(WinitTheme::Light)),
+            Some(WinitTheme::Dark)
+        );
+        assert_eq!(system_theme_snapshot(None, Some(WinitTheme::Light)), Some(WinitTheme::Light));
+    }
+
+    #[test]
+    fn ssh_delete_undo_restores_saved_and_pinned_order() {
+        let mut saved = strings(&["alpha", "target", "omega"]);
+        let mut pinned = strings(&["target", "alpha"]);
+        let mut hidden = strings(&["already-hidden"]);
+
+        let snapshot =
+            remove_ssh_host_from_lists("target", false, &mut saved, &mut pinned, &mut hidden);
+        assert_eq!(snapshot, (Some(1), Some(0), false));
+        assert_eq!(saved, strings(&["alpha", "omega"]));
+        assert_eq!(pinned, strings(&["alpha"]));
+        // A Nebula-managed host is deleted, not renamed to "hidden": nothing
+        // may linger in the hidden section for it.
+        assert_eq!(hidden, strings(&["already-hidden"]));
+
+        restore_ssh_host_to_lists(
+            "target",
+            snapshot.0,
+            snapshot.1,
+            snapshot.2,
+            &mut saved,
+            &mut pinned,
+            &mut hidden,
+        );
+        assert_eq!(saved, strings(&["alpha", "target", "omega"]));
+        assert_eq!(pinned, strings(&["target", "alpha"]));
+        assert_eq!(hidden, strings(&["already-hidden"]));
+    }
+
+    #[test]
+    fn ssh_config_only_hide_is_fully_reversible() {
+        let mut saved = Vec::new();
+        let mut pinned = Vec::new();
+        let mut hidden = Vec::new();
+
+        let snapshot =
+            remove_ssh_host_from_lists("config-alias", true, &mut saved, &mut pinned, &mut hidden);
+        assert_eq!(snapshot, (None, None, false));
+        assert_eq!(hidden, strings(&["config-alias"]));
+
+        restore_ssh_host_to_lists(
+            "config-alias",
+            snapshot.0,
+            snapshot.1,
+            snapshot.2,
+            &mut saved,
+            &mut pinned,
+            &mut hidden,
+        );
+        assert!(saved.is_empty());
+        assert!(pinned.is_empty());
+        assert!(hidden.is_empty());
+    }
+
+    /// A host that exists both as a saved entry and as a `~/.ssh/config`
+    /// alias must be hidden on top of the saved-list removal, otherwise the
+    /// config merge resurrects it on the next restart.
+    #[test]
+    fn ssh_delete_of_a_config_backed_saved_host_also_hides_the_alias() {
+        let mut saved = strings(&["dual"]);
+        let mut pinned = Vec::new();
+        let mut hidden = Vec::new();
+
+        let snapshot =
+            remove_ssh_host_from_lists("dual", true, &mut saved, &mut pinned, &mut hidden);
+        assert_eq!(snapshot, (Some(0), None, false));
+        assert!(saved.is_empty());
+        assert_eq!(hidden, strings(&["dual"]));
+
+        restore_ssh_host_to_lists(
+            "dual",
+            snapshot.0,
+            snapshot.1,
+            snapshot.2,
+            &mut saved,
+            &mut pinned,
+            &mut hidden,
+        );
+        assert_eq!(saved, strings(&["dual"]));
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn asymmetric_bottom_reserve_recovers_rows_hidden_by_top_chrome() {
+        let size = SizeInfo::new_fully_asymmetric(1000.0, 1000.0, 10.0, 20.0, 0.0, 0.0, 64.0, 16.0);
+        assert_eq!(size.screen_lines(), 46);
+        assert_eq!(size.padding_y(), 64.0);
+        assert_eq!(size.padding_bottom(), 16.0);
+
+        let old_symmetric = SizeInfo::new_asymmetric(1000.0, 1000.0, 10.0, 20.0, 0.0, 0.0, 64.0);
+        assert_eq!(old_symmetric.screen_lines(), 43);
+    }
+
+    #[test]
+    fn alternate_screen_padding_stays_inside_stacked_panes() {
+        let window =
+            SizeInfo::new_fully_asymmetric(1000.0, 700.0, 10.0, 20.0, 100.0, 20.0, 80.0, 20.0);
+        let top =
+            SizeInfo::new_fully_asymmetric(1000.0, 700.0, 10.0, 20.0, 100.0, 20.0, 80.0, 324.0);
+        let bottom =
+            SizeInfo::new_fully_asymmetric(1000.0, 700.0, 10.0, 20.0, 100.0, 20.0, 384.0, 20.0);
+
+        assert_eq!(
+            alt_screen_vertical_padding_bands(&window, &top, 56.0, 636.0),
+            [Some((56.0, 24.0)), Some((360.0, 16.0))]
+        );
+        assert_eq!(
+            alt_screen_vertical_padding_bands(&window, &bottom, 56.0, 636.0),
+            [None, Some((664.0, 28.0))]
+        );
+    }
+
+    #[test]
+    fn missing_font_notice_can_be_dismissed() {
+        let confirm =
+            NebulaConfirm::InstallRequiredFont { directory: std::path::PathBuf::from("fonts") };
+
+        assert!(confirm.can_dismiss());
+    }
+
+    #[test]
+    fn tab_drop_ignores_scrolled_out_zero_rows() {
+        // Storage indices 0..=2 and 13.. are hidden; only 3..=12 have screen
+        // coordinates. A pointer within that window must never be shifted by
+        // the hidden rows that the layout keeps for index stability.
+        let visible: Vec<_> = (3..=12)
+            .map(|index| (index, (0.0, 100.0 + (index - 3) as f32 * 30.0, 200.0, 24.0)))
+            .collect();
+
+        assert_eq!(super::tab_drop_index_from_visible_rows(5, 90.0, &visible, 16), 3);
+        assert_eq!(super::tab_drop_index_from_visible_rows(5, 130.0, &visible, 16), 4);
+        assert_eq!(super::tab_drop_index_from_visible_rows(5, 500.0, &visible, 16), 12);
+        assert_eq!(super::tab_drop_index_from_visible_rows(5, 130.0, &[], 16), 5);
+    }
+}

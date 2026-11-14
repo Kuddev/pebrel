@@ -1,0 +1,731 @@
+use super::*;
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn automatic_command_output_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    let _lock = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    pebrel_settings::persist_keys(&[("automatic_command_views", "1".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1000.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("命令输出自动渲染", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 2);
+    for expected in [false, true] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("nebula-switch-automatic_command_views").unwrap();
+        assert!(bounds.size.height > px(0.0) && bounds.bottom() <= px(1000.0));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(RuntimeSettings::load().automatic_command_views, expected);
+        assert_eq!(pane.read_with(cx, |pane, _| pane.runtime.automatic_command_views), expected);
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn environment_refresh_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    let _fixture_guard = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    pebrel_settings::persist_keys(&[("refresh_environment", "1".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane_out = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("环境变量", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 2);
+    if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("nebula-switch-refresh_environment").is_none());
+        assert!(RuntimeSettings::load().refresh_environment);
+        return;
+    }
+    for enabled in [false, true] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("nebula-switch-refresh_environment").unwrap();
+        assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+        assert!(bounds.origin.y >= px(0.0) && bounds.bottom() <= px(900.0));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(pane.read_with(cx, |pane, _| pane.runtime.refresh_environment), enabled);
+        assert_eq!(RuntimeSettings::load().refresh_environment, enabled);
+        assert_eq!(
+            pane.read_with(cx, |pane, _| pane.setting_override("refresh_environment")),
+            Some((!enabled, "1".into()))
+        );
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url(cx: &mut gpui::TestAppContext) {
+    use crate::display::{MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol};
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+    use gpui::Focusable as _;
+
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    pebrel_settings::persist_keys(&[
+        ("ssh_proxy_mode", "custom".into()),
+        ("ssh_proxy_url", "socks5://127.0.0.1:1080".into()),
+    ])
+    .unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(pebrel_settings::ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, _| pane.active_section = 5);
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(1200.0), gpui::px(900.0)));
+    for (text, expected, host) in [
+        ("http://127.0.0.1:8080", ManualProxyProtocol::Http, "127.0.0.1:8080"),
+        ("socks5://127.0.0.1:1080", ManualProxyProtocol::Socks5, "127.0.0.1:1080"),
+        ("socks5h://127.0.0.1:1080", ManualProxyProtocol::Socks5h, "127.0.0.1:1080"),
+    ] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            pane.read(cx).proxy_url_input.read(cx).focus_handle(cx).focus(window, cx);
+        });
+        let select_all = if crate::platform::Platform::current() == crate::platform::Platform::MacOS
+        {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        };
+        cx.simulate_keystrokes(select_all);
+        cx.simulate_input(text);
+        cx.run_until_parked();
+        pane.read_with(cx, |pane, cx| {
+            let row = pane.proxy_protocol_select.read(cx).selected_index(cx).unwrap().row;
+            assert_eq!(MANUAL_PROXY_PROTOCOL_OPTIONS[row], expected);
+            assert_eq!(pane.proxy_url_input.read(cx).value().to_string(), host);
+        });
+        assert_eq!(pebrel_settings::RuntimeSettings::load().ssh_proxy_url, text);
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn provider_key_dialog_blocks_clipboard_export_and_cancel_does_not_store(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1100.0), px(900.0)));
+    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.prompt_provider_key(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("test-secret-that-must-not-leave-input");
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("clipboard sentinel".into()));
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+        window.dispatch_action(Box::new(gpui_component::input::Copy), cx);
+        window.dispatch_action(Box::new(gpui_component::input::Cut), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("clipboard sentinel"));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.provider_key_task.is_none()));
+    assert!(pane.read_with(cx, |pane, _| !matches!(
+        pane.provider_status,
+        Some(ProviderStatus::ApiKeySaved)
+    )));
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn rename_keymap_row_is_searchable_and_enters_capture(cx: &mut gpui::TestAppContext) {
+    use crate::display::keymap;
+    use crate::gpui_shell::settings_fixture::{
+        SettingsBytesGuard, SettingsPaneHost, lock_theme_studio,
+    };
+
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    pebrel_settings::persist_keybinds(&[]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, cx| {
+            pane.keymap_binds.clear();
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("Rename tab", window, cx));
+        });
+        pane_out = Some(pane.clone());
+        let host = cx.new(|_| SettingsPaneHost { pane });
+        gpui_component::Root::new(host, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let row = crate::display::keymap::EDITABLE_ACTIONS
+        .iter()
+        .position(|(action, ..)| *action == crate::config::Action::RenameTab)
+        .unwrap()
+        + 1;
+    let row_id: &'static str = Box::leak(format!("settings-keymap-row-{row}").into_boxed_str());
+    let bounds = cx.debug_bounds(row_id).expect("rename row is rendered");
+    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_capture), Some(row));
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse("escape").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.run_until_parked();
+    assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_capture), None);
+
+    let before = std::fs::read(pebrel_settings::settings_path()).unwrap();
+    // 走窗口拦截器和真实弹窗命中，避免仅测谓词却漏掉 Enter 打开后立即误确认。
+    for dismissal in ["cancel", "escape", "confirm"] {
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let row_bounds = cx.debug_bounds(row_id).unwrap();
+        cx.simulate_click(row_bounds.center(), gpui::Modifiers::default());
+        assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_capture), Some(row));
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(cx.debug_bounds("confirm-dialog-ok").is_some());
+        assert!(cx.debug_bounds("confirm-dialog-cancel").is_some());
+        assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_capture), None);
+        assert_eq!(std::fs::read(pebrel_settings::settings_path()).unwrap(), before);
+
+        if dismissal == "escape" {
+            cx.simulate_keystrokes("escape");
+        } else {
+            let button =
+                if dismissal == "confirm" { "confirm-dialog-ok" } else { "confirm-dialog-cancel" };
+            let bounds = cx.debug_bounds(button).unwrap();
+            cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        }
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(cx.debug_bounds("confirm-dialog-ok").is_none());
+        let saved = pebrel_settings::keybind_pairs();
+        assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_binds.clone()), saved);
+        if dismissal == "confirm" {
+            let (combo, custom) = keymap::GPUI
+                .effective_combo(&crate::config::Action::RenameTab, &keymap::build_bindings(&saved))
+                .unwrap();
+            assert!(custom);
+            assert_eq!(keymap::parse_combo(&combo), keymap::parse_combo("enter"));
+        } else {
+            assert!(saved.is_empty());
+            assert_eq!(std::fs::read(pebrel_settings::settings_path()).unwrap(), before);
+        }
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn settings_search_replaces_keymap_search_and_keeps_section_queries(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    let origin = pane.read_with(cx, |pane, _| pane.active_section);
+    for query in ["命令面板", "command palette", "keymap", ""] {
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.replace_all(query, window, cx));
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        if !query.is_empty() {
+            assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 7);
+            assert!(cx.debug_bounds("settings-keymap-row-1").is_some());
+            if query != "keymap" {
+                assert!(cx.debug_bounds("settings-keymap-row-4").is_none());
+            } else {
+                assert!(cx.debug_bounds("settings-keymap-row-4").is_some());
+            }
+        }
+    }
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), origin);
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn localized_search_routes_and_filters_shortcut_rows(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+        let mut settings = crate::gpui_shell::config::Settings::load(ThemeName::Nord);
+        settings.ui_language = crate::display::UiLanguage::JaJp;
+        cx.set_global(settings);
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    let origin = pane.read_with(cx, |pane, _| pane.active_section);
+    for (query, section, row) in [
+        ("コマンドパレット", 7, Some("settings-keymap-row-1")),
+        ("N 番目のタブを選択", 7, Some("settings-keymap-readonly-N 番目のタブを選択")),
+        ("確認ダイアログ", 7, Some("settings-keymap-readonly-確認ダイアログ: 確定／キャンセル")),
+        ("フォント", 1, None),
+        ("プロキシ", 5, None),
+        ("ショートカット", 7, Some("settings-keymap-row-4")),
+        ("", origin, None),
+    ] {
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.replace_all(query, window, cx));
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), section, "{query}");
+        if let Some(row) = row {
+            assert!(cx.debug_bounds(row).is_some(), "{query}: {row} must be rendered");
+            if query != "ショートカット" {
+                assert!(cx.debug_bounds("settings-keymap-row-4").is_none());
+            }
+        }
+    }
+
+    // Searching from Keymap must keep matching actions visible even when the
+    // same word also names an Interaction setting. Other settings still route.
+    cx.update(|_, cx| pane.update(cx, |pane, _| pane.active_section = 7));
+    for (query, section) in
+        [("コピー", 7), ("COPY", 7), ("复制", 7), ("プロキシ", 5), ("コピー", 7), ("", 7)]
+    {
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.replace_all(query, window, cx));
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), section, "{query}");
+        if section == 7 && !query.is_empty() {
+            assert!(cx.debug_bounds("settings-keymap-row-24").is_some());
+            assert!(cx.debug_bounds("settings-keymap-row-4").is_none());
+        }
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn ai_toast_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        let mut settings = crate::gpui_shell::config::Settings::load(ThemeName::Nord);
+        settings.ai_toasts = true;
+        cx.set_global(settings);
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, _| {
+            pane.runtime = RuntimeSettings::from_raw(&pebrel_settings::RawSettings::default());
+        });
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("AI 消息弹窗", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 2);
+    let bounds = cx.debug_bounds("nebula-switch-ai_toasts").expect("AI toast switch is rendered");
+    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+    assert!(bounds.origin.y >= px(0.0) && bounds.bottom() <= px(1600.0));
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.setting_override("ai_toasts")),
+        Some((false, "1".to_owned()))
+    );
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    // 点击开关会写 `ctrl_wheel_font_zoom=`：与 theme studio 夹具同一把锁，
+    // 并原样恢复用户的设置文件。
+    let _fixture_guard = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        let mut settings = crate::gpui_shell::config::Settings::load(ThemeName::Nord);
+        settings.ctrl_wheel_font_zoom = true;
+        cx.set_global(settings);
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, _| {
+            pane.runtime = RuntimeSettings::from_raw(&pebrel_settings::RawSettings::default());
+        });
+        pane_out = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("滚轮", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 1);
+    // 未改动时开关跟随出厂默认（开启），重置按钮回写 "1"。
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.setting_override("ctrl_wheel_font_zoom")),
+        Some((false, "1".to_owned()))
+    );
+    let bounds =
+        cx.debug_bounds("nebula-switch-ctrl_wheel_font_zoom").expect("Ctrl+滚轮 switch 已渲染");
+    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+    assert!(bounds.origin.y >= px(0.0) && bounds.bottom() <= px(1600.0));
+
+    // 点击必须真的落到运行时字段上：关闭后该键变脏，重置目标仍是 "1"。
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!pane.read_with(cx, |pane, _| pane.runtime.ctrl_wheel_font_zoom));
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.setting_override("ctrl_wheel_font_zoom")),
+        Some((true, "1".to_owned()))
+    );
+    cx.update(|_, cx| assert!(!crate::gpui_shell::config::ctrl_wheel_font_zoom(cx)));
+}
+
+#[test]
+fn settings_nav_hides_providers_without_changing_stable_routes() {
+    let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();
+    assert_eq!(
+        visibility,
+        vec![true, true, true, false, true, true, true, true, true, true, true, true, true]
+    );
+    assert!(!is_nav_section_visible(SECTION_IDS.len()));
+    assert!(!is_nav_section_visible(usize::MAX));
+    assert_eq!(
+        SECTION_IDS,
+        [
+            "application",
+            "appearance",
+            "profiles",
+            "providers",
+            "ssh",
+            "network",
+            "interaction",
+            "keymap",
+            "advanced",
+            "backup",
+            "agents",
+            "mobile",
+            "plugins",
+        ]
+    );
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn hidden_provider_navigation_keeps_prediction_search_reachable(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1200.0), px(900.0)));
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("settings-nav-3").is_none());
+    let origin = pane.read_with(cx, |pane, _| pane.active_section);
+    for (query, visible) in [("prediction", true), ("", false)] {
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.replace_all(query, window, cx));
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(cx.debug_bounds("settings-nav-3").is_some(), visible);
+        assert_eq!(
+            pane.read_with(cx, |pane, _| pane.active_section),
+            if visible { 3 } else { origin }
+        );
+    }
+}
+
+#[test]
+fn settings_nav_starts_with_application_then_frequent_options() {
+    let visible: Vec<_> = visible_nav_sections().collect();
+    assert_eq!(visible, vec![0, 1, 2, 10, PLUGINS_SECTION, 6, 7, 4, 5, 11, 8, 9]);
+    let zh_labels: Vec<_> = visible
+        .iter()
+        .map(|index| section_label(*index, crate::display::UiLanguage::ZhCn))
+        .collect();
+    assert_eq!(
+        zh_labels,
+        vec![
+            "应用",
+            "外观",
+            "终端",
+            "Agents",
+            "插件",
+            "交互",
+            "按键映射",
+            "SSH",
+            "网络",
+            "手机远程",
+            "高级",
+            "备份"
+        ]
+    );
+    let en_labels: Vec<_> = visible
+        .iter()
+        .map(|index| section_label(*index, crate::display::UiLanguage::EnUs))
+        .collect();
+    assert_eq!(
+        en_labels,
+        vec![
+            "Application",
+            "Appearance",
+            "Terminal",
+            "Agents",
+            "Plugins",
+            "Interaction",
+            "Key Bindings",
+            "SSH",
+            "Network",
+            "Phone Remote",
+            "Advanced",
+            "Backup",
+        ]
+    );
+}
+
+#[test]
+fn localized_select_labels_keep_stable_value_cardinality() {
+    let cases: &[(&str, &[&str])] = &[
+        ("language", pebrel_settings::LanguagePref::VALUES),
+        ("cursor_shape", &["beam", "underline", "block", "hollow"]),
+        ("tabs_position", &["sidebar", "top"]),
+        ("bell", &["off", "visual", "sound", "both"]),
+        ("notification_duration", pebrel_settings::NotificationDuration::VALUES),
+        ("completion_style", &pebrel_settings::CompletionStyleName::VALUES),
+    ];
+    for (key, values) in cases {
+        for language in crate::display::UiLanguage::ALL {
+            assert_eq!(localized_select_labels(key, values, *language).len(), values.len());
+        }
+    }
+    assert_eq!(
+        localized_select_labels("tabs_position", cases[2].1, crate::display::UiLanguage::EnUs),
+        vec![SharedString::from("Left sidebar"), SharedString::from("Top")]
+    );
+}
+
+#[test]
+fn language_picker_uses_native_names_and_translated_system_option() {
+    let labels = localized_select_labels(
+        "language",
+        pebrel_settings::LanguagePref::VALUES,
+        crate::display::UiLanguage::FrFr,
+    );
+    assert_eq!(labels[0], SharedString::from("Suivre le système"));
+    assert!(labels.contains(&SharedString::from("Français")));
+    assert!(labels.contains(&SharedString::from("日本語")));
+}
+
+#[test]
+fn cached_semantic_statuses_render_in_the_current_language() {
+    let provider = ProviderStatus::Saved;
+    assert_eq!(provider.text(crate::display::UiLanguage::ZhCn), "供应商配置已保存");
+    assert_eq!(provider.text(crate::display::UiLanguage::EnUs), "Provider settings saved");
+
+    let backup = BackupStatus::CredentialSaved;
+    assert_eq!(backup.text(crate::display::UiLanguage::ZhCn), "凭据已写入系统凭据管理器");
+    assert_eq!(
+        backup.text(crate::display::UiLanguage::EnUs),
+        "Credential saved to the system credential manager"
+    );
+
+    let ssh = SshStatus::Opening("server.example".to_owned());
+    assert_eq!(ssh.text(crate::display::UiLanguage::ZhCn), "正在打开 server.example…");
+    assert_eq!(ssh.text(crate::display::UiLanguage::EnUs), "Opening server.example…");
+}
+
+/// Every row, including the import action, has the same icon slot height.
+/// The virtual list measures its first visible item; filtering must not change
+/// the row geometry when that item changes from an action to a shell.
+#[cfg(feature = "gpui-test-support")]
+mod shell_row_geometry {
+    use super::*;
+    use gpui::TestAppContext;
+
+    struct ShellRowProbe {
+        rows: Vec<(&'static str, ShellSelectItem)>,
+    }
+
+    impl Render for ShellRowProbe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // 把继承字号压到图标槽以下，让行高只由图标槽决定。这样断言测的
+            // 就是「行高与图标种类无关」这条不变量本身，而不是某套字体度量。
+            // 真实弹出列表与搜索另由 shell_picker_tests 覆盖。
+            v_flex().w(px(240.0)).text_size(px(8.0)).children(self.rows.iter().map(
+                |(selector, item)| {
+                    div()
+                        .debug_selector(move || (*selector).to_owned())
+                        .child(item.render(window, cx))
+                },
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn every_row_shares_one_icon_slot_height(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let rows = vec![
+            (
+                "shell-probe-import",
+                ShellSelectItem::import_action(crate::display::UiLanguage::ZhCn),
+            ),
+            (
+                "shell-probe-brand",
+                ShellSelectItem::new("pwsh".to_owned(), "PowerShell 7".to_owned(), 1.0),
+            ),
+            ("shell-probe-glyph", ShellSelectItem::new("zsh".to_owned(), "Zsh".to_owned(), 1.0)),
+        ];
+        let (_, cx) = cx.add_window_view(|_, _| ShellRowProbe { rows });
+        let heights: Vec<f32> = ["shell-probe-import", "shell-probe-brand", "shell-probe-glyph"]
+            .iter()
+            .map(|selector| {
+                f32::from(cx.debug_bounds(selector).expect("shell row bounds").size.height)
+            })
+            .collect();
+        assert_eq!(heights[1], heights[2], "品牌图标行与字形回落行必须等高: {heights:?}");
+        assert_eq!(heights[1], SHELL_ROW_ICON_SIZE, "普通行的图标槽即整行高度: {heights:?}");
+        assert_eq!(
+            heights[0], heights[1],
+            "导入行和 Shell 行必须等高，搜索改变首行时不得改变行距: {heights:?}"
+        );
+    }
+}

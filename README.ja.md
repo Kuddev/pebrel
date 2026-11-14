@@ -121,13 +121,13 @@ Pebrel（旧称 Nebula）は、ローカルのシェル、リモートホスト�
   ネイティブの貼り付けキーは維持されます。既定に戻すと、再起動せずに既存のウィンドウにも
   反映されます。実行時の上書きは以前のルールを置き換えるため、追記のみの方式で生じていた
   古い無効化バインドが残ることはありません。保存される設定の形式は変わりません。
-  詳しくは[ショートカットの所有に関する決定](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)をご覧ください。
+  詳しくは[ショートカットの所有に関する決定](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)をご覧ください。
 - ローカルの Windows PowerShell のプロンプトでは、複数行のクリップボードの貼り付けを
   PSReadLine 内に留めて確認できます。Enter で送信し、1 回の Undo で貼り付け全体を取り消せます。
   これには、シェル統合が有効で、管理対象の貼り付けショートカットにユーザーのバインドがないことが必要です。
   PSReadLine は CRLF を正規化し、タブを 4 つのスペースに展開します。その他のエディターは、
   ネゴシエートされた貼り付けや既存の確認動作をそのまま保ちます。詳しくは
-  [クリップボードの貼り付けの契約](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)をご覧ください。
+  [クリップボードの貼り付けの契約](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)をご覧ください。
 
 ### インテリジェントな補完
 
@@ -288,7 +288,7 @@ pebrel config check
 固定された Rust ツールチェーンとプラットフォームの依存関係をインストールした状態で、次を実行します：
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 内部の Cargo パッケージの名前は今も `nebula` ですが、アプリケーションとコマンドの名前は

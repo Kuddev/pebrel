@@ -1,0 +1,981 @@
+mod transition;
+pub(crate) use transition::ThemeTransition;
+
+use gpui::{App, Bounds, Hsla, Pixels, Rgba as GpuiRgba, Window, fill, hsla, point, px, size};
+use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
+
+use crate::display::color::Rgb;
+use crate::display::ui::theme::NebulaTheme;
+use crate::renderer::ui::Rgba;
+use pebrel_settings::ThemeName;
+
+mod custom;
+mod syntax;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod selection_tests;
+pub(crate) use custom::ResolvedTheme;
+
+struct DocumentColors {
+    background: Hsla,
+    foreground: Hsla,
+}
+impl gpui::Global for DocumentColors {}
+
+pub(crate) fn code_block_background(cx: &App) -> Hsla {
+    let base =
+        cx.try_global::<DocumentColors>().map_or(cx.theme().background, |colors| colors.background);
+    // Code keeps the document palette, with a distinct surface in either mode.
+    base.blend(cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.075 } else { 0.055 }))
+}
+
+pub(crate) fn inline_code_background(cx: &App) -> Hsla {
+    let base =
+        cx.try_global::<DocumentColors>().map_or(cx.theme().background, |colors| colors.background);
+    // 行内标记比大代码块略实，但继续使用文档色系，避免白纸上的生硬方块。
+    base.blend(cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.12 } else { 0.075 }))
+}
+
+pub(crate) fn code_block_foreground(cx: &App) -> Hsla {
+    cx.try_global::<DocumentColors>().map_or(cx.theme().foreground, |colors| colors.foreground)
+}
+
+/// settings 的 [`ThemeName`] → 旧壳 chrome 主题。变体一一同名；chrome
+/// 色表的权威在 `display::ui::theme`，GPUI 壳与旧壳取同一份数据。
+pub(crate) fn chrome_theme(name: ThemeName) -> NebulaTheme {
+    NebulaTheme::from_prompt_name(name.available().prompt_name()).expect("shared theme identity")
+}
+
+/// Reverse the shared stable-name mapping and resolve retired preferences.
+fn settings_theme_name(theme: NebulaTheme) -> ThemeName {
+    ThemeName::from_prompt_name(theme.prompt_name()).expect("shared theme identity").available()
+}
+
+/// 当前生效的旧壳 chrome 主题（SSH 连接卡片等复用旧 Skin/palette 的
+/// 视图从这里取色，避免第二套品牌色定义）。
+pub(crate) fn chrome_theme_resolved(cx: &App) -> NebulaTheme {
+    resolved_theme(cx).chrome_theme()
+}
+
+/// Resolved snapshot shared by terminal, chrome and settings helpers.  Once
+/// `Settings` is installed this is a pure in-memory lookup; the disk fallback
+/// is only needed during the short bootstrap window before the global exists.
+pub(crate) fn resolved_theme(cx: &App) -> std::sync::Arc<ResolvedTheme> {
+    cx.try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| settings.resolved_theme.clone())
+        .unwrap_or_else(|| {
+            let runtime = pebrel_settings::RuntimeSettings::load();
+            let fallback =
+                resolve_theme_name(runtime.theme, runtime.follow_system_theme, system_is_light(cx));
+            std::sync::Arc::new(ResolvedTheme::from_runtime(&runtime, fallback))
+        })
+}
+
+pub(crate) fn resolved_skin(cx: &App) -> crate::display::ui::theme::Skin {
+    resolved_theme(cx).skin()
+}
+
+pub(crate) fn resolved_palette(cx: &App) -> crate::display::ui::theme::NebulaPalette {
+    resolved_theme(cx).chrome_palette()
+}
+
+/// 当前 OS 外观是否为浅色。跟随系统时与旧壳 `WinitTheme::Light` 同一判定。
+pub(crate) fn system_is_light(cx: &App) -> bool {
+    matches!(
+        cx.window_appearance(),
+        gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
+    )
+}
+
+/// 把用户点选的主题家族折算成此刻该显示的成员。
+/// `follow_system` 关闭时原样返回 preference；开启时走
+/// [`NebulaTheme::for_system_appearance`]。
+pub(crate) fn resolve_theme_name(
+    preference: ThemeName,
+    follow_system: bool,
+    system_is_light: bool,
+) -> ThemeName {
+    let preference = preference.available();
+    if !follow_system {
+        return preference;
+    }
+    settings_theme_name(chrome_theme(preference).for_system_appearance(system_is_light))
+}
+
+/// 生效主题：`follow_system_theme` 开启时按系统外观折算到用户主题家族的
+/// 亮/暗成员（规则与旧壳 `NebulaTheme::for_system_appearance` 同一来源）。
+/// chrome 令牌与终端 palette 都必须走这里，两层才不会分家。
+pub fn effective_theme_name(cx: &App) -> ThemeName {
+    if let Some(settings) = cx.try_global::<crate::gpui_shell::config::Settings>() {
+        return settings.resolved_theme.base_name();
+    }
+    let rt = pebrel_settings::RuntimeSettings::load();
+    resolve_theme_name(rt.theme, rt.follow_system_theme, system_is_light(cx))
+}
+
+/// 点选一张主题卡时要写盘的键：对齐旧壳 `select_nebula_theme`
+/// （关掉跟随系统）+ `apply_nebula_theme`（底色换成该主题 `term_bg`）。
+pub(crate) fn theme_card_persist_updates(name: ThemeName) -> [(&'static str, String); 7] {
+    [
+        ("theme", name.prompt_name().to_owned()),
+        ("follow_system_theme", "0".to_owned()),
+        ("background", pebrel_settings::format_hex_rgb(name.term_theme().background)),
+        ("pane_card_radius", "0".to_owned()),
+        ("pane_card_gutter", "0".to_owned()),
+        ("pane_card_shadow", "0".to_owned()),
+        ("pane_card_divider", "1".to_owned()),
+    ]
+}
+
+fn to_hsla(r: u8, g: u8, b: u8) -> Hsla {
+    GpuiRgba { r: f32::from(r) / 255.0, g: f32::from(g) / 255.0, b: f32::from(b) / 255.0, a: 1.0 }
+        .into()
+}
+
+/// 不透明 ink（旧壳 `Rgb` 令牌）。
+fn ink(c: Rgb) -> Hsla {
+    to_hsla(c.r, c.g, c.b)
+}
+
+/// 最淡一档墨色（旧壳 `Skin::ink_faint`）：比 `muted_foreground`(ink_dim)
+/// 再暗一档，旧壳只用于「确实在场但不参与层级竞争」的元素——侧栏数量
+/// chip 的数字、未绑定键帽等。GPUI 全局 token 没有这一档，按需来取。
+pub(crate) fn faint_ink(cx: &App) -> Hsla {
+    ink(resolved_skin(cx).ink_faint)
+}
+
+/// 运行态圆环的轨道和旋转弧共用语义色；先与 Tab 行底色合成，
+/// 轨道与弧重叠时不会重复积累透明度，深浅主题都保持中性对比。
+pub(crate) fn sidebar_spinner_colors(cx: &App, active: bool) -> (GpuiRgba, GpuiRgba) {
+    let palette = resolved_palette(cx);
+    let sk = resolved_skin(cx);
+    let shell = Rgba::new(palette.shell_bg.r, palette.shell_bg.g, palette.shell_bg.b, 255);
+    let base =
+        if active { crate::display::ui::surface::over(sk.accent_soft, shell) } else { shell };
+    let track = crate::display::ui::surface::over(sk.hairline, base);
+    let head = crate::display::ui::surface::over(
+        Rgba::new(sk.ink_dim.r, sk.ink_dim.g, sk.ink_dim.b, 255),
+        base,
+    );
+    let gpui = |color: Rgba| GpuiRgba {
+        r: f32::from(color.r) / 255.0,
+        g: f32::from(color.g) / 255.0,
+        b: f32::from(color.b) / 255.0,
+        a: 1.0,
+    };
+    (gpui(track), gpui(head))
+}
+
+/// 保留 alpha 的水洗层（hover/surface/hairline 这类叠加色）。
+fn wash(c: Rgba) -> Hsla {
+    GpuiRgba {
+        r: f32::from(c.r) / 255.0,
+        g: f32::from(c.g) / 255.0,
+        b: f32::from(c.b) / 255.0,
+        a: f32::from(c.a) / 255.0,
+    }
+    .into()
+}
+
+/// 当不透明用的 `Rgba` 令牌（panel/danger/toggle 一族 alpha 本就 255）。
+fn solid(c: Rgba) -> Hsla {
+    to_hsla(c.r, c.g, c.b)
+}
+
+fn luma(r: u8, g: u8, b: u8) -> f32 {
+    0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)
+}
+
+/// hover/active 派生：深色往白提、浅色往黑压，幅度 `k`。旧壳没有为
+/// 实色按钮单列 hover 令牌（quad 直接换色），这里按明度方向补出两档。
+fn shift3(r: u8, g: u8, b: u8, k: f32) -> Hsla {
+    let target = if luma(r, g, b) < 140.0 { 255.0 } else { 0.0 };
+    let mix = |v: u8| (f32::from(v) + (target - f32::from(v)) * k).round().clamp(0.0, 255.0) as u8;
+    to_hsla(mix(r), mix(g), mix(b))
+}
+
+/// 压在语义色块上的文字：深块配近白、浅块配近黑（slate 两端）。
+fn on_solid(c: Rgba) -> Hsla {
+    if luma(c.r, c.g, c.b) < 150.0 { to_hsla(248, 250, 252) } else { to_hsla(15, 23, 42) }
+}
+
+/// 同色加浓（滚动条拖拽这类只调 alpha 的反馈；旧壳的 thumb 也是
+/// "alpha applied at the call site"）。
+fn wash_scaled(c: Rgba, f: f32) -> Hsla {
+    GpuiRgba {
+        r: f32::from(c.r) / 255.0,
+        g: f32::from(c.g) / 255.0,
+        b: f32::from(c.b) / 255.0,
+        a: (f32::from(c.a) / 255.0 * f).min(1.0),
+    }
+    .into()
+}
+
+/// 旧壳 `shell_frame_color` 的不透明形态：panel 按自身 alpha 预合成到
+/// shell_bg 上。整窗清到这个色；终端以 term_bg 圆角卡浮于其上，顶栏与
+/// 侧栏融进壳色（一体化外壳）。GPUI 壳暂不接透明度滑块，alpha 取 1。
+fn shell_color(p: crate::display::ui::theme::NebulaPalette) -> Hsla {
+    let pa = f32::from(p.panel.a) / 255.0;
+    let comp = |pv: u8, bv: u8| (f32::from(pv) * pa + f32::from(bv) * (1.0 - pa)).round() as u8;
+    to_hsla(
+        comp(p.panel.r, p.shell_bg.r),
+        comp(p.panel.g, p.shell_bg.g),
+        comp(p.panel.b, p.shell_bg.b),
+    )
+}
+
+/// 终端卡容器的几何。四个键一组：圆角、外间距、投影、竖线——「浮起的圆角卡」
+/// 与「铺满到窗口边」由此成为同一条渲染路径的两组取值，不是两套代码、更不是
+/// 两套页面。
+///
+/// 主题默认叠加用户配置后，按半径确定形态：直角铺满、圆角留缝。
+/// 只调整生效值，不改写保存的卡缝、投影和竖线；切回对应形态时恢复这些配置。
+///
+/// 卡内壁到网格的内间距**不在这里**：那是 `SizeInfo` 的 `padding.x/y` 与
+/// `padding_right()`（`config/window.rs`），本来就可配。两处都给会双份叠加。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaneCardStyle {
+    /// 卡圆角。0 时外间距和投影同时停用，终端铺满可用区域。
+    pub radius: f32,
+    /// 卡与周围 chrome 的外间距，**逐边给**——不能假设对称，理由见
+    /// [`paint_shell_around_card`]。GPUI 侧它落在父容器的 padding 上（卡是子
+    /// 元素），所以读代码时别把它和网格内边距混起来。
+    pub margin: gpui::Edges<f32>,
+    /// 卡投影。
+    pub shadow: bool,
+    /// 侧栏与终端之间生效的竖线宽度；圆角卡不画，直角卡沿用配置。
+    pub divider: f32,
+}
+
+impl Default for PaneCardStyle {
+    /// Before settings are installed, use the same flat shape as the presets.
+    fn default() -> Self {
+        Self { radius: 0.0, margin: gpui::Edges::default(), shadow: false, divider: 1.0 }
+    }
+}
+
+impl PaneCardStyle {
+    /// 合并主题默认与用户覆盖。唯一的调用点是
+    /// [`crate::gpui_shell::config::Settings::load`]——那里同时握着**生效**主题
+    /// 与 `RuntimeSettings`，是唯一能正确合并两层的地方；别处自行读一遍
+    /// settings 就会在跟随系统主题时和 chrome 分家。
+    pub fn resolve(theme: ThemeName, runtime: &pebrel_settings::RuntimeSettings) -> Self {
+        let resolved = ResolvedTheme::builtin(theme, None);
+        Self::resolve_for_resolved_theme(&resolved, runtime)
+    }
+
+    /// Resolve geometry from the same immutable theme snapshot used by the
+    /// terminal and chrome. Custom themes therefore do not silently fall back
+    /// to their built-in base card shape.
+    pub fn resolve_for_resolved_theme(
+        theme: &ResolvedTheme,
+        runtime: &pebrel_settings::RuntimeSettings,
+    ) -> Self {
+        let geometry = theme.card_geometry();
+        let radius = runtime.pane_card_radius.unwrap_or(geometry.radius);
+        let rounded = radius > 0.0;
+        let gutter =
+            if rounded { runtime.pane_card_gutter.unwrap_or(geometry.gutter) } else { 0.0 };
+        Self {
+            radius,
+            // 上边恒零：08-26 裁定侧栏 / 终端卡 / 右侧抽屉三列顶边都贴 chrome
+            // 下沿。可配的那个数只作用于左 / 右 / 下三边。
+            margin: gpui::Edges { top: 0.0, right: gutter, bottom: gutter, left: gutter },
+            shadow: rounded && runtime.pane_card_shadow.unwrap_or(geometry.shadow),
+            divider: if rounded {
+                0.0
+            } else {
+                runtime.pane_card_divider.unwrap_or(geometry.divider)
+            },
+        }
+    }
+
+    /// 当前生效的卡几何。
+    pub fn current(cx: &App) -> Self {
+        cx.try_global::<crate::gpui_shell::config::Settings>()
+            .map(|settings| settings.card)
+            .unwrap_or_default()
+    }
+}
+
+/// 侧栏与正文的弱分界直接使用 HTML 对应的 `line` RGBA 令牌。
+/// 它与外窗描边、强调色分别取值，不额外合成一套灰色。
+pub fn card_divider_color(cx: &App) -> Hsla {
+    wash(resolved_skin(cx).hairline)
+}
+
+/// 终端卡圆角。默认值的权威在 `pebrel_settings::DEFAULT_PANE_CARD_RADIUS`，
+/// 旧壳的 `UI_SHELL_RADIUS_LOGICAL` 引用同一个常量——两壳必须同径。
+pub fn card_radius(cx: &App) -> Pixels {
+    px(PaneCardStyle::current(cx).radius)
+}
+
+/// 卡投影。浅色主题压得更浅——同一组 alpha 落在浅底上会显脏而不是显深度。
+///
+/// 偏移只给 y、不给 x：光源当作正上方，卡在窗口里居中偏右时也不会出现
+/// 阴影朝一侧甩的违和感。
+pub fn card_shadow(cx: &App) -> gpui::BoxShadow {
+    let is_light = resolved_palette(cx).is_light;
+    gpui::BoxShadow {
+        color: hsla(0.0, 0.0, 0.0, if is_light { 0.10 } else { 0.28 }),
+        offset: point(px(0.0), px(6.0)),
+        blur_radius: px(18.0),
+        spread_radius: px(0.0),
+        inset: false,
+    }
+}
+
+/// 终端卡底色使用当前生效的终端背景，并应用窗口背景不透明度。
+/// 设置页通过 `settings_content_bg` 保留主题面板色，复用同一份 alpha。
+pub fn card_content_bg(cx: &App) -> Hsla {
+    let mut bg: Hsla = cx
+        .try_global::<crate::gpui_shell::config::Settings>()
+        .map(|s| s.palette.background.into())
+        .unwrap_or_else(|| cx.theme().background);
+    bg.a *= crate::gpui_shell::wallpaper::card_surface_opacity(cx);
+    bg
+}
+
+/// 旧壳的透明清屏模型：只在圆角卡**外部**画一层壳色，卡内部保持透明，
+/// 随后由卡自己的 `term_bg × opacity` 覆盖。若直接给 workspace 根节点上底色，
+/// 卡区域会先吃一次 shell alpha、再吃一次 card alpha，实际不透明度从 `o`
+/// 变成 `1-(1-o)^2`，DWM Acrylic 看起来就会发糊、发实。
+///
+/// GPUI 没有凹圆角 primitive，因此四角按物理像素扫描圆外区域；卡本身的
+/// 抗锯齿圆角仍是唯一可见边，壳色不会侵入卡内形成第二次 alpha 叠加。
+///
+/// `insets` 必须是调用方**真实**的卡缝，四边分别给——不能在这里假设对称。
+/// 终端卡的上边距是零（08-26 裁定：侧栏 / 终端卡 / 右侧抽屉三列顶边都贴
+/// chrome 下沿），而左右和底部是 8px。这里若按四边 8px 推算，卡矩形整体
+/// 下移 8px：左右两条壳色带从 `y+8` 起画，卡真正的上两个圆角却在 `y`，
+/// 于是 `y..y+8` 里圆角外侧那两块三角没有任何人覆盖——深色主题下露的是
+/// 深色不易察觉，浅色主题下直接露出一圈白边和一道顶部白缝。
+pub fn paint_shell_around_card(
+    bounds: Bounds<Pixels>,
+    insets: gpui::Edges<f32>,
+    window: &mut Window,
+    cx: &App,
+) {
+    let color = cx.theme().background;
+    let width = f32::from(bounds.size.width);
+    let height = f32::from(bounds.size.height);
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+
+    // 逐边钳制，且后一边扣掉前一边已占的空间：窄窗口下两侧卡缝相加超过
+    // 容器宽度时，卡矩形不能退化成负尺寸。
+    let top = insets.top.clamp(0.0, height);
+    let bottom = insets.bottom.clamp(0.0, height - top);
+    let left = insets.left.clamp(0.0, width);
+    let right = insets.right.clamp(0.0, width - left);
+
+    let x = f32::from(bounds.origin.x);
+    let y = f32::from(bounds.origin.y);
+    let card_x = x + left;
+    let card_y = y + top;
+    let card_w = (width - left - right).max(0.0);
+    let card_h = (height - top - bottom).max(0.0);
+    let paint = |window: &mut Window, x: f32, y: f32, w: f32, h: f32| {
+        if w > 0.0 && h > 0.0 {
+            window.paint_quad(fill(Bounds::new(point(px(x), px(y)), size(px(w), px(h))), color));
+        }
+    };
+
+    // 四条带互不重叠，每个像素只承受一次壳色 alpha。某一边卡缝为零时
+    // 对应的带宽度为零，`paint` 直接跳过。
+    paint(window, x, y, width, top);
+    paint(window, x, y + height - bottom, width, bottom);
+    paint(window, x, card_y, left, card_h);
+    paint(window, x + width - right, card_y, right, card_h);
+
+    let radius = PaneCardStyle::current(cx).radius.min(card_w * 0.5).min(card_h * 0.5);
+    if radius <= 0.0 {
+        return;
+    }
+    let step = 1.0 / window.scale_factor().max(1.0);
+    let rows = (radius / step).ceil() as usize;
+    let card_right = card_x + card_w;
+    let card_bottom = card_y + card_h;
+    for row in 0..rows {
+        let row_top = row as f32 * step;
+        let row_h = step.min(radius - row_top).max(0.0);
+        let sample_y = (row_top + row_h * 0.5).min(radius);
+        let dy = radius - sample_y;
+        let outside = (radius - (radius * radius - dy * dy).max(0.0).sqrt()).clamp(0.0, radius);
+        paint(window, card_x, card_y + row_top, outside, row_h);
+        paint(window, card_right - outside, card_y + row_top, outside, row_h);
+        paint(window, card_x, card_bottom - row_top - row_h, outside, row_h);
+        paint(window, card_right - outside, card_bottom - row_top - row_h, outside, row_h);
+    }
+}
+
+/// 设置页正文与终端卡共用背景不透明度；背景只由 workspace 卡容器绘制。
+pub(crate) fn settings_content_bg(cx: &App) -> Hsla {
+    let mut bg = settings_panel_bg(cx);
+    bg.a *= crate::gpui_shell::wallpaper::card_surface_opacity(cx);
+    bg
+}
+
+/// 弹窗和控件的实色底，独立于正文不透明度以保持可读性。
+pub fn settings_panel_bg(cx: &App) -> Hsla {
+    solid(resolved_skin(cx).panel)
+}
+
+/// Terminal completion colors are derived from the active Nebula skin. The
+/// popup used to switch between two hard-coded black/white palettes, which
+/// made custom themes look as if a foreign window had been pasted on top.
+/// Semantic colors still stay in the icon/tag column; panel and selection
+/// surfaces now share the theme's own panel, ink, hairline, and accent ramp.
+pub(crate) struct CompletionColors {
+    pub ghost: Hsla,
+    pub panel_bg: Hsla,
+    pub panel_border: Hsla,
+    pub panel_shadow: Hsla,
+    pub row_bg: Hsla,
+    pub row_fg: Hsla,
+    pub match_fg: Hsla,
+    pub selected_bg: Hsla,
+    pub selected_fg: Hsla,
+    pub scroll_track: Hsla,
+    pub scroll_thumb: Hsla,
+    pub history: Hsla,
+    pub command: Hsla,
+    pub directory: Hsla,
+    pub rust_file: Hsla,
+    pub toml: Hsla,
+    pub markdown: Hsla,
+    pub file: Hsla,
+}
+
+pub(crate) fn completion_colors(cx: &App, _term_bg: GpuiRgba) -> CompletionColors {
+    let sk = resolved_skin(cx);
+    let alpha = |hex: u32, a: f32| -> Hsla {
+        GpuiRgba {
+            r: f32::from(((hex >> 16) & 0xff) as u8) / 255.0,
+            g: f32::from(((hex >> 8) & 0xff) as u8) / 255.0,
+            b: f32::from((hex & 0xff) as u8) / 255.0,
+            a,
+        }
+        .into()
+    };
+    let selected = crate::display::ui::surface::over(sk.accent_soft, sk.panel);
+    CompletionColors {
+        ghost: ink(sk.ink_faint),
+        panel_bg: solid(sk.panel),
+        panel_border: wash(sk.hairline),
+        panel_shadow: if sk.is_light { alpha(0x101820, 0.18) } else { alpha(0x000000, 0.46) },
+        row_bg: solid(sk.panel),
+        row_fg: ink(sk.ink_dim),
+        match_fg: ink(sk.ink_faint),
+        selected_bg: solid(selected),
+        selected_fg: ink(sk.ink_strong),
+        scroll_track: wash(sk.track_off),
+        scroll_thumb: wash_scaled(sk.track_off, if sk.is_light { 1.8 } else { 2.2 }),
+        history: solid(sk.warn),
+        command: ink(sk.accent),
+        directory: solid(sk.ok),
+        rust_file: solid(sk.danger),
+        toml: ink(sk.accent),
+        markdown: ink(sk.accent),
+        file: ink(sk.ink_dim),
+    }
+}
+
+/// 设置页导航与分组卡内的细分隔线。
+pub fn settings_hairline(cx: &App) -> Hsla {
+    let sk = resolved_skin(cx);
+    // 浅色底上黑线比深色底上白线更"重"（同 alpha 视觉对比更高），所以浅色
+    // 取更低的 alpha。
+    let alpha = if sk.is_light { 20 } else { 18 };
+    wash(Rgba::new(sk.ink.r, sk.ink.g, sk.ink.b, alpha))
+}
+
+/// Component focus is an input-modality signal. Pointer clicks already show a
+/// caret, an open menu, or a pressed/selected state, so repeating that state as
+/// a dark outline makes the control look stuck. Keyboard navigation keeps the
+/// accent ring; pointer interaction folds the ring into the normal input line.
+pub fn sync_component_focus_ring(window: &Window, cx: &mut App) {
+    sync_component_focus_ring_for_input(window.last_input_was_keyboard(), cx);
+}
+
+fn sync_component_focus_ring_for_input(last_input_was_keyboard: bool, cx: &mut App) {
+    let ring = if last_input_was_keyboard { cx.theme().link } else { cx.theme().input };
+    // GPUI 的 global_mut 即使写回相同颜色也会通知观察者；动画帧不应重复广播主题变化。
+    if cx.theme().ring == ring {
+        return;
+    }
+    Theme::global_mut(cx).ring = ring;
+}
+
+/// 设置卡片借用当前主题的中性色阶，独立于选中与焦点色。
+pub(super) fn settings_card_fill(cx: &App) -> Hsla {
+    settings_card_fill_for_theme(&resolved_theme(cx))
+}
+
+fn settings_card_fill_for_theme(theme: &ResolvedTheme) -> Hsla {
+    let sk = theme.skin();
+    if sk.is_light {
+        return solid(sk.panel).blend(hsla(0.0, 0.0, 1.0, 0.86));
+    }
+
+    let panel = sk.panel;
+    let card = sk.card;
+    // The built-in opaque picker fills are the next step in each neutral ramp.
+    if !theme.is_custom()
+        && card.a == 255
+        && luma(card.r, card.g, card.b) > luma(panel.r, panel.g, panel.b)
+    {
+        return solid(crate::display::ui::surface::over(Rgba { a: 128, ..card }, panel));
+    }
+
+    // Custom cards describe the shell; translucent picker fills describe selection.
+    // Lift the panel in its own hue when there is no suitable raised swatch.
+    let base = solid(panel);
+    Hsla { l: (base.l + 7.0 / 255.0).min(1.0), ..base }
+}
+
+pub(super) fn settings_card_shadow(cx: &App) -> Vec<gpui::BoxShadow> {
+    if !resolved_skin(cx).is_light {
+        return Vec::new();
+    }
+    [(0.06, 0.0, 0.0, 1.0), (0.08, 4.0, 12.0, 0.0)]
+        .into_iter()
+        .map(|(alpha, y, blur, spread)| gpui::BoxShadow {
+            color: hsla(220.0 / 360.0, 0.4, 0.14, alpha),
+            offset: point(px(0.0), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset: false,
+        })
+        .collect()
+}
+
+pub(super) fn settings_canvas_tint(cx: &App) -> Hsla {
+    if resolved_skin(cx).is_light {
+        hsla(220.0 / 360.0, 0.3, 0.2, 0.022)
+    } else {
+        gpui::transparent_black()
+    }
+}
+
+/// 中性悬停色用于次要操作，强调色留给选中、开启和焦点。
+pub(super) fn neutral_hover(cx: &App) -> Hsla {
+    ink(resolved_skin(cx).ink).opacity(0.05)
+}
+
+/// 设置页悬停与选中使用当前主题的强调色。
+pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
+    let sk = resolved_skin(cx);
+    let (hover_alpha, strong_alpha) = if sk.is_light { (10, 18) } else { (30, 46) };
+    let alpha = if strong { strong_alpha } else { hover_alpha };
+    wash(Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, alpha))
+}
+
+/// 按运行时主题重建窗口 chrome：先切组件库深浅模式垫底（未映射的长尾
+/// token 落在正确的底色系上），再用旧壳 [`Skin`] 覆写全部关键 token——
+/// 所有主题（含 Nord / Nord Light / Warm Sand）共用同一条 token 应用路径。启动、设置变更、系统外观变化
+/// 都走这里；主题名先经 [`effective_theme_name`] 折算 follow_system。
+pub fn apply_chrome_theme(cx: &mut App) {
+    super::font_loading::ensure_selected(cx);
+    // 视效（模糊/透明度/壁纸）与主题同一时机刷新：设置热应用、系统外观
+    // 变化都会走到这里，窗口级效果与 token 保持同帧一致。
+    crate::gpui_shell::wallpaper::refresh(cx);
+    // 托盘与 chrome 同一热应用节拍：启动 / 设置变更 / 系统外观。
+    crate::gpui_shell::apply_tray_setting();
+
+    let resolved = resolved_theme(cx);
+    let mode = if resolved.skin().is_light { ThemeMode::Light } else { ThemeMode::Dark };
+    Theme::change(mode, None, cx);
+    apply_skin_tokens(&resolved, cx);
+    let background = resolved.terminal_background();
+    let foreground = resolved.terminal_foreground();
+    cx.set_global(DocumentColors {
+        background: to_hsla(background[0], background[1], background[2]),
+        foreground: to_hsla(foreground[0], foreground[1], foreground[2]),
+    });
+    apply_shell_opacity(&resolved, cx);
+}
+
+/// 只按当前不透明度重算壳色，不做别的。
+///
+/// 拖不透明度滑块的快路径：[`apply_chrome_theme`] 那一整套（读设置文件、
+/// 重建壁纸纹理、`Theme::change`、四十来个 token 重写、窗口级模糊）对"只改了
+/// alpha"这件事是纯浪费，而滑块一次拖拽会发几十上百个事件。2026-08-21 定案：
+/// 拖拽走这里，落盘与整套热应用等停手之后。
+///
+/// 主题名由调用方传入：[`effective_theme_name`] 内部会 `RuntimeSettings::load()`
+/// 读盘一次，那正是这条路径要避开的东西。设置页自己持有 `runtime` 镜像。
+pub fn reapply_shell_opacity(name: ThemeName, follow_system: bool, cx: &mut App) {
+    let _ = (name, follow_system);
+    reapply_prepared_surface_opacity(cx);
+}
+
+/// Wallpaper readiness can change asynchronously without a settings/theme reload.
+pub(super) fn reapply_prepared_surface_opacity(cx: &mut App) {
+    let resolved = resolved_theme(cx);
+    apply_shell_opacity(&resolved, cx);
+}
+
+/// 一体化外壳（对齐旧壳 draw_chrome）：窗口背景、侧栏、顶栏是同一块
+/// 壳色，各自的分隔线取同色隐形；唯一的结构分界是内容区那张圆角卡。
+/// 壳色带用户透明度（文字 token 不带——对比度不塌，旧壳裁定）。
+fn apply_shell_opacity(chrome: &ResolvedTheme, cx: &mut App) {
+    // A theme's explicit material opacity is part of the resolved snapshot;
+    // otherwise keep the user's live/window opacity setting. This is read once
+    // here and never reparsed from the theme document on a frame.
+    // `wallpaper::refresh` has already merged the immutable theme default with
+    // the explicit runtime preference. Reading the resolved visual value here
+    // keeps chrome, terminal cards and native window effects on one contract.
+    let opacity = crate::gpui_shell::wallpaper::chrome_surface_opacity(cx);
+    let mut shell = shell_color(chrome.chrome_palette());
+    shell.a *= opacity;
+    let theme = Theme::global_mut(cx);
+    theme.background = shell;
+    theme.sidebar = shell;
+    theme.sidebar_border = shell;
+    theme.title_bar = shell;
+    theme.title_bar_border = shell;
+
+    // gpui-component 1.16 的壳组件改读 resolved background token；直接改
+    // ThemeColor 不会自动同步 tokens。这里只更新快路径实际改动的五个字段，
+    // 保持拖动不透明度时不重建整套主题。
+    theme.tokens.background = shell.into();
+    theme.tokens.sidebar = shell.into();
+    theme.tokens.sidebar_border = shell.into();
+    theme.tokens.title_bar = shell.into();
+    theme.tokens.title_bar_border = shell.into();
+}
+
+/// Shared tab surface for sidebar and top layouts. Text/icons keep their alpha.
+pub(super) fn tab_bar_background(cx: &App) -> Hsla {
+    // The prepared shell token already contains the resolved theme color.
+    // Replace its alpha, avoiding both a second multiplication and render-time I/O.
+    let mut color = cx.theme().background;
+    color.a = crate::gpui_shell::wallpaper::tab_bar_surface_opacity(cx);
+    color
+}
+
+/// 旧壳 [`Skin`] → gpui-component 全局 token。改全局而不是逐组件覆样式：
+/// 后续直接引入的组件自然进入 Nebula 视觉系统，上游升级时差异集中在一处。
+///
+/// 语义对照：
+/// - ink 三档 → foreground / muted_foreground / `*_active_foreground`
+/// - hover / hover_strong → 普通行悬停与选中水洗；侧栏 Tab 选中态单独使用
+///   accent_soft，与旧壳 `draw_chrome` 一致
+/// - surface / card / panel → secondary、group_box、popover 三层浮面
+/// - accent → primary/ring/caret/link；浅色主题下 Skin 已把它折成中性
+///   深灰（2026-07-31 裁定），无需此处分支
+/// - danger/ok/warn → 语义三色，不随主题 accent 变
+/// 面积色柔和化：把通道往自身亮度收，色相与明度都不动，只降饱和。
+///
+/// `keep` 是保留的饱和比例（1.0 原样）。用在开关轨道、主按钮、滑条填充这类
+/// 成片的品牌色上；`link` / `caret` / `ring` 那些发丝级用途继续用原值，它们
+/// 需要的是辨识度，而辨识度来自亮度差、不来自饱和度。
+fn soften(c: crate::display::color::Rgb, keep: f32) -> crate::display::color::Rgb {
+    let luma = 0.299 * f32::from(c.r) + 0.587 * f32::from(c.g) + 0.114 * f32::from(c.b);
+    let pull =
+        |channel: u8| (luma + (f32::from(channel) - luma) * keep).round().clamp(0.0, 255.0) as u8;
+    crate::display::color::Rgb::new(pull(c.r), pull(c.g), pull(c.b))
+}
+
+fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
+    let (ui_font_family, ui_font_size) = cx
+        .try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| (settings.ui_font_family.clone(), settings.ui_font_size_override))
+        .unwrap_or_default();
+    let sk = chrome.skin();
+    let transparent = hsla(0.0, 0.0, 0.0, 0.0);
+    let theme = Theme::global_mut(cx);
+
+    // 文字。
+    theme.foreground = ink(sk.ink);
+    theme.muted_foreground = ink(sk.ink_dim);
+
+    // 面与线。
+    theme.border = wash(sk.hairline);
+    theme.input = wash(sk.hairline);
+    theme.muted = wash(sk.surface);
+    theme.group_box = wash(sk.card);
+    theme.group_box_foreground = ink(sk.ink);
+    theme.popover = solid(sk.panel);
+    theme.popover_foreground = ink(sk.ink);
+    theme.overlay = wash(sk.veil);
+
+    // 悬停 / 选中水洗。
+    let hover = wash(sk.hover);
+    let selected = wash(sk.accent_soft);
+    let list_selected = selected;
+    theme.accent = hover;
+    theme.accent_foreground = ink(sk.ink_strong);
+    theme.list_hover = ink(sk.ink).opacity(if sk.is_light { 0.06 } else { 0.08 });
+    theme.list_active = ink(sk.accent).opacity(0.08);
+    theme.list_active_border = transparent;
+    theme.sidebar_foreground = ink(sk.ink);
+    theme.sidebar_accent = selected;
+    theme.sidebar_accent_foreground = ink(sk.ink_strong);
+    theme.tab_foreground = ink(sk.ink_dim);
+    theme.tab_active = selected;
+    theme.tab_active_foreground = ink(sk.ink_strong);
+
+    // 按钮。
+    // 面积色降饱和，细元素不降。同一个 accent 用在两种尺度上：开关轨道、主
+    // 按钮是成片的色块，link / caret / 焦点环是发丝级的细节。饱和度决定「刺
+    // 不刺眼」，亮度差决定「看不看得见」——所以色块压饱和（暗底上 #52a8ff
+    // 这种亮蓝铺开会发光，一整页只剩几个块在跳），细元素保持原值换辨识度。
+    let soft_accent = sk.accent;
+    theme.primary = ink(soft_accent);
+    theme.primary_hover = shift3(soft_accent.r, soft_accent.g, soft_accent.b, 0.10);
+    theme.primary_active = shift3(soft_accent.r, soft_accent.g, soft_accent.b, 0.18);
+    theme.primary_foreground = ink(sk.ink_on_accent);
+    theme.primary_foreground = ink(crate::display::terminal_color::ensure_contrast(
+        sk.ink_on_accent,
+        sk.accent,
+        sk.ink,
+        sk.ink_strong,
+        4.5,
+    ));
+    theme.secondary = wash(sk.surface);
+    theme.secondary_hover = hover;
+    theme.secondary_active = list_selected;
+    theme.secondary_foreground = ink(sk.ink);
+
+    // 语义三色。
+    theme.danger = solid(sk.danger);
+    theme.danger_hover = shift3(sk.danger.r, sk.danger.g, sk.danger.b, 0.10);
+    theme.danger_active = shift3(sk.danger.r, sk.danger.g, sk.danger.b, 0.18);
+    theme.danger_foreground = on_solid(sk.danger);
+    theme.success = solid(sk.ok);
+    theme.success_hover = shift3(sk.ok.r, sk.ok.g, sk.ok.b, 0.10);
+    theme.success_active = shift3(sk.ok.r, sk.ok.g, sk.ok.b, 0.18);
+    theme.success_foreground = on_solid(sk.ok);
+    theme.warning = solid(sk.warn);
+    theme.warning_hover = shift3(sk.warn.r, sk.warn.g, sk.warn.b, 0.10);
+    theme.warning_active = shift3(sk.warn.r, sk.warn.g, sk.warn.b, 0.18);
+    theme.warning_foreground = on_solid(sk.warn);
+
+    // Button tokens are independent of the accent used by switches and links.
+    // Default actions remain transparent; primary actions choose solid/soft below.
+    theme.button = transparent;
+    theme.button_hover = ink(sk.ink).opacity(0.045);
+    theme.button_active = ink(sk.ink).opacity(0.08);
+    theme.button_foreground = theme.secondary_foreground;
+    theme.button_primary = theme.primary;
+    theme.button_primary_hover = theme.primary_hover;
+    theme.button_primary_active = theme.primary_active;
+    theme.button_primary_foreground = theme.primary_foreground;
+    if !chrome.is_custom() && chrome.base_name() == ThemeName::Nord {
+        // Keep frost blue readable under dark text in every pointer state.
+        theme.button_primary_hover = theme.primary.blend(theme.foreground.opacity(0.08));
+        theme.button_primary_active = theme.primary.blend(theme.foreground.opacity(0.14));
+    }
+    // Nord's solid frost blue is intentional. Other themes use a soft wash;
+    // keep the accent itself unchanged for switches, links and custom themes.
+    if chrome.is_custom() || chrome.base_name() != ThemeName::Nord {
+        theme.button_primary = theme.primary.opacity(0.10);
+        theme.button_primary_hover = theme.primary.opacity(0.15);
+        theme.button_primary_active = theme.primary.opacity(0.20);
+        let pressed = crate::display::ui::surface::over(
+            Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, 51),
+            sk.panel,
+        );
+        theme.button_primary_foreground = ink(crate::display::terminal_color::ensure_contrast(
+            sk.accent,
+            Rgb::new(pressed.r, pressed.g, pressed.b),
+            sk.ink,
+            Rgb::new(sk.panel.r, sk.panel.g, sk.panel.b),
+            4.5,
+        ));
+    }
+    theme.button_secondary = theme.secondary;
+    theme.button_secondary_hover = theme.secondary_hover;
+    theme.button_secondary_active = theme.secondary_active;
+    theme.button_secondary_foreground = theme.secondary_foreground;
+    theme.button_danger = theme.danger;
+    theme.button_danger_hover = theme.danger_hover;
+    theme.button_danger_active = theme.danger_active;
+    theme.button_danger_foreground = theme.danger_foreground;
+    theme.button_success = theme.success;
+    theme.button_success_hover = theme.success_hover;
+    theme.button_success_active = theme.success_active;
+    theme.button_success_foreground = theme.success_foreground;
+    theme.button_warning = theme.warning;
+    theme.button_warning_hover = theme.warning_hover;
+    theme.button_warning_active = theme.warning_active;
+    theme.button_warning_foreground = theme.warning_foreground;
+
+    // 焦点 / 选择 / 链接 / 拖拽。
+    theme.ring = ink(sk.accent);
+    theme.caret = ink(sk.accent);
+    // Use ink, not the already washed-out list surface: Input also desaturates
+    // this color for search matches. TextView paints it over glyphs, so keep
+    // the overlay translucent while retaining contrast against the document.
+    let [r, g, b] = chrome.terminal_background();
+    let selection = crate::display::terminal_color::ensure_contrast(
+        sk.accent,
+        Rgb::new(r, g, b),
+        sk.ink,
+        sk.ink_strong,
+        4.5,
+    );
+    theme.selection = ink(selection).opacity(0.3);
+    theme.link = ink(sk.accent);
+    theme.link_hover = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.10);
+    theme.link_active = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.18);
+    theme.drag_border = ink(sk.accent);
+    theme.drop_target = wash(sk.accent_soft);
+
+    // 开关 / 滑条 / 滚动条。Switch 开态吃 primary 是上游硬编码；旧壳裁定
+    // 的开态专色（#1e222b 一族）要在 fork 加 token 才能接上，记为后续。
+    theme.switch = solid(sk.toggle_track_off);
+    theme.switch_thumb = solid(sk.knob_on);
+    theme.slider_bar = ink(soft_accent);
+    theme.slider_thumb = solid(sk.knob_on);
+    theme.scrollbar = transparent;
+    theme.scrollbar_thumb = wash(sk.track_off);
+    theme.scrollbar_thumb_hover = wash_scaled(sk.track_off, 1.6);
+
+    // 字号与圆角：控件 pill 档 = 旧壳 UI_CORNER_RADIUS_LOGICAL(8)；浮层
+    // 12，低于终端卡的 14——三档呼应旧壳的圆角层级。
+    theme.font_size = px(ui_font_size.unwrap_or(14.0));
+    theme.mono_font_size = theme.font_size * (13.0 / 14.0);
+
+    // 整壳的兜底字体（fork `root.rs` 用 `theme.font_family` 给根容器）。上游
+    // 默认 `.SystemUIFont` 在 Windows 上没落到 UI 字体，中文最终回落进终端等
+    // 宽族，于是整页中文字距被拉开、拉丁与数字的节奏更明显。旧壳只有一套
+    // glyph cache 时这是架构限制，GPUI 壳没有这个限制，不该继承那个观感。
+    //
+    // 我们是终端，所以等宽在这里是**语义标记**而不是全局字体：路径、键帽、
+    // 命令、数值这类"机器读、要逐字符对齐、要能整段复制"的东西显式走 mono；
+    // 标题和说明是给人读的，走 sans。
+    // 元数据用系统等宽字体，不能因界面显示路径而隐式加载完整中文字体。
+    theme.mono_font_family = crate::font_install::SYSTEM_MONO_FONT_FAMILY.into();
+    let default_ui_font = super::typography::UI_FONT_FAMILY;
+    theme.font_family = ui_font_family.unwrap_or_else(|| default_ui_font.to_owned()).into();
+    theme.radius = px(6.0);
+    theme.radius_lg = px(12.0);
+
+    // 1.16 的 Button、Slider、Switch 等背景统一读取 ThemeTokens。Nebula 的
+    // Skin 是纯色权威来源，因此在所有 ThemeColor 覆写完成后一次性解析，避免
+    // 新组件悄悄回落到 gpui-component 的默认主题色。
+    syntax::apply(theme, chrome);
+    theme.tokens = (&theme.colors).into();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaneCardStyle, resolve_theme_name, theme_card_persist_updates};
+    use pebrel_settings::{RawSettings, RuntimeSettings, ThemeName};
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn repeated_focus_ring_sync_does_not_notify_theme_observers(cx: &mut gpui::TestAppContext) {
+        use gpui_component::Theme;
+        use std::{cell::Cell, rc::Rc};
+
+        cx.update(|cx| {
+            let mut theme = Theme::default();
+            theme.input = gpui::rgb(0x303744).into();
+            theme.link = gpui::rgb(0x88c0d0).into();
+            theme.ring = theme.input;
+            cx.set_global(theme);
+        });
+        let notifications = Rc::new(Cell::new(0));
+        let observed = notifications.clone();
+        let _subscription =
+            cx.update(|cx| cx.observe_global::<Theme>(move |_| observed.set(observed.get() + 1)));
+
+        for _ in 0..24 {
+            cx.update(|cx| super::sync_component_focus_ring_for_input(false, cx));
+        }
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 0, "unchanged animation frames must not rebroadcast Theme");
+
+        cx.update(|cx| {
+            super::sync_component_focus_ring_for_input(true, cx);
+            assert_eq!(Theme::global(cx).ring, Theme::global(cx).link);
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 1, "keyboard focus still updates the visible ring");
+        for _ in 0..24 {
+            cx.update(|cx| super::sync_component_focus_ring_for_input(true, cx));
+        }
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 1);
+
+        cx.update(|cx| {
+            super::sync_component_focus_ring_for_input(false, cx);
+            assert_eq!(Theme::global(cx).ring, Theme::global(cx).input);
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 2, "pointer input restores the neutral ring once");
+    }
+
+    #[test]
+    fn square_panes_fill_the_column_despite_saved_card_spacing_and_shadow() {
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(
+            "pane_card_radius=0\npane_card_gutter=8\npane_card_shadow=1\n",
+        ));
+        for theme in [ThemeName::Nord, ThemeName::Paper, ThemeName::SilverLight] {
+            let card = PaneCardStyle::resolve(theme, &runtime);
+            assert_eq!(card.margin, gpui::Edges::default(), "{theme:?}");
+            assert!(!card.shadow, "{theme:?}");
+            assert_eq!(card.divider, 1.0, "{theme:?}");
+        }
+    }
+
+    #[test]
+    fn changing_pane_shape_restores_spacing_and_dividers_without_rewriting_preferences() {
+        let mut runtime = RuntimeSettings::from_raw(&RawSettings::from_text(
+            "pane_card_radius=14\npane_card_gutter=8\npane_card_shadow=1\npane_card_divider=2\n",
+        ));
+        let rounded = PaneCardStyle::resolve(ThemeName::Paper, &runtime);
+        assert_eq!(rounded.margin, gpui::Edges { top: 0.0, right: 8.0, bottom: 8.0, left: 8.0 });
+        assert!(rounded.shadow);
+        assert_eq!(rounded.divider, 0.0);
+
+        runtime.pane_card_radius = Some(0.0);
+        let square = PaneCardStyle::resolve(ThemeName::Paper, &runtime);
+        assert_eq!(square.margin, gpui::Edges::default());
+        assert!(!square.shadow);
+        assert_eq!(square.divider, 2.0);
+
+        runtime.pane_card_radius = Some(14.0);
+        assert_eq!(PaneCardStyle::resolve(ThemeName::Paper, &runtime), rounded);
+        assert_eq!(runtime.pane_card_gutter, Some(8.0));
+        assert_eq!(runtime.pane_card_shadow, Some(true));
+        assert_eq!(runtime.pane_card_divider, Some(2.0));
+    }
+
+    #[test]
+    fn follow_system_remaps_theme_family_and_manual_mode_keeps_preference() {
+        assert_eq!(resolve_theme_name(ThemeName::SilverLight, true, false), ThemeName::Nord);
+        assert_eq!(resolve_theme_name(ThemeName::Nebula, true, true), ThemeName::CatppuccinLatte);
+        assert_eq!(
+            resolve_theme_name(ThemeName::SilverLight, false, false),
+            ThemeName::SilverLight
+        );
+        assert_eq!(resolve_theme_name(ThemeName::BreezeLight, true, false), ThemeName::BreezeDark);
+        assert_eq!(resolve_theme_name(ThemeName::BreezeDark, true, true), ThemeName::BreezeLight);
+        assert_eq!(resolve_theme_name(ThemeName::MintLight, true, false), ThemeName::MintDark);
+        assert_eq!(resolve_theme_name(ThemeName::MintDark, true, true), ThemeName::MintLight);
+        assert_eq!(resolve_theme_name(ThemeName::Nord, true, true), ThemeName::NordLight);
+        assert_eq!(resolve_theme_name(ThemeName::NordLight, true, false), ThemeName::Nord);
+        assert_eq!(resolve_theme_name(ThemeName::Paper, true, true), ThemeName::Paper);
+        assert_eq!(resolve_theme_name(ThemeName::Paper, true, false), ThemeName::Nord);
+    }
+
+    #[test]
+    fn picking_a_theme_card_disables_follow_system_and_writes_that_theme_background() {
+        let updates = theme_card_persist_updates(ThemeName::LinenLight);
+        assert_eq!(updates[0], ("theme", "LinenLight".to_owned()));
+        assert_eq!(updates[1], ("follow_system_theme", "0".to_owned()));
+        assert_eq!(
+            updates[2],
+            (
+                "background",
+                pebrel_settings::format_hex_rgb(ThemeName::LinenLight.term_theme().background)
+            )
+        );
+    }
+}

@@ -1,0 +1,419 @@
+//! PTY 会话接线：`Term` + `EventLoop` + ConPTY，全部来自 `pebrel_terminal`。
+//!
+//! 与 `pebrel_app::window_context::create_pane` 相同的模式，只是事件出口换成
+//! futures channel，让 GPUI 前台任务可以 `await` 事件。SSH 会话复用同一
+//! `TerminalSession` 形状：传输层换成 `ssh_session::spawn_session`（russh
+//! 直连，与旧壳同一条业务路径），事件与输入协议不变。
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use pebrel_terminal::Term;
+use pebrel_terminal::event::{Event, EventListener, WindowSize};
+use pebrel_terminal::event_loop::{EventLoop, Notifier};
+use pebrel_terminal::grid::Dimensions;
+use pebrel_terminal::sync::FairMutex;
+use pebrel_terminal::term::Config;
+use pebrel_terminal::tty;
+use pebrel_terminal::tty::EventedPty as _;
+
+use crate::gpui_shell::config::Settings;
+
+struct AutomaticCommandViews(Arc<AtomicBool>);
+
+impl gpui::Global for AutomaticCommandViews {}
+
+/// The application shares the current preference with every PTY and SSH reader.
+pub(super) fn automatic_command_views(cx: &mut gpui::App) -> Arc<AtomicBool> {
+    if let Some(current) = cx.try_global::<AutomaticCommandViews>() {
+        return Arc::clone(&current.0);
+    }
+    let enabled = |cx: &gpui::App| {
+        cx.try_global::<Settings>().is_none_or(|settings| settings.automatic_command_views)
+    };
+    let current = Arc::new(AtomicBool::new(enabled(cx)));
+    let observed = Arc::clone(&current);
+    cx.set_global(AutomaticCommandViews(Arc::clone(&current)));
+    cx.observe_global::<Settings>(move |cx| {
+        let enabled = enabled(cx);
+        if observed.swap(enabled, Ordering::Relaxed) != enabled {
+            cx.refresh_windows();
+        }
+    })
+    .detach();
+    current
+}
+
+/// 把 PTY/SSH 线程发出的终端事件转投到 GPUI 前台的异步通道。本地与 SSH
+/// 会话共用同一形状：`stages` 只有 SSH 业务层会写（连接阶段横幅的数据
+/// 源），本地会话的这条通道保持沉默——统一类型让 `Term<EventProxy>` 在
+/// 视图层只有一种，SSH 不需要平行的第二套会话结构。
+#[derive(Clone)]
+pub struct EventProxy {
+    events: super::event_mailbox::EventSender,
+    stages: UnboundedSender<crate::ssh_session::SshStage>,
+    remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
+    resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
+    tmux_activity: Arc<std::sync::Mutex<Option<crate::ssh_session::TmuxActivity>>>,
+    multiplexer_client: Arc<AtomicBool>,
+    automatic_command_views: Arc<AtomicBool>,
+}
+
+impl EventProxy {
+    fn channel(
+        automatic_command_views: Arc<AtomicBool>,
+    ) -> (Self, super::event_mailbox::EventReceiver, UnboundedReceiver<crate::ssh_session::SshStage>)
+    {
+        let (events, receiver) = super::event_mailbox::channel();
+        let (stages, stage_receiver) = unbounded();
+        let proxy = Self {
+            events,
+            stages,
+            remote_connection: Default::default(),
+            resume_target: Default::default(),
+            tmux_activity: Default::default(),
+            multiplexer_client: Default::default(),
+            automatic_command_views,
+        };
+        (proxy, receiver, stage_receiver)
+    }
+}
+
+impl EventListener for EventProxy {
+    fn send_event(&self, event: Event) {
+        self.events.send(event);
+    }
+
+    fn automatic_command_views_enabled(&self) -> bool {
+        self.automatic_command_views.load(Ordering::Relaxed)
+    }
+
+    fn command_view(
+        &self,
+        shell: &str,
+        command: &str,
+    ) -> Option<pebrel_terminal::inline_content::CommandView> {
+        crate::command_lenses::classify(shell, command)
+    }
+}
+
+impl crate::ssh_session::SshEventHost for EventProxy {
+    fn ssh_pane_connection(&self, connection: Option<crate::ssh_session::PaneConnection>) {
+        if let Ok(mut current) = self.remote_connection.lock() {
+            *current = connection;
+        }
+    }
+    fn ssh_resume_target(&self, target: Option<crate::ssh_session::ResumeTarget>) {
+        if let Ok(mut current) = self.resume_target.lock() {
+            if *current != target {
+                self.ssh_tmux_activity(None);
+            }
+            *current = target;
+        }
+    }
+    fn ssh_tmux_activity(&self, activity: Option<crate::ssh_session::TmuxActivity>) {
+        if let Ok(mut current) = self.tmux_activity.lock() {
+            if current.is_none() && activity.is_none() {
+                return;
+            }
+            *current = activity;
+        }
+        self.send_event(Event::Wakeup);
+    }
+    fn ssh_multiplexer_client(&self, present: bool) {
+        if self.multiplexer_client.swap(present, std::sync::atomic::Ordering::Relaxed) != present {
+            self.send_event(Event::Wakeup);
+        }
+    }
+    fn ssh_stage(&self, stage: crate::ssh_session::SshStage) {
+        let _ = self.stages.unbounded_send(stage);
+    }
+}
+
+/// 初始网格尺寸；`Term::new`/`Term::resize` 只消费行列数。
+#[derive(Clone, Copy)]
+pub struct GridSize {
+    pub columns: usize,
+    pub screen_lines: usize,
+}
+
+impl Dimensions for GridSize {
+    fn total_lines(&self) -> usize {
+        self.screen_lines
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.screen_lines
+    }
+
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
+
+pub struct TerminalSession {
+    pub term: Arc<FairMutex<Term<EventProxy>>>,
+    pub notifier: Notifier,
+    pub(super) native_prompt: super::event_mailbox::NativePromptState,
+    /// PTY 直系 shell PID；关闭确认沿用旧壳 `busy_child(shell_pid)` 判据。
+    /// SSH 没有本地 shell 进程，固定为 0。
+    pub shell_pid: u32,
+    pub(super) remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
+    pub(crate) resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
+    pub(super) tmux_activity: Arc<std::sync::Mutex<Option<crate::ssh_session::TmuxActivity>>>,
+    /// The SSH PTY is owned by a terminal multiplexer client (remote process evidence).
+    pub(super) multiplexer_client: Arc<AtomicBool>,
+    automatic_command_views: Arc<AtomicBool>,
+}
+
+impl TerminalSession {
+    pub(super) fn automatic_command_views_enabled(&self) -> bool {
+        self.automatic_command_views.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session()
+-> (TerminalSession, std::sync::mpsc::Receiver<pebrel_terminal::event_loop::Msg>) {
+    let (session, receiver, _, _) = test_session_with_events();
+    (session, receiver)
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session_with_events() -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<pebrel_terminal::event_loop::Msg>,
+    super::event_mailbox::EventReceiver,
+    EventProxy,
+) {
+    test_session_with_command_views(Arc::new(AtomicBool::new(true)))
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session_with_command_views(
+    automatic_command_views: Arc<AtomicBool>,
+) -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<pebrel_terminal::event_loop::Msg>,
+    super::event_mailbox::EventReceiver,
+    EventProxy,
+) {
+    let (proxy, event_rx, _) = EventProxy::channel(Arc::clone(&automatic_command_views));
+    let term =
+        Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
+    let (sender, receiver) = pebrel_terminal::event_loop::EventLoopSender::standalone().unwrap();
+    (
+        TerminalSession {
+            term: Arc::new(FairMutex::new(term)),
+            notifier: Notifier(sender),
+            native_prompt: proxy.events.native_prompt.clone(),
+            shell_pid: 0,
+            remote_connection: proxy.remote_connection.clone(),
+            resume_target: proxy.resume_target.clone(),
+            tmux_activity: proxy.tmux_activity.clone(),
+            multiplexer_client: proxy.multiplexer_client.clone(),
+            automatic_command_views,
+        },
+        receiver,
+        event_rx,
+        proxy,
+    )
+}
+
+/// 一次会话 spawn 的完整出口：会话句柄 + 终端事件流 + SSH 阶段流
+/// （本地会话的阶段流永远安静，接收端可以直接丢弃）。
+pub type SpawnedSession = (
+    TerminalSession,
+    super::event_mailbox::EventReceiver,
+    UnboundedReceiver<crate::ssh_session::SshStage>,
+);
+
+/// 启动一个本地 shell 会话。尺寸随后由首帧 prepaint 按真实布局重设；
+/// `term_config` 携带运行时设置（默认光标形状/闪烁等）。
+///
+/// `shell`：设置里选定的默认 shell（`shell_detect::resolve_id` +
+/// `DetectedShell::shell()`，含各家集成注入）；`None` 走引擎默认
+/// （PowerShell + PTY 层集成）——语义与旧壳 `default_shell_launch` 一致。
+pub(super) fn local_options(
+    shell: Option<tty::Shell>,
+    pane_id: u64,
+    cwd: Option<std::path::PathBuf>,
+) -> tty::Options {
+    let mut options = tty::Options::default();
+    options.shell = shell;
+    options.working_directory = cwd;
+    if let Err(error) = crate::platform::shell_integration::prepare(&mut options) {
+        log::warn!("Could not prepare shell integration: {error}");
+    }
+    crate::platform::environment::prepare_local_pty(&mut options);
+    options.env.insert("PEBREL_NATIVE_RESULTS".into(), "1".into());
+    // WSL tab 的命令边界（OSC 133;D/A）与 cwd（OSC 7）：来宾登录 shell 默认
+    // 不发，Agent 生命周期、目录树与 Git 视图都会失去来宾侧事实。只对
+    // `wsl.exe` 启动生效，见 [`crate::shell_detect::wsl_cwd_report_env`]。
+    if let Some(launch) = &options.shell {
+        let program = launch.program().to_owned();
+        let args = launch.args().to_vec();
+        let current_wslenv = options
+            .env
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
+            .map(|(_, value)| value.as_str());
+        // Only a guest that confirmed zsh can read it takes the bootstrap.
+        let zsh = crate::platform::wsl_guest_shell::takes_zsh_bootstrap(
+            &program,
+            &args,
+            &crate::shell_detect::effective_wslenv(current_wslenv),
+            crate::platform::wsl_guest_shell::verified,
+        )
+        .then(|| crate::platform::shell_integration::wsl_zsh_path().to_string_lossy().into_owned());
+        let additions =
+            crate::shell_detect::wsl_cwd_report_env(&program, current_wslenv, zsh.as_deref());
+        for (name, value) in additions {
+            options.env.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
+            options.env.insert(name, value);
+        }
+    }
+    // 身份契约必须最后写：它以环境表里 `WSLENV` 的现值为基准合并，才能同时
+    // 保住上面那段的 cwd 上报条目。见 [`crate::agent_env`]。
+    crate::agent_env::apply(&mut options.env, pane_id);
+    crate::platform::wsl_hooks::prepare(&mut options);
+    options
+}
+
+pub fn spawn(
+    window_size: WindowSize,
+    term_config: Config,
+    options: tty::Options,
+    automatic_command_views: Arc<AtomicBool>,
+) -> std::io::Result<SpawnedSession> {
+    let (proxy, rx, stage_rx) = EventProxy::channel(Arc::clone(&automatic_command_views));
+
+    let grid = GridSize {
+        columns: window_size.num_cols as usize,
+        screen_lines: window_size.num_lines as usize,
+    };
+    let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+
+    tty::setup_env();
+    let pty = tty::new(&options, window_size, 0)?;
+    let shell_pid = pty.child_pid().unwrap_or(0);
+
+    // PEBREL_PTY_RECORD=1 复用 ref_test 的 conout 录制（./nebula.recording），
+    // 用于 resize 锚定问题的字节级取证。
+    let record = std::env::var_os("PEBREL_PTY_RECORD").is_some();
+    let native_prompt = proxy.events.native_prompt.clone();
+    let remote_connection = proxy.remote_connection.clone();
+    let mut event_loop =
+        EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
+    if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
+        event_loop.set_remote_hook_token(token.clone());
+    }
+    let mut notifier = Notifier(event_loop.channel());
+    // Seed the stream with the geometry used to open the PTY before any child output is read.
+    notifier.on_cell_metrics(window_size);
+    let _io_thread = event_loop.spawn();
+
+    Ok((
+        TerminalSession {
+            term,
+            notifier,
+            native_prompt,
+            shell_pid,
+            remote_connection,
+            resume_target: Default::default(),
+            tmux_activity: Default::default(),
+            multiplexer_client: Default::default(),
+            automatic_command_views,
+        },
+        rx,
+        stage_rx,
+    ))
+}
+
+/// 启动一个串口会话：无 PTY，字节流直接进入 grid。端口打开失败由调用方展示。
+pub fn spawn_serial(
+    destination: &str,
+    window_size: WindowSize,
+    term_config: Config,
+    automatic_command_views: Arc<AtomicBool>,
+) -> std::io::Result<SpawnedSession> {
+    let term_config = crate::ssh_session::terminal_config(term_config);
+    let (proxy, rx, stage_rx) = EventProxy::channel(Arc::clone(&automatic_command_views));
+
+    let grid = GridSize {
+        columns: window_size.num_cols as usize,
+        screen_lines: window_size.num_lines as usize,
+    };
+    let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+    let native_prompt = proxy.events.native_prompt.clone();
+    let remote_connection = proxy.remote_connection.clone();
+    let sender = crate::serial_session::spawn_session(destination, Arc::clone(&term), proxy)?;
+
+    Ok((
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt,
+            shell_pid: 0,
+            remote_connection,
+            resume_target: Default::default(),
+            tmux_activity: Default::default(),
+            multiplexer_client: Default::default(),
+            automatic_command_views,
+        },
+        rx,
+        stage_rx,
+    ))
+}
+
+/// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
+/// 地址解析/认证/代理/跳板全部在共享 Runtime 内完成；连接失败的原因由
+/// 业务层写进 grid，阶段流交给视图画连接横幅。
+pub fn spawn_ssh(
+    destination: String,
+    initial_remote_cwd: Option<String>,
+    resume_target: Option<crate::ssh_session::ResumeTarget>,
+    window_size: WindowSize,
+    term_config: Config,
+    automatic_command_views: Arc<AtomicBool>,
+) -> std::io::Result<SpawnedSession> {
+    let term_config = crate::ssh_session::terminal_config(term_config);
+    let (proxy, rx, stage_rx) = EventProxy::channel(Arc::clone(&automatic_command_views));
+
+    let grid = GridSize {
+        columns: window_size.num_cols as usize,
+        screen_lines: window_size.num_lines as usize,
+    };
+    let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+    let native_prompt = proxy.events.native_prompt.clone();
+    let remote_connection = proxy.remote_connection.clone();
+    *proxy.resume_target.lock().unwrap() = resume_target.clone();
+    let resume_state = proxy.resume_target.clone();
+    let tmux_activity = proxy.tmux_activity.clone();
+    let multiplexer_client = proxy.multiplexer_client.clone();
+    let sender = crate::ssh_session::spawn_session_resuming(
+        destination,
+        initial_remote_cwd,
+        resume_target,
+        window_size,
+        Arc::clone(&term),
+        proxy,
+    )?;
+
+    Ok((
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt,
+            shell_pid: 0,
+            remote_connection,
+            resume_target: resume_state,
+            tmux_activity,
+            multiplexer_client,
+            automatic_command_views,
+        },
+        rx,
+        stage_rx,
+    ))
+}

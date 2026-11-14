@@ -128,7 +128,7 @@ class NativeSuiteTests(unittest.TestCase):
         self.assertEqual(command[1], "test")
         self.assertIn("--locked", command)
         self.assertIn("--workspace", command)
-        self.assertEqual(command[command.index("--features") + 1], "nebula/gpui-test-support")
+        self.assertEqual(command[command.index("--features") + 1], "pebrel/gpui-test-support")
         self.assertNotIn("--exclude", command)
         self.assertNotIn("--lib", command)
         self.assertNotIn("--skip", command)
@@ -155,7 +155,7 @@ class NativeSuiteTests(unittest.TestCase):
             self.assertIn("--locked", command)
             self.assertIn("--workspace", command)
             self.assertIn("--timings", command)
-            self.assertEqual(command[command.index("--features") + 1], "nebula/gpui-test-support")
+            self.assertEqual(command[command.index("--features") + 1], "pebrel/gpui-test-support")
             self.assertEqual(command[command.index(profile_flag) + 1], "ci")
             self.assertEqual(command[command.index("--config") + 1], ".github/ci-profile.toml")
             for excluded in ("--exclude", "--lib", "--skip", "--filterset", "--partition", "--no-run"):
@@ -229,16 +229,16 @@ class NativeSuiteTests(unittest.TestCase):
             }],
         })
 
-        unix_hook = (root / "nebula_app/src/ai_hook/unix.rs").read_text(encoding="utf-8")
+        unix_hook = (root / "pebrel_app/src/ai_hook/unix.rs").read_text(encoding="utf-8")
         self.assertIn("fn local_hook_socket_routes_identity_and_releases_its_private_directory(", unix_hook)
 
-        serial = (root / "nebula_app/src/gpui_shell/ssh_settings/serial_tests.rs").read_text(encoding="utf-8")
+        serial = (root / "pebrel_app/src/gpui_shell/ssh_settings/serial_tests.rs").read_text(encoding="utf-8")
         self.assertIn("fn serial_editor_saves_reloads_and_reopens_without_ssh_username(", serial)
         self.assertIn("let _lock = lock_theme_studio();", serial)
         self.assertIn("SettingsBytesGuard::capture()", serial)
 
         # 核对真实函数名，避免配置和期望同时保留旧名字却漏掉写设置的测试。
-        segmented = (root / "nebula_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")
+        segmented = (root / "pebrel_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")
         for name in (
             "capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection",
             "completion_capsules_keep_all_chinese_choices_at_large_font_size",
@@ -246,7 +246,7 @@ class NativeSuiteTests(unittest.TestCase):
             self.assertIn(f"fn {name}(", segmented)
 
         # 这些夹具同样会写共享设置；只加入真实函数，不放宽其它测试的调度。
-        elevated = (root / "nebula_app/src/gpui_shell/workspace/windowing/elevated_launch.rs").read_text(encoding="utf-8")
+        elevated = (root / "pebrel_app/src/gpui_shell/workspace/windowing/elevated_launch.rs").read_text(encoding="utf-8")
         for name in (
             "elevated_launch_reuses_window_and_preserves_each_program_and_directory",
             "elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs",
@@ -254,10 +254,10 @@ class NativeSuiteTests(unittest.TestCase):
         ):
             self.assertIn(f"fn {name}(", elevated)
 
-        startup = (root / "nebula_app/src/gpui_shell/workspace/windowing/startup.rs").read_text(encoding="utf-8")
+        startup = (root / "pebrel_app/src/gpui_shell/workspace/windowing/startup.rs").read_text(encoding="utf-8")
         self.assertIn("fn launch_visibility_reaches_the_actual_workspace(", startup)
 
-        bash_input = (root / "nebula_terminal/src/tty/windows/test/bash_input.rs").read_text(encoding="utf-8")
+        bash_input = (root / "pebrel_terminal/src/tty/windows/test/bash_input.rs").read_text(encoding="utf-8")
         self.assertIn(
             "fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales()",
             bash_input,

@@ -5,8 +5,8 @@ import unittest
 from generate_assets import terminal_ansi, theme_palettes
 
 ROOT = Path(__file__).resolve().parents[2]
-THEMES = (ROOT / "nebula_settings/src/themes.rs").read_text(encoding="utf-8")
-SETTINGS = (ROOT / "nebula_settings/src/lib.rs").read_text(encoding="utf-8")
+THEMES = (ROOT / "pebrel_settings/src/themes.rs").read_text(encoding="utf-8")
+SETTINGS = (ROOT / "pebrel_settings/src/lib.rs").read_text(encoding="utf-8")
 
 
 class TerminalPaletteTest(unittest.TestCase):

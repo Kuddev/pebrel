@@ -36,8 +36,8 @@ class ManifestError(ValueError):
 
 def verify_binary_freshness(binary: Path, repo: Path) -> None:
     sources = [repo / name for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "CHANGELOG.md")]
-    for name in ("nebula_app", "nebula_terminal", "nebula_config", "nebula_config_derive",
-                 "nebula_settings", "nebula_split", "nebula-completions", "assets", "extra", "third_party"):
+    for name in ("pebrel_app", "pebrel_terminal", "pebrel_config", "pebrel_config_derive",
+                 "pebrel_settings", "pebrel_split", "pebrel-completions", "assets", "extra", "third_party"):
         root = repo / name
         if root.is_dir():
             sources.extend(path for path in root.rglob("*") if path.is_file())
