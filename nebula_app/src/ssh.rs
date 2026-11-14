@@ -244,10 +244,19 @@ fn format_destination(dest: &str, login_user: Option<&str>, port: Option<&str>) 
         }
     }
     match port {
-        // A non-default port only round-trips as an ssh:// URI. Bare IPv6
-        // destinations (they contain ':') can't take the suffix unambiguously
-        // — keep the plain host and lose the port instead of corrupting it.
-        Some(p) if p != "22" && !dest.contains(':') => format!("ssh://{host}:{p}"),
+        // A non-default port round-trips as a URI. Bracket IPv6 separately
+        // from the username so its final address segment cannot become a port.
+        Some(p) if p != "22" => {
+            let (user, address) =
+                host.rsplit_once('@').map_or((None, host.as_str()), |(u, h)| (Some(u), h));
+            let address = if address.contains(':') && !address.starts_with('[') {
+                format!("[{address}]")
+            } else {
+                address.to_owned()
+            };
+            let authority = user.map_or_else(|| address.clone(), |u| format!("{u}@{address}"));
+            format!("ssh://{authority}:{p}")
+        },
         _ => host,
     }
 }
@@ -980,8 +989,13 @@ mod tests {
         assert_eq!(d("ssh -p 2222 host"), Some("ssh://host:2222".into()));
         assert_eq!(d("ssh -p2222 user@host"), Some("ssh://user@host:2222".into()));
         assert_eq!(d("ssh -p 22 host"), Some("host".into())); // default port
-        // Bare IPv6 can't take an unambiguous port suffix: host survives.
-        assert_eq!(d("ssh -p 2222 ::1"), Some("::1".into()));
+        // Brackets keep a bare IPv6 address separate from its explicit port.
+        assert_eq!(d("ssh -p 2222 ::1"), Some("ssh://[::1]:2222".into()));
+        assert_eq!(
+            d("ssh -p 2222 root@2001:db8::10"),
+            Some("ssh://root@[2001:db8::10]:2222".into())
+        );
+        assert_eq!(d("ssh -l root -p2223 [::1]"), Some("ssh://root@[::1]:2223".into()));
         // -l never overrides an explicit user@.
         assert_eq!(d("ssh -l root admin@host"), Some("admin@host".into()));
     }

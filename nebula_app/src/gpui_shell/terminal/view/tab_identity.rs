@@ -2,12 +2,31 @@
 
 use super::{TerminalView, last_path_component};
 
+pub(super) struct ManualSshLabel {
+    destination: String,
+    label: String,
+}
+
 fn ssh_label(destination: Option<&str>, directory: &std::path::Path) -> Option<String> {
     let destination = destination?;
     let profiles = crate::ssh_profiles::SshProfiles::load(&directory.join("ssh_profiles.json"))
         .map_err(|error| log::warn!("Could not load SSH tab names: {error}"))
         .ok()?;
     profiles.labels().remove(destination)
+}
+
+/// Name for a typed connection already parsed by the shared SSH authority:
+/// the saved host label, else `user@host[:port]`.
+fn manual_ssh_label(destination: &str, directory: &std::path::Path) -> Option<String> {
+    // The parser returns `ssh://` only for ports; profiles store `host:port`.
+    let (address, port) = crate::display::split_destination_port(
+        destination.strip_prefix("ssh://").unwrap_or(destination),
+    );
+    let destination = crate::display::join_destination_port(&address, &port);
+    if destination.is_empty() || destination.chars().any(char::is_control) {
+        return None;
+    }
+    ssh_label(Some(&destination), directory).or(Some(destination))
 }
 
 impl TerminalView {
@@ -54,8 +73,29 @@ impl TerminalView {
             ssh_label(self.ssh_destination.as_deref(), &crate::display::nebula_data_dir());
     }
 
+    /// The existing connection stack owns the lifetime; OSC 133;D only ends a
+    /// foreground command. Load saved labels only when the destination changes.
+    pub(super) fn refresh_manual_ssh_label(&mut self) -> bool {
+        let destination = self
+            .ssh_destination
+            .is_none()
+            .then(|| self.suggest.completion_context.ssh_destination())
+            .flatten();
+        if self.manual_ssh_label.as_ref().map(|host| host.destination.as_str()) == destination {
+            return false;
+        }
+        self.manual_ssh_label = destination.and_then(|destination| {
+            Some(ManualSshLabel {
+                destination: destination.to_owned(),
+                label: manual_ssh_label(destination, &crate::display::nebula_data_dir())?,
+            })
+        });
+        true
+    }
+
     /// Native AI task titles name the focused pane; ordinary shells retain their
-    /// directory or saved SSH host name. Workspace manual names take precedence.
+    /// directory or saved SSH host name, including a typed SSH connection.
+    /// Workspace manual names take precedence.
     pub fn tab_label(&self) -> String {
         if let Some(task) = self.reported_ai_task() {
             return task.to_owned();
@@ -63,6 +103,20 @@ impl TerminalView {
         if let Some(destination) = &self.ssh_destination {
             return self.ssh_label.as_ref().unwrap_or(destination).clone();
         }
+        if self.exited.is_none()
+            && let Some(host) = &self.manual_ssh_label
+        {
+            return host.label.clone();
+        }
+        let local = self.local_tab_label();
+        if self.running_program.as_deref() != Some("ssh") {
+            return local;
+        }
+        // An unparsed ssh line still must not look like a plain local tab.
+        format!("{local} · ssh")
+    }
+
+    fn local_tab_label(&self) -> String {
         last_path_component(&self.cwd)
             .or_else(|| {
                 std::env::current_dir()
@@ -157,5 +211,40 @@ mod tests {
             ssh_label(Some("root@192.0.2.10:2222"), &directory.path().join("isolated")),
             None
         );
+    }
+
+    #[test]
+    fn typed_ssh_names_follow_saved_labels_and_destinations() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut profiles = crate::ssh_profiles::SshProfiles::default();
+        let mut host = profiles.for_destination("root@192.0.2.10:2222");
+        host.label = Some("SG-1 新加坡".into());
+        profiles.upsert(host);
+        profiles.save(&directory.path().join("ssh_profiles.json")).unwrap();
+        let label = |line| {
+            crate::ssh::ssh_destination(line)
+                .and_then(|destination| manual_ssh_label(&destination, directory.path()))
+        };
+
+        for line in [
+            "ssh -p 2222 root@192.0.2.10",
+            "ssh -l root -p2222 192.0.2.10",
+            "/usr/bin/ssh ssh://root@192.0.2.10:2222",
+        ] {
+            assert_eq!(label(line).as_deref(), Some("SG-1 新加坡"), "{line}");
+        }
+        for (port, name) in [(2222, "IPv6 production"), (2223, "IPv6 staging")] {
+            let mut host = profiles.for_destination(&format!("root@[2001:db8::10]:{port}"));
+            host.label = Some(name.into());
+            profiles.upsert(host);
+        }
+        profiles.save(&directory.path().join("ssh_profiles.json")).unwrap();
+        assert_eq!(label("ssh -p 2222 root@2001:db8::10").as_deref(), Some("IPv6 production"));
+        assert_eq!(label("ssh -p 2223 root@2001:db8::10").as_deref(), Some("IPv6 staging"));
+        assert_eq!(label("ssh -p 22 deploy@example.com").as_deref(), Some("deploy@example.com"));
+        assert_eq!(label("ssh.exe -t build-box").as_deref(), Some("build-box"));
+        for line in ["ssh host uptime", "ssh -N -L 8080:localhost:80 host", "ssh host | tee log"] {
+            assert_eq!(label(line), None, "{line}");
+        }
     }
 }
