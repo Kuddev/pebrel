@@ -192,9 +192,11 @@ discover candidates from the current environment without matching prior commands
   selected language; Copy source preserves the complete original answer. See
   [reader language behavior](docs/answer-reader-language.md).
 - Clipboard images are saved as PNG files and their paths inserted into local,
-  WSL, or SSH sessions. Inline terminal images require CLI output using OSC 1337,
-  direct RGB/RGBA over APC, or Sixel (7-bit DCS); image attachment previews
-  depend on the CLI itself.
+  WSL, or SSH sessions. Each pane can retain up to 128 MiB. When Pebrel confirms
+  the receiving command or Agent turn has finished, it keeps the files for two
+  more minutes before cleanup. Closing a pane removes its local temporary PNGs;
+  save a copy elsewhere to keep using a file. Inline terminal images and
+  attachment thumbnails depend on support in the CLI.
 
 <p align="center">
   <img src="docs/screenshots/ai-sidebar.png" alt="AI activity sidebar" width="300" />

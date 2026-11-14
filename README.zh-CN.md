@@ -169,9 +169,10 @@ Tab 打开列表，再次按 Tab 轮换候选，Enter 插入选中项但不执�
 - 通知跟随来源窗格，点击即可返回对应终端。
 - 已捕获的 Claude Code 与 Codex 回答可在阅读器中打开，支持 Markdown、公式、原文和本地图片预览。
   阅读器控件与提示随所选语言显示；复制原文保留完整回答。详见[阅读器语言说明](docs/answer-reader-language.md)。
-- 剪贴板图片会保存为 PNG，并把路径插入本地、WSL 或 SSH 会话。终端内直接显示图片需要 CLI
-  输出 OSC 1337、通过 APC 直接传输 RGB/RGBA，或 Sixel（7 位 DCS）协议；
-  附件缩略图取决于 CLI 自身。
+- 剪贴板图片会保存为 PNG，并把路径插入本地、WSL 或 SSH 会话。每个窗格最多保留
+  128 MiB 的粘贴图片。Pebrel 确认接收命令或 Agent 回合已结束后，会再保留两分钟才
+  清理。关闭窗格会删除它暂存的本地图片；需要长期引用时请先另存。终端内的图片显示
+  和附件缩略图取决于 CLI 的支持。
 
 <p align="center">
   <img src="docs/screenshots/ai-sidebar.png" alt="AI 活动侧栏" width="300" />
