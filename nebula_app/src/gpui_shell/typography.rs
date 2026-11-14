@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use gpui::{App, Font, FontFallbacks, Global, font};
+use gpui::{App, Font, FontFallbacks, Global, TextRenderingMode, font};
 use gpui_component::ActiveTheme as _;
 
 pub(super) const UI_FONT_FAMILY: &str = "Geist";
@@ -12,6 +12,8 @@ struct UiCjkFallbacks(Option<FontFallbacks>);
 impl Global for UiCjkFallbacks {}
 
 pub(super) fn init(cx: &mut App) {
+    // Keep text coverage independent of RGB subpixels as window materials and displays change.
+    cx.set_text_rendering_mode(TextRenderingMode::Grayscale);
     if let Err(error) = cx.text_system().add_fonts(vec![Cow::Borrowed(UI_FONT_BYTES)]) {
         super::try_write_stderr(format_args!("[pebrel:gpui] cannot register Geist: {error}"));
     }
