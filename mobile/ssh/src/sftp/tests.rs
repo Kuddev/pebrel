@@ -226,7 +226,7 @@ fn batch_limits_and_resume_identity_reject_malformed_requests() {
     assert!(
         parse(&format!(
             r#"{{"op":"write_batch","transfer":1,"offset":0,"data":"{}"}}"#,
-            "x".repeat(BATCH.div_ceil(3) * 4 + 1)
+            "x".repeat(UPLOAD_BATCH.div_ceil(3) * 4 + 1)
         ))
         .is_err()
     );
@@ -235,4 +235,49 @@ fn batch_limits_and_resume_identity_reject_malformed_requests() {
             .is_err()
     );
     assert!(parse(r#"{"op":"read","transfer":1,"offset":0,"length":0}"#).is_err());
+    assert!(
+        parse(&format!(r#"{{"op":"stat","path":"/"}}{}"#, " ".repeat(UPLOAD_BATCH * 3))).is_err()
+    );
+}
+
+#[tokio::test]
+async fn android_escaped_binary_uploads_preserve_names_and_bytes() {
+    let peer = Arc::new(Mutex::new(Peer::default()));
+    let mut files = connect(peer.clone()).await;
+    for (op, size) in [("write", CHUNK), ("write_batch", UPLOAD_BATCH)] {
+        let path = format!("/资料/《写作讲义》（{op}+备注）.pdf");
+        let bytes = vec![0xff; size];
+        let opened = files
+            .execute(parse(&json!({"op":"begin_upload", "path":path}).to_string()).unwrap())
+            .await
+            .unwrap();
+        let id = opened["transfer"].as_u64().unwrap();
+        let request = json!({"op":op, "transfer":id, "offset":0,
+            "data":base64::engine::general_purpose::STANDARD.encode(&bytes)});
+        // Android's JSONStringer escapes every slash, including those in Base64 data.
+        let wire = request.to_string().replace('/', "\\/");
+        let written = files.execute(parse(&wire).unwrap()).await.unwrap();
+        assert_eq!(written["next_offset"], size);
+        files
+            .execute(parse(&json!({"op":"commit", "transfer":id}).to_string()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(peer.lock().unwrap().files[&path], bytes);
+    }
+}
+
+#[tokio::test]
+async fn uploads_fill_128_requests_before_waiting_for_acknowledgements() {
+    let peer = Arc::new(Mutex::new(Peer { window: UPLOAD_REQUESTS, ..Peer::default() }));
+    let mut files = connect(peer.clone()).await;
+    let bytes: Vec<u8> = (0..UPLOAD_BATCH).map(|i| (i % 251) as u8).collect();
+    let opened = files.begin_upload("/target".into(), None, 0, false).await.unwrap();
+    let id = opened["transfer"].as_u64().unwrap();
+    let request = json!({"op":"write_batch", "transfer":id, "offset":0,
+        "data":base64::engine::general_purpose::STANDARD.encode(&bytes)});
+    let written = files.execute(parse(&request.to_string()).unwrap()).await.unwrap();
+    assert_eq!(written["next_offset"], UPLOAD_BATCH);
+    assert_eq!(peer.lock().unwrap().peak.load(Ordering::Relaxed), UPLOAD_REQUESTS);
+    files.commit(id).await.unwrap();
+    assert_eq!(peer.lock().unwrap().files["/target"], bytes);
 }

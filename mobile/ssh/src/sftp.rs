@@ -30,6 +30,8 @@ mod transfer;
 
 pub(crate) const CHUNK: usize = 32 * 1024;
 pub(crate) const BATCH: usize = CHUNK * 64;
+const UPLOAD_REQUESTS: usize = 128;
+pub(crate) const UPLOAD_BATCH: usize = CHUNK * UPLOAD_REQUESTS;
 const DIRECTORY_PAGE: usize = 256;
 const MAX_HANDLES: usize = 4;
 
@@ -120,7 +122,9 @@ pub(crate) enum Request {
 }
 
 pub(crate) fn parse(text: &str) -> Result<Request> {
-    if text.len() > BATCH.div_ceil(3) * 4 + 8192 {
+    // Android's JSONStringer escapes Base64 '/' as '\/', doubling its wire size.
+    // Keep the unescaped per-operation data limits below unchanged.
+    if text.len() > UPLOAD_BATCH.div_ceil(3) * 4 * 2 + 8192 {
         return Err(Failure("INVALID_INPUT"));
     }
     let request: Request = serde_json::from_str(text).map_err(|_| Failure("INVALID_INPUT"))?;
@@ -140,7 +144,7 @@ pub(crate) fn parse(text: &str) -> Result<Request> {
         Request::Write { data, .. } if data.len() > CHUNK.div_ceil(3) * 4 => {
             return Err(Failure("INVALID_INPUT"));
         },
-        Request::WriteBatch { data, .. } if data.len() > BATCH.div_ceil(3) * 4 => {
+        Request::WriteBatch { data, .. } if data.len() > UPLOAD_BATCH.div_ceil(3) * 4 => {
             return Err(Failure("INVALID_INPUT"));
         },
         Request::Read { length: Some(length), .. } if *length == 0 || *length > BATCH => {
@@ -250,7 +254,7 @@ impl Files {
             channel.into_stream(),
             russh_sftp::client::Config {
                 request_timeout_secs: 30,
-                max_concurrent_writes: 64,
+                max_concurrent_writes: UPLOAD_REQUESTS,
                 ..Default::default()
             },
         );
@@ -306,7 +310,7 @@ impl Files {
                 self.write(transfer, offset, data, CHUNK).await
             },
             Request::WriteBatch { transfer, offset, data } => {
-                self.write(transfer, offset, data, BATCH).await
+                self.write(transfer, offset, data, UPLOAD_BATCH).await
             },
             Request::ResolveUpload { path, token, size, digest } => {
                 self.resolve_upload(path, token, size, digest).await

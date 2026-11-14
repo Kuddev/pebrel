@@ -3,6 +3,7 @@ package io.github.kuddev.pebrel.mobile.connection
 import android.util.Base64
 import io.github.kuddev.pebrel.ssh.NativeSshException
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -23,6 +24,7 @@ data class SftpEntry(val path: String, val name: String, val kind: String, val s
 data class SftpListing(val path: String, val entries: List<SftpEntry>, val cursor: Long?, val skipped: Int)
 data class SftpContent(val file: SftpEntry, val bytes: ByteArray)
 data class SftpTab(val id: String, val session: String, val file: SftpEntry)
+private data class UploadBatch(val bytes: ByteArray, val count: Int, val encoded: String)
 
 /** View operations borrow the already authenticated SSH connection; no extra password or socket. */
 class SftpClient(private val execute: (JSONObject) -> JSONObject,
@@ -121,8 +123,11 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject,
         var offset = 0L
         var attempted = false
         var completed = false
-        var batch = BATCH
+        var batch = UPLOAD_BATCH
         val digest = MessageDigest.getInstance("SHA-256")
+        // Rendezvous retains only the active batch and one prepared batch, including while offline.
+        val prepared = Channel<UploadBatch>(Channel.RENDEZVOUS)
+        var reader: Job? = null
         suspend fun open() {
             while (transfer == null) {
                 ensureActive()
@@ -136,20 +141,38 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject,
         }
         try {
             open()
-            val buffer = ByteArray(BATCH)
-            while (true) {
+            reader = launch(Dispatchers.IO) {
+                try {
+                    while (true) {
+                        val buffer = ByteArray(UPLOAD_BATCH)
+                        var count = 0
+                        // Document providers may return short reads; fill the concurrent network window.
+                        while (count < buffer.size) {
+                            ensureActive()
+                            val read = runInterruptible { source.read(buffer, count, buffer.size - count) }
+                            if (read < 0) break
+                            if (read == 0) { yield(); continue }
+                            count += read
+                        }
+                        if (count == 0) break
+                        val encoded = Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP)
+                        prepared.send(UploadBatch(buffer, count, encoded))
+                        if (count < buffer.size) break
+                    }
+                } finally { prepared.close() }
+            }
+            for (block in prepared) {
                 ensureActive()
-                // A short local read is valid, including document providers with unknown sizes.
-                val count = source.read(buffer)
-                if (count < 0) break
-                if (count == 0) { yield(); continue }
+                val buffer = block.bytes
+                val count = block.count
                 var position = 0
                 while (position < count) {
                     val length = minOf(batch, count - position)
                     try {
                         open()
                         val started = System.nanoTime()
-                        val data = Base64.encodeToString(buffer, position, length, Base64.NO_WRAP)
+                        val data = if (position == 0 && length == count) block.encoded
+                            else Base64.encodeToString(buffer, position, length, Base64.NO_WRAP)
                         val written = request("write_batch", JSONObject().put("transfer", transfer).put("offset", offset).put("data", data))
                         check(written.getLong("next_offset") == offset + length)
                         digest.update(buffer, position, length)
@@ -157,7 +180,7 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject,
                         offset += length
                         waiting(false)
                         progress(offset, size)
-                        if (length == batch && System.nanoTime() - started < 5_000_000_000L) batch = (batch * 2).coerceAtMost(BATCH)
+                        if (length == batch && System.nanoTime() - started < 5_000_000_000L) batch = (batch * 2).coerceAtMost(UPLOAD_BATCH)
                     } catch (error: NativeSshException) {
                         if (error.code in setOf("TIMEOUT", "SFTP_TIMEOUT")) batch = (batch / 2).coerceAtLeast(CHUNK)
                         awaitRecovery(error, waiting)
@@ -186,6 +209,9 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject,
             }
             @Suppress("UNREACHABLE_CODE") error("unreachable")
         } finally {
+            reader?.cancel()
+            prepared.cancel()
+            withContext(NonCancellable) { reader?.join() }
             transfer?.let { release(it) }
             // Never remove the final destination, even after an ambiguous RENAME acknowledgement.
             if (attempted && !completed && active()) withContext(NonCancellable) {
@@ -214,6 +240,7 @@ class SftpClient(private val execute: (JSONObject) -> JSONObject,
     companion object {
         const val CHUNK = 32 * 1024
         const val BATCH = CHUNK * 64
+        const val UPLOAD_BATCH = CHUNK * 128
         const val MAX_PREVIEW_BYTES = 16L * 1024 * 1024
     }
 }

@@ -3,6 +3,9 @@
 ## Status
 Proposed for review.
 
+Upload sizing and source preparation superseded by
+[concurrent upload preparation](2026-11-08-upload-preparation-pipeline.md).
+
 ## Context
 Android previously waited for each 32 KiB READ/WRITE, with another FSTAT after
 every READ. Throughput was constrained by round trips even on a fast link.
