@@ -1,5 +1,183 @@
 use super::*;
 
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn pinned_hosts_from_two_groups_stay_above_a_full_screen_of_ordinary_hosts(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, cx| {
+            pane.manage_launcher_ssh(String::new(), false, window, cx);
+            let mut hosts =
+                vec![("pinned-work".to_owned(), "work"), ("pinned-home".into(), "home")];
+            hosts.extend((0..12).map(|index| (format!("work-{index}"), "work")));
+            hosts.push(("home-ordinary".into(), "home"));
+            pane.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
+                saved: hosts.iter().map(|(host, _)| host.clone()).collect(),
+                pinned: vec!["pinned-work".into(), "pinned-home".into()],
+                ..Default::default()
+            };
+            // All promotes the older pins; Recent retains its own source order.
+            pane.ssh_hosts.saved.rotate_left(2);
+            for (host, group) in hosts {
+                pane.ssh_hosts.profiles.upsert(pane.ssh_hosts.profiles.for_destination(&host));
+                pane.ssh_hosts
+                    .profiles
+                    .set_organization(
+                        &host,
+                        crate::ssh_profiles::HostOrganization {
+                            group: group.into(),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+        });
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(800.0), px(1100.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let first = cx.debug_bounds("ssh-host-row-0").expect("first pinned host is visible");
+    let second = cx.debug_bounds("ssh-host-row-1").expect("second group's pinned host is visible");
+    let ordinary = cx.debug_bounds("ssh-host-row-2").expect("ordinary hosts follow the pins");
+    assert!(first.bottom() <= second.top());
+    assert!(second.bottom() <= ordinary.top());
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.is_empty()));
+    pane.update(cx, |pane, cx| {
+        pane.ssh_library.collapsed_groups.extend(["work".into(), "home".into()]);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_some());
+    assert!(cx.debug_bounds("ssh-host-row-1").is_some());
+    assert!(cx.debug_bounds("ssh-host-row-2").is_none(), "folds only hide ordinary hosts");
+    pane.update(cx, |pane, _| pane.ssh_library.collapsed_groups.clear());
+    let recent = cx.debug_bounds("host-scope-2").unwrap();
+    cx.simulate_click(recent.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_some());
+    assert!(cx.debug_bounds("ssh-host-row-13").is_none(), "Recent does not promote old pins");
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn ssh_group_headers_toggle_with_mouse_keyboard_and_reveal_search(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, cx| {
+            pane.manage_launcher_ssh(String::new(), false, window, cx);
+            pane.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
+                saved: vec!["alpha".into(), "beta".into(), "other".into()],
+                ..Default::default()
+            };
+            for host in ["alpha", "beta"] {
+                pane.ssh_hosts.profiles.upsert(pane.ssh_hosts.profiles.for_destination(host));
+                pane.ssh_hosts
+                    .profiles
+                    .set_organization(
+                        host,
+                        crate::ssh_profiles::HostOrganization {
+                            group: "work".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+        });
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(800.0), px(1100.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let header = cx.debug_bounds("ssh-group-work").unwrap();
+    assert!(header.size.height >= px(32.0));
+    assert!(cx.debug_bounds("ssh-host-row-0").is_some());
+    // Click the blank part of the real button, away from the label and chevron.
+    cx.simulate_click(
+        gpui::point(header.right() - px(8.0), header.center().y),
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_none());
+    assert!(cx.debug_bounds("ssh-host-row-1").is_none());
+    assert!(cx.debug_bounds("ssh-host-row-2").is_some());
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    // Buttons deliberately preserve input focus on mouse clicks. Reach the first
+    // group through the actual Tab path from the toolbar's last input instead.
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.ssh_library.search.update(cx, |input, cx| input.focus(window, cx));
+        });
+    });
+    cx.simulate_keystrokes("tab enter");
+    cx.run_until_parked();
+    assert!(!pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    cx.simulate_keystrokes("space");
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.ssh_library.search.update(cx, |input, cx| input.set_value("alpha", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_some(), "search reveals folded matches");
+    let header = cx.debug_bounds("ssh-group-work").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_library.collapsed_groups.contains("work")));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.ssh_library.search.update(cx, |input, cx| input.set_value("", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-host-row-0").is_none(), "clearing restores folds");
+    assert!(cx.debug_bounds("ssh-host-row-2").is_some());
+}
+
 #[test]
 fn pairing_design_ssh_auth_description_uses_metadata_not_a_saved_password_claim() {
     let profiles = crate::ssh_profiles::SshProfiles::default();
