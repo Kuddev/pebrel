@@ -449,25 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn disabled_persistence_keeps_new_commands_in_memory_only() {
-        struct Restore;
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                super::set_persistence(true);
-            }
-        }
-        let _restore = Restore;
-        super::set_persistence(false);
-        let marker = format!("echo memory-only-{}", std::process::id());
-        let scope = HistoryScope::Ssh("memory-only-qa".into());
-        let mut history = NebulaHistory::default();
-        history.record(&scope, &marker, "/");
-        assert!(history.hint(&scope, "echo memory-only-").is_some());
-        let saved = std::fs::read_to_string(super::history_path(SSH_HISTORY_FILE));
-        assert!(!saved.unwrap_or_default().contains(&marker));
-    }
-
-    #[test]
     fn hint_returns_remainder_of_newest_match() {
         let scope = HistoryScope::Local;
         let history = hist(scope.clone(), &["cargo build", "cargo test", "git status"]);
@@ -636,5 +617,24 @@ mod tests {
             parse_record(&HistoryScope::Local, local_record),
             Some((HistoryScope::Local, "dir".to_owned()))
         );
+    }
+
+    #[test]
+    fn disabled_persistence_keeps_new_commands_in_memory_only() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                super::set_persistence(true);
+            }
+        }
+        let _restore = Restore;
+        super::set_persistence(false);
+        let marker = format!("echo memory-only-{}", std::process::id());
+        let scope = HistoryScope::Ssh("memory-only-qa".into());
+        let mut history = NebulaHistory::default();
+        history.record(&scope, &marker, "/");
+        assert!(history.hint(&scope, "echo memory-only-").is_some());
+        let saved = std::fs::read_to_string(super::history_path(SSH_HISTORY_FILE));
+        assert!(!saved.unwrap_or_default().contains(&marker));
     }
 }
