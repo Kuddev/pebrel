@@ -1,6 +1,10 @@
 <resources>
     <string name="ssh_terminal_mode">Terminal</string>
     <string name="ssh_persistent_session">Persistent session</string>
-    <string name="ssh_multiplexer_hint">Runs on the SSH host. Leave the name empty for the default session. Disconnecting detaches the client; remote processes keep running. The host needs the selected session manager installed.</string>
+    <string name="ssh_multiplexer_hint">Leave empty for the default session. The host needs the session manager installed.</string>
     <string name="ssh_session_name_invalid">Use up to 64 letters, numbers, underscores or hyphens; dots are also accepted by session types that support them.</string>
+    <string name="ssh_section_server">Server</string>
+    <string name="ssh_mode_shell_hint">A plain login shell that ends when you disconnect.</string>
+    <string name="ssh_mode_tmux_hint">Keeps running on the host after you disconnect.</string>
+    <string name="ssh_mode_herdr_hint">Keeps Agent sessions running on the host after you disconnect.</string>
 </resources>

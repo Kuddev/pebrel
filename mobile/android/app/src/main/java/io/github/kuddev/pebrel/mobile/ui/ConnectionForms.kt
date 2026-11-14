@@ -42,16 +42,38 @@ import io.github.kuddev.pebrel.mobile.R
 
 /** Full-page sheet geometry from the approved HTML, with Android touch targets. */
 @Composable
-fun ConnectionForm(title: String, onClose: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+fun ConnectionForm(title: String, onClose: () -> Unit, footer: (@Composable ColumnScope.() -> Unit)? = null,
+                   content: @Composable ColumnScope.() -> Unit) {
     Dialog(onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState())
-                .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp)) {
-                ConnectionHeading(title, onClose)
-                Spacer(Modifier.height(20.dp))
-                content()
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp)) {
+                    ConnectionHeading(title, onClose)
+                    Spacer(Modifier.height(20.dp))
+                    content()
+                }
+                // Actions stay in reach however long the form grows.
+                if (footer != null) {
+                    HorizontalDivider(thickness = .5.dp)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), content = footer)
+                }
             }
         }
+    }
+}
+
+/** A titled group of related fields; the page reads as a few cards rather than one long column. */
+@Composable
+fun FormSection(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(18.dp)
+    Column(modifier.fillMaxWidth()) {
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colors.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
+        Column(Modifier.fillMaxWidth().clip(shape).background(colors.surfaceVariant.copy(alpha = .35f))
+            .border(.5.dp, colors.outlineVariant, shape).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
 }
 
