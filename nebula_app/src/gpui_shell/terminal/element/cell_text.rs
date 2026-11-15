@@ -226,10 +226,6 @@ mod tests {
         let fitted = super::shape_cell_text(&shaper, glyph, size, &run(glyph), span, true);
         assert!(fitted.width > px(0.0) && fitted.width <= span + px(0.05));
         assert_eq!(fitted.runs[0].glyphs[0].id, natural.runs[0].glyphs[0].id);
-        eprintln!(
-            "compact two-cell span: {span:?}, natural: {:?}, fitted: {:?}",
-            natural.width, fitted.width
-        );
     }
 
     /// emoji/全宽 fallback 的缩放判据：只缩真正溢出跨度的字形，PUA 图标与
