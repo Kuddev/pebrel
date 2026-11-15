@@ -250,8 +250,7 @@ fn load_definition(reference: &str) -> Result<ThemeDefinition, String> {
         crate::theme_library::ThemeDocument::from_json_bytes(reference.as_bytes())
             .map_err(|error| error.to_string())?
     } else {
-        let root = crate::platform::dirs::data_dir().join("themes");
-        crate::theme_library::ThemeLibraryStore::new(root)
+        crate::theme_library::ThemeLibraryStore::default()
             .load(reference)
             .map_err(|error| error.to_string())?
     };

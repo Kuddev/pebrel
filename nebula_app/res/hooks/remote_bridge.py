@@ -18,6 +18,41 @@ import time
 MAX_PAYLOAD = 1024 * 1024
 MAX_ENVELOPE = 64 * 1024
 MAX_STREAM_FILES = 4096
+MAX_OUTPUT_PREVIEW_CHARS = 4000
+
+
+def compact_payload(source, payload):
+    """Keep lifecycle facts and an explicitly bounded final-answer preview."""
+    keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
+    compact = {key: payload[key] for key in keep if key in payload}
+    question = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
+    if question is not None:
+        compact.update(tool_name=payload["tool_name"], tool_input=question)
+    key = None
+    if source in ("claude", "codex") and payload.get("hook_event_name") == "Stop":
+        key = "last_assistant_message"
+    elif source == "codex" and payload.get("type") == "agent-turn-complete":
+        key = "last-assistant-message"
+    elif source in ("opencode", "pi") and payload.get("kind") == "done":
+        key = "message"
+    elif payload.get("hook_event_name") == "StopFailure":
+        key = "error"
+    answer = payload.get(key) if key else None
+    if isinstance(answer, str):
+        preview = answer[:MAX_OUTPUT_PREVIEW_CHARS]
+        compact["pebrel_output"] = {
+            "preview": preview, "original_chars": len(answer),
+            "truncated": len(preview) < len(answer), "reason": "envelope_limit",
+        }
+        if key in compact:
+            compact[key] = answer[:512]
+    return compact
+
+
+def encode_envelope(header, payload):
+    return header.encode() + b"\n" + json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def provider_argv_matches(source, argv):
@@ -127,6 +162,8 @@ def stream_state(token, identity):
 
 
 def send(source, native, mode, payload, token, owner=None, route=None, deadline=None):
+    # Reserved transport metadata is produced here, never trusted from a CLI.
+    payload.pop("pebrel_output", None)
     owner = owner or process_identity(source)
     with stream_state(token, owner or source) as state:
         state.seek(0)
@@ -146,23 +183,108 @@ def send(source, native, mode, payload, token, owner=None, route=None, deadline=
             header += " tmux=" + route["context"]
         if native:
             header += " codex_hooks=" + mode.split("=", 1)[1]
-        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        envelope = header.encode() + b"\n" + encoded
+        envelope = encode_envelope(header, payload)
         if len(envelope) > MAX_ENVELOPE:
-            # Lifecycle must still arrive when a tool or answer is huge. Keep
-            # protocol identities and drop content, without inventing a result.
-            keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
-            question_input = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
-            tool_name = payload.get("tool_name")
-            payload = {key: payload[key] for key in keep if key in payload}
-            if question_input is not None:
-                payload.update(tool_name=tool_name, tool_input=question_input)
-            envelope = header.encode() + b"\n" + json.dumps(payload, separators=(",", ":")).encode()
+            payload = compact_payload(source, payload)
+            envelope = encode_envelope(header, payload)
+        if len(envelope) > MAX_ENVELOPE and "pebrel_output" in payload:
+            # Large identity/context fields may leave no room for a preview.
+            # Preserve the reason and original size even in that case.
+            payload["pebrel_output"].update(preview=None, truncated=True)
+            envelope = encode_envelope(header, payload)
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"
         exit_owner = owner if source == "claude" and payload.get("hook_event_name") == "SessionEnd" else None
-        write_terminal(osc, source, route, deadline, exit_owner=exit_owner)
+        write_terminal(osc, source, route, deadline, owner=owner, exit_owner=exit_owner)
+
+
+def _proc_snapshot(proc_fd):
+    """Read one process through its pinned procfs directory, not a reusable PID."""
+    fd = os.open("stat", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=proc_fd)
+    try:
+        row = os.read(fd, 8192).decode()
+    finally:
+        os.close(fd)
+    fields = row[row.rfind(")") + 2:].split()
+    # Parent, controlling session, controlling terminal, process birth time.
+    return tuple(int(fields[i]) for i in (1, 3, 4, 19))
+
+
+def owner_tty(source, owner):
+    """Native provider Linux fallback, bound to send()'s PID and birth time.
+
+    Follow only our pinned ancestor chain. Require the same executable inode as
+    this user's installed native provider. Open its existing fd through
+    procfs (deliberately following that kernel magic link), never reopen a
+    reusable /dev/pts/N pathname. Recheck every ancestor before returning the fd.
+    """
+    if source not in ("codex", "claude") or not owner:
+        return None
+    anchors = []
+    result = None
+    try:
+        owner_pid, owner_birth = map(int, owner.split(":"))
+        try:
+            installed = os.stat(Path.home() / ".local/bin" / source)
+        except FileNotFoundError:
+            if source != "claude":
+                raise
+            installed = os.stat(Path.home() / ".npm-global/bin/claude")
+        first_pid = pid = os.getppid()
+        for _ in range(48):
+            proc_fd = os.open(f"/proc/{pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            anchors.append((proc_fd, None))
+            if os.fstat(proc_fd).st_uid != os.getuid():
+                return None
+            snapshot = _proc_snapshot(proc_fd)
+            anchors[-1] = (proc_fd, snapshot)
+            parent, session, tty_nr, birth = snapshot
+            if pid == owner_pid:
+                if birth != owner_birth or not tty_nr:
+                    return None
+                executable = os.stat("exe", dir_fd=proc_fd)
+                if (executable.st_dev, executable.st_ino) != (installed.st_dev, installed.st_ino):
+                    return None
+                want = os.makedev((tty_nr >> 8) & 0xfff,
+                                 (tty_nr & 0xff) | ((tty_nr >> 12) & 0xfff00))
+                for std in (0, 1, 2):
+                    fd = None
+                    try:
+                        link = f"fd/{std}"
+                        if not re.fullmatch(r"/dev/pts/[0-9]+", os.readlink(link, dir_fd=proc_fd)):
+                            continue
+                        fd = os.open(link, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY,
+                                     dir_fd=proc_fd)
+                        info = os.fstat(fd)
+                        if not stat.S_ISCHR(info.st_mode) or info.st_rdev != want or not os.isatty(fd):
+                            continue
+                        if os.getppid() != first_pid:
+                            return None
+                        if any(_proc_snapshot(anchor) != before for anchor, before in anchors):
+                            return None
+                        current_executable = os.stat("exe", dir_fd=proc_fd)
+                        if (current_executable.st_dev, current_executable.st_ino) != (installed.st_dev, installed.st_ino):
+                            return None
+                        if os.fstat(proc_fd).st_uid != os.getuid():
+                            return None
+                        result, fd = fd, None
+                        return result
+                    except (OSError, ValueError, IndexError):
+                        continue
+                    finally:
+                        if fd is not None:
+                            os.close(fd)
+                return None
+            if parent <= 1 or parent == pid:
+                return None
+            pid = parent
+    except (OSError, ValueError, IndexError):
+        return None
+    finally:
+        for proc_fd, _ in reversed(anchors):
+            os.close(proc_fd)
+    return None
 
 
 def open_claude_exit_terminal(owner, flags):
@@ -194,19 +316,29 @@ def open_claude_exit_terminal(owner, flags):
     return None
 
 
-def write_terminal(osc, source=None, route=None, deadline=None, *, exit_owner=None):
-    flags = os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+def write_terminal(osc, source=None, route=None, deadline=None, owner=None, *, exit_owner=None):
     try:
-        fd = os.open(route["tty"] if route else "/dev/tty", flags)
+        fd = os.open(route["tty"] if route else "/dev/tty",
+                     os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError as error:
-        if route or source != "claude" or error.errno != errno.ENXIO:
+        if route or error.errno != errno.ENXIO:
             raise
-        fd = open_claude_exit_terminal(exit_owner, flags)
-        if fd is None:
-            # Interactive Claude consumes terminalSequence for other hooks but
-            # does not relay it during SessionEnd.
-            print(json.dumps({"terminalSequence": osc.decode("ascii")}), flush=True)
-            return
+        if source in ("codex", "claude"):
+            fd = owner_tty(source, owner)
+            if fd is None and source == "claude" and exit_owner:
+                # SessionEnd may outlive its ancestor chain. Preserve upstream's
+                # verified detached-exit delivery after the pinned-owner path.
+                flags = os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                fd = open_claude_exit_terminal(exit_owner, flags)
+            if fd is None:
+                if source != "claude":
+                    raise
+                # Keep compatibility for platforms without a verified Linux
+                # owner. Native Linux hooks use the pinned owner fd above.
+                print(json.dumps({"terminalSequence": osc.decode("ascii")}), flush=True)
+                return
+        else:
+            raise
     offset = 0
     deadline = min(deadline or float("inf"), time.monotonic() + 0.5)
     try:

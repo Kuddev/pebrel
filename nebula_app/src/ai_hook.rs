@@ -13,8 +13,10 @@ mod event;
 pub(crate) mod installation;
 pub(crate) mod integrations;
 pub(crate) mod lifecycle;
+pub(crate) mod local_command;
 mod native_events;
 mod ordering;
+mod output;
 mod payload;
 mod protocol;
 pub(crate) mod remote;
@@ -26,6 +28,7 @@ pub use event::{
 };
 pub use ordering::GateVerdict;
 pub(crate) use ordering::{accept_for_pane, reorder_batch};
+pub(crate) use output::BridgeOutput;
 use protocol::parse_envelope;
 pub(crate) use protocol::parse_remote_envelope;
 

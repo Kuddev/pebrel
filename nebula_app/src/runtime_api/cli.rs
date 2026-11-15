@@ -278,6 +278,15 @@ fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
             let response = request_once("agents.list", json!({ "window_id": window }), timeout)?;
             print_response(&response, options.pretty)
         },
+        CliCommand::AgentAttach { window, pane, name, kind, expected_session_id } => {
+            let response = request_once(
+                "agent.attach",
+                json!({"window_id": window, "pane_id": pane, "name": name,
+                       "kind": kind, "expected_session_id": expected_session_id}),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
         CliCommand::AgentStart { window, name, kind, cwd, resume_session_id } => {
             let response = request_once(
                 "agent.start",

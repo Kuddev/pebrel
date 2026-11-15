@@ -118,6 +118,9 @@ _pebrel() {
             pebrel__config__help,init)
                 cmd="pebrel__config__help__init"
                 ;;
+            pebrel__ctl,agent-attach)
+                cmd="pebrel__ctl__agent__attach"
+                ;;
             pebrel__ctl,agent-fork)
                 cmd="pebrel__ctl__agent__fork"
                 ;;
@@ -213,6 +216,9 @@ _pebrel() {
                 ;;
             pebrel__ctl,zoom-pane)
                 cmd="pebrel__ctl__zoom__pane"
+                ;;
+            pebrel__ctl__help,agent-attach)
+                cmd="pebrel__ctl__help__agent__attach"
                 ;;
             pebrel__ctl__help,agent-fork)
                 cmd="pebrel__ctl__help__agent__fork"
@@ -375,6 +381,9 @@ _pebrel() {
                 ;;
             pebrel__help__config,init)
                 cmd="pebrel__help__config__init"
+                ;;
+            pebrel__help__ctl,agent-attach)
+                cmd="pebrel__help__ctl__agent__attach"
                 ;;
             pebrel__help__ctl,agent-fork)
                 cmd="pebrel__help__ctl__agent__fork"
@@ -1260,12 +1269,50 @@ _pebrel() {
             return 0
             ;;
         pebrel__ctl)
-            opts="-h --pretty --timeout-ms --help describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
+            opts="-h --pretty --timeout-ms --help describe snapshot orchestrate agents agent-attach agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --timeout-ms)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__ctl__agent__attach)
+            opts="-h --window --pane --name --kind --expected-session-id --pretty --timeout-ms --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --pane)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --name)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --kind)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --expected-session-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --timeout-ms)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -1690,8 +1737,22 @@ _pebrel() {
             return 0
             ;;
         pebrel__ctl__help)
-            opts="describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
+            opts="describe snapshot orchestrate agents agent-attach agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__ctl__help__agent__attach)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -2813,8 +2874,22 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__ctl)
-            opts="describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait"
+            opts="describe snapshot orchestrate agents agent-attach agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__ctl__agent__attach)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

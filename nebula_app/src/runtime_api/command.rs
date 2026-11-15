@@ -478,9 +478,8 @@ impl RuntimeCommand {
                     max_output_bytes: params.max_output_bytes,
                 })
             },
-            "agent.start" | "agent.fork" | "agent.prompt" | "agent.paste" | "agent.read" => {
-                agent_api::command_from_request(request)
-            },
+            "agent.attach" | "agent.start" | "agent.fork" | "agent.prompt" | "agent.paste"
+            | "agent.read" => agent_api::command_from_request(request),
             method if method.starts_with("git.") => super::git::command(request),
             method => Err(ApiError::new(
                 "method_not_found",

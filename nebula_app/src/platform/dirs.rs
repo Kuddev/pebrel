@@ -48,10 +48,32 @@ pub fn home_dir() -> Option<PathBuf> {
 pub fn data_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
+        #[cfg(not(test))]
         let dir = resolve_data_dir();
+        #[cfg(test)]
+        let dir = test_data_dir();
         let _ = std::fs::create_dir_all(&dir);
         dir
     })
+}
+
+#[cfg(test)]
+fn test_data_dir() -> PathBuf {
+    // Explicit native acceptance directories keep their contract. Ordinary
+    // unit tests must never checkpoint fixtures over the user's workspace.
+    if has_override() {
+        return resolve_data_dir();
+    }
+    static DIRECTORY: OnceLock<tempfile::TempDir> = OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            tempfile::Builder::new()
+                .prefix("pebrel-unit-tests-")
+                .tempdir()
+                .expect("create isolated test data directory")
+        })
+        .path()
+        .to_owned()
 }
 
 fn resolve_data_dir() -> PathBuf {
@@ -65,6 +87,14 @@ fn resolve_data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unit_test_data_never_defaults_to_the_user_profile() {
+        if !has_override() {
+            assert_ne!(data_dir(), resolve_data_dir());
+            assert!(data_dir().is_dir());
+        }
+    }
 
     #[test]
     fn home_dir_rejects_empty_env() {

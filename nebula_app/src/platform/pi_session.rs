@@ -64,6 +64,7 @@ fn resolve_in(root: &Path, saved: &AgentSession) -> Result<AgentSession, Resolve
                     return Err(ResolveError::Invalid);
                 }
                 return Ok(AgentSession {
+                    managed_name: None,
                     source: "pi".into(),
                     session_id: Some(found),
                     session_file: Some(file.clone()),
@@ -104,6 +105,7 @@ fn resolve_in(root: &Path, saved: &AgentSession) -> Result<AgentSession, Resolve
     }
     let file = matches.pop().ok_or(ResolveError::Missing)?;
     Ok(AgentSession {
+        managed_name: None,
         source: "pi".into(),
         session_id: Some(expected.to_owned()),
         session_file: Some(file.to_str().ok_or(ResolveError::Invalid)?.to_owned()),
@@ -215,6 +217,7 @@ fn resolve_guest(
             return Err(ResolveError::Ambiguous);
         }
         candidate = Some(AgentSession {
+            managed_name: None,
             source: "pi".into(),
             session_id: Some(expected.into()),
             session_file: Some(path.into()),
@@ -232,8 +235,12 @@ mod tests {
     fn exact_native_metadata_required_and_ambiguity_is_preserved() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(format!("timestamp_{ID}.jsonl"));
-        let saved =
-            AgentSession { source: "pi".into(), session_id: Some(ID.into()), session_file: None };
+        let saved = AgentSession {
+            managed_name: None,
+            source: "pi".into(),
+            session_id: Some(ID.into()),
+            session_file: None,
+        };
         assert_eq!(resolve_in(dir.path(), &saved), Err(ResolveError::Missing));
         let header = format!("{{\"type\":\"session\",\"id\":\"{ID}\"}}\n");
         std::fs::write(&file, &header).unwrap();
@@ -253,6 +260,7 @@ mod tests {
         let file = dir.path().join("custom-history-name.jsonl");
         std::fs::write(&file, format!("{{\"type\":\"session\",\"id\":\"{ID}\"}}\n")).unwrap();
         let saved = AgentSession {
+            managed_name: None,
             source: "pi".into(),
             session_id: Some(ID.into()),
             session_file: Some(dir.path().join("old-location.jsonl").to_str().unwrap().into()),

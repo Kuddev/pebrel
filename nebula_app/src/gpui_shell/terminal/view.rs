@@ -228,6 +228,10 @@ pub enum TerminalViewEvent {
     /// Provider 明确上报的 permission/awaiting-input 上下文。宿主拥有 Window，
     /// 由它负责驻留提示、后台 Tab 标记和系统通知；raw context 不进入文案。
     AiAttention(crate::ai_hook::AttentionContext),
+    /// A provider completion accepted by this pane. The workspace owns the
+    /// cross-agent delegation side effect; keeping the event here makes local
+    /// and WSL/SSH hook ingress share the same completion path.
+    AiTurnDone(Box<crate::ai_hook::AiHookEvent>),
     Notification(crate::notify::Notification),
     /// 非应用鼠标模式下右键命中真实终端选区。菜单由 workspace 根持有，
     /// 避免每个 pane 都渲染一份带叠加阴影的 PopupMenu。
@@ -849,7 +853,9 @@ impl TerminalView {
                 // ——比 OSC 133 的命令行嗅探准，后者漏掉包装启动和没有 shell
                 // 集成的会话。少了这一条，远端 agent 的侧栏图标和会话身份
                 // （fork/恢复要用）全都缺席。
-                if let Some(hook) = crate::ai_hook::parse_remote_envelope(&envelope, None) {
+                if let Some(hook) =
+                    crate::ai_hook::parse_remote_envelope(&envelope, Some(self.pane_id))
+                {
                     self.handle_ai_hook(&hook, cx);
                 }
             },

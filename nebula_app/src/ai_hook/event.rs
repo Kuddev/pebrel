@@ -271,6 +271,7 @@ pub struct AiHookEvent {
     /// Compaction starts hooks inside an existing turn; it is not an idle edge.
     pub(crate) session_compacted: bool,
     pub answer: Option<crate::assistant_answer::AssistantAnswer>,
+    pub(crate) bridge_output: Option<super::BridgeOutput>,
     pub answer_cwd: Option<std::path::PathBuf>,
     /// Pane hosting the CLI (from `NEBULA_PANE_ID`); `None` falls back to the
     /// focused pane (only happens when the env was stripped along the way).

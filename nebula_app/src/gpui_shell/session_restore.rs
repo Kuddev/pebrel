@@ -129,6 +129,7 @@ mod tests {
             (
                 "D:/work".to_owned(),
                 Some(AgentSession {
+                    managed_name: None,
                     session_file: None,
                     source: "claude".into(),
                     session_id: Some("abc-1".into()),

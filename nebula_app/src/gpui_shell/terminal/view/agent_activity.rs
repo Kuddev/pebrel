@@ -57,6 +57,7 @@ impl TerminalView {
             event.source == "codex" && event.session_file.is_none() && self.ai_session_from_probe;
         let target = event.session_id.as_ref().filter(|_| !keep_native_identity).map(|id| {
             crate::session::AgentSession {
+                managed_name: None,
                 source: event.source.clone(),
                 session_id: Some(id.clone()),
                 session_file: event.session_file.clone(),
@@ -159,6 +160,13 @@ impl TerminalView {
                 crate::notify::Notification::from_ai_hook(event, event.message.clone(), false)
         {
             cx.emit(TerminalViewEvent::Notification(notification));
+        }
+        if event.kind == AiHookKind::TurnDone {
+            let mut completion = event.clone();
+            // The OSC/WSL envelope is authenticated by this PTY, so the local
+            // pane is the only trusted route for delegation correlation.
+            completion.pane = Some(self.pane_id);
+            cx.emit(TerminalViewEvent::AiTurnDone(Box::new(completion)));
         }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();

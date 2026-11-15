@@ -143,6 +143,7 @@ fn duplicate_rebuilds_nested_mixed_layout_with_fresh_sessions(cx: &mut TestAppCo
                             view.cwd = cwd.clone();
                             view.restore_agent(
                                 AgentSession {
+                                    managed_name: None,
                                     source: "codex".into(),
                                     session_id: Some("source-only".into()),
                                     session_file: None,

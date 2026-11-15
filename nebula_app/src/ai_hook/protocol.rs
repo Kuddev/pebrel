@@ -307,7 +307,15 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         selection: context_string(&payload, &["selection", "selected_text", "selectedText"]),
         raw_context: sanitized_raw_context(&payload),
     });
-    let answer = crate::assistant_answer::AssistantAnswer::from_hook(&source, &payload);
+    let bridge_output = super::BridgeOutput::from_payload(&payload);
+    let mut answer = crate::assistant_answer::AssistantAnswer::from_hook(&source, &payload);
+    if let Some(output) = &bridge_output
+        && !output.truncated
+        && let Some(preview) = &output.preview
+        && matches!(answer, Some(crate::assistant_answer::AssistantAnswer::Missing))
+    {
+        answer = Some(crate::assistant_answer::AssistantAnswer::Complete(preview.clone()));
+    }
     let answer_cwd = payload
         .get("cwd")
         .and_then(Value::as_str)
@@ -325,6 +333,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             && payload.get("hook_event_name").and_then(Value::as_str) == Some("Notification")
             && context_string(&payload, &["notificationType", "notification_type"]).is_none(),
         answer,
+        bridge_output,
         answer_cwd,
         pane,
         source,
