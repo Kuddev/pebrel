@@ -24,6 +24,7 @@ const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
 
 pub(crate) mod assets;
 mod fallback;
+pub(crate) mod release_notes;
 
 #[cfg(feature = "update-test-source")]
 pub(crate) mod test_source;
@@ -91,12 +92,14 @@ pub struct UpdateCheckResult {
     pub current: String,
     pub latest: String,
     pub update_available: bool,
+    pub release_page: Option<String>,
     pub asset: Option<UpdateAsset>,
 }
 
 #[derive(Debug)]
 struct LatestRelease {
     version: String,
+    release_page: Option<String>,
     asset: Option<UpdateAsset>,
 }
 
@@ -186,6 +189,10 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
                         current: env!("CARGO_PKG_VERSION").into(),
                         latest: asset.version.clone(),
                         update_available: true,
+                        release_page: release_notes::from_download(
+                            &asset.download_url,
+                            &asset.version,
+                        ),
                         asset: Some(asset),
                     },
                 ));
@@ -229,6 +236,7 @@ pub fn check_now() -> Result<UpdateCheckResult, String> {
         update_available,
         current,
         latest: release.version,
+        release_page: release.release_page,
         asset: release.asset,
     })
 }
@@ -348,7 +356,8 @@ fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
         &release.assets,
         &assets::native_names(&version),
     );
-    Ok(LatestRelease { version, asset })
+    let release_page = release_notes::from_tag(release.tag_name.trim());
+    Ok(LatestRelease { version, release_page, asset })
 }
 
 pub(crate) fn windows_x64_installer_names(version: &str) -> [String; 3] {
@@ -437,6 +446,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.version, "1.7.0");
+        assert_eq!(
+            result.release_page.as_deref(),
+            Some("https://github.com/Kuddev/pebrel/releases/tag/v1.7.0")
+        );
         let requests = server.finish();
         assert!(requests[0].0.starts_with("CONNECT api.update.invalid:80 "));
         assert!(requests[0].1.starts_with("GET /latest "));

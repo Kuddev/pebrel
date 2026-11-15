@@ -8,8 +8,8 @@ use super::*;
 use crate::i18n::Message;
 use crate::update_download::DownloadStatus;
 
-const UPDATE_DIALOG_IDLE_HEIGHT: f32 = 250.0;
-const UPDATE_DIALOG_STATUS_HEIGHT: f32 = 280.0;
+const UPDATE_DIALOG_IDLE_HEIGHT: f32 = 294.0;
+const UPDATE_DIALOG_STATUS_HEIGHT: f32 = 324.0;
 
 fn update_dialog_frame(dialog: Dialog, window: &Window, estimated_height: f32, cx: &App) -> Dialog {
     // 默认 Dialog 继承终端壳的透明背景；更新内容需像设置页一样遮住底层文字。
@@ -357,6 +357,17 @@ pub(crate) fn open_update_dialog(
             },
             DownloadStatus::Idle => {},
         }
+
+        let release_page = dialog_result.release_page.clone()
+            .unwrap_or_else(|| crate::update_check::RELEASES_PAGE.to_owned());
+        body = body.child(
+            h_flex().child(
+                Button::new("update-release-notes")
+                    .debug_selector(|| "update-release-notes".to_owned())
+                    .label(language.text(Message::UpdateViewReleaseNotes))
+                    .on_click(move |_, _, cx| cx.open_url(&release_page)),
+            ),
+        );
 
         let skip_version = dialog_result.latest.clone();
         let cancel_version = dialog_result.latest.clone();

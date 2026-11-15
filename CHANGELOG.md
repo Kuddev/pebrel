@@ -4,6 +4,16 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## Unreleased / 未发布
+
+### English
+
+- Add a separate release-notes link to update details, including during downloads and after failures, without starting a download or dismissing the dialog.
+
+### 简体中文
+
+- 更新详情新增独立的版本日志外链，下载中及失败后仍可查看；点击不下载、不关闭弹窗。
+
 ## 2.5.0 - 2026-11-09
 
 ```text
