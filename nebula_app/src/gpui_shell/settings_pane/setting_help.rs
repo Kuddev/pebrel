@@ -102,6 +102,10 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             language.text(crate::i18n::Message::SettingsHelpCopiesOnMouseReleaseAnd),
             Some(language.text(crate::i18n::Message::SettingsHelpWhenDisabledSelectionDoesNot)),
         ),
+        "reverse_selection" => (
+            language.text(crate::i18n::Message::SettingsHelpSelectionFillsWithEachCellForeground),
+            None,
+        ),
         "multiline_paste_confirm" => (
             language.text(crate::i18n::Message::SettingsHelpAsksBeforeMultilineOrRisky),
             Some(
@@ -180,6 +184,7 @@ mod tests {
             "accept",
             "completion_style",
             "copy_on_select",
+            "reverse_selection",
             "multiline_paste_confirm",
             "panel_resize",
             "cjk_bold_regular",

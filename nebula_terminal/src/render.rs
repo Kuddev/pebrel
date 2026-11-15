@@ -201,11 +201,27 @@ impl TextSegment {
     }
 }
 
-/// Geometry-only cell run (selection highlight).
+/// One selected cell with the colors a per-cell inverse paint needs: the run
+/// is filled with `fg` and its glyphs are drawn in `bg`.
 pub struct CellRun {
     pub row: u16,
     pub start: u16,
     pub end: u16,
+    pub fg: Color,
+    pub bg: Color,
+    pub bold: bool,
+    pub dim: bool,
+    pub bg_dim: bool,
+}
+
+impl CellRun {
+    fn same_colors(&self, fg: Color, bg: Color, bold: bool, dim: bool, bg_dim: bool) -> bool {
+        self.fg == fg
+            && self.bg == bg
+            && self.bold == bold
+            && self.dim == dim
+            && self.bg_dim == bg_dim
+    }
 }
 
 /// Background run with its unresolved color.
@@ -342,14 +358,24 @@ impl RenderSnapshot {
             runs.push(BgRun { row, start: col, end: col + 1, color, dim });
         }
 
-        fn push_sel(runs: &mut Vec<CellRun>, row: u16, col: u16) {
+        fn push_sel(
+            runs: &mut Vec<CellRun>,
+            row: u16,
+            col: u16,
+            fg: Color,
+            bg: Color,
+            bold: bool,
+            dim: bool,
+            bg_dim: bool,
+        ) {
             if let Some(last) = runs.last_mut() {
-                if last.row == row && last.end == col {
+                if last.row == row && last.end == col && last.same_colors(fg, bg, bold, dim, bg_dim)
+                {
                     last.end = col + 1;
                     return;
                 }
             }
-            runs.push(CellRun { row, start: col, end: col + 1 });
+            runs.push(CellRun { row, start: col, end: col + 1, fg, bg, bold, dim, bg_dim });
         }
 
         // Segment assembly state: (row, wide, next expected col).
@@ -395,9 +421,12 @@ impl RenderSnapshot {
                     range.contains_cell(&indexed, content.cursor.point, cursor_shape)
                 });
             if is_selected {
-                push_sel(&mut snap.selection_runs, row, col);
+                let selected = |runs: &mut Vec<CellRun>, col: u16| {
+                    push_sel(runs, row, col, fg, bg, bold, dim, bg_dim);
+                };
+                selected(&mut snap.selection_runs, col);
                 if flags.contains(Flags::WIDE_CHAR) && col as usize + 1 < cols {
-                    push_sel(&mut snap.selection_runs, row, col + 1);
+                    selected(&mut snap.selection_runs, col + 1);
                 }
             }
 
@@ -647,6 +676,54 @@ mod tests {
     }
 
     #[test]
+    fn selection_runs_carry_the_colors_a_per_cell_inverse_needs() {
+        use crate::vte::ansi::{Color, NamedColor};
+
+        let mut term = term_with(&["RRBIB"]);
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(1), Column(0));
+        for col in 0..2 {
+            term.grid_mut()[Line(0)][Column(col)].fg = Color::Named(NamedColor::Red);
+        }
+        term.grid_mut()[Line(0)][Column(2)].bg = Color::Named(NamedColor::Blue);
+        term.grid_mut()[Line(0)][Column(3)].flags.insert(Flags::INVERSE);
+
+        term.selection = Some(Selection::new(
+            SelectionType::Lines,
+            crate::index::Point::new(Line(0), Column(0)),
+            Side::Left,
+        ));
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let runs = snap
+            .selection_runs
+            .iter()
+            .map(|run| (run.row, run.start, run.end, run.fg, run.bg))
+            .collect::<Vec<_>>();
+        // 逐格反色需要每格自己的前后景：块用 `fg`，块内文字用 `bg`。
+        assert_eq!(
+            runs,
+            vec![
+                (0, 0, 2, Color::Named(NamedColor::Red), Color::Named(NamedColor::Background)),
+                (0, 2, 3, Color::Named(NamedColor::Foreground), Color::Named(NamedColor::Blue)),
+                // SGR 7 已在快照里交换，要交换后的那一对才能反出原样。
+                (
+                    0,
+                    3,
+                    4,
+                    Color::Named(NamedColor::Background),
+                    Color::Named(NamedColor::Foreground),
+                ),
+                (
+                    0,
+                    4,
+                    8,
+                    Color::Named(NamedColor::Foreground),
+                    Color::Named(NamedColor::Background),
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn capture_segments_ignore_cursor_position() {
         // 分段随光标状态变化曾导致整行按闪烁相位重塑形（可见跳字）；
         // 光标只能以 CursorSnapshot 形式出现，绝不改变文本分段。
@@ -795,7 +872,14 @@ mod tests {
             (source.box_glyphs[0].fg, source.box_glyphs[0].dim),
             (ordinary.box_glyphs[0].fg, ordinary.box_glyphs[0].dim)
         );
-        assert!(source.selection_runs.iter().any(|r| r.row == 0 && r.start == 0 && r.end == 2));
+        // 选区按格色切分 run，几何上必须完整覆盖第一行的 0..2 两格。
+        let covered = source
+            .selection_runs
+            .iter()
+            .filter(|run| run.row == 0)
+            .flat_map(|run| run.start..run.end)
+            .collect::<Vec<_>>();
+        assert_eq!(covered, vec![0, 1]);
         assert!(source.segments.iter().any(|s| s.row == 1 && s.cells[0].text == "v"));
     }
 

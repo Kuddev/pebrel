@@ -243,6 +243,9 @@ fn theme_advanced_labels(language: crate::display::UiLanguage) -> ThemeAdvancedL
         selection_foreground: SharedString::from(
             language.text(Message::ThemeEditorSelectionForeground),
         ),
+        selection_overridden: SharedString::from(
+            language.text(Message::ThemeEditorSelectionOverridden),
+        ),
         cursor_text: SharedString::from(language.text(Message::ThemeEditorCursorText)),
         inherit: SharedString::from(language.text(Message::ThemeEditorInherit)),
         color_placeholder: SharedString::from("#rrggbb"),

@@ -27,6 +27,7 @@ pub mod mouse_protocol;
 mod native_results;
 mod osc_links;
 mod reading;
+mod selection_paint;
 pub mod session;
 mod session_pump;
 mod ssh_connect_overlay;

@@ -27,6 +27,8 @@ pub(super) struct ThemeAdvancedLabels {
     pub(super) selection: SharedString,
     pub(super) selection_background: SharedString,
     pub(super) selection_foreground: SharedString,
+    /// 反色选区开启时声明的席位（主题编辑器的选区配色被覆盖）。
+    pub(super) selection_overridden: SharedString,
     pub(super) cursor_text: SharedString,
     pub(super) inherit: SharedString,
     pub(super) color_placeholder: SharedString,
@@ -397,24 +399,26 @@ impl ThemeAdvancedEditor {
         colors: AppearanceColors,
         error_color: Hsla,
         disabled: bool,
+        selection_overridden: bool,
         on_shadow_toggle: F,
     ) -> gpui::Div
     where
         F: Fn(&bool, &mut gpui::Window, &mut gpui::App) + 'static,
     {
-        let swatch = |picker: &Entity<ColorPickerState>, color: Option<Rgb8>| {
-            if disabled {
-                div()
-                    .size(px(20.0))
-                    .rounded(px(3.0))
-                    .border_1()
-                    .border_color(colors.control)
-                    .bg(color.map_or(colors.subtle, |[r, g, b]| rgb_hsla(r, g, b)))
-                    .into_any_element()
-            } else {
-                ColorPicker::new(picker).small().into_any_element()
-            }
-        };
+        let swatch =
+            |picker: &Entity<ColorPickerState>, color: Option<Rgb8>, row_disabled: bool| {
+                if row_disabled {
+                    div()
+                        .size(px(20.0))
+                        .rounded(px(3.0))
+                        .border_1()
+                        .border_color(colors.control)
+                        .bg(color.map_or(colors.subtle, |[r, g, b]| rgb_hsla(r, g, b)))
+                        .into_any_element()
+                } else {
+                    ColorPicker::new(picker).small().into_any_element()
+                }
+            };
         let ansi_cell = |index: usize| {
             h_flex()
                 .id(("theme-advanced-ansi", index))
@@ -422,7 +426,7 @@ impl ThemeAdvancedEditor {
                 .gap(px(6.0))
                 .items_center()
                 .w_full()
-                .child(swatch(&self.ansi_pickers[index], Some(self.ansi[index])))
+                .child(swatch(&self.ansi_pickers[index], Some(self.ansi[index]), disabled))
                 .child(
                     div()
                         .w(px(22.0))
@@ -449,11 +453,12 @@ impl ThemeAdvancedEditor {
         let optional_row = |label: SharedString,
                             input: &Entity<InputState>,
                             color: Option<Rgb8>,
-                            picker: &Entity<ColorPickerState>| {
+                            picker: &Entity<ColorPickerState>,
+                            row_disabled: bool| {
             h_flex()
                 .gap(px(8.0))
                 .items_center()
-                .child(swatch(picker, color))
+                .child(swatch(picker, color, row_disabled))
                 .child(
                     div()
                         .w(px(112.0))
@@ -473,7 +478,7 @@ impl ThemeAdvancedEditor {
                                 .appearance(false)
                                 .bordered(false)
                                 .focus_bordered(false)
-                                .disabled(disabled),
+                                .disabled(row_disabled),
                         ),
                 )
         };
@@ -533,18 +538,29 @@ impl ThemeAdvancedEditor {
                         &self.selection_background_input,
                         self.selection_background,
                         &self.selection_background_picker,
+                        disabled || selection_overridden,
                     ))
                     .child(optional_row(
                         self.labels.selection_foreground.clone(),
                         &self.selection_foreground_input,
                         self.selection_foreground,
                         &self.selection_foreground_picker,
+                        disabled || selection_overridden,
                     ))
+                    .when(selection_overridden, |group| {
+                        group.child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(colors.secondary)
+                                .child(self.labels.selection_overridden.clone()),
+                        )
+                    })
                     .child(optional_row(
                         self.labels.cursor_text.clone(),
                         &self.cursor_text_input,
                         self.cursor_text,
                         &self.cursor_text_picker,
+                        disabled,
                     )),
             )
             .child(

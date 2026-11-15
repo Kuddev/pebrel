@@ -24,6 +24,7 @@ use nebula_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
 use super::colors::Palette;
 use super::cursor_painter::{CursorPaint, paint_box_glyph};
+use super::selection_paint;
 use super::view::TerminalView;
 use super::view::cursor::CursorGeometry;
 
@@ -520,38 +521,51 @@ impl Element for TerminalElement {
         } else {
             theme.selection
         };
-        for run in &snap.selection_runs {
-            for visual in math_frame.projected_runs(
-                run.row as usize,
-                run.start as usize..run.end as usize,
-                layout.cols,
-                false,
-            ) {
-                art.spans(
-                    i64::from(run.row),
-                    visual,
-                    vertical.row(f32::from(run.row)),
-                    |columns, y, h| {
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(
-                                    bounds.origin.x + layout.cell_width * columns.start as f32,
-                                    bounds.origin.y + layout.line_height * y,
+        // `reverse_selection`：逐格反色（块 = 该格前景、字 = 该格背景），主题与
+        // 用户的选区配色整体让位；关着时仍是原来那一片叠色。
+        let inverse = crate::gpui_shell::config::reverse_selection(cx)
+            .then(|| selection_paint::resolve(&snap.selection_runs, &theme, &overrides));
+        selection_paint::paint_blocks(
+            &snap.selection_runs,
+            inverse.as_deref(),
+            selection_fill,
+            app_cursor.map(|cursor| (cursor.row, cursor.col, cursor.wide)),
+            |row, start, end, color| {
+                for visual in math_frame.projected_runs(
+                    row as usize,
+                    start as usize..end as usize,
+                    layout.cols,
+                    false,
+                ) {
+                    art.spans(
+                        i64::from(row),
+                        visual,
+                        vertical.row(f32::from(row)),
+                        |columns, y, h| {
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(
+                                        bounds.origin.x + layout.cell_width * columns.start as f32,
+                                        bounds.origin.y + layout.line_height * y,
+                                    ),
+                                    size(
+                                        layout.cell_width * columns.len() as f32,
+                                        layout.line_height * h,
+                                    ),
                                 ),
-                                size(
-                                    layout.cell_width * columns.len() as f32,
-                                    layout.line_height * h,
-                                ),
-                            ),
-                            selection_fill,
-                        ));
-                    },
-                );
-            }
-        }
+                                color,
+                            ));
+                        },
+                    );
+                }
+            },
+        );
         self.paint_reading_highlight(bounds, layout, viewport_top_abs, window, cx);
         let selection_foreground = theme.selection_foreground;
         let selected_foreground = |row: u16, col: u16| -> Option<Rgba> {
+            if let Some(runs) = &inverse {
+                return selection_paint::text_color(runs, row, col);
+            }
             let foreground = selection_foreground?;
             snap.selection_runs
                 .iter()
