@@ -53,21 +53,39 @@ fn write_with_permissions(path: &Path, contents: &[u8], private: bool) -> io::Re
 /// Try to own a sibling lock file without waiting on the UI thread.
 pub(crate) fn try_lock(path: &Path) -> io::Result<Option<FileLock>> {
     let lock_path = lock_path(path);
+    // Only an existing lock file means contention. Creating its parent can
+    // also return AlreadyExists when an ordinary file occupies that path.
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     match create_lock(&lock_path) {
         Ok(lock) => Ok(Some(lock)),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = match std::fs::symlink_metadata(&lock_path) {
+                Ok(metadata) => metadata,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(err) => return Err(err),
+            };
+            if !metadata.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "state lock is not a regular file",
+                ));
+            }
+
             // A crashed process can strand the tiny lock file. State writes
             // finish in milliseconds, so a 30-second-old lock is stale enough
             // to reclaim without racing a healthy writer.
-            let stale = std::fs::metadata(&lock_path)
-                .and_then(|metadata| metadata.modified())
-                .ok()
-                .and_then(|modified| modified.elapsed().ok())
-                .is_some_and(|age| age >= Duration::from_secs(30));
+            let stale =
+                metadata.modified()?.elapsed().is_ok_and(|age| age >= Duration::from_secs(30));
             if !stale {
                 return Ok(None);
             }
-            let _ = std::fs::remove_file(&lock_path);
+            match std::fs::remove_file(&lock_path) {
+                Ok(()) => {},
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {},
+                Err(err) => return Err(err),
+            }
             match create_lock(&lock_path) {
                 Ok(lock) => Ok(Some(lock)),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(None),
@@ -123,9 +141,6 @@ pub(crate) fn try_lifetime_lock(path: &Path) -> io::Result<Option<LifetimeFileLo
 }
 
 fn create_lock(path: &Path) -> io::Result<FileLock> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     if let Err(err) = write!(file, "{}", std::process::id()) {
         // 锁文件一旦创建成功就代表“已占用”；写 PID 失败时必须立刻回收，
@@ -203,7 +218,28 @@ pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{try_lifetime_lock, try_lock, write};
+    use super::{lock_path, try_lifetime_lock, try_lock, write};
+
+    #[test]
+    fn lock_parent_that_is_a_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, b"existing state").unwrap();
+
+        assert!(try_lock(&parent.join("state.json")).is_err());
+        assert_eq!(std::fs::read(parent).unwrap(), b"existing state");
+    }
+
+    #[test]
+    fn a_directory_at_the_lock_path_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let lock = lock_path(&path);
+        std::fs::create_dir(&lock).unwrap();
+
+        assert!(try_lock(&path).is_err());
+        assert!(lock.is_dir());
+    }
 
     #[test]
     fn atomic_write_replaces_and_lock_is_exclusive() {
