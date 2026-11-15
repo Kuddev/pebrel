@@ -26,6 +26,7 @@
     "fold_collapse": "Collapse the middle {count} lines",
     "view": "View",
     "raw": "Raw",
+    "no_output": "No output",
     "copy": "Copy source",
     "copied": "Copied",
     "filter": "Filter rows…",

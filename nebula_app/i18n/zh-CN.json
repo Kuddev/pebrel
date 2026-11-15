@@ -26,6 +26,7 @@
     "fold_collapse": "收起中间 {count} 行",
     "view": "视图",
     "raw": "原文",
+    "no_output": "没有输出",
     "copy": "复制原文",
     "copied": "已复制",
     "filter": "筛选数据行…",

@@ -241,6 +241,66 @@ fn native_result_compact_hover_tools_and_copy_feedback(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn native_result_empty_stderr_keeps_stream_controls_and_clipboard(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let source = "git output on stdout\n";
+    let wire = format!(
+        "{}\r\n{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 91,
+            rows: 16,
+            mime: "text/x-git-progress".into(),
+            title: "git output".into(),
+        }
+        .encode(),
+        Packet::Place { wire_id: 91, row: 1 }.encode(),
+        Packet::Append { wire_id: 91, text: source.into() }.encode(),
+        Packet::End { wire_id: 91, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    draw(&mut cx);
+
+    let hover_result = |cx: &mut VisualTestContext| {
+        let bounds = cx.debug_bounds("native-result").unwrap();
+        cx.simulate_mouse_move(
+            bounds.origin + point(px(10.0), px(5.0)),
+            None,
+            Modifiers::default(),
+        );
+        draw(cx);
+    };
+    let click = |cx: &mut VisualTestContext, selector: &'static str| {
+        let center = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_click(center, Modifiers::default());
+        draw(cx);
+    };
+    hover_result(&mut cx);
+    click(&mut cx, "native-result-raw");
+    click(&mut cx, "native-result-stderr");
+    draw(&mut cx);
+    let body = cx.debug_bounds("native-result-raw-content").unwrap();
+    assert!(body.size.height > px(0.0), "empty stderr must stay visible");
+
+    // Re-enter the result after the layout shrinks; recovery cannot depend on
+    // the mouse still hovering the toolbar at its previous position.
+    cx.simulate_mouse_move(point(px(0.0), px(0.0)), None, Modifiers::default());
+    draw(&mut cx);
+    hover_result(&mut cx);
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("keep this".into()));
+    });
+    click(&mut cx, "native-result-copy");
+    assert_eq!(clipboard(&mut cx).as_deref(), Some("keep this"));
+
+    click(&mut cx, "native-result-stdout");
+    hover_result(&mut cx);
+    click(&mut cx, "native-result-copy");
+    assert_eq!(clipboard(&mut cx).as_deref(), Some(source));
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
 fn native_result_mount_preserves_grid_and_isolates_pointer(cx: &mut TestAppContext) {
     use nebula_terminal::inline_content::Packet;
     let (view, mut cx, receiver, proxy) = open(cx);
