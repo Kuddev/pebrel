@@ -4,6 +4,88 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.9 - Unreleased
+
+- `Pebrel-v2.5.9-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-windows-x64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.9-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Added
+
+- Added the option to delete selected files, symbolic links, or empty folders from the SFTP file drawer after confirmation.
+- Added manual sleep and optional automatic sleep for idle local tabs. Waking a tab starts a fresh shell in its previous directory and restores recent terminal output. Addresses [#992](https://github.com/Kuddev/nebula/issues/992).
+
+#### Fixed
+
+- Fixed macOS agent hook connections closing before a delayed message arrived.
+- Fixed tab groups filling the entire row on hover. The title and guide line now highlight.
+- Fixed low contrast in the Linux Settings navigation when the window background is translucent. Addresses [#903](https://github.com/Kuddev/nebula/issues/903).
+- Fixed image paste staying blocked after a Linux pane reached its 32-image quota and the earlier work had finished. Addresses [#981](https://github.com/Kuddev/nebula/issues/981).
+- Fixed the About page showing Windows on other desktop platforms.
+- Fixed wrapped formulas losing alignment when partly scrolled out of view and the terminal still has their source lines. Columns stay in place, and gaps no longer activate nearby links. Addresses [#909](https://github.com/Kuddev/nebula/issues/909).
+- Fixed local file links broken by UTF-8 truncation when the original path can be recovered from the link.
+- Fixed terminal stalls when saving directory history. Recent directories remain available in memory if the history file cannot be locked.
+- Fixed Antigravity subagents taking over the foreground session or marking its turn complete.
+- Fixed wide terminal glyphs overlapping the next cell.
+
+#### Improved
+
+- Improved desktop text rendering with grayscale antialiasing by default. Use `pebrel.luau` to choose system or subpixel antialiasing. Subpixel mode requires an opaque window and platform support.
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 新增 SFTP 文件抽屉的删除操作，确认后可删除所选文件、符号链接和空目录。
+- 新增空闲本地标签的手动休眠和可选的自动休眠。唤醒时在原目录启动新的 Shell，并恢复近期终端输出。对应 [#992](https://github.com/Kuddev/nebula/issues/992)。
+
+#### 修复
+
+- 修复 macOS 上助手 Hook 连接在延迟消息到达前就被关闭的问题。
+- 修复鼠标悬停时标签分组整行被填色的问题，现在只高亮标题和引导线。
+- 修复 Linux 窗口背景半透明时设置导航文字对比度过低的问题。对应 [#903](https://github.com/Kuddev/nebula/issues/903)。
+- 修复 Linux 同一窗格粘贴 32 张图片后，即使之前的任务已结束也无法继续粘贴的问题。对应 [#981](https://github.com/Kuddev/nebula/issues/981)。
+- 修复其他桌面平台的关于页误显示 Windows 的问题。
+- 修复终端仍保留公式源行时，换行公式部分滚出视区后的错位。固定列保持原位，点击空白不会误开邻近链接。对应 [#909](https://github.com/Kuddev/nebula/issues/909)。
+- 修复因 UTF-8 截断而失效的本地文件链接，可在路径能够从链接中恢复时打开原文件。
+- 修复保存目录历史时终端卡顿的问题。无法锁定历史文件时，仍可使用内存中的近期目录。
+- 修复 Antigravity 子会话接管前台会话或将前台任务误标为完成的问题。
+- 修复终端宽字形覆盖相邻单元格的问题。
+
+#### 改进
+
+- 改进桌面文字的抗锯齿，默认使用灰度模式，可在 `pebrel.luau` 中选择系统或子像素模式。子像素模式需要平台支持，且窗口须为不透明。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/whitoud"><img src="https://avatars.githubusercontent.com/u/54259693?v=4&amp;s=96" width="48" height="48" alt="whitoud" title="whitoud" /></a>
+  <a href="https://github.com/Cec1c"><img src="https://avatars.githubusercontent.com/u/170788854?v=4&amp;s=96" width="48" height="48" alt="Cec1c" title="Cec1c" /></a>
+  <a href="https://github.com/not-exist"><img src="https://avatars.githubusercontent.com/u/121529946?v=4&amp;s=96" width="48" height="48" alt="not-exist" title="not-exist" /></a>
+  <a href="https://github.com/onlynet"><img src="https://avatars.githubusercontent.com/u/21923781?v=4&amp;s=96" width="48" height="48" alt="onlynet" title="onlynet" /></a>
+</p>
+
+- [@Kuddev](https://github.com/Kuddev)
+- [@whitoud](https://github.com/whitoud)
+- [@Cec1c](https://github.com/Cec1c)
+- [@not-exist](https://github.com/not-exist)
+- [@onlynet](https://github.com/onlynet)
+
 ## 2.5.8 - 2026-11-14
 
 ```text
