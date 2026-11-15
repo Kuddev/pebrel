@@ -19,6 +19,8 @@ mod config_defaults;
 pub use config_defaults::{UiValueKind, install_config_defaults, ui_value_kind};
 mod agent_hooks;
 pub use agent_hooks::AgentHook;
+mod agent_resume;
+pub use agent_resume::{AGENT_RESUME_SETTINGS, AgentResumeArgs, AgentResumeRule};
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
 mod background_media;
@@ -1083,6 +1085,7 @@ pub struct RuntimeSettings {
     pub silent_start: bool,
     pub restore_session: bool,
     pub resume_ai: bool,
+    pub agent_resume_args: AgentResumeArgs,
     /// 常驻系统托盘图标。
     pub tray: bool,
     pub blur: BlurModeName,
@@ -1287,6 +1290,7 @@ impl RuntimeSettings {
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
+            agent_resume_args: AgentResumeArgs::from_raw(raw),
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
             opacity,

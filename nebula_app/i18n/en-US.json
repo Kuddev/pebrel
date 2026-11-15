@@ -1531,7 +1531,10 @@
     "restore_failed": "This AI conversation could not be restored. Its saved target is preserved. Use Retry recovery in the tab menu, or locate it in session history.",
     "restore_choose_codex": "The saved Codex conversation is unavailable. Choose a conversation in Codex to continue.",
     "restore_ambiguous": "More than one native session file matches this conversation. The saved target is preserved; choose the exact conversation from session history.",
-    "retry": "Retry session recovery"
+    "restore_rule_incompatible": "{agent} resume rule cannot be passed safely in {shell}. Update or disable the rule in settings, or continue once without applying it.",
+    "restore_rule_invalid": "{agent} resume rule has invalid syntax. Update or disable the rule in settings, or continue once without applying it.",
+    "retry": "Retry session recovery",
+    "retry_without_rule": "Continue without rule"
   },
   "ssh.agent.unavailable": "No system SSH agent was available within the discovery timeout.",
   "ssh.agent.empty": "The SSH agent returned no identities.",

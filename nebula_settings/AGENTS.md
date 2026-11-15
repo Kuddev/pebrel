@@ -7,3 +7,4 @@
 - 持久化格式、兼容迁移或共享设置所有权的非平凡变化写入 `architecture/notes/nebula_settings/<capability>/`。
 
 - 原生 UI 的 Luau 默认值与界面保存优先级见 [脚本默认值](../architecture/notes/nebula_settings/config_defaults/2026-11-02-script-ui-defaults.md)；设置核心不执行脚本。
+- Agent 会话恢复与分叉附加参数规则的键名合同、启停状态及 Shell 转义职责边界见 [Agent 恢复与分叉参数规则](../architecture/notes/nebula_settings/agent_resume/2026-11-10-agent-resume-fork-rules.md)。

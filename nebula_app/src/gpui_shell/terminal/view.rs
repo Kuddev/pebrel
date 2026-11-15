@@ -1790,6 +1790,8 @@ impl Render for TerminalView {
         }
         if self.local_session_failed() {
             root = root.child(self.session_failure_banner(cx));
+        } else if self.can_retry_without_rule() {
+            root = root.child(self.rule_failure_banner(cx));
         }
         if self.session.is_some() {
             root = root.child(self.reading_chrome(cx));
