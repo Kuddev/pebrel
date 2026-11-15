@@ -58,7 +58,7 @@ pub(super) fn parse(request: &ApiRequest) -> Result<RuntimeCommand, ApiError> {
     let p: Params = parse_params(&request.params)?;
     if p.window_id == 0
         || p.pane_id == 0
-        || !matches!(p.identity.kind.as_str(), "codex" | "claude")
+        || !matches!(p.identity.kind.as_str(), "codex" | "claude" | "antigravity")
         || p.identity.session_id.is_empty()
         || p.identity.session_id.len() > 128
         || p.identity.session_id.chars().any(char::is_control)
