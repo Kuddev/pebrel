@@ -31,10 +31,10 @@ macOS, Linux, and Android downloads are Preview builds.
 
 - Fixed macOS agent hook connections closing before a delayed message arrived.
 - Fixed tab groups filling the entire row on hover. The title and guide line now highlight.
-- Fixed low contrast in the Linux Settings navigation when the window background is translucent. Addresses [#903](https://github.com/Kuddev/nebula/issues/903).
-- Fixed image paste staying blocked after a Linux pane reached its 32-image quota and the earlier work had finished. Addresses [#981](https://github.com/Kuddev/nebula/issues/981).
+- Fixed low contrast in the Linux Settings navigation when the window background is translucent.
+- Fixed image paste staying blocked after a Linux pane reached its 32-image quota and the earlier work had finished.
 - Fixed the About page showing Windows on other desktop platforms.
-- Fixed wrapped formulas losing alignment when partly scrolled out of view and the terminal still has their source lines. Columns stay in place, and gaps no longer activate nearby links. Addresses [#909](https://github.com/Kuddev/nebula/issues/909).
+- Fixed wrapped formulas losing alignment when partly scrolled out of view and the terminal still has their source lines. Columns stay in place, and gaps no longer activate nearby links.
 - Fixed local file links broken by UTF-8 truncation when the original path can be recovered from the link.
 - Fixed terminal stalls when saving directory history. Recent directories remain available in memory if the history file cannot be locked.
 - Fixed Antigravity subagents taking over the foreground session or marking its turn complete.
@@ -57,10 +57,10 @@ macOS、Linux 和 Android 下载为预览版。
 
 - 修复 macOS 上助手 Hook 连接在延迟消息到达前就被关闭的问题。
 - 修复鼠标悬停时标签分组整行被填色的问题，现在只高亮标题和引导线。
-- 修复 Linux 窗口背景半透明时设置导航文字对比度过低的问题。对应 [#903](https://github.com/Kuddev/nebula/issues/903)。
-- 修复 Linux 同一窗格粘贴 32 张图片后，即使之前的任务已结束也无法继续粘贴的问题。对应 [#981](https://github.com/Kuddev/nebula/issues/981)。
+- 修复 Linux 窗口背景半透明时设置导航文字对比度过低的问题。
+- 修复 Linux 同一窗格粘贴 32 张图片后，即使之前的任务已结束也无法继续粘贴的问题。
 - 修复其他桌面平台的关于页误显示 Windows 的问题。
-- 修复终端仍保留公式源行时，换行公式部分滚出视区后的错位。固定列保持原位，点击空白不会误开邻近链接。对应 [#909](https://github.com/Kuddev/nebula/issues/909)。
+- 修复终端仍保留公式源行时，换行公式部分滚出视区后的错位。固定列保持原位，点击空白不会误开邻近链接。
 - 修复因 UTF-8 截断而失效的本地文件链接，可在路径能够从链接中恢复时打开原文件。
 - 修复保存目录历史时终端卡顿的问题。无法锁定历史文件时，仍可使用内存中的近期目录。
 - 修复 Antigravity 子会话接管前台会话或将前台任务误标为完成的问题。
