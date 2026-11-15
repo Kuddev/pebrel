@@ -468,6 +468,19 @@ pub struct SidePanel {
     /// "读不到"和"目录真的是空的"。
     enumeration_failed: bool,
     needs_refresh: bool,
+    /// Absolute paths inserted by an incremental expand that still need an
+    /// ignore annotation. The next idle frame hands exactly these to the
+    /// background worker; the click path never waits for git, and a worker
+    /// already in flight coalesces them into one follow-up pass.
+    pending_ignore_paths: HashSet<PathBuf>,
+    /// Monotonic identity of the visible tree shape (root, expansion).
+    /// A full snapshot captured before a local change must not replace the
+    /// incrementally updated rows when it arrives.
+    tree_generation: u64,
+    /// The row set on screen was cut by [`MAX_ROWS`] (a snapshot or an expand),
+    /// so the tail of the tree is missing. Only a re-flatten can put those rows
+    /// back, so a collapse must not pretend the cut was reversible.
+    rows_truncated: bool,
 }
 
 /// What the background snapshot worker produces: everything `refresh` used to
@@ -478,13 +491,28 @@ struct PanelSnapshot {
     root: PathBuf,
     /// Files 快照所属的来宾位置；避免两个发行版恰好同为 `/home` 时串结果。
     files_wsl: Option<crate::shell_detect::WslCwd>,
-    rows: Vec<FileRow>,
-    /// 这次枚举是否全部成功。WSL 冷启动可能耗尽预算被 kill，那时 `rows` 是空的
-    /// 但**不代表目录是空的**——UI 必须能区分，否则会把"读不到"说成"此目录为空"。
-    enumeration_ok: bool,
+    update: SnapshotUpdate,
+    /// [`SidePanel::tree_generation`] when the scan started. Stale row sets are
+    /// dropped instead of reverting an expand/collapse done while it ran.
+    tree_generation: u64,
     /// `None` 表示目录行先行发布、VCS 仍在读取；`Some(None)` 才表示当前
     /// 目录不在仓库中。这样慢 WSL git 不会让 Files 一直显示空白。
     git: Option<Option<GitInfo>>,
+}
+
+/// What a finished worker publishes. A full snapshot replaces the tree; the
+/// ignore-only pass annotates the rows an expand inserted by path, so rows
+/// outside the request keep their mark and a concurrent expand/collapse is
+/// never overwritten.
+enum SnapshotUpdate {
+    Rows {
+        rows: Vec<FileRow>,
+        /// 这次枚举是否全部成功。WSL 冷启动可能耗尽预算被 kill，那时 `rows` 是空的
+        /// 但**不代表目录是空的**——UI 必须能区分，否则会把"读不到"说成"此目录为空"。
+        enumeration_ok: bool,
+    },
+    /// `queried` 是这次真正问过 git 的路径；只有这些行会被改写。
+    Ignored { queried: HashSet<PathBuf>, ignored: HashSet<PathBuf> },
 }
 
 /// 工人 panic/提前返回也必须解锁；否则一次异常会让此窗口今后的所有刷新失效。
@@ -543,6 +571,9 @@ impl SidePanel {
             snapshot_slot: Default::default(),
             enumeration_failed: false,
             needs_refresh: false,
+            pending_ignore_paths: HashSet::new(),
+            tree_generation: 0,
+            rows_truncated: false,
         }
     }
 
@@ -672,6 +703,8 @@ impl SidePanel {
             || wsl_changed
             || self.needs_refresh)
         {
+            // 增量展开只改内存行；ignore 标注由后台补，不在点击路径等 git。
+            self.refresh_ignored_marks();
             return changed;
         }
         if root_changed {
@@ -679,6 +712,7 @@ impl SidePanel {
             self.expanded.clear();
             self.scroll = 0;
             self.selected = None;
+            self.tree_generation = self.tree_generation.wrapping_add(1);
         }
         self.refresh();
         changed || root_changed || custom_invalidated || follow_override_cleared || wsl_changed
@@ -710,15 +744,62 @@ impl SidePanel {
             self.needs_refresh = true;
             return false;
         }
-        self.tree_rows = snapshot.rows;
-        if self.search.trim().is_empty() {
+        let generation_matches = snapshot.tree_generation == self.tree_generation;
+        // 第一遍（`git: None`）只做枚举，第二遍才带 ignore 标注。
+        let annotated = snapshot.git.is_some();
+        let mut changed = false;
+        match snapshot.update {
+            SnapshotUpdate::Rows { rows, enumeration_ok } if generation_matches => {
+                // 第一遍不付 `check-ignore` 的代价；沿用上一份按路径的标注，
+                // 免得每次重刷先把斜体抹掉再补回来。新出现的行仍由第二遍补。
+                let previous: HashSet<PathBuf> = if annotated {
+                    HashSet::new()
+                } else {
+                    self.tree_rows
+                        .iter()
+                        .filter(|row| row.ignored)
+                        .map(|row| row.path.clone())
+                        .collect()
+                };
+                self.tree_rows = rows;
+                if !annotated {
+                    for row in &mut self.tree_rows {
+                        row.ignored = previous.contains(&row.path);
+                    }
+                }
+                // 到了上限的树可能还有没画出来的行；折叠腾出位置后只有重新
+                // 扁平才能把它们补回来。
+                self.rows_truncated = self.tree_rows.len() >= MAX_ROWS;
+                self.enumeration_failed = !enumeration_ok;
+                changed = true;
+            },
+            SnapshotUpdate::Rows { .. } => {
+                // 工人开始扫描后根/展开变了：增量路径已经把行集改成
+                // 最新状态，这份旧行集只会把它回退，只能丢弃。但它承载的
+                // 内容（磁盘上的新增文件、ignore 标注）也一起丢了，而起这份
+                // 快照的 `refresh` 已经消费掉 `needs_refresh`——重挂一次，
+                // 下一帧按当前树形状重扫；只有真被丢弃过才付这次重扫。
+                self.needs_refresh = true;
+            },
+            SnapshotUpdate::Ignored { queried, ignored } => {
+                // 只按路径改这次问过的行；没问过的行保留原标注，所以既能与
+                // 新行共存，也不会把屏上已有的斜体抹掉。
+                for row in &mut self.tree_rows {
+                    if queried.contains(&row.path) {
+                        row.ignored = ignored.contains(&row.path);
+                    }
+                }
+                changed = true;
+            },
+        }
+        if changed && self.search.trim().is_empty() {
             self.rows.clone_from(&self.tree_rows);
         }
-        self.enumeration_failed = !snapshot.enumeration_ok;
         if let Some(git) = snapshot.git {
             self.git = git.map(std::sync::Arc::new);
+            changed = true;
         }
-        true
+        changed
     }
 
     fn harvest_file_search(&mut self) -> bool {
@@ -760,6 +841,7 @@ impl SidePanel {
             self.expanded.clear();
             self.scroll = 0;
             self.selected = None;
+            self.tree_generation = self.tree_generation.wrapping_add(1);
             self.refresh();
         }
         changed
@@ -779,6 +861,7 @@ impl SidePanel {
             self.expanded.clear();
             self.scroll = 0;
             self.selected = None;
+            self.tree_generation = self.tree_generation.wrapping_add(1);
             self.refresh();
         }
         true
@@ -814,6 +897,7 @@ impl SidePanel {
             self.expanded.clear();
             self.scroll = 0;
             self.selected = None;
+            self.tree_generation = self.tree_generation.wrapping_add(1);
             self.refresh();
         }
         changed
@@ -932,6 +1016,8 @@ impl SidePanel {
             // 没有根：清空是即时且无成本的，不需要工人。
             self.rows = Vec::new();
             self.tree_rows = Vec::new();
+            self.rows_truncated = false;
+            self.pending_ignore_paths.clear();
             self.search_memory = None;
             self.git = None;
             self.sync_file_index();
@@ -957,31 +1043,18 @@ impl SidePanel {
             .or_else(|| self.followed_cwd.clone())
             .unwrap_or_else(|| root.clone());
         let wsl = self.followed_wsl.clone();
+        let tree_generation = self.tree_generation;
+        self.pending_ignore_paths.clear();
         let running = std::sync::Arc::clone(&self.snapshot_running);
         let slot = std::sync::Arc::clone(&self.snapshot_slot);
         let worker = std::thread::spawn(move || {
             let _running_guard = SnapshotRunningGuard(running);
-            let (rows, enumeration_ok) = match &files_wsl {
-                Some(located) => SidePanel::tree_rows_wsl(located, &expanded),
-                None => (SidePanel::tree_rows(&root, &expanded), true),
-            };
-            // 文件列表是 Files 的主结果，不能被随后可能耗满超时预算的 WSL
-            // git 探测扣住。先发布目录行；VCS 完成后再用同一行集补全快照。
-            if let Ok(mut slot) = slot.lock() {
-                *slot = Some(PanelSnapshot {
-                    root: root.clone(),
-                    files_wsl: files_wsl.clone(),
-                    rows: rows.clone(),
-                    enumeration_ok,
-                    git: None,
-                });
-            }
             // 设置可强制只认 Git / SVN（混合仓库场景）；Auto 保持既有探测：
             // a checkout nested inside a Git tree must remain visible as SVN.
             // Prefer SVN only when its metadata is in the current path's
             // ancestor chain; ordinary Git directories keep the cheaper Git
             // first path and only probe SVN as a fallback.
-            let git = match &wsl {
+            let probe_git = move || match &wsl {
                 // 聚焦的是 WSL 终端：宿主的 `git_root` 与来宾目录毫无关系
                 // （UNC 不可达时它还停在上一个宿主目录），必须在来宾里跑
                 // git。SVN 不走这条——WSL 里用 svn 没有实据，不加没验证过
@@ -1007,9 +1080,103 @@ impl SidePanel {
                     },
                 },
             };
+            SidePanel::build_snapshot(
+                root,
+                files_wsl,
+                expanded,
+                tree_generation,
+                probe_git,
+                |snapshot| {
+                    if let Ok(mut slot) = slot.lock() {
+                        *slot = Some(snapshot);
+                    }
+                },
+            );
+        });
+        #[cfg(test)]
+        {
+            self.snapshot_thread = Some(worker);
+        }
+        #[cfg(not(test))]
+        drop(worker);
+    }
+
+    /// Produce the two-stage snapshot consumed by [`Self::harvest_snapshot`].
+    /// Background-only. The first publication is pure directory enumeration, so
+    /// `git check-ignore` (100-360 ms for a full tree) and VCS probing cannot
+    /// hold the first paint; the second adds both annotations to the same rows.
+    fn build_snapshot(
+        root: PathBuf,
+        files_wsl: Option<crate::shell_detect::WslCwd>,
+        expanded: HashSet<PathBuf>,
+        tree_generation: u64,
+        probe_git: impl FnOnce() -> Option<GitInfo>,
+        mut publish: impl FnMut(PanelSnapshot),
+    ) {
+        let (mut rows, enumeration_ok) = match &files_wsl {
+            Some(located) => SidePanel::tree_rows_wsl(located, &expanded),
+            None => (SidePanel::tree_rows(&root, &expanded), true),
+        };
+        publish(PanelSnapshot {
+            root: root.clone(),
+            files_wsl: files_wsl.clone(),
+            update: SnapshotUpdate::Rows { rows: rows.clone(), enumeration_ok },
+            tree_generation,
+            git: None,
+        });
+        let git = probe_git();
+        // 来宾树没有宿主 git 可查；`.git` 祖先检查在 [`Self::ignored_paths`]。
+        if files_wsl.is_none() {
+            Self::mark_ignored(&root, &mut rows);
+        }
+        publish(PanelSnapshot {
+            root,
+            files_wsl,
+            update: SnapshotUpdate::Rows { rows, enumeration_ok },
+            tree_generation,
+            git: Some(git),
+        });
+    }
+
+    /// Resolve ignore annotations requested by an incremental expand. Reuses
+    /// the single snapshot worker/slot: if one is already in flight the request
+    /// stays pending and folds into one follow-up pass instead of stacking.
+    fn refresh_ignored_marks(&mut self) {
+        if self.pending_ignore_paths.is_empty() {
+            return;
+        }
+        let Some(root) = self.root.clone() else {
+            self.pending_ignore_paths.clear();
+            return;
+        };
+        if self.file_wsl_root().is_some() {
+            // 来宾树没有宿主 git，也不会入队；清掉以防切根中途的残留。
+            self.pending_ignore_paths.clear();
+            return;
+        }
+        if self.snapshot_running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        // 只问这批新插入的行；屏上已有的标注不动，也就不再为整棵树跑 git。
+        let queried = std::mem::take(&mut self.pending_ignore_paths);
+        let tree_generation = self.tree_generation;
+        let running = std::sync::Arc::clone(&self.snapshot_running);
+        let slot = std::sync::Arc::clone(&self.snapshot_slot);
+        let worker = std::thread::spawn(move || {
+            let _running_guard = SnapshotRunningGuard(running);
+            let Some(ignored) =
+                SidePanel::ignored_paths(&root, queried.iter().map(PathBuf::as_path))
+            else {
+                return;
+            };
             if let Ok(mut slot) = slot.lock() {
-                *slot =
-                    Some(PanelSnapshot { root, files_wsl, rows, enumeration_ok, git: Some(git) });
+                *slot = Some(PanelSnapshot {
+                    root,
+                    files_wsl: None,
+                    update: SnapshotUpdate::Ignored { queried, ignored },
+                    tree_generation,
+                    git: None,
+                });
             }
         });
         #[cfg(test)]
@@ -1020,29 +1187,9 @@ impl SidePanel {
         drop(worker);
     }
 
-    /// Rebuild only the flattened rows (tree shape / filter changes; the git
-    /// snapshot stays).
-    fn rebuild_rows(&mut self) {
-        let Some(root) = self.root.clone() else { return };
-        if !self.search.trim().is_empty() {
-            self.queue_file_search();
-            return;
-        }
-        match self.file_wsl_root() {
-            Some(located) => {
-                let (rows, ok) = Self::tree_rows_wsl(located, &self.expanded);
-                self.tree_rows = rows;
-                self.enumeration_failed = !ok;
-            },
-            None => {
-                self.tree_rows = Self::tree_rows(&root, &self.expanded);
-                self.enumeration_failed = false;
-            },
-        }
-        self.rows.clone_from(&self.tree_rows);
-    }
-
     fn queue_file_search(&mut self) {
+        // 过滤器只改 `rows` 的视图，不动行集；bump generation 只会把正在跑的
+        // 全量扫描作废，再为同一个行集重跑一次。
         self.scroll = 0;
         self.search_error = None;
         self.search_total = 0;
@@ -1169,8 +1316,9 @@ impl SidePanel {
                 ignored: false,
             });
         }
-        Self::flatten_dir_into(&mut rows, expanded, root, 0);
-        Self::mark_ignored(root, &mut rows);
+        // Ignore annotations are a separate background pass: enumerating the
+        // tree must not wait on `git check-ignore`.
+        Self::flatten_dir_into(&mut rows, expanded, root, 0, MAX_ROWS);
         rows
     }
 
@@ -1203,7 +1351,7 @@ impl SidePanel {
         let Some(listing) = wsl_read_dirs(&located.distro, &dirs) else {
             return (rows, false);
         };
-        Self::flatten_wsl_dir_into(&mut rows, expanded, &listing, &root, 0);
+        Self::flatten_wsl_dir_into(&mut rows, expanded, &listing, &root, 0, MAX_ROWS);
         // 非零退出通常只是某个已展开的子目录在两帧之间被删了——那一条起点报错，
         // 其余起点的输出照样在 stdout 里。只有**根**也没读出条目时才是真失败：
         // 根为空的目录不可能有已展开的后代，所以这时起点只有根一个，非零退出
@@ -1220,13 +1368,14 @@ impl SidePanel {
         listing: &WslDirListing,
         guest_dir: &str,
         depth: usize,
+        limit: usize,
     ) {
-        if rows.len() >= MAX_ROWS {
+        if rows.len() >= limit {
             return;
         }
         let Some(entries) = listing.by_dir.get(guest_dir) else { return };
         for (is_dir, name, guest_path) in entries {
-            if rows.len() >= MAX_ROWS {
+            if rows.len() >= limit {
                 return;
             }
             // 该 PathBuf 只作为展开/选中的稳定键；真实来宾路径始终取
@@ -1244,21 +1393,24 @@ impl SidePanel {
                 ignored: false,
             });
             if is_expanded {
-                Self::flatten_wsl_dir_into(rows, expanded, listing, guest_path, depth + 1);
+                Self::flatten_wsl_dir_into(rows, expanded, listing, guest_path, depth + 1, limit);
             }
         }
     }
 
+    /// 把 `dir` 按 DFS 顺序压进 `rows`。返回 `read_dir` 是否成功——`limit`
+    /// 用尽不算失败，那只是到了上限。
     fn flatten_dir_into(
         rows: &mut Vec<FileRow>,
         expanded: &HashSet<PathBuf>,
         dir: &Path,
         depth: usize,
-    ) {
-        if rows.len() >= MAX_ROWS {
-            return;
+        limit: usize,
+    ) -> bool {
+        if rows.len() >= limit {
+            return true;
         }
-        let Ok(read) = std::fs::read_dir(dir) else { return };
+        let Ok(read) = std::fs::read_dir(dir) else { return false };
         let entries = read.flatten().filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             // `.git` is noise in a file tree; everything else shows.
@@ -1269,8 +1421,8 @@ impl SidePanel {
             Some((is_dir, name, e.path()))
         });
         for (is_dir, name, path) in Self::ordered_entries(entries, MAX_PER_DIR) {
-            if rows.len() >= MAX_ROWS {
-                return;
+            if rows.len() >= limit {
+                return true;
             }
             let is_expanded = is_dir && expanded.contains(&path);
             rows.push(FileRow {
@@ -1284,9 +1436,10 @@ impl SidePanel {
                 ignored: false,
             });
             if is_expanded {
-                Self::flatten_dir_into(rows, expanded, &path, depth + 1);
+                Self::flatten_dir_into(rows, expanded, &path, depth + 1, limit);
             }
         }
+        true
     }
 
     /// Order one directory's entries and apply the per-directory cap.
@@ -1332,18 +1485,40 @@ impl SidePanel {
 
     /// Annotate the already-sorted snapshot in one `git check-ignore` call. This
     /// runs after flattening, so ignore state can never change row order.
-    fn mark_ignored(root: &Path, rows: &mut [FileRow]) {
+    /// Returns whether a git process was actually consulted.
+    fn mark_ignored(root: &Path, rows: &mut [FileRow]) -> bool {
+        let paths = rows.iter().filter(|row| !row.is_parent).map(|row| row.path.as_path());
+        let Some(ignored) = Self::ignored_paths(root, paths) else { return false };
+        for row in rows {
+            row.ignored = ignored.contains(&row.path);
+        }
+        true
+    }
+
+    /// Absolute paths among `paths` that `git check-ignore` reports as ignored.
+    /// `None` when there is nothing to ask — no candidates, or no `.git` in
+    /// `root`'s ancestors, in which case spawning git can only fail.
+    fn ignored_paths<'a>(
+        root: &Path,
+        paths: impl IntoIterator<Item = &'a Path>,
+    ) -> Option<HashSet<PathBuf>> {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        let candidates: Vec<_> = rows
-            .iter()
-            .filter(|row| !row.is_parent)
-            .filter_map(|row| row.path.strip_prefix(root).ok())
-            .map(|path| path.to_string_lossy().replace('\\', "/"))
+        // 普通目录（不在仓库里）是文件树最常见的形态，不能为一次注定失败的
+        // 查询起子进程。
+        if git_repository_root(root).is_none() {
+            return None;
+        }
+        let candidates: Vec<(PathBuf, String)> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let relative = path.strip_prefix(root).ok()?;
+                Some((path.to_owned(), relative.to_string_lossy().replace('\\', "/")))
+            })
             .collect();
         if candidates.is_empty() {
-            return;
+            return None;
         }
 
         let mut command = Command::new("git");
@@ -1354,17 +1529,17 @@ impl SidePanel {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         crate::platform::process::hidden_command(&mut command);
-        let Ok(mut child) = command.spawn() else { return };
-        let Some(mut stdin) = child.stdin.take() else { return };
-        for path in candidates {
-            if stdin.write_all(path.as_bytes()).is_err() || stdin.write_all(&[0]).is_err() {
-                return;
+        let Ok(mut child) = command.spawn() else { return None };
+        let Some(mut stdin) = child.stdin.take() else { return None };
+        for (_, relative) in &candidates {
+            if stdin.write_all(relative.as_bytes()).is_err() || stdin.write_all(&[0]).is_err() {
+                return None;
             }
         }
         drop(stdin);
-        let Ok(output) = child.wait_with_output() else { return };
+        let Ok(output) = child.wait_with_output() else { return None };
         if !output.status.success() && output.status.code() != Some(1) {
-            return;
+            return None;
         }
         let ignored: HashSet<String> = output
             .stdout
@@ -1372,11 +1547,59 @@ impl SidePanel {
             .filter(|path| !path.is_empty())
             .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
             .collect();
-        for row in rows {
-            row.ignored = row.path.strip_prefix(root).ok().is_some_and(|relative| {
-                ignored.contains(&relative.to_string_lossy().replace('\\', "/"))
-            });
-        }
+        Some(
+            candidates
+                .into_iter()
+                .filter(|(_, relative)| ignored.contains(relative))
+                .map(|(path, _)| path)
+                .collect(),
+        )
+    }
+
+    /// Drop the visible descendants of a collapsed directory. Flattened rows
+    /// are DFS-ordered, so its descendants are the contiguous run right after
+    /// it with a greater depth; no directory is re-read.
+    fn collapse_subtree(rows: &mut Vec<FileRow>, path: &Path) -> bool {
+        let Some(index) =
+            rows.iter().position(|row| !row.is_parent && row.is_dir && row.path == path)
+        else {
+            return false;
+        };
+        let depth = rows[index].depth;
+        let end = rows[index + 1..]
+            .iter()
+            .position(|row| row.depth <= depth)
+            .map_or(rows.len(), |offset| index + 1 + offset);
+        rows.drain(index + 1..end);
+        rows[index].expanded = false;
+        true
+    }
+
+    /// Insert a freshly read child subtree after its directory row. `children`
+    /// comes from reading only the newly expanded directory, never the rest of
+    /// the tree; the global row cap still applies.
+    ///
+    /// Returns `(found, truncated)`. `truncated` 表示上限砍掉了属于别的子树的
+    /// 行：此刻行集比同一形状重新扁平的结果更短，只有重新扁平才能补回来。
+    fn expand_subtree(
+        rows: &mut Vec<FileRow>,
+        path: &Path,
+        children: Vec<FileRow>,
+    ) -> (bool, bool) {
+        let Some(index) =
+            rows.iter().position(|row| !row.is_parent && row.is_dir && row.path == path)
+        else {
+            return (false, false);
+        };
+        rows[index].expanded = true;
+        rows.splice(index + 1..index + 1, children);
+        // Match a full re-flatten: the inserted subtree may push the tail past
+        // the global cap, so drop whatever no longer fits after it.
+        // `>=`，不是 `>`：点击的是最后一行、子行又恰好填满预算时，长度只到
+        // MAX_ROWS，但子树已被预算截断，折叠兄弟目录后仍需重扫才能补回来。
+        let truncated = rows.len() >= MAX_ROWS;
+        rows.truncate(MAX_ROWS);
+        (true, truncated)
     }
 
     /// Click on visible row `index` (post-scroll). Directories toggle their
@@ -1391,7 +1614,9 @@ impl SidePanel {
         }
         let path = row.path.clone();
         let guest_path = row.guest_path.clone();
-        if row.is_parent {
+        let depth = row.depth;
+        let is_parent = row.is_parent;
+        if is_parent {
             // 返回上级只改变窗口内的目录树根节点，不能连带修改终端 cwd；
             // 用户仍可通过现有“跟随”操作回到当前终端目录。
             if let (Some(current), Some(guest)) = (self.file_wsl_root(), guest_path) {
@@ -1402,11 +1627,81 @@ impl SidePanel {
             }
             return self.set_custom_root(path);
         }
-        if !self.expanded.remove(&path) {
-            self.expanded.insert(path);
+        // 任何展开/折叠都让工人手里基于旧 `expanded` 的行集过期。
+        self.tree_generation = self.tree_generation.wrapping_add(1);
+        if self.expanded.remove(&path) {
+            // Collapse is a pure in-memory cut: no directory re-read, no git.
+            Self::collapse_subtree(&mut self.tree_rows, &path);
+            self.rows.clone_from(&self.tree_rows);
+            if self.rows_truncated {
+                // 上限曾在某次展开时砍掉别的子树的行；折叠后只有按当前形状
+                // 重扫才能把它们找回来。行集先更新，扫描在后台。
+                self.needs_refresh = true;
+            }
+            return true;
         }
-        // Re-flatten only (no git re-run): tree shape changed, content didn't.
-        self.rebuild_rows();
+        // 本行之后只剩 `MAX_ROWS - index - 1` 个位置；多读出来的子行会被上限
+        // 截掉，没理由为它们走盘。
+        let budget = self
+            .tree_rows
+            .iter()
+            .position(|row| !row.is_parent && row.is_dir && row.path == path)
+            .map_or(MAX_ROWS, |index| MAX_ROWS.saturating_sub(index + 1));
+        self.expanded.insert(path.clone());
+        let wsl_root = self.file_wsl_root().cloned();
+        let host_tree = wsl_root.is_none();
+        let mut children = Vec::new();
+        match (wsl_root, guest_path) {
+            (Some(located), Some(guest)) => {
+                // 只读这一个新目录（以及被折叠父级藏起来的已展开后代），
+                // 不再为整棵已展开树重跑一条 `find`。
+                let dirs = wsl_dirs_to_list(&guest, &self.expanded);
+                match wsl_read_dirs(&located.distro, &dirs) {
+                    Some(listing) => {
+                        let ok = listing.exit_ok || listing.by_dir.contains_key(&guest);
+                        Self::flatten_wsl_dir_into(
+                            &mut children,
+                            &self.expanded,
+                            &listing,
+                            &guest,
+                            depth + 1,
+                            budget,
+                        );
+                        self.enumeration_failed = !ok;
+                    },
+                    None => {
+                        // Keep the rows already on screen; the regular snapshot
+                        // path surfaces the read failure with its retry state.
+                        self.enumeration_failed = true;
+                        self.needs_refresh = true;
+                    },
+                }
+            },
+            (None, None) => {
+                if !Self::flatten_dir_into(&mut children, &self.expanded, &path, depth + 1, budget)
+                {
+                    // 目录在两份快照之间被删/读不到：别把它留成“展开但空”，
+                    // 交给下一份快照摘掉这一行。
+                    self.expanded.remove(&path);
+                    self.needs_refresh = true;
+                    return false;
+                }
+            },
+            (_, _) => {
+                // 来宾行与当前根不匹配（根切换期间还没落地的旧快照）。不能把
+                // 来宾路径交给宿主文件 API，等下一份快照重建这棵树。
+                self.expanded.remove(&path);
+                return false;
+            },
+        }
+        if host_tree {
+            // New rows have no ignore annotation yet; queue exactly them for the
+            // background pass instead of re-checking the whole visible tree.
+            self.pending_ignore_paths.extend(children.iter().map(|row| row.path.clone()));
+        }
+        let (_, truncated) = Self::expand_subtree(&mut self.tree_rows, &path, children);
+        self.rows_truncated |= truncated;
+        self.rows.clone_from(&self.tree_rows);
         true
     }
 
