@@ -1733,6 +1733,7 @@ fn image_projection_preserves_erased_tiles_row_offsets_and_clipping() {
             visual_cells: 4,
             shift_before: 0,
             shift_after: -2,
+            limit: usize::MAX,
         }],
     };
     let runs = [
@@ -1796,6 +1797,7 @@ fn expanded_formula_clips_image_without_changing_texture_origin() {
             visual_cells: 6,
             shift_before: 0,
             shift_after: 3,
+            limit: usize::MAX,
         }],
     };
     let runs = [ImageRun {
