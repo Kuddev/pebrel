@@ -277,7 +277,7 @@ struct SplitDrag {
 /// 避免 paint 阶段反向 update 实体）。键：(tab 下标, 节点路径)。
 type SplitBoundsStore = Rc<RefCell<HashMap<(usize, Vec<bool>), Bounds<Pixels>>>>;
 /// 键：pane id（方向导航要拿所有叶子的屏幕矩形算最近邻）。
-type PaneBoundsStore = Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>;
+type PaneBoundsStore = Rc<RefCell<pane_header::PaneBounds>>;
 
 /// GPUI `Bounds` → `nebula_split::Rect`（同为窗口逻辑像素坐标系）。
 fn to_split_rect(bounds: &Bounds<Pixels>) -> nebula_split::Rect {
@@ -949,7 +949,7 @@ impl NebulaWorkspace {
             _sidebar_resize_keys: Self::subscribe_sidebar_resize_cancel(window, cx),
             reader_focus: None,
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
-            pane_bounds: Rc::new(RefCell::new(HashMap::new())),
+            pane_bounds: PaneBoundsStore::default(),
             titlebar_background: window_titlebar::TitleBarBackground::default(),
             theme_transition: crate::gpui_shell::theme::ThemeTransition::default(),
             command_palette_open: false,
@@ -1500,9 +1500,7 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    /// ctrl+alt+方向：按上一帧 pane 矩形找目标方向最近邻（垂直漂移 4 倍
-    /// 惩罚，`nebula_split::nav_target` 与旧壳同式）。缩放态先退出缩放再
-    /// 导航，pane 矩形下一帧才有——本次导航按缩放前记录的矩形执行。
+    /// Ctrl+Alt+方向：在未放大的分屏布局中寻找最近邻。
     fn navigate_pane(&mut self, nav: SplitNav, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.active;
         let Some(WorkspaceTab::Terminal { panes, focused, zoomed, .. }) = self.tabs.get_mut(active)
@@ -1512,15 +1510,15 @@ impl NebulaWorkspace {
         if panes.len() < 2 {
             return;
         }
-        *zoomed = false;
-        let focused_id = *focused;
-        let bounds = self.pane_bounds.borrow();
-        let rects: Vec<(u64, nebula_split::Rect)> = panes
-            .iter()
-            .filter_map(|pane| bounds.get(&pane.id).map(|b| (pane.id, to_split_rect(b))))
-            .collect();
-        drop(bounds);
-        if let Some(target) = nebula_split::nav_target(&rects, focused_id, nav) {
+        let target = self.pane_bounds.borrow().direction_target(
+            panes.iter().map(|pane| pane.id),
+            *focused,
+            nav,
+        );
+        if std::mem::take(zoomed) {
+            self.mark_structural_resize(active, cx);
+        }
+        if let Some(target) = target {
             self.focus_pane(active, target, window, cx);
         } else {
             cx.notify();
