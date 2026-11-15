@@ -413,6 +413,8 @@ pub struct TerminalView {
     pub(crate) port_forwards: Vec<crate::ssh_session::LocalForward>,
     pub(crate) port_forward_task: Option<gpui::Task<()>>,
     ssh_label: Option<String>,
+    /// Cached host name for the outer SSH connection typed into a local pane.
+    manual_ssh_label: Option<tab_identity::ManualSshLabel>,
     /// 创建本地 PTY 时冻结的受控环境，供独立 `pane.exec` child 复用。
     pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
     /// SSH 连接阶段（业务层上报）：Ready 前画连接横幅，Failed 驻留错误。
@@ -862,6 +864,9 @@ impl TerminalView {
                     self.on_native_cmd_prompt(cx);
                 }
                 self.suggest.completion_shell_report(&name, &value);
+                if self.refresh_manual_ssh_label() {
+                    cx.emit(TerminalViewEvent::TitleChanged);
+                }
                 self.native_clipboard.observe(&name, &value);
                 self.observe_shell_pointer(&name, &value, cx);
                 self.handle_completion_editor_report(&name, &value, cx);

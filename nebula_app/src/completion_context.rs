@@ -18,6 +18,7 @@ struct Frame {
     token: Option<String>,
     env: SuggestEnv,
     cwd: String,
+    ssh_destination: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -27,6 +28,12 @@ pub(crate) struct CompletionContext {
 }
 
 impl CompletionContext {
+    /// The outer typed SSH connection owns the tab's host identity, including
+    /// while remote commands or nested shells change the foreground program.
+    pub(crate) fn ssh_destination(&self) -> Option<&str> {
+        self.frames.iter().find_map(|frame| frame.ssh_destination.as_deref())
+    }
+
     pub(crate) fn owns_current(&self, token: &str) -> bool {
         self.frames.last().is_some_and(|frame| frame.token.as_deref() == Some(token))
     }
@@ -38,11 +45,21 @@ impl CompletionContext {
     fn submit_argv(&mut self, env: &SuggestEnv, cwd: &str, words: &[String]) -> Option<SuggestEnv> {
         let child = connection_argv_environment(env, words)?;
         if self.frames.is_empty() {
-            self.frames.push(Frame { token: None, env: env.clone(), cwd: cwd.to_owned() });
+            self.frames.push(Frame {
+                token: None,
+                env: env.clone(),
+                cwd: cwd.to_owned(),
+                ssh_destination: None,
+            });
         } else if let Some(frame) = self.frames.last_mut() {
             frame.cwd = cwd.to_owned();
         }
-        self.frames.push(Frame { token: None, env: child.clone(), cwd: String::new() });
+        self.frames.push(Frame {
+            token: None,
+            env: child.clone(),
+            cwd: String::new(),
+            ssh_destination: crate::ssh::ssh_destination_words(words),
+        });
         Some(child)
     }
 
@@ -77,6 +94,7 @@ impl CompletionContext {
                 token: Some(token.to_owned()),
                 env: reported_env.clone(),
                 cwd: cwd.to_owned(),
+                ssh_destination: None,
             });
         }
         (reported_env != *env).then(|| (reported_env, cwd.to_owned()))

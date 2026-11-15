@@ -1,0 +1,6 @@
+{
+  "source": "Windows OpenSSH loopback PTY, using nebula_terminal/src/tty/connection.ps1; 2026-11-14",
+  "destination": "test@127.0.0.1:51400",
+  "connected": "\u001b]7;file://localhost/home/test/project\u0007\u001b]1337;SetUserVar=pebrel_shell=bG9jYWw6cGFyZW50\u0007\u001b]1337;SetUserVar=pebrel_connection=bG9jYWw6cGFyZW50CnNzaAAtRgBOVUwALW8AQmF0Y2hNb2RlPXllcwAtbwBTdHJpY3RIb3N0S2V5Q2hlY2tpbmc9bm8ALW8AVXNlcktub3duSG9zdHNGaWxlPU5VTAAtbwBMb2dMZXZlbD1FUlJPUgAtdHQALXAANTE0MDAAdGVzdEAxMjcuMC4wLjE=\u0007\u001b]1337;SetUserVar=pebrel_shell=cmVtb3RlOmNoaWxk\u0007\u001b]7;file://remote/srv/remote\u0007\u001b]133;C\u0007uptime\r\n\u001b]133;D;0\u0007REMOTE_DONE\r\n",
+  "disconnected": "\u001b]1337;SetUserVar=pebrel_shell=bG9jYWw6cGFyZW50\u0007\u001b]133;D;0\u0007\u001b]7;file://localhost/home/test/project\u0007"
+}

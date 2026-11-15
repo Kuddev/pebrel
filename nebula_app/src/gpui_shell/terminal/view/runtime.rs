@@ -60,9 +60,13 @@ impl TerminalView {
                 .map(|agent| agent.slug().to_owned())
                 .or_else(|| crate::display::extract_program(&self.suggest.last_committed));
             self.invalidate_ai_session_probe();
-            if identity != self.running_program {
+            let program_changed = identity != self.running_program;
+            if program_changed {
                 self.running_program = identity;
                 self.ai_session = None;
+            }
+            let ssh_label_changed = self.refresh_manual_ssh_label();
+            if program_changed || ssh_label_changed {
                 cx.emit(TerminalViewEvent::TitleChanged);
             }
             let agent = self
