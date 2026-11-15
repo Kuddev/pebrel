@@ -34,6 +34,24 @@ pub struct FileSearchOptions {
     pub regex: bool,
 }
 
+/// A compiled query that matches one display name at a time.
+///
+/// The SFTP browser filters the directory it already listed, so it has no
+/// `IndexedPath`. It still uses the local tree's query semantics instead of
+/// forking case folding, whole-word or regex behavior.
+#[derive(Clone)]
+pub(crate) struct NameMatcher(QueryMatcher);
+
+impl NameMatcher {
+    pub(crate) fn compile(query: &str, options: FileSearchOptions) -> Result<Self, String> {
+        QueryMatcher::compile(query, options).map(Self)
+    }
+
+    pub(crate) fn matches(&self, name: &str) -> bool {
+        self.0.matches_text(name, &name.to_lowercase())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileIndexStatus {
     Idle,

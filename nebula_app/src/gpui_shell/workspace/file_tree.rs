@@ -36,7 +36,7 @@ pub(super) const ROW_WASH_INSET: f32 = 2.0;
 /// 抽屉内容左右留白（旧壳 `px + 12`：比水洗再多 2px）。
 pub(super) const DRAWER_TEXT_INSET: f32 = 4.0;
 
-fn hover_text_color(cx: &gpui::App) -> gpui::Hsla {
+pub(super) fn hover_text_color(cx: &gpui::App) -> gpui::Hsla {
     let mut color = cx.theme().primary;
     // 悬停文字保持主题色相；暗底提亮、浅底加深，小面积强调不沿用按钮的暗压色。
     if color.s > 0.05 {
@@ -47,7 +47,7 @@ fn hover_text_color(cx: &gpui::App) -> gpui::Hsla {
     color
 }
 
-fn color_feedback_button(
+pub(super) fn color_feedback_button(
     id: impl Into<SharedString>,
     content: impl gpui::IntoElement,
     color: gpui::Hsla,

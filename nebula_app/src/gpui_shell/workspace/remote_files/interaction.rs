@@ -74,7 +74,15 @@ impl NebulaWorkspace {
             "space" if toggle => self.remote_browser.selection.toggle_focus(),
             "c" if toggle => self.remote_copy_selected(window, cx),
             "v" if toggle => self.remote_paste(window, cx),
-            "escape" => self.remote_browser.selection.clear(),
+            // The filter is the narrower state: escape first reveals all rows,
+            // and only a second escape clears the selection.
+            "escape" => {
+                if self.remote_browser.search_active() {
+                    self.clear_remote_search(cx);
+                } else {
+                    self.remote_browser.selection.clear();
+                }
+            },
             "enter" if !toggle && !modifiers.shift => {
                 if let Some(row) = rows
                     .iter()

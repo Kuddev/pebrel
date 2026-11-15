@@ -356,7 +356,7 @@ impl NebulaWorkspace {
             self.details_panel.document.as_ref().unwrap().1.clone().into_any_element()
         } else {
             match self.side_panel.view {
-                PanelView::Files if remote => self.render_remote_files(cx),
+                PanelView::Files if remote => self.render_remote_files(window, cx),
                 PanelView::Files => self.render_file_tree(cx),
                 PanelView::Git => self.render_git_tree(window, cx),
             }
