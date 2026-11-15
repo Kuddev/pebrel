@@ -141,7 +141,7 @@ pub(crate) fn run(job: DownloadJob, language: UiLanguage) {
 /// Restore local update state without requiring a successful network check.
 /// Call once on a background executor; a user-started task always takes priority.
 pub(crate) fn hydrate() {
-    if crate::platform::distribution::current().externally_managed() {
+    if crate::platform::distribution::require_direct_update().is_err() {
         return;
     }
     let cached = handoff::failed_update()

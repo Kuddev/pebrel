@@ -4,6 +4,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 
+pub(super) const PORTABLE_UPDATE_MESSAGE: &str =
+    "This copy is portable. Use the download page to replace its package.";
+
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 
@@ -115,14 +118,16 @@ pub(crate) fn installation_directory(executable: &Path) -> Result<PathBuf, Strin
     return macos::bundle(executable);
     #[cfg(not(target_os = "macos"))]
     {
-        let directory = executable.parent().ok_or("Missing application directory")?;
-        if !directory.join("unins000.exe").is_file() {
-            return Err(
-                "This copy is portable. Use the download page to replace its package.".into()
-            );
-        }
-        Ok(directory.to_owned())
+        windows_installation_directory(executable)
+            .map(Path::to_owned)
+            .ok_or_else(|| PORTABLE_UPDATE_MESSAGE.into())
     }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+pub(super) fn windows_installation_directory(executable: &Path) -> Option<&Path> {
+    let directory = executable.parent()?;
+    directory.join("unins000.exe").is_file().then_some(directory)
 }
 
 pub(crate) fn guard_base(executable: &Path) -> PathBuf {

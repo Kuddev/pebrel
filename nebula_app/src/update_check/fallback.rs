@@ -52,6 +52,9 @@ fn with_checksums(
         && let Ok(text) = response.body_mut().with_config().limit(64 * 1024).read_to_string()
     {
         release.asset = super::assets::from_checksums(&release.version, &text);
+        release.portable_zip_url = super::assets::current_windows_arch().and_then(|architecture| {
+            super::assets::portable_from_checksums(&release.version, architecture, &text)
+        });
     }
     release
 }
@@ -72,21 +75,10 @@ fn redirected_uri(agent: &ureq::Agent, url: &str) -> Result<String, ureq::Error>
 
 fn release_from_uri(uri: &str) -> Option<LatestRelease> {
     let tag = uri.strip_prefix(TAG_PREFIX)?;
-    let version = tag.strip_prefix(['v', 'V']).unwrap_or(tag);
     // Official stable releases use major.minor.patch. Reject login pages,
     // arbitrary tags, extra path/query/fragment components and preview tags.
-    let components: Vec<_> = version.split('.').collect();
-    if components.len() != 3
-        || components.iter().any(|part| {
-            part.is_empty()
-                || !part.bytes().all(|byte| byte.is_ascii_digit())
-                || part.parse::<u64>().is_err()
-                || (part.len() > 1 && part.starts_with('0'))
-        })
-    {
-        return None;
-    }
-    Some(LatestRelease { version: version.to_owned(), asset: None })
+    let version = super::stable_version_from_tag(tag)?;
+    Some(LatestRelease { version: version.to_owned(), asset: None, portable_zip_url: None })
 }
 
 #[cfg(test)]

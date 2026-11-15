@@ -91,13 +91,69 @@ pub struct UpdateCheckResult {
     pub current: String,
     pub latest: String,
     pub update_available: bool,
-    pub asset: Option<UpdateAsset>,
+    delivery: UpdateDelivery,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UpdateDelivery {
+    InApp(UpdateAsset),
+    Portable(Option<String>),
+    ReleasesPage,
+}
+
+impl UpdateCheckResult {
+    pub(crate) fn from_cached(asset: UpdateAsset) -> Self {
+        Self {
+            current: env!("CARGO_PKG_VERSION").into(),
+            latest: asset.version.clone(),
+            update_available: true,
+            delivery: UpdateDelivery::InApp(asset),
+        }
+    }
+
+    fn from_release(release: LatestRelease, portable: bool) -> Result<Self, String> {
+        let update_available = can_install_version(&release.version)?;
+        let delivery = if portable {
+            UpdateDelivery::Portable(release.portable_zip_url)
+        } else {
+            release.asset.map_or(UpdateDelivery::ReleasesPage, UpdateDelivery::InApp)
+        };
+        Ok(Self {
+            current: env!("CARGO_PKG_VERSION").into(),
+            latest: release.version,
+            update_available,
+            delivery,
+        })
+    }
+
+    pub(crate) fn asset(&self) -> Option<&UpdateAsset> {
+        match &self.delivery {
+            UpdateDelivery::InApp(asset) => Some(asset),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_portable(&self) -> bool {
+        matches!(self.delivery, UpdateDelivery::Portable(_))
+    }
+
+    pub(crate) fn portable_zip_url(&self) -> Option<&str> {
+        match &self.delivery {
+            UpdateDelivery::Portable(url) => url.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn manual_download_url(&self) -> &str {
+        self.portable_zip_url().unwrap_or(RELEASES_PAGE)
+    }
 }
 
 #[derive(Debug)]
 struct LatestRelease {
     version: String,
     asset: Option<UpdateAsset>,
+    portable_zip_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -182,12 +238,7 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
                         )))
             {
                 let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable(
-                    UpdateCheckResult {
-                        current: env!("CARGO_PKG_VERSION").into(),
-                        latest: asset.version.clone(),
-                        update_available: true,
-                        asset: Some(asset),
-                    },
+                    UpdateCheckResult::from_cached(asset),
                 ));
             }
         }
@@ -221,16 +272,9 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
 /// 立即检查 GitHub 最新 release；调用方必须把它放到后台执行器，避免
 /// 网络等待阻塞 UI 线程。
 pub fn check_now() -> Result<UpdateCheckResult, String> {
-    crate::platform::distribution::require_direct_update()?;
-    let release = fetch_latest_release()?;
-    let current = env!("CARGO_PKG_VERSION").to_owned();
-    let update_available = can_install_version(&release.version)?;
-    Ok(UpdateCheckResult {
-        update_available,
-        current,
-        latest: release.version,
-        asset: release.asset,
-    })
+    use crate::platform::distribution::{Distribution, require_release_check};
+    let distribution = require_release_check()?;
+    UpdateCheckResult::from_release(fetch_latest_release()?, distribution == Distribution::Portable)
 }
 
 fn update_state_path() -> std::path::PathBuf {
@@ -335,6 +379,12 @@ fn fetch_release_with_fallback(
 }
 
 fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
+    let (release, version) = decode_release(bytes)?;
+    let names = assets::native_names(&version);
+    Ok(select_release(release, version, &names, assets::current_windows_arch()))
+}
+
+fn decode_release(bytes: &[u8]) -> Result<(GitHubRelease, String), String> {
     let release: GitHubRelease =
         serde_json::from_slice(bytes).map_err(|error| format!("GitHub 返回了无效数据：{error}"))?;
     let version = release.tag_name.trim().trim_start_matches(['v', 'V']);
@@ -342,13 +392,42 @@ fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
         return Err("GitHub release 的版本号为空".to_owned());
     }
     let version = version.to_owned();
+    Ok((release, version))
+}
+
+fn select_release(
+    release: GitHubRelease,
+    version: String,
+    installer_names: &[String],
+    windows_arch: Option<&str>,
+) -> LatestRelease {
     let asset = assets::select(
         &version,
         release.body.as_deref().unwrap_or_default(),
         &release.assets,
-        &assets::native_names(&version),
+        installer_names,
     );
-    Ok(LatestRelease { version, asset })
+    let portable_zip_url = windows_arch.and_then(|architecture| {
+        assets::portable_from_assets(&release.tag_name, architecture, &release.assets)
+    });
+    LatestRelease { version, asset, portable_zip_url }
+}
+
+/// Only a stable, numeric release tag may supply a path component for a link.
+fn stable_version_from_tag(tag: &str) -> Option<&str> {
+    let version = tag.strip_prefix(['v', 'V']).unwrap_or(tag);
+    let mut components = version.split('.');
+    for _ in 0..3 {
+        let part = components.next()?;
+        if part.is_empty()
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+            || part.parse::<u64>().is_err()
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            return None;
+        }
+    }
+    components.next().is_none().then_some(version)
 }
 
 pub(crate) fn windows_x64_installer_names(version: &str) -> [String; 3] {
@@ -447,6 +526,63 @@ mod tests {
         GitHubReleaseAsset, REMIND_LATER_SECS, UpdatePromptState, checksum_from_release_body,
         is_newer, parse_latest_release, select_windows_x64_installer, windows_x64_installer_names,
     };
+
+    #[test]
+    fn windows_release_offers_only_the_update_path_owned_by_the_running_copy() {
+        use super::{RELEASES_PAGE, UpdateCheckResult, assets, decode_release, select_release};
+        use serde_json::json;
+
+        let version = "99.0.0";
+        let base = format!("https://github.com/Kuddev/pebrel/releases/download/v{version}");
+        let names = ["x64.zip", "arm64.zip", "x64-setup.exe", "arm64-setup.exe"];
+        let assets: Vec<_> = names
+            .iter()
+            .map(|suffix| {
+                let name = format!("Pebrel-v{version}-windows-{suffix}");
+                json!({"browser_download_url": format!("{base}/{name}"), "name": name,
+                   "size": 42, "digest": format!("sha256:{}", "a".repeat(64))})
+            })
+            .collect();
+        let release = |architecture: &str, assets: &[serde_json::Value]| {
+            let (release, version) = decode_release(
+                &serde_json::to_vec(&json!({"tag_name": format!("v{version}"), "assets": assets}))
+                    .unwrap(),
+            )
+            .unwrap();
+            let installers = assets::windows_names(&version, architecture);
+            select_release(release, version, &installers, Some(architecture))
+        };
+        for (architecture, suffix) in [("x86_64", "x64"), ("aarch64", "arm64")] {
+            let portable =
+                UpdateCheckResult::from_release(release(architecture, &assets), true).unwrap();
+            assert!(portable.update_available && portable.is_portable());
+            assert!(portable.asset().is_none(), "a ZIP copy cannot start a setup download");
+            assert_eq!(
+                portable.manual_download_url(),
+                format!("{base}/Pebrel-v{version}-windows-{suffix}.zip")
+            );
+            let installed =
+                UpdateCheckResult::from_release(release(architecture, &assets), false).unwrap();
+            assert_eq!(
+                installed.asset().unwrap().name,
+                format!("Pebrel-v{version}-windows-{suffix}-setup.exe")
+            );
+            assert!(installed.asset().unwrap().sha256.is_some());
+            assert!(!installed.is_portable());
+            assert_eq!(installed.manual_download_url(), RELEASES_PAGE);
+            let missing =
+                UpdateCheckResult::from_release(release(architecture, &assets[2..]), true).unwrap();
+            assert!(missing.update_available && missing.is_portable());
+            assert!(missing.asset().is_none() && missing.portable_zip_url().is_none());
+            assert_eq!(missing.manual_download_url(), RELEASES_PAGE);
+        }
+
+        let mut untrusted = assets[0].clone();
+        untrusted["browser_download_url"] = json!("https://example.invalid/pebrel.zip");
+        let result =
+            UpdateCheckResult::from_release(release("x86_64", &[untrusted]), true).unwrap();
+        assert_eq!(result.manual_download_url(), RELEASES_PAGE);
+    }
 
     #[test]
     fn rehearsal_permits_only_exact_reinstall_or_upgrade() {
