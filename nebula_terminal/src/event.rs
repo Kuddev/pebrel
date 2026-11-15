@@ -208,6 +208,11 @@ pub trait OnResize {
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
 
+    /// Whether the host currently accepts automatic views from shell command boundaries.
+    fn automatic_command_views_enabled(&self) -> bool {
+        true
+    }
+
     /// The host chooses a renderer for a literal shell command. Core only owns its source range.
     fn command_view(
         &self,

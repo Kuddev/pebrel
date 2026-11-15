@@ -414,7 +414,11 @@ impl SettingsPane {
         }
         if matches!(
             key,
-            "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes" | "refresh_environment"
+            "ai_toasts"
+                | "focus_follows_mouse"
+                | "dim_inactive_panes"
+                | "refresh_environment"
+                | "automatic_command_views"
         ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
@@ -786,6 +790,7 @@ impl SettingsPane {
             "ghost" => flag!(ghost),
             "ai_toasts" => flag!(ai_toasts),
             "ctrl_wheel_font_zoom" => flag!(ctrl_wheel_font_zoom),
+            "automatic_command_views" => flag!(automatic_command_views),
             "notification_duration" => pick!(notification_duration),
             "cursor_motion" => pick!(cursor_motion),
             "cjk_bold_regular" => flag!(cjk_bold_regular),
@@ -1340,7 +1345,22 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.command_history_row(cx));
-        v_flex().w_full().gap(px(GROUP_GAP)).child(terminal).child(completion).child(alerts)
+        let command_output = self
+            .group(language.text(crate::i18n::Message::SettingsCommandOutputTitle), cx)
+            .child(self.switch_row(
+                "automatic_command_views",
+                language.text(crate::i18n::Message::SettingsCommandOutputAutomatic),
+                language.text(crate::i18n::Message::SettingsCommandOutputDescription),
+                self.runtime.automatic_command_views,
+                cx,
+            ));
+        v_flex()
+            .w_full()
+            .gap(px(GROUP_GAP))
+            .child(terminal)
+            .child(completion)
+            .child(command_output)
+            .child(alerts)
     }
 
     fn section_interaction(&mut self, cx: &mut Context<Self>) -> gpui::Div {

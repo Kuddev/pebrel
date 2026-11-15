@@ -34,6 +34,7 @@ pub fn ui_value_kind(key: &str) -> Option<UiValueKind> {
     Some(match key {
         "follow_system_theme"
         | "ctrl_wheel_font_zoom"
+        | "automatic_command_views"
         | "cursor_blink"
         | "copy_on_select"
         | "focus_follows_mouse"

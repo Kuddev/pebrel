@@ -18,6 +18,7 @@ const RESET_KEYS: &[&str] = &[
     "ui_font_size",
     "font_size",
     "ctrl_wheel_font_zoom",
+    "automatic_command_views",
     "ligatures",
     "cursor_shape",
     "cursor_blink",
@@ -239,6 +240,26 @@ mod tests {
         assert_eq!(runtime.cursor_motion, crate::CursorMotion::Off);
         assert!(!restored.contains("cursor_motion="));
         assert!(restored.contains("custom_data=keep"));
+    }
+
+    #[test]
+    fn automatic_command_views_preserve_existing_settings_and_restore_the_default() {
+        use crate::{RawSettings, RuntimeSettings, apply_updates};
+
+        let existing = "automatic_command_views=invalid\ncustom=keep\n";
+        assert!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(existing)).automatic_command_views
+        );
+        let saved = apply_updates(existing, &[("automatic_command_views", "0".into())]);
+        assert!(
+            !RuntimeSettings::from_raw(&RawSettings::from_text(&saved)).automatic_command_views
+        );
+        let restored = default_settings_text(&saved);
+        assert!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).automatic_command_views
+        );
+        assert!(!restored.contains("automatic_command_views="));
+        assert!(restored.contains("custom=keep"));
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! 直连，与旧壳同一条业务路径），事件与输入协议不变。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use nebula_terminal::Term;
@@ -16,6 +17,33 @@ use nebula_terminal::sync::FairMutex;
 use nebula_terminal::term::Config;
 use nebula_terminal::tty;
 use nebula_terminal::tty::EventedPty as _;
+
+use crate::gpui_shell::config::Settings;
+
+struct AutomaticCommandViews(Arc<AtomicBool>);
+
+impl gpui::Global for AutomaticCommandViews {}
+
+/// The application shares the current preference with every PTY and SSH reader.
+pub(super) fn automatic_command_views(cx: &mut gpui::App) -> Arc<AtomicBool> {
+    if let Some(current) = cx.try_global::<AutomaticCommandViews>() {
+        return Arc::clone(&current.0);
+    }
+    let enabled = |cx: &gpui::App| {
+        cx.try_global::<Settings>().is_none_or(|settings| settings.automatic_command_views)
+    };
+    let current = Arc::new(AtomicBool::new(enabled(cx)));
+    let observed = Arc::clone(&current);
+    cx.set_global(AutomaticCommandViews(Arc::clone(&current)));
+    cx.observe_global::<Settings>(move |cx| {
+        let enabled = enabled(cx);
+        if observed.swap(enabled, Ordering::Relaxed) != enabled {
+            cx.refresh_windows();
+        }
+    })
+    .detach();
+    current
+}
 
 /// 把 PTY/SSH 线程发出的终端事件转投到 GPUI 前台的异步通道。本地与 SSH
 /// 会话共用同一形状：`stages` 只有 SSH 业务层会写（连接阶段横幅的数据
@@ -28,12 +56,37 @@ pub struct EventProxy {
     remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
     resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
     tmux_activity: Arc<std::sync::Mutex<Option<crate::ssh_session::TmuxActivity>>>,
-    multiplexer_client: Arc<std::sync::atomic::AtomicBool>,
+    multiplexer_client: Arc<AtomicBool>,
+    automatic_command_views: Arc<AtomicBool>,
+}
+
+impl EventProxy {
+    fn channel(
+        automatic_command_views: Arc<AtomicBool>,
+    ) -> (Self, super::event_mailbox::EventReceiver, UnboundedReceiver<crate::ssh_session::SshStage>)
+    {
+        let (events, receiver) = super::event_mailbox::channel();
+        let (stages, stage_receiver) = unbounded();
+        let proxy = Self {
+            events,
+            stages,
+            remote_connection: Default::default(),
+            resume_target: Default::default(),
+            tmux_activity: Default::default(),
+            multiplexer_client: Default::default(),
+            automatic_command_views,
+        };
+        (proxy, receiver, stage_receiver)
+    }
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         self.events.send(event);
+    }
+
+    fn automatic_command_views_enabled(&self) -> bool {
+        self.automatic_command_views.load(Ordering::Relaxed)
     }
 
     fn command_view(
@@ -110,7 +163,14 @@ pub struct TerminalSession {
     pub(crate) resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
     pub(super) tmux_activity: Arc<std::sync::Mutex<Option<crate::ssh_session::TmuxActivity>>>,
     /// The SSH PTY is owned by a terminal multiplexer client (remote process evidence).
-    pub(super) multiplexer_client: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) multiplexer_client: Arc<AtomicBool>,
+    automatic_command_views: Arc<AtomicBool>,
+}
+
+impl TerminalSession {
+    pub(super) fn automatic_command_views_enabled(&self) -> bool {
+        self.automatic_command_views.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -127,16 +187,19 @@ pub(super) fn test_session_with_events() -> (
     super::event_mailbox::EventReceiver,
     EventProxy,
 ) {
-    let (events, event_rx) = super::event_mailbox::channel();
-    let (stages, _) = unbounded();
-    let proxy = EventProxy {
-        events,
-        stages,
-        remote_connection: Default::default(),
-        resume_target: Default::default(),
-        tmux_activity: Default::default(),
-        multiplexer_client: Default::default(),
-    };
+    test_session_with_command_views(Arc::new(AtomicBool::new(true)))
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session_with_command_views(
+    automatic_command_views: Arc<AtomicBool>,
+) -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<nebula_terminal::event_loop::Msg>,
+    super::event_mailbox::EventReceiver,
+    EventProxy,
+) {
+    let (proxy, event_rx, _) = EventProxy::channel(Arc::clone(&automatic_command_views));
     let term =
         Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
     let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
@@ -150,6 +213,7 @@ pub(super) fn test_session_with_events() -> (
             resume_target: proxy.resume_target.clone(),
             tmux_activity: proxy.tmux_activity.clone(),
             multiplexer_client: proxy.multiplexer_client.clone(),
+            automatic_command_views,
         },
         receiver,
         event_rx,
@@ -221,17 +285,9 @@ pub fn spawn(
     window_size: WindowSize,
     term_config: Config,
     options: tty::Options,
+    automatic_command_views: Arc<AtomicBool>,
 ) -> std::io::Result<SpawnedSession> {
-    let (tx, rx) = super::event_mailbox::channel();
-    let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy {
-        events: tx,
-        stages: stage_tx,
-        remote_connection: Default::default(),
-        resume_target: Default::default(),
-        tmux_activity: Default::default(),
-        multiplexer_client: Default::default(),
-    };
+    let (proxy, rx, stage_rx) = EventProxy::channel(Arc::clone(&automatic_command_views));
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -266,6 +322,7 @@ pub fn spawn(
             resume_target: Default::default(),
             tmux_activity: Default::default(),
             multiplexer_client: Default::default(),
+            automatic_command_views,
         },
         rx,
         stage_rx,
@@ -277,18 +334,10 @@ pub fn spawn_serial(
     destination: &str,
     window_size: WindowSize,
     term_config: Config,
+    automatic_command_views: Arc<AtomicBool>,
 ) -> std::io::Result<SpawnedSession> {
     let term_config = crate::ssh_session::terminal_config(term_config);
-    let (tx, rx) = super::event_mailbox::channel();
-    let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy {
-        events: tx,
-        stages: stage_tx,
-        remote_connection: Default::default(),
-        resume_target: Default::default(),
-        tmux_activity: Default::default(),
-        multiplexer_client: Default::default(),
-    };
+    let (proxy, rx, stage_rx) = EventProxy::channel(Arc::clone(&automatic_command_views));
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -309,6 +358,7 @@ pub fn spawn_serial(
             resume_target: Default::default(),
             tmux_activity: Default::default(),
             multiplexer_client: Default::default(),
+            automatic_command_views,
         },
         rx,
         stage_rx,
@@ -324,18 +374,10 @@ pub fn spawn_ssh(
     resume_target: Option<crate::ssh_session::ResumeTarget>,
     window_size: WindowSize,
     term_config: Config,
+    automatic_command_views: Arc<AtomicBool>,
 ) -> std::io::Result<SpawnedSession> {
     let term_config = crate::ssh_session::terminal_config(term_config);
-    let (tx, rx) = super::event_mailbox::channel();
-    let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy {
-        events: tx,
-        stages: stage_tx,
-        remote_connection: Default::default(),
-        resume_target: Default::default(),
-        tmux_activity: Default::default(),
-        multiplexer_client: Default::default(),
-    };
+    let (proxy, rx, stage_rx) = EventProxy::channel(Arc::clone(&automatic_command_views));
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -367,6 +409,7 @@ pub fn spawn_ssh(
             resume_target: resume_state,
             tmux_activity,
             multiplexer_client,
+            automatic_command_views,
         },
         rx,
         stage_rx,

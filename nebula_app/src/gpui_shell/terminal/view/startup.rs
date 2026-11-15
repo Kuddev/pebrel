@@ -106,6 +106,7 @@ impl TerminalView {
             TerminalLaunch::Serial { .. } => String::new(),
         };
         let is_serial = matches!(launch, TerminalLaunch::Serial { .. });
+        let automatic_command_views = session::automatic_command_views(cx);
         // 启动目录已经是 PTY 的输入事实，不能等第一次 OSC 上报才交给补全。
         // WSL 的启动目录属于宿主，必须保持空值，直到来宾自己报告 cwd。
         let mut completion_cwd = String::new();
@@ -162,7 +163,8 @@ impl TerminalView {
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
-                let spawned = session::spawn(initial, term_config, options);
+                let spawned =
+                    session::spawn(initial, term_config, options, automatic_command_views);
                 if spawned.is_ok()
                     && let Some(cwd) = history_cwd
                 {
@@ -192,7 +194,14 @@ impl TerminalView {
                 crate::display::SuggestEnv::Ssh { destination: destination.clone() },
                 None,
                 crate::session::LaunchSession::Ssh { host: destination.clone() },
-                session::spawn_ssh(destination, cwd, resume_target, initial, term_config),
+                session::spawn_ssh(
+                    destination,
+                    cwd,
+                    resume_target,
+                    initial,
+                    term_config,
+                    automatic_command_views,
+                ),
             ),
             TerminalLaunch::Serial { destination } => (
                 None,
@@ -203,7 +212,7 @@ impl TerminalView {
                 },
                 None,
                 crate::session::LaunchSession::Serial { destination: destination.clone() },
-                session::spawn_serial(&destination, initial, term_config),
+                session::spawn_serial(&destination, initial, term_config, automatic_command_views),
             ),
         };
         let is_ssh = ssh_destination.is_some();

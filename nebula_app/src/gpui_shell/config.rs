@@ -44,6 +44,7 @@ pub struct Settings {
     pub base_font_size_px: f32,
     /// Ctrl+滚轮缩放终端字号。默认开启；关闭时终端消费整个手势而不缩放。
     pub ctrl_wheel_font_zoom: bool,
+    pub automatic_command_views: bool,
     pub ui_font_size_px: f32,
     pub(crate) ui_font_family: Option<String>,
     pub(crate) ui_font_size_override: Option<f32>,
@@ -266,6 +267,7 @@ impl Settings {
                 .enabled(resolved_theme.typography().map(|typography| typography.ligatures)),
             base_font_size_px,
             ctrl_wheel_font_zoom: runtime.ctrl_wheel_font_zoom,
+            automatic_command_views: runtime.automatic_command_views,
             ui_font_size_px: runtime.ui_font_size_px.unwrap_or(base_font_size_px),
             ui_font_family: runtime.ui_font_family.clone(),
             ui_font_size_override: runtime.ui_font_size_px,

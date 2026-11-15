@@ -21,7 +21,7 @@ impl CommandCapture {
             self.shell = Some(value.to_owned());
         } else if name == "pebrel_command" {
             self.pending = value.split_once('\n').and_then(|(owner, command)| {
-                (self.shell.as_deref() == Some(owner))
+                (self.shell.as_deref() == Some(owner) && host.automatic_command_views_enabled())
                     .then(|| host.command_view(owner, command))
                     .flatten()
             });
@@ -50,10 +50,17 @@ impl CommandCapture {
         self.active = None;
     }
 
-    pub fn finish<U>(&mut self, term: &mut Term<U>, registry: &mut Registry, code: Option<i32>) {
+    pub fn finish<U: EventListener>(
+        &mut self,
+        term: &mut Term<U>,
+        registry: &mut Registry,
+        code: Option<i32>,
+        host: &U,
+    ) {
         let Some((view, start, epoch)) = self.active.take() else { return };
         // 失败、重排、全屏应用和半行结束保留原始输出；不覆盖后续提示符。
-        if code != Some(0)
+        if !host.automatic_command_views_enabled()
+            || code != Some(0)
             || epoch != term.reading_epoch()
             || !supported(term)
             || term.grid().cursor.point.column.0 != 0

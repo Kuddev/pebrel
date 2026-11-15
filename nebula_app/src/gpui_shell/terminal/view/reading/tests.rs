@@ -168,6 +168,82 @@ fn ordinary_cat_uses_native_layout_and_keeps_following_prompt(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn disabling_automatic_command_views_reveals_vt_output_and_keeps_manual_views(
+    cx: &mut TestAppContext,
+) {
+    use nebula_terminal::grid::{Dimensions as _, GridCell as _};
+    use nebula_terminal::index::{Column, Line};
+    use nebula_terminal::inline_content::Packet;
+    use nebula_terminal::vte::ansi::{Color, NamedColor};
+
+    let (view, mut cx, _, proxy) = open_with_cache(cx, true);
+    cx.update(|_, cx| cx.global_mut::<Settings>().automatic_command_views = true);
+    let status = b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmdpdCBzdGF0dXM=\x07\x1b]133;C\x07\x1b[32mstaged\x1b[0m\r\n\x1b[31mchanged\x1b[0m\r\n\x1b]133;D;0\x07";
+    feed(&view, &mut cx, &proxy, status);
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result").is_some());
+    cx.update(|window, cx| {
+        let result = view.read(cx).native_results.entities.values().next().unwrap().read(cx);
+        let focus = result.focus_handle_for_test();
+        window.focus(&focus, cx);
+    });
+    draw(&mut cx);
+
+    cx.update(|_, cx| cx.global_mut::<Settings>().automatic_command_views = false);
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result").is_none());
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(view.read(cx).focus_handle.is_focused(window)));
+    view.read_with(&cx, |view, _| {
+        let projection = view.native_results.projection.borrow();
+        let term = view.session.as_ref().unwrap().term.lock();
+        for (row, color) in [(0, NamedColor::Green), (1, NamedColor::Red)] {
+            assert!(!projection.covers(row as usize));
+            assert_eq!(term.grid()[Line(row)][Column(0)].fg, Color::Named(color));
+        }
+    });
+
+    feed(&view, &mut cx, &proxy, status);
+    draw(&mut cx);
+    view.read_with(&cx, |view, _| {
+        let term = view.session.as_ref().unwrap().term.lock();
+        let captured = (term.topmost_line().0..=term.bottommost_line().0)
+            .filter_map(|row| term.grid()[Line(row)][Column(0)].inline_marker())
+            .filter(|marker| marker.row == 0 && marker.surface.has_grid_source())
+            .count();
+        assert_eq!(captured, 1, "only the command run before the switch may be captured");
+    });
+
+    let manual = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 701,
+            rows: 2,
+            mime: "text/markdown".into(),
+            title: "Manual result".into(),
+        }
+        .encode(),
+        Packet::Append { wire_id: 701, text: "Explicit view".into() }.encode(),
+        Packet::End { wire_id: 701, code: 0 }.encode(),
+    );
+    feed(&view, &mut cx, &proxy, manual.as_bytes());
+    draw(&mut cx);
+    view.read_with(&cx, |view, _| {
+        let placements = view.native_results.placements();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(&*placements[0].0.title, "Manual result");
+    });
+
+    cx.update(|_, cx| cx.global_mut::<Settings>().automatic_command_views = true);
+    draw(&mut cx);
+    view.read_with(&cx, |view, _| {
+        let placements = view.native_results.placements();
+        assert_eq!(placements.len(), 2);
+        assert!(placements.iter().any(|(surface, _, _)| surface.has_grid_source()));
+    });
+}
+
+#[gpui::test]
 fn native_result_compact_hover_tools_and_copy_feedback(cx: &mut TestAppContext) {
     use nebula_terminal::inline_content::Packet;
     let (view, mut cx, receiver, proxy) = open(cx);
@@ -1246,8 +1322,9 @@ fn open_with_cache(
                 cx,
             )
         });
-        let (receiver, proxy) = view.update(cx, |view, _| {
-            let (session, receiver, _, proxy) = session::test_session_with_events();
+        let (receiver, proxy) = view.update(cx, |view, cx| {
+            let (session, receiver, _, proxy) =
+                session::test_session_with_command_views(session::automatic_command_views(cx));
             view.session = Some(session);
             view.error = None;
             view.exited = None;

@@ -2,6 +2,47 @@ use super::*;
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn automatic_command_output_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    let _lock = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("automatic_command_views", "1".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1000.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("命令输出自动渲染", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 2);
+    for expected in [false, true] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("nebula-switch-automatic_command_views").unwrap();
+        assert!(bounds.size.height > px(0.0) && bounds.bottom() <= px(1000.0));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(RuntimeSettings::load().automatic_command_views, expected);
+        assert_eq!(pane.read_with(cx, |pane, _| pane.runtime.automatic_command_views), expected);
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn environment_refresh_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
     use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 
