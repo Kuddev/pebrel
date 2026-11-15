@@ -103,6 +103,48 @@ fn observe(graphics: &str, prefix: &str, images: usize, closed: bool) -> usize {
     wakes
 }
 #[test]
+fn initial_resize_replies_to_a_quiet_child_waiting_for_cell_size() {
+    let (event_loop, _, listener, mut child) = setup();
+    let sender = event_loop.channel();
+    let thread = event_loop.spawn();
+    let wait_for_wakeups = |count| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if listener.0.lock().unwrap().iter().filter(|e| matches!(e, Event::Wakeup)).count()
+                >= count
+            {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+
+    // Only the geometry query goes through the PTY. The child emits no more
+    // output while it waits, including after the first viewport is committed.
+    child.write_all(b"\x1b[16t").unwrap();
+    let read_query = wait_for_wakeups(1);
+    let size = WindowSize { num_cols: 25, num_lines: 9, cell_width: 9, cell_height: 19 };
+    sender.send(Msg::Resize(size)).unwrap();
+    let resized = wait_for_wakeups(2);
+    sender.send(Msg::Shutdown).unwrap();
+    thread.join().unwrap();
+
+    assert!(read_query && resized);
+    let events = listener.0.lock().unwrap();
+    let replies: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::PtyWrite(reply) => Some(reply.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replies, ["\x1b[6;19;9t"]);
+}
+
+#[test]
 fn committed_prefix_has_actual_wakeup_before_open_image_batch() {
     for graphics in [image(), "\x1bPq~\x1b\\"] {
         assert_eq!(observe(graphics, "A", 1, false), 1);
