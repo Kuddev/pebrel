@@ -38,7 +38,7 @@ Pebrel 打开的每个**本地** pane 都带上下面这些变量。pane 里的�
 连接旧版 Nebula 时，可在新变量缺失时使用旧版导出的 `NEBULA_CLI` 与 `NEBULA_PANE_ID`。
 CLI 路径由环境给出，调用方无需根据展示名称猜测文件名。
 
-实现在 `nebula_app/src/agent_env.rs`，两个壳共用同一个 `apply()`。三条设计约束：
+实现在 `pebrel_app/src/agent_env.rs`，两个壳共用同一个 `apply()`。三条设计约束：
 
 1. **只进本地 PTY。** SSH pane 注入的是 `PEBREL_PANE_REMOTE=1`，不给 `PEBREL_CLI`/`PEBREL_BIN_DIR`
    ——远端主机上没有这个二进制，把本机绝对路径送过去只会造出一个"变量有了但永远执行不了"的伪能力，
@@ -219,7 +219,7 @@ id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默�
 Windows 本地 PowerShell 的终端剪贴板操作可委托给当前 PSReadLine 的原生 Paste。
 该能力只用于用户剪贴板操作及其广播接收端，不能作为 Runtime API 目标已开启
 bracketed paste 的证明；`pane.paste` 和 `agent.paste` 仍遵循上述协议校验。
-详见[剪贴板能力边界](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
+详见[剪贴板能力边界](../architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
 
 ## 单请求编排
 
@@ -435,7 +435,7 @@ token。无 token 的连接会被静默丢弃。该边界用于阻止其他本�
 `export PEBREL_RUNTIME_ENDPOINT=resident`（POSIX），使后续 CLI 子进程使用当前发现记录。
 不要把隔离实例的专属地址改为此标记。旧版 CLI 不识别 `resident`，应使用当前 PTY 导出的
 `PEBREL_CLI`。生命周期取舍与验证边界见
-[地址发现决策](../architecture/notes/nebula_app/runtime_api/2026-10-23-resident-endpoint-lifetime.md)。
+[地址发现决策](../architecture/notes/pebrel_app/runtime_api/2026-10-23-resident-endpoint-lifetime.md)。
 
 旧版 `PING/ATTACH` 文本请求仍由同一服务端接受，保证单实例与会话重新挂载不因协议升级
 失效；新功能只通过版本化 JSON 协议开放。

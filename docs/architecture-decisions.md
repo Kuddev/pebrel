@@ -248,10 +248,10 @@ single-file storage process; the records below remain unchanged historical conte
   trees. They save terminal layout/launch identity, not command history or output.
   Reads and writes belong to the recipe view's background tasks. Restoring creates
   a separate regular window. Bounds, count and version validation precede restore.
-- **Split authority:** `nebula_split::SplitTree::dock_at_leaf` owns subtree grafting.
+- **Split authority:** `pebrel_split::SplitTree::dock_at_leaf` owns subtree grafting.
   Local/cross-window gestures carry a stable destination pane ID and direction;
   preview rectangles use the same tree layout math as the resulting split.
-- **Preferences:** `nebula_settings` owns the quick-window mode and optional logical
+- **Preferences:** `pebrel_settings` owns the quick-window mode and optional logical
   dimensions. The window registry samples only normal, settled window bounds,
   saves changes through the existing preference writer and clamps restored sizes
   to the current display. Animation positions do not become saved dimensions.
@@ -300,7 +300,7 @@ single-file storage process; the records below remain unchanged historical conte
 
 - **Status:** Requested by the maintainer, 2026-09-11; implemented in the working
   tree, with native validation pending.
-- **Decision:** Add the default-on `ai_toasts` preference to `nebula_settings` and
+- **Decision:** Add the default-on `ai_toasts` preference to `pebrel_settings` and
   its existing persistence/reset contracts. The GPUI adapter caches it with other
   runtime settings. Disabling it hides only in-app AI completion/confirmation
   cards; native system notifications, tab indicators and terminal state retain
@@ -346,7 +346,7 @@ single-file storage process; the records below remain unchanged historical conte
   process requires a separately reviewed broker and authenticated PTY transport.
   A future privileged-residency feature must have explicit recovery/discovery.
 
-The two pane preferences in the same request reuse `nebula_settings`: mouse focus
+The two pane preferences in the same request reuse `pebrel_settings`: mouse focus
 has an optional GUI override of the compatible TOML setting (default off), while
 inactive-pane dimming defaults on to preserve the existing appearance. Both are
 cached by the GPUI settings adapter; pointer movement and rendering do not read
@@ -360,7 +360,7 @@ settings files.
   Users need to start from an existing theme, adjust common settings, preview text
   colors and exchange themes without making the selection page an editor.
 - **Decision:** Keep built-in identities compatible. Shared, dependency-free theme
-  values and validation belong to `nebula_settings`; versioned JSON, external format
+  values and validation belong to `pebrel_settings`; versioned JSON, external format
   adapters and library I/O belong to the application's `theme_library` capability.
   A custom theme is an independent snapshot with a stable library identity and a
   built-in fallback. Copying or renaming does not edit its source or create a runtime
@@ -648,7 +648,7 @@ settings files.
   increase a large shrink's latency. Allocation reduction is not a working-set or
   universal throughput guarantee. Existing-history scrolling does not allocate
   new history rows. Compare identical content, geometry and build profiles.
-- **Preferences:** `nebula_settings` owns additive `scrollback_lines` and
+- **Preferences:** `pebrel_settings` owns additive `scrollback_lines` and
   `scroll_speed` keys, validation and defaults. History offers seven values from
   1,000 to 100,000, defaults to 10,000 and is passed only to newly created terminal
   sessions; changing it cannot truncate open sessions. Wheel speed defaults to
