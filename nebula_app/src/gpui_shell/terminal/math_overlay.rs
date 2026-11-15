@@ -292,8 +292,8 @@ impl MathOverlay {
             candidates,
             size: *size,
             pixels_per_point,
-            // 与旧壳一致：TUI/备用屏继续拥有固定列坐标，但公式覆盖本身仍可用。
-            reflow_inline: !alt_screen,
+            // 行内公式统一按渲染宽度压缩，避免在备用屏 TUI 中留下多余空白。
+            reflow_inline: true,
             selection,
             viewport_origin: origin,
         }
@@ -408,10 +408,17 @@ impl MathOverlay {
         }
     }
 
-    /// GPUI 所有 terminal-cell 输入的反投影入口。调用方传入与当前 term 锁
-    /// 同源的 viewport origin，避免滚动或 resize commit 时把视觉行映错。
+    /// GPUI 所有选区/指针端点的反投影入口。调用方传入与当前 term 锁同源的
+    /// viewport origin，避免滚动或 resize commit 时把视觉行映错；固定栏前的
+    /// 压缩空白格吸附到栏前末格右侧，保证拖选端点留在固定栏外。
     pub fn source_point(&self, point: Point, side: Side, viewport_origin: Line) -> (Point, Side) {
         self.state.source_point(point, side, viewport_origin)
+    }
+
+    /// GPUI 单元格/链接命中的反投影入口：仅当视觉格真实承载某个未覆盖的源格
+    /// 时返回 `Some`，公式位图覆盖区与固定栏前的压缩空白格返回 `None`。
+    pub fn source_cell(&self, point: Point, viewport_origin: Line) -> Option<Point> {
+        self.state.source_cell(point, viewport_origin)
     }
 }
 
@@ -963,6 +970,246 @@ mod tests {
 
         assert!(cleared.is_empty());
         assert_eq!(cleared.project_cell(0, source_suffix, 20), Some(source_suffix));
+    }
+
+    #[test]
+    fn review_alt_screen_table_columns() {
+        let (columns, rows, separator) = (48, 4, 17);
+        let formula = format!("| {:<14} | value |", r"\(x^2\)");
+        let plain = format!("| {:<14} | value |", "plain");
+        let mut term = term_with(columns, rows, &[]);
+        term.swap_alt();
+        for (row, text) in [formula, plain].iter().enumerate() {
+            for (column, glyph) in text.chars().enumerate() {
+                term.grid_mut()[Line(row as i32)][Column(column)].c = glyph;
+            }
+            assert_eq!(term.grid()[Line(row as i32)][Column(separator)].c, '|');
+        }
+        term.grid_mut().cursor.point = Point::new(Line(3), Column(0));
+
+        let size = grid_size_info(columns, rows, 8.0, 16.0);
+        let mut guarded = MathOverlay::default();
+        let mut pending =
+            guarded.plan_frame(&term, &size, Rgb::new(0xd6, 0xda, 0xea), 16.0, 1.0, |_| true);
+        // Reproduce the existing full-screen guard without changing the fixture grid.
+        pending.reflow_inline = false;
+        let guarded = guarded.finalize_frame_with(pending, |_, _| true);
+        assert_eq!(guarded.formulas.len(), 1);
+        assert_eq!(guarded.project_cell(0, separator, columns), Some(separator));
+        assert_eq!(guarded.project_cell(1, separator, columns), Some(separator));
+
+        let frame = plan(&mut MathOverlay::default(), &term, columns, rows);
+        assert_eq!(frame.formulas.len(), 1);
+        let formula_row = frame.project_cell(0, separator, columns);
+        let plain_row = frame.project_cell(1, separator, columns);
+        assert_eq!(
+            formula_row, plain_row,
+            "a formula must not shift a full-screen table column; fixed separator {separator}"
+        );
+    }
+
+    #[test]
+    fn review_alt_screen_borderless_fixed_columns() {
+        let (columns, rows, fixed_col) = (32, 4, 8);
+        for table in [
+            &[r"\(x^2\) 123", "plain   456"][..],
+            &[r"\(x^2\) col", "plain   col"][..],
+            &[r"\(x^2\) col", "heading col"][..],
+            &[r"\(x^2\) col", "        row-two", "        row-three"][..],
+        ] {
+            let mut term = term_with(columns, rows, &[]);
+            term.swap_alt();
+            for (row, text) in table.iter().enumerate() {
+                for (column, glyph) in text.chars().enumerate() {
+                    term.grid_mut()[Line(row as i32)][Column(column)].c = glyph;
+                }
+            }
+            term.grid_mut().cursor.point = Point::new(Line(3), Column(0));
+
+            let frame = plan(&mut MathOverlay::default(), &term, columns, rows);
+            assert_eq!(frame.formulas.len(), 1, "{table:?}");
+            for (row, text) in table.iter().enumerate() {
+                assert_eq!(
+                    frame.project_cell(row, fixed_col, columns),
+                    Some(fixed_col),
+                    "borderless fixed column on row {row} must stay at column {fixed_col}: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn issue_909_alt_screen_wide_comma_suffix_compacts_before_fixed_columns() {
+        let (columns, rows) = (96, 4);
+        for (line0, line1) in [
+            (
+                format!(
+                    "   \\(R_0\\)，大半径{}环形轴线到中心的距离{}米\r\n",
+                    " ".repeat(10),
+                    " ".repeat(29),
+                ),
+                format!("   参数名称{}物理含义{}单位\r\n", " ".repeat(17), " ".repeat(41)),
+            ),
+            (
+                format!(
+                    "│  \\(R_0\\)，大半径{}│ 环形轴线到中心的距离{}│\r\n",
+                    " ".repeat(10),
+                    " ".repeat(27),
+                ),
+                format!("│  参数名称{}│ 物理含义{}│\r\n", " ".repeat(17), " ".repeat(39)),
+            ),
+        ] {
+            let mut term =
+                Term::new(Config::default(), &TestSize { cols: columns, rows }, VoidListener);
+            let mut parser: nebula_terminal::vte::ansi::Processor =
+                nebula_terminal::vte::ansi::Processor::new();
+            parser.advance(&mut term, format!("\x1b[?1049h{line0}{line1}\r\n").as_bytes());
+            assert_eq!(term.grid()[Line(0)][Column(10)].c, '，');
+            assert_ne!(term.grid()[Line(0)][Column(28)].c, ' ');
+            assert_ne!(term.grid()[Line(0)][Column(77)].c, ' ');
+
+            let mut overlay = MathOverlay::default();
+            let frame = plan(&mut overlay, &term, columns, rows);
+            assert_eq!(frame.formulas.len(), 1);
+            assert_eq!(
+                frame.project_cell(0, 10, columns),
+                Some(7),
+                "fullwidth comma immediately after \\(R_0\\) must compact next to the formula box"
+            );
+            assert_eq!(frame.project_cell(0, 28, columns), Some(28));
+            assert_eq!(frame.project_cell(0, 77, columns), Some(77));
+        }
+    }
+
+    #[test]
+    fn partially_scrolled_wrapped_inline_formula_projects_and_selects_on_visible_row() {
+        let cols = 20;
+        let mut term = term_with(cols, 4, &["intro", r"prefix \(x^2 +", r"  y^2\) tail", "prompt"]);
+        term.grid_mut()[Line(1)][Column(cols - 1)]
+            .flags
+            .insert(nebula_terminal::term::cell::Flags::WRAPLINE);
+        let mut overlay = MathOverlay::default();
+
+        // First scan the full 4-row viewport so the wrapped inline formula is persisted.
+        let full_frame = plan(&mut overlay, &term, cols, 4);
+        assert_eq!(full_frame.formulas.len(), 1);
+
+        // Now render through a 2-row viewport anchored at Line(0) (rows 0..2)
+        // so closing row 2 sits outside the viewport while row 1 remains visible.
+        term.set_presentation_origin(Some(Line(0)));
+        let partial_size = grid_size_info(cols, 2, 8.0, 16.0);
+        let pending =
+            overlay
+                .plan_frame(&term, &partial_size, Rgb::new(0xd6, 0xda, 0xea), 16.0, 1.0, |_| true);
+        let partial_frame = overlay.finalize_frame_with(pending, |_, _| true);
+        assert_eq!(partial_frame.formulas.len(), 1);
+        assert!(
+            partial_frame.formulas[0].plan.baseline_y > 16.0
+                && partial_frame.formulas[0].plan.baseline_y < 32.0
+                && partial_frame.formulas[0].plan.clip_bottom <= 32.0,
+            "cropped draw plan must sit on visible row 1"
+        );
+        assert_eq!(
+            partial_frame.project_formula_background(1, 7, cols),
+            Some(7),
+            "projection must anchor on visible row 1 alongside the bitmap"
+        );
+
+        let right_visual_col =
+            ((partial_frame.formulas[0].plan.clip_right / 8.0).round() as usize).saturating_sub(1);
+        let (start, start_side) =
+            overlay.source_point(Point::new(Line(1), Column(7)), Side::Left, Line(0));
+        let (end, end_side) = overlay.source_point(
+            Point::new(Line(1), Column(right_visual_col)),
+            Side::Right,
+            Line(0),
+        );
+        assert_eq!((start, start_side), (Point::new(Line(1), Column(7)), Side::Left));
+        assert_eq!((end, end_side), (Point::new(Line(1), Column(cols - 1)), Side::Right));
+
+        let mut selection = Selection::new(SelectionType::Simple, start, start_side);
+        selection.update(end, end_side);
+        term.selection = Some(selection);
+        let selected_pending =
+            overlay
+                .plan_frame(&term, &partial_size, Rgb::new(0xd6, 0xda, 0xea), 16.0, 1.0, |_| true);
+        let selected_frame = overlay.finalize_frame_with(selected_pending, |_, _| true);
+        assert!(selected_frame.formulas[0].selected);
+    }
+
+    #[test]
+    fn alt_screen_compacts_prose_suffix_before_coloured_sidebar_surface() {
+        let (columns, rows, sidebar_col) = (48, 4, 28);
+        let mut term = term_with(columns, rows, &[]);
+        term.swap_alt();
+        for (column, glyph) in r"\(x^2\) trailing prose linkX".chars().enumerate() {
+            term.grid_mut()[Line(0)][Column(column)].c = glyph;
+        }
+        let hyperlink = nebula_terminal::term::cell::Hyperlink::new(
+            None::<String>,
+            "https://example.com/sidebar-edge".to_owned(),
+        );
+        term.grid_mut()[Line(0)][Column(sidebar_col - 1)].set_hyperlink(Some(hyperlink));
+        for column in sidebar_col..36 {
+            let cell = &mut term.grid_mut()[Line(0)][Column(column)];
+            cell.c = 'S';
+            cell.bg = Color::Indexed(4);
+        }
+        term.grid_mut().cursor.point = Point::new(Line(3), Column(0));
+
+        let mut overlay = MathOverlay::default();
+        let frame = plan(&mut overlay, &term, columns, rows);
+        assert_eq!(frame.formulas.len(), 1);
+        assert!(
+            frame.project_cell(0, 8, columns).unwrap() < 8,
+            "inline prose suffix before the barrier still compacts"
+        );
+        let last_pre_sidebar_visual =
+            frame.project_cell(0, sidebar_col - 1, columns).expect("last pre-sidebar cell visible");
+        assert_eq!(last_pre_sidebar_visual, 23);
+        let config = crate::config::UiConfig::default();
+        let mods = gpui::Modifiers::default();
+        let shifted_link_source = overlay
+            .source_cell(Point::new(Line(0), Column(last_pre_sidebar_visual)), Line(0))
+            .expect("shifted link cell maps to its source column");
+        assert_eq!(shifted_link_source, Point::new(Line(0), Column(sidebar_col - 1)));
+        assert!(
+            super::super::osc_links::highlighted_at(&term, &config, shifted_link_source, &mods)
+                .is_some(),
+            "hovering the shifted visual column must hit the OSC 8 link"
+        );
+        assert_eq!(
+            frame.project_cell(0, sidebar_col, columns),
+            Some(sidebar_col),
+            "coloured TUI sidebar column stays anchored"
+        );
+        for gap_col in (last_pre_sidebar_visual + 1)..sidebar_col {
+            let (mapped, mapped_side) =
+                overlay.source_point(Point::new(Line(0), Column(gap_col)), Side::Left, Line(0));
+            assert_eq!(
+                (mapped, mapped_side),
+                (Point::new(Line(0), Column(sidebar_col - 1)), Side::Right),
+                "selection endpoint in compaction gap column {gap_col} snaps outside the sidebar"
+            );
+            let link_hit =
+                overlay.source_cell(Point::new(Line(0), Column(gap_col)), Line(0)).and_then(
+                    |point| super::super::osc_links::highlighted_at(&term, &config, point, &mods),
+                );
+            assert!(
+                link_hit.is_none(),
+                "blank compaction gap column {gap_col} must not hit the shifted link"
+            );
+        }
+        assert_eq!(
+            overlay.source_point(Point::new(Line(0), Column(sidebar_col)), Side::Left, Line(0)),
+            (Point::new(Line(0), Column(sidebar_col)), Side::Left),
+            "first cell of the fixed sidebar maps to its own source column"
+        );
+        assert_eq!(
+            overlay.source_cell(Point::new(Line(0), Column(sidebar_col)), Line(0)),
+            Some(Point::new(Line(0), Column(sidebar_col))),
+            "first cell of the fixed sidebar remains addressable for cell hit-testing"
+        );
     }
 
     #[test]

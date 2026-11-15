@@ -86,6 +86,12 @@ impl TextGrid {
         self.absolute_top.saturating_add(self.viewport.start)
     }
 
+    /// Renderer rows exclude the retained context at either edge of the viewport.
+    fn inline_rows(&self, span: RowSpan) -> Option<(usize, usize)> {
+        let row = usize::try_from(span.row).ok()?;
+        (row < self.viewport.len()).then_some((row, self.viewport.start + row))
+    }
+
     #[cfg(test)]
     pub(super) fn from_rows(rows: &[&str]) -> Self {
         let columns = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
@@ -425,7 +431,27 @@ impl TextGrid {
             .is_some_and(|cells| cells.contains(&Some(OBJECT)))
     }
 
+    fn row_leading_non_blank(&self, row: usize, end: usize) -> usize {
+        self.rows
+            .get(row)
+            .and_then(|cells| {
+                cells[..end.min(cells.len())]
+                    .iter()
+                    .position(|cell| cell.is_some_and(|character| character != ' '))
+            })
+            .unwrap_or(0)
+    }
+
     pub(super) fn spans(&self, start: GridPosition, end: GridPosition) -> Vec<RowSpan> {
+        self.spans_for(start, end, true)
+    }
+
+    pub(super) fn spans_for(
+        &self,
+        start: GridPosition,
+        end: GridPosition,
+        display: bool,
+    ) -> Vec<RowSpan> {
         if start.row == end.row {
             return vec![RowSpan { row: start.row as i32, start: start.column, end: end.column }];
         }
@@ -433,9 +459,11 @@ impl TextGrid {
         let mut spans = Vec::with_capacity(end.row - start.row + 1);
         spans.push(RowSpan { row: start.row as i32, start: start.column, end: self.columns });
         for row in start.row + 1..end.row {
-            spans.push(RowSpan { row: row as i32, start: 0, end: self.columns });
+            let row_start = if display { 0 } else { self.row_leading_non_blank(row, self.columns) };
+            spans.push(RowSpan { row: row as i32, start: row_start, end: self.columns });
         }
-        spans.push(RowSpan { row: end.row as i32, start: 0, end: end.column });
+        let end_start = if display { 0 } else { self.row_leading_non_blank(end.row, end.column) };
+        spans.push(RowSpan { row: end.row as i32, start: end_start, end: end.column });
         spans
     }
 }
@@ -553,6 +581,34 @@ pub(crate) fn scan_visible<T>(
             }
 
             apply_layout_hints(&mut overlay, &grid);
+            if let Some(span) = overlay.inline_span() {
+                if let Some((row, grid_row)) = grid.inline_rows(span) {
+                    let ansi_limit = rendered_cells
+                        .iter()
+                        .filter(|cell| {
+                            cell.point.line == row
+                                && cell.point.column.0 >= span.end
+                                && cell.bg_alpha > 0.0
+                        })
+                        .map(|cell| cell.point.column.0)
+                        .min();
+                    if let Some(ansi_limit) = ansi_limit {
+                        overlay.reflow_limit = Some(
+                            overlay.reflow_limit.map_or(ansi_limit, |limit| limit.min(ansi_limit)),
+                        );
+                    }
+                    let limit = overlay.reflow_limit.unwrap_or(grid.columns);
+                    if filter_reasoning_style
+                        && !has_reflowable_prose(&grid, grid_row, span.end, limit)
+                    {
+                        overlay.reflow_limit = Some(span.end);
+                    }
+                    if let Some(limit) = overlay.reflow_limit {
+                        overlay.reflow_content_end =
+                            Some(suffix_content_end(&grid, grid_row, span.end, limit));
+                    }
+                }
+            }
             Some(overlay)
         })
         .collect();
@@ -583,10 +639,16 @@ pub(super) fn formula_uses_reasoning_style(overlay: &FormulaOverlay) -> bool {
 /// the blank space around them allows it. `scan_visible` and the tests share
 /// this one decision so the numbers behind fit and clip always agree.
 pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) {
+    overlay.viewport_rows = grid.viewport.len();
     // Record what the neighbouring rows hold; `prepare_overlays` decides how
     // much of it is actually in the way once it knows the rendered width.
-    let (Some(first), Some(last)) = (overlay.spans.first(), overlay.spans.last()) else {
-        return;
+    let (first, last) = if let Some(span) = overlay.inline_span() {
+        (span, span)
+    } else {
+        let (Some(&first), Some(&last)) = (overlay.spans.first(), overlay.spans.last()) else {
+            return;
+        };
+        (first, last)
     };
     let first_row = first.row + grid.viewport.start as i32;
     let last_row = last.row + grid.viewport.start as i32;
@@ -616,6 +678,109 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
             }
         }))
     .then_some(grid.columns.max(source_right));
+
+    if let Some(span) = overlay.inline_span() {
+        if let Some((_, grid_row)) = grid.inline_rows(span) {
+            overlay.reflow_limit = reflow_barrier(grid, grid_row, span.end);
+            overlay.reflow_content_end = overlay
+                .reflow_limit
+                .map(|limit| suffix_content_end(grid, grid_row, span.end, limit));
+        }
+    }
+}
+
+/// First column after `from` where inline reflow must stop so table borders
+/// (`|`, Unicode box-drawing `U+2500..=U+259F`), multi-column padding
+/// ($\ge 2$ consecutive spaces before later content), and borderless fixed
+/// columns keep their grid columns.
+fn reflow_barrier(grid: &TextGrid, row: usize, from: usize) -> Option<usize> {
+    let cells = grid.rows.get(row)?;
+    let start = from.min(cells.len());
+    let mut run_start = None;
+    let mut space_run = 0usize;
+    for (offset, cell) in cells[start..].iter().enumerate() {
+        let column = start + offset;
+        let Some(character) = *cell else {
+            continue;
+        };
+        if character == '|' || ('\u{2500}'..='\u{259f}').contains(&character) {
+            return Some(run_start.unwrap_or(column));
+        }
+        if character == ' ' {
+            if space_run == 0 {
+                run_start = Some(column);
+            }
+            space_run += 1;
+        } else {
+            if space_run >= 2
+                || (space_run == 1
+                    && (is_aligned_column_stop(grid, row, column)
+                        || !token_has_prose_or_math(cells, column)))
+            {
+                return Some(column);
+            }
+            run_start = None;
+            space_run = 0;
+        }
+    }
+    None
+}
+
+fn is_aligned_column_stop(grid: &TextGrid, row: usize, column: usize) -> bool {
+    if column < 2 {
+        return false;
+    }
+    grid.viewport.clone().any(|other_row| {
+        let other_cells = &grid.rows[other_row];
+        other_row != row
+            && column < other_cells.len()
+            && other_cells[column].is_some_and(|ch| ch != ' ' && ch != OBJECT)
+            && other_cells[column - 1] == Some(' ')
+    })
+}
+
+fn token_has_prose_or_math(cells: &[Option<char>], start: usize) -> bool {
+    cells[start..]
+        .iter()
+        .take_while(|cell| !matches!(cell, Some(' ' | '|' | '\u{2500}'..='\u{259f}' | OBJECT)))
+        .flatten()
+        .any(|&character| character.is_alphabetic() || matches!(character, '$' | '\\'))
+}
+
+fn has_reflowable_prose(grid: &TextGrid, row: usize, from: usize, limit: usize) -> bool {
+    let Some(cells) = grid.rows.get(row) else {
+        return false;
+    };
+    let start = from.min(cells.len());
+    let end = limit.min(cells.len());
+    if end <= start {
+        return false;
+    }
+    let slice = &cells[start..end];
+    let leading_spaces = slice.iter().take_while(|cell| matches!(cell, Some(' '))).count();
+    if leading_spaces >= 2 || leading_spaces == slice.len() {
+        return false;
+    }
+    let token_start = start + leading_spaces;
+    if leading_spaces == 1 && is_aligned_column_stop(grid, row, token_start) {
+        return false;
+    }
+    token_has_prose_or_math(&cells[..end], token_start)
+}
+
+fn suffix_content_end(grid: &TextGrid, row: usize, from: usize, limit: usize) -> usize {
+    let Some(cells) = grid.rows.get(row) else {
+        return from;
+    };
+    let start = from.min(cells.len());
+    let end = limit.min(cells.len());
+    if end <= start {
+        return from;
+    }
+    cells[start..end]
+        .iter()
+        .rposition(|cell| !matches!(cell, Some(' ')))
+        .map_or(from, |offset| start + offset + 1)
 }
 
 /// Mark rows occupied by a *different* formula after all visible overlays have
@@ -624,13 +789,25 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
 pub(super) fn mark_formula_neighbours(overlays: &mut [FormulaOverlay]) {
     let spans: Vec<Vec<(i32, usize, usize)>> = overlays
         .iter()
-        .map(|overlay| overlay.spans.iter().map(|span| (span.row, span.start, span.end)).collect())
+        .map(|overlay| {
+            if let Some(span) = overlay.inline_span() {
+                vec![(span.row, span.start, span.end)]
+            } else {
+                overlay.spans.iter().map(|span| (span.row, span.start, span.end)).collect()
+            }
+        })
         .collect();
     for (index, overlay) in overlays.iter_mut().enumerate() {
-        let Some(first) = overlay.spans.first() else { continue };
-        let Some(last) = overlay.spans.last() else { continue };
-        let source_start = overlay.spans.iter().map(|span| span.start).min().unwrap_or(first.start);
-        let source_end = overlay.spans.iter().map(|span| span.end).max().unwrap_or(last.end);
+        let (first, last, source_start, source_end) = if let Some(span) = overlay.inline_span() {
+            (span, span, span.start, span.end)
+        } else {
+            let Some(&first) = overlay.spans.first() else { continue };
+            let Some(&last) = overlay.spans.last() else { continue };
+            let source_start =
+                overlay.spans.iter().map(|span| span.start).min().unwrap_or(first.start);
+            let source_end = overlay.spans.iter().map(|span| span.end).max().unwrap_or(last.end);
+            (first, last, source_start, source_end)
+        };
 
         for distance in 0..MAX_ABSORBED_BLANK_ROWS {
             let distance = (distance + 1) as i32;
@@ -1527,7 +1704,8 @@ pub(super) fn make_overlay(
         source: Arc::from(source),
         display,
         formula_id,
-        spans: grid.spans(open, after),
+        spans: grid.spans_for(open, after, display),
+        viewport_rows: grid.rows.len(),
         foreground: Rgb::default(),
         fallback: Vec::new(),
         neighbours_above: [NEIGHBOUR_UNKNOWN; MAX_ABSORBED_BLANK_ROWS],
@@ -1535,5 +1713,7 @@ pub(super) fn make_overlay(
         formula_neighbours_above: [false; MAX_ABSORBED_BLANK_ROWS],
         formula_neighbours_below: [false; MAX_ABSORBED_BLANK_ROWS],
         widen_right_to: None,
+        reflow_limit: None,
+        reflow_content_end: None,
     }
 }

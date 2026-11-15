@@ -154,8 +154,7 @@ impl TerminalView {
         }
     }
 
-    /// 像素坐标 → 网格坐标（含滚动偏移）与半格判定。
-    pub(super) fn grid_point(&self, position: Point<Pixels>) -> (TermPoint, Side) {
+    fn visual_grid_point(&self, position: Point<Pixels>) -> (TermPoint, Side, Line) {
         let rel_x = (position.x - self.origin.x).as_f32() / self.cell_width.as_f32().max(1.0);
         let rel_y = (position.y - self.origin.y).as_f32() / self.line_height.as_f32().max(1.0);
         let col = (rel_x.floor().max(0.0) as usize).min(self.cols.saturating_sub(1));
@@ -166,7 +165,7 @@ impl TerminalView {
             .min(projection.source_rows(self.rows).saturating_sub(1));
         let side = if rel_x.fract() > 0.5 { Side::Right } else { Side::Left };
         let Some(session) = self.session.as_ref() else {
-            return (TermPoint::new(Line(row as i32), Column(col)), side);
+            return (TermPoint::new(Line(row as i32), Column(col)), side, Line(0));
         };
         let term = session.term.lock();
         let viewport_origin = term.viewport_origin_for(self.rows);
@@ -181,10 +180,27 @@ impl TerminalView {
         } else {
             term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)))
         };
+        (point, side, viewport_origin)
+    }
+
+    /// 像素坐标 → 网格坐标（含滚动偏移）与半格判定。
+    pub(super) fn grid_point(&self, position: Point<Pixels>) -> (TermPoint, Side) {
+        let (point, side, viewport_origin) = self.visual_grid_point(position);
         if self.reading.panel.is_some() {
             (point, side)
         } else {
             self.math.source_point(point, side, viewport_origin)
+        }
+    }
+
+    /// 像素坐标 → 真实承载可见原文的源格。公式位图覆盖区与固定栏前的压缩
+    /// 空白格不对应任何可见源字符格，返回 `None` 以免误命中已左移的链接。
+    pub(super) fn link_grid_point(&self, position: Point<Pixels>) -> Option<TermPoint> {
+        let (point, _, viewport_origin) = self.visual_grid_point(position);
+        if self.reading.panel.is_some() {
+            Some(point)
+        } else {
+            self.math.source_cell(point, viewport_origin)
         }
     }
 
@@ -217,7 +233,7 @@ impl TerminalView {
             None
         } else {
             self.session.as_ref().and_then(|session| {
-                let (point, _) = self.grid_point(position);
+                let point = self.link_grid_point(position)?;
                 let term = session.term.lock();
                 super::super::osc_links::highlighted_at(&term, &self.hint_config, point, mods)
                     .and_then(|hint| {
@@ -730,10 +746,12 @@ impl TerminalView {
             self.finish_shell_pointer(event);
         }
         self.selecting = false;
-        let (point, _) = self.grid_point(event.position);
         let open_link = pending_link_open
             && self.selection_is_empty()
-            && self.link_hover.as_ref().is_some_and(|hover| hover.hint.bounds().contains(&point));
+            && self
+                .link_grid_point(event.position)
+                .zip(self.link_hover.as_ref())
+                .is_some_and(|(point, hover)| hover.hint.bounds().contains(&point));
         if open_link {
             self.try_open_hovered_link(window, cx);
         } else if self.copy_on_select {
