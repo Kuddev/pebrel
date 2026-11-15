@@ -53,6 +53,11 @@ fn write_with_permissions(path: &Path, contents: &[u8], private: bool) -> io::Re
 /// Try to own a sibling lock file without waiting on the UI thread.
 pub(crate) fn try_lock(path: &Path) -> io::Result<Option<FileLock>> {
     let lock_path = lock_path(path);
+    // 父目录不可创建是真实错误，不能伪装成“锁被占用”：先于争用判定传播，
+    // 让调用方计入失败而不是按去抖节奏无限重试。
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     match create_lock(&lock_path) {
         Ok(lock) => Ok(Some(lock)),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
@@ -123,9 +128,6 @@ pub(crate) fn try_lifetime_lock(path: &Path) -> io::Result<Option<LifetimeFileLo
 }
 
 fn create_lock(path: &Path) -> io::Result<FileLock> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     if let Err(err) = write!(file, "{}", std::process::id()) {
         // 锁文件一旦创建成功就代表“已占用”；写 PID 失败时必须立刻回收，

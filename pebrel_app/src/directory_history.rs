@@ -417,13 +417,13 @@ fn flush_worker(
                     failures += 1;
                     if failures >= MAX_FLUSH_FAILURES {
                         log::warn!(
-                            "Directory history persistence disabled after {failures} failed saves: {err}"
+                            "Directory history persistence disabled after {failures} failed flushes: {err}"
                         );
                         disable_persistence(&state);
                         break;
                     }
                     log::debug!(
-                        "Failed to save directory history ({failures}/{MAX_FLUSH_FAILURES}): {err}"
+                        "Failed to flush directory history ({failures}/{MAX_FLUSH_FAILURES}): {err}"
                     );
                 },
             }
@@ -505,8 +505,8 @@ impl DirectoryDatabase {
 }
 
 /// 合并一次待落盘记录。磁盘 I/O 期间不持有状态锁，UI 线程的 `record`
-/// 与补全查询不会因为一次 JSON 写而停顿；写失败时把批次放回队首，并把错误
-/// 交给 worker 累计。
+/// 与补全查询不会因为一次 JSON 写而停顿；争用或失败时把批次放回队首，争用
+/// 留给下一轮，建锁/写盘错误交给 worker 累计。
 fn flush(state: &Mutex<ServiceState>) -> Option<String> {
     let (batch, path) = {
         let mut state = state.lock();
@@ -517,9 +517,18 @@ fn flush(state: &Mutex<ServiceState>) -> Option<String> {
         (std::mem::take(&mut state.pending), state.path.clone())
     };
 
-    let Ok(Some(_lock)) = crate::atomic_file::try_lock(&path) else {
-        restore_pending(state, batch);
-        return None;
+    let _lock = match crate::atomic_file::try_lock(&path) {
+        Ok(Some(lock)) => lock,
+        // 另一个进程正在写：保留批次等待下一轮，不计作失败。
+        Ok(None) => {
+            restore_pending(state, batch);
+            return None;
+        },
+        // 建锁失败是持久错误（只读盘、父路径不可创建等）：与争用区分并计入失败。
+        Err(err) => {
+            restore_pending(state, batch);
+            return Some(err.to_string());
+        },
     };
 
     let mut merged = match read_database(&path) {
@@ -1025,6 +1034,9 @@ mod tests {
         // 锁定期间 worker 不能写入；记录必须留在 pending 而不是被丢弃。
         wait_until(|| history.state.lock().pending.len() == 1);
         assert!(!path.exists());
+        // 争用不是失败：跨过多个去抖窗口后仍必须保持持久化启用。
+        std::thread::sleep(FLUSH_DEBOUNCE * 6);
+        assert!(history.state.lock().persistence_enabled);
         drop(lock);
         assert!(history.record(second.to_str().unwrap()));
 
@@ -1033,6 +1045,53 @@ mod tests {
         });
         let database = read_database(&path).unwrap().unwrap();
         assert_eq!(database.entries.len(), 2);
+    }
+
+    #[test]
+    fn lock_creation_failure_is_a_flush_failure_not_contention() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocker = temp.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let directory = temp.path().join("kept");
+        std::fs::create_dir(&directory).unwrap();
+        let pending = observation(directory.to_str().unwrap(), current_time()).unwrap();
+
+        // 直接父目录和祖先目录分别被普通文件占据：两者都必须在争用判定之前
+        // 作为真实错误返回，否则 worker 会把永久失败当成锁忙而无限重试。
+        // 平台差异（Windows 两者都是 AlreadyExists，Linux 祖先是 NotADirectory）
+        // 意味着这里只能断言 flush 的结果，不能断言具体错误类别。
+        for path in [
+            blocker.join("directory_history.json"),
+            blocker.join("nested").join("directory_history.json"),
+        ] {
+            let state = Mutex::new(ServiceState {
+                database: DirectoryDatabase::default(),
+                pending: vec![pending.clone()],
+                unsaved_seed: None,
+                path,
+                persistence_enabled: true,
+            });
+            assert!(flush(&state).is_some(), "lock creation errors must be reported");
+            assert_eq!(state.lock().pending.len(), 1, "the batch must be restored");
+        }
+    }
+
+    #[test]
+    fn repeated_lock_failures_disable_persistence_and_keep_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocker = temp.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let path = blocker.join("directory_history.json");
+        let directory = temp.path().join("kept");
+        std::fs::create_dir(&directory).unwrap();
+        let history = persistent_history(&path);
+
+        assert!(history.record(directory.to_str().unwrap()));
+        // 锁始终建不出来：连续 MAX_FLUSH_FAILURES 次后必须停用持久化，而不是
+        // 每个去抖窗口都无限重试；内存 frecency 不受影响。
+        wait_until(|| !history.state.lock().persistence_enabled);
+        assert!(history.state.lock().pending.is_empty());
+        assert!(history.score(&directory).is_some());
     }
 
     #[test]
@@ -1100,30 +1159,6 @@ mod tests {
             history.score(&directory).is_some(),
             "a failed persistence pass must not roll back the in-memory record"
         );
-    }
-
-    #[test]
-    fn disabling_persistence_drops_the_batch_and_keeps_memory() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("directory_history.json");
-        let directory = temp.path().join("kept");
-        std::fs::create_dir(&directory).unwrap();
-        let pending = observation(directory.to_str().unwrap(), current_time()).unwrap();
-        let state = Mutex::new(ServiceState {
-            database: DirectoryDatabase::default(),
-            pending: vec![pending],
-            unsaved_seed: Some(DirectoryDatabase::default()),
-            path,
-            persistence_enabled: true,
-        });
-
-        // 反复写盘失败后的终态：不再重试、不再保留待写批次。
-        disable_persistence(&state);
-
-        let state = state.lock();
-        assert!(!state.persistence_enabled);
-        assert!(state.pending.is_empty());
-        assert!(state.unsaved_seed.is_none());
     }
 
     #[test]
