@@ -20,6 +20,7 @@
 //! 就会出现"点进 c 目录，界面却显示 b 目录的内容"。世代号对不上的响应直接
 //! 丢弃——它描述的是一个已经不存在的意图。
 
+mod deletion;
 mod drag;
 mod drop_overlay;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -64,6 +65,7 @@ struct RemoteDirectorySnapshot {
     selection: Selection,
     shell_cwd: Option<String>,
     retry_path: Option<String>,
+    needs_refresh: bool,
 }
 
 /// 远端浏览器的状态。
@@ -114,6 +116,8 @@ pub(super) struct RemoteBrowser {
     preflighting: bool,
     preflight_id: u64,
     last_outcome: Option<crate::i18n::Message>,
+    deletion: Option<gpui::Task<()>>,
+    needs_refresh: bool,
     /// 远端复制载荷必须带稳定的源 destination，不能从当前标题反推源主机。
     clipboard: Option<RemoteClipboard>,
 }
@@ -171,11 +175,12 @@ impl RemoteBrowser {
                     self.shell_cwd.clone()
                 },
                 retry_path: self.retry_path.clone(),
+                needs_refresh: self.needs_refresh,
             },
         );
     }
 
-    /// 绑定 pane。返回 `true` 表示已有完整快照，调用方不得再列目录。
+    /// 绑定 pane。返回 `true` 表示已恢复快照；失效的目录内容仍需刷新。
     fn bind(&mut self, pane: u64, destination: String) -> bool {
         self.last_outcome = None;
         self.park_active();
@@ -207,6 +212,7 @@ impl RemoteBrowser {
             self.selection = snapshot.selection;
             self.shell_cwd = snapshot.shell_cwd;
             self.retry_path = snapshot.retry_path;
+            self.needs_refresh = snapshot.needs_refresh;
             return true;
         }
 
@@ -218,6 +224,7 @@ impl RemoteBrowser {
         self.selection.clear();
         self.shell_cwd = None;
         self.retry_path = None;
+        self.needs_refresh = false;
         false
     }
 
@@ -239,6 +246,7 @@ impl RemoteBrowser {
             self.selection.clear();
             self.shell_cwd = None;
             self.retry_path = None;
+            self.needs_refresh = false;
             self.pending_path = None;
             self.following_cwd = false;
             self.navigation = None;
@@ -259,6 +267,7 @@ impl RemoteBrowser {
         self.selection.clear();
         self.shell_cwd = None;
         self.retry_path = None;
+        self.needs_refresh = false;
         self.pending_path = None;
         self.following_cwd = false;
         self.navigation = None;
@@ -339,10 +348,19 @@ impl NebulaWorkspace {
     ) {
         let restored = self.remote_browser.bind(pane, destination.clone());
         self.remote_files_scroll = self.remote_browser.scroll_for(pane);
-        if self.follow_remote_shell_cwd(cwd, cx) {
+        let followed = self.follow_remote_shell_cwd(cwd, cx);
+        if self.remote_browser.loading {
             return;
         }
-        if restored {
+        if restored && self.remote_browser.needs_refresh {
+            self.navigate_remote_with_mode(
+                self.remote_browser.path.clone(),
+                SftpBrowseMode::RecoverMissing,
+                cx,
+            );
+            return;
+        }
+        if restored || followed {
             cx.notify();
             return;
         }
@@ -463,6 +481,7 @@ impl NebulaWorkspace {
                                 .scroll_to_item(0, gpui::ScrollStrategy::Top);
                         }
                         workspace.remote_browser.retry_path = None;
+                        workspace.remote_browser.needs_refresh = false;
                     },
                     Some(Err(message)) => {
                         workspace.remote_browser.error = Some(message);
@@ -567,7 +586,7 @@ impl NebulaWorkspace {
             .focus_handle
             .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone();
-        let busy = self.remote_transfer_working() || self.remote_browser.preflighting;
+        let busy = self.remote_file_operation_busy();
         let ready = self.current_remote_transfer_target().is_some();
         let has_selection = !self.selected_remote_entries().is_empty();
         let has_clipboard = self.remote_browser.clipboard.is_some();
@@ -874,9 +893,8 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let has_error = self.remote_browser.error.is_some();
         let tip = label.clone();
-        let can_download = self.current_remote_transfer_target().is_some()
-            && !self.remote_transfer_working()
-            && !self.remote_browser.preflighting;
+        let can_act =
+            self.current_remote_transfer_target().is_some() && !self.remote_file_operation_busy();
         v_flex()
             .w_full()
             .flex_shrink_0()
@@ -930,11 +948,25 @@ impl NebulaWorkspace {
                             )
                             .w(px(28.0))
                             .h(px(28.0))
-                            .disabled(!can_download)
+                            .disabled(!can_act)
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
                                     this.remote_pick_download_directory(window, cx)
                                 },
+                            )),
+                        )
+                        .child(
+                            remote_button(
+                                "remote-files-delete-selection",
+                                IconName::Delete,
+                                language.text(Message::RemoteDeleteSelection),
+                            )
+                            .debug_selector(|| "remote-files-delete-selection".to_owned())
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .disabled(!can_act || self.remote_browser.needs_refresh)
+                            .on_click(cx.listener(
+                                |this, _, window, cx| this.request_remote_deletion(window, cx),
                             )),
                         )
                         .child(
@@ -1011,7 +1043,7 @@ impl NebulaWorkspace {
         let press = row.clone();
         let download = row.clone();
         let copy = row.clone();
-        let busy = self.remote_transfer_working() || self.remote_browser.preflighting;
+        let busy = self.remote_file_operation_busy();
         let ready = self.current_remote_transfer_target().is_some();
         let native_drag = (!row.is_parent && !busy)
             .then(|| self.current_remote_transfer_target())
@@ -1232,6 +1264,9 @@ impl NebulaWorkspace {
     /// 三种情况必须分开说。"读不到"和"是空的"混为一谈，用户就不知道该重试
     /// 还是该换目录——这是空态里最常见也最误导人的一处偷懒。
     fn remote_notice(&self, language: crate::display::UiLanguage) -> Option<String> {
+        if self.remote_browser.deletion.is_some() {
+            return Some(language.text(Message::RemoteDeleting).to_owned());
+        }
         if let Some(error) = self.remote_browser.error.as_deref() {
             return Some(language.format(Message::RemoteErrorRetry, &[("error", error)]));
         }

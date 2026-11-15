@@ -1,3 +1,6 @@
+#[cfg(feature = "gpui-shell")]
+#[path = "ssh_sftp/deletion.rs"]
+mod deletion;
 #[path = "ssh_sftp/document.rs"]
 pub(crate) mod document;
 #[path = "ssh_sftp/export.rs"]
@@ -30,6 +33,9 @@ use tokio::io::AsyncWriteExt;
 
 use transaction::FileStamp;
 use transfer::TransferObserver;
+
+#[cfg(feature = "gpui-shell")]
+pub(crate) use deletion::SftpDeleteError;
 
 type SftpError = Box<dyn std::error::Error + Send + Sync>;
 type SftpResult<T> = Result<T, SftpError>;
@@ -73,6 +79,16 @@ pub enum SftpEntryKind {
     Directory,
     File,
     Symlink,
+}
+
+impl SftpEntryKind {
+    fn from_file_type(file_type: FileType) -> Self {
+        match file_type {
+            FileType::Dir => Self::Directory,
+            FileType::Symlink => Self::Symlink,
+            FileType::File | FileType::Other => Self::File,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,10 +154,10 @@ pub struct SftpController {
     upload_debounce_active: Arc<AtomicBool>,
 }
 
-/// Long-lived SFTP channel used only by interactive directory browsing.
+/// Per-pane SFTP channel for directory listings and interactive mutations.
 ///
 /// Each browser session owns a stable channel, separate from bulk transfers.
-/// This handle is cheap to clone into UI jobs, serializes directory requests
+/// This handle is cheap to clone into UI jobs, serializes requests
 /// on one SFTP subsystem, and is never shared with upload/download workers.
 #[derive(Clone)]
 pub(crate) struct SftpBrowseSession {
@@ -718,11 +734,7 @@ async fn read_remote_dir(
     let mut entries = Vec::new();
     for entry in sftp.read_dir(path.to_owned()).await? {
         let metadata = entry.metadata();
-        let kind = match metadata.file_type() {
-            FileType::Dir => SftpEntryKind::Directory,
-            FileType::Symlink => SftpEntryKind::Symlink,
-            FileType::File | FileType::Other => SftpEntryKind::File,
-        };
+        let kind = SftpEntryKind::from_file_type(metadata.file_type());
         let type_prefix = match kind {
             SftpEntryKind::Directory => 'd',
             SftpEntryKind::Symlink => 'l',
@@ -1507,6 +1519,18 @@ async fn download_file_atomic(
     transaction::publish_local_file(temporary, destination, modified, context).await
 }
 
+async fn remove_remote_path(
+    sftp: &SftpSession,
+    path: String,
+    kind: SftpEntryKind,
+) -> Result<(), SftpClientError> {
+    if kind == SftpEntryKind::Directory {
+        sftp.remove_dir(path).await
+    } else {
+        sftp.remove_file(path).await
+    }
+}
+
 async fn delete_remote_entry(
     sftp: &SftpSession,
     entry: SftpEntry,
@@ -1533,8 +1557,10 @@ async fn delete_remote_entry(
                     stack.push(Step::Visit(child));
                 }
             },
-            Step::Visit(entry) => sftp.remove_file(entry.path).await?,
-            Step::RemoveDirectory(path) => sftp.remove_dir(path).await?,
+            Step::Visit(entry) => remove_remote_path(sftp, entry.path, entry.kind).await?,
+            Step::RemoveDirectory(path) => {
+                remove_remote_path(sftp, path, SftpEntryKind::Directory).await?
+            },
         }
     }
     Ok(())

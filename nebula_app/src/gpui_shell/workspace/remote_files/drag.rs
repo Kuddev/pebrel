@@ -85,7 +85,7 @@ impl NebulaWorkspace {
             cx.notify();
             return;
         }
-        if self.remote_transfer_working() || self.remote_browser.preflighting {
+        if self.remote_file_operation_busy() {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferBusy).to_owned());
             cx.notify();

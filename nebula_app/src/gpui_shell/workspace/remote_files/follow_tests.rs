@@ -6,7 +6,7 @@ use crate::gpui_shell::terminal::view::{TerminalLaunch, TerminalView};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use gpui_component::Root;
 use nebula_terminal::event::Event;
-use russh_sftp::protocol::{File, Handle, Name, Status, StatusCode};
+use russh_sftp::protocol::{Attrs, File, FileAttributes, Handle, Name, Status, StatusCode};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::sync::Mutex;
@@ -72,6 +72,24 @@ struct Store {
     gates: HashMap<String, Arc<tokio::sync::Semaphore>>,
     denied_once: HashSet<String>,
     missing: HashSet<String>,
+    extra_files: Vec<String>,
+    kinds: HashMap<String, SftpEntryKind>,
+    remove_requests: Vec<String>,
+    rmdir_requests: Vec<String>,
+    removed: HashSet<String>,
+    remove_denied: HashSet<String>,
+}
+
+impl Store {
+    fn attrs(&self, path: &str) -> FileAttributes {
+        let mut attrs = FileAttributes::empty();
+        match self.kinds.get(path).copied().unwrap_or(SftpEntryKind::File) {
+            SftpEntryKind::File => attrs.set_regular(true),
+            SftpEntryKind::Directory => attrs.set_dir(true),
+            SftpEntryKind::Symlink => attrs.set_symlink(true),
+        }
+        attrs
+    }
 }
 
 struct Peer {
@@ -105,10 +123,60 @@ impl russh_sftp::server::Handler for Peer {
     }
 
     async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, StatusCode> {
-        if !self.listed.insert(handle) {
+        if !self.listed.insert(handle.clone()) {
             return Err(StatusCode::Eof);
         }
-        Ok(Name { id, files: vec![File::dummy("listing.txt")] })
+        let (_, directory) = handle.split_once(':').expect("owned directory handle");
+        let store = self.store.lock().unwrap();
+        let files = std::iter::once("listing.txt")
+            .chain(store.extra_files.iter().map(String::as_str))
+            .filter_map(|name| {
+                let path = format!("{}/{name}", directory.trim_end_matches('/'));
+                (!store.removed.contains(&path)).then(|| File::new(name, store.attrs(&path)))
+            })
+            .collect::<Vec<_>>();
+        if files.is_empty() {
+            return Err(StatusCode::Eof);
+        }
+        Ok(Name { id, files })
+    }
+
+    async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, StatusCode> {
+        let store = self.store.lock().unwrap();
+        if store.removed.contains(&path) {
+            return Err(StatusCode::NoSuchFile);
+        }
+        Ok(Attrs { id, attrs: store.attrs(&path) })
+    }
+
+    async fn remove(&mut self, id: u32, path: String) -> Result<Status, StatusCode> {
+        let mut store = self.store.lock().unwrap();
+        store.remove_requests.push(path.clone());
+        if store.remove_denied.contains(&path) || store.attrs(&path).is_dir() {
+            return Err(StatusCode::PermissionDenied);
+        }
+        store.removed.insert(path);
+        Ok(Status {
+            id,
+            status_code: StatusCode::Ok,
+            error_message: String::new(),
+            language_tag: String::new(),
+        })
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, StatusCode> {
+        let mut store = self.store.lock().unwrap();
+        store.rmdir_requests.push(path.clone());
+        if store.remove_denied.contains(&path) || !store.attrs(&path).is_dir() {
+            return Err(StatusCode::PermissionDenied);
+        }
+        store.removed.insert(path);
+        Ok(Status {
+            id,
+            status_code: StatusCode::Ok,
+            error_message: String::new(),
+            language_tag: String::new(),
+        })
     }
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, StatusCode> {
@@ -284,7 +352,8 @@ fn listed(fixture: &mut Fixture, path: &str) {
         })
     });
     fixture.workspace.read_with(&fixture.window, |workspace, _| {
-        assert_eq!(workspace.remote_browser.entries[0].path, format!("{path}/listing.txt"));
+        let expected = format!("{path}/listing.txt");
+        assert!(workspace.remote_browser.entries.iter().any(|entry| entry.path == expected));
         assert!(workspace.remote_browser.error.is_none());
     });
 }
@@ -308,6 +377,119 @@ fn focus(fixture: &mut Fixture, tab: usize) {
 fn click(fixture: &mut Fixture, id: &'static str) {
     let bounds = fixture.window.debug_bounds(id).expect("remote toolbar button bounds");
     fixture.window.simulate_click(bounds.center(), gpui::Modifiers::default());
+}
+
+fn select_remote_rows(fixture: &mut Fixture) {
+    fixture.window.update(|window, cx| {
+        let focus = fixture.workspace.read(cx).remote_browser.focus_handle.clone().unwrap();
+        focus.focus(window, cx);
+    });
+    fixture.window.simulate_keystrokes("ctrl-a");
+}
+
+#[gpui::test]
+fn remote_delete_cancel_and_confirm_use_the_selection(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    let path = "/srv/Alpha 中";
+    listed(&mut fixture, path);
+    select_remote_rows(&mut fixture);
+    wait(&mut fixture, |f| {
+        f.window.clone().debug_bounds("remote-files-delete-selection").is_some()
+    });
+    click(&mut fixture, "remote-files-delete-selection");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-cancel").is_some());
+    assert!(fixture.stores[0].lock().unwrap().remove_requests.is_empty());
+    click(&mut fixture, "confirm-dialog-cancel");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-cancel").is_none());
+    assert!(fixture.stores[0].lock().unwrap().remove_requests.is_empty());
+
+    select_remote_rows(&mut fixture);
+    fixture.window.simulate_keystrokes("delete");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-ok").is_some());
+    click(&mut fixture, "confirm-dialog-ok");
+    wait(&mut fixture, |f| {
+        f.workspace.read_with(&f.window, |workspace, _| {
+            workspace.remote_browser.path == path
+                && workspace.remote_browser.entries.is_empty()
+                && !workspace.remote_browser.loading
+        })
+    });
+    assert_eq!(fixture.stores[0].lock().unwrap().remove_requests, [format!("{path}/listing.txt")]);
+}
+
+#[gpui::test]
+fn remote_delete_relists_after_partial_failure(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    let path = "/srv/partial";
+    let refused = format!("{path}/refused.txt");
+    {
+        let mut store = fixture.stores[0].lock().unwrap();
+        store.extra_files.push("refused.txt".into());
+        store.remove_denied.insert(refused.clone());
+    }
+    report(&mut fixture, 0, Event::CwdReport(path.into()));
+    listed(&mut fixture, path);
+    select_remote_rows(&mut fixture);
+    fixture.window.simulate_keystrokes("delete");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-ok").is_some());
+    click(&mut fixture, "confirm-dialog-ok");
+    wait(&mut fixture, |f| {
+        f.workspace.read_with(&f.window, |workspace, _| {
+            workspace.remote_browser.entries.len() == 1
+                && workspace.remote_browser.entries[0].path == refused
+                && !workspace.remote_browser.loading
+        })
+    });
+    assert_eq!(
+        fixture.stores[0].lock().unwrap().remove_requests,
+        [format!("{path}/listing.txt"), refused]
+    );
+}
+
+#[gpui::test]
+fn remote_delete_uses_remove_for_links_and_rmdir_for_folders(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    let path = "/srv/entry-types";
+    let folder = format!("{path}/empty");
+    let link = format!("{path}/link-to-directory");
+    {
+        let mut store = fixture.stores[0].lock().unwrap();
+        store.extra_files.extend(["empty".into(), "link-to-directory".into()]);
+        store.kinds.insert(folder.clone(), SftpEntryKind::Directory);
+        store.kinds.insert(link.clone(), SftpEntryKind::Symlink);
+    }
+    report(&mut fixture, 0, Event::CwdReport(path.into()));
+    listed(&mut fixture, path);
+    select_remote_rows(&mut fixture);
+    fixture.window.simulate_keystrokes("delete");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-ok").is_some());
+    click(&mut fixture, "confirm-dialog-ok");
+    wait(&mut fixture, |f| {
+        f.workspace.read_with(&f.window, |workspace, _| {
+            workspace.remote_browser.entries.is_empty() && !workspace.remote_browser.loading
+        })
+    });
+    let store = fixture.stores[0].lock().unwrap();
+    assert_eq!(store.rmdir_requests, [folder]);
+    assert_eq!(
+        store.remove_requests.iter().collect::<HashSet<_>>(),
+        [&link, &format!("{path}/listing.txt")].into_iter().collect(),
+    );
+    assert_eq!(store.remove_requests.len(), 2);
+}
+
+#[gpui::test]
+fn remote_delete_confirmation_expires_when_the_directory_changes(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    listed(&mut fixture, "/srv/Alpha 中");
+    select_remote_rows(&mut fixture);
+    fixture.window.simulate_keystrokes("delete");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-ok").is_some());
+    report(&mut fixture, 0, Event::CwdReport("/srv/new-directory".into()));
+    listed(&mut fixture, "/srv/new-directory");
+    click(&mut fixture, "confirm-dialog-ok");
+    wait(&mut fixture, |f| f.window.clone().debug_bounds("confirm-dialog-ok").is_none());
+    assert!(fixture.stores[0].lock().unwrap().remove_requests.is_empty());
 }
 
 #[gpui::test]

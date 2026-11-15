@@ -13,6 +13,12 @@ impl NebulaWorkspace {
         self.remote_transfer_snapshot().is_some_and(|snapshot| snapshot.phase == SftpPhase::Working)
     }
 
+    pub(super) fn remote_file_operation_busy(&self) -> bool {
+        self.remote_transfer_working()
+            || self.remote_browser.preflighting
+            || self.remote_browser.deletion.is_some()
+    }
+
     /// 为当前 pane/目录取得控制器，并启动一条常驻 wake 接收协程。
     ///
     /// 接收协程只持有 channel，不持有 controller；否则 controller 的 wake 闭包
@@ -127,6 +133,12 @@ impl NebulaWorkspace {
         target: &RemoteTransferTarget,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.remote_file_operation_busy() {
+            self.remote_browser.error =
+                Some(workspace_ui_language().text(Message::TransferBusy).to_owned());
+            cx.notify();
+            return;
+        }
         if !self.remote_transfer_target_matches(target) {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferTargetChanged).to_owned());
@@ -213,7 +225,7 @@ impl NebulaWorkspace {
             cx.notify();
             return;
         }
-        if self.remote_transfer_working() || self.remote_browser.preflighting {
+        if self.remote_file_operation_busy() {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferBusy).to_owned());
             cx.notify();
@@ -445,7 +457,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.remote_transfer_working() || self.remote_browser.preflighting {
+        if self.remote_file_operation_busy() {
             return;
         }
         let Some(target) = self.current_remote_transfer_target() else { return };
@@ -477,7 +489,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.remote_transfer_working() || self.remote_browser.preflighting {
+        if self.remote_file_operation_busy() {
             return;
         }
         let Some(target) = self.current_remote_transfer_target() else { return };
@@ -506,7 +518,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.remote_transfer_working() || self.remote_browser.preflighting {
+        if self.remote_file_operation_busy() {
             return;
         }
         let Some(target) = self.current_remote_transfer_target() else { return };

@@ -85,6 +85,11 @@ impl NebulaWorkspace {
                 }
             },
             "backspace" if !toggle && !modifiers.shift => self.remote_parent(cx),
+            "delete" if !toggle && !modifiers.shift => {
+                cx.stop_propagation();
+                self.request_remote_deletion(window, cx);
+                return;
+            },
             "f5" => self.remote_refresh(cx),
             _ => return,
         }
