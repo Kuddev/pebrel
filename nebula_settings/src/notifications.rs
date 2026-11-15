@@ -109,3 +109,27 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod auto_continue_tests {
+    use crate::{RawSettings, RuntimeSettings, apply_updates};
+
+    #[test]
+    fn auto_continue_defaults_and_roundtrips_without_erasing_other_settings() {
+        assert!(RuntimeSettings::from_raw(&RawSettings::default()).ai_auto_continue);
+        for value in ["0", "false", "off", "no"] {
+            let saved = apply_updates(
+                "custom_data=keep\nai_toasts=0\n",
+                &[("ai_auto_continue", value.to_owned())],
+            );
+            let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&saved));
+            assert!(!runtime.ai_auto_continue, "{value}");
+            assert!(!runtime.ai_toasts);
+            assert!(saved.contains("custom_data=keep"));
+        }
+        for value in ["1", "true", "on", "yes"] {
+            let raw = RawSettings::from_text(&format!("ai_auto_continue={value}\n"));
+            assert!(RuntimeSettings::from_raw(&raw).ai_auto_continue);
+        }
+    }
+}

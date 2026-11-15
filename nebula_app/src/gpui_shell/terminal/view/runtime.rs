@@ -137,6 +137,8 @@ impl TerminalView {
     /// the primary edge; the cached-prompt path calls the same reset so the two
     /// lifecycle routes cannot drift apart.
     pub(super) fn clear_foreground_agent_state(&mut self, cx: &mut Context<Self>) -> bool {
+        self.cancel_auto_continue();
+        self.auto_continue.reset();
         if let Some(session) = &self.session {
             session.term.lock().set_redraw_anchor_enabled(false);
         }
@@ -443,7 +445,7 @@ impl TerminalView {
         }
     }
 
-    fn runtime_key_sequence(
+    pub(super) fn runtime_key_sequence(
         &self,
         key: crate::runtime_api::RuntimeKey,
         modifiers: crate::runtime_api::RuntimeKeyModifiers,
@@ -713,6 +715,9 @@ impl TerminalView {
         }
         if submit {
             self.suggest.last_committed.clone_from(&text);
+            if let Some(agent) = agent.as_ref() {
+                self.agent_activity.submitted_text(&agent.kind, &text);
+            }
         }
         self.write_input(bytes, cx);
         if submit {
@@ -725,9 +730,6 @@ impl TerminalView {
                 self.classify_submitted_command();
             }
             self.mark_command_running();
-            if let Some(agent) = agent {
-                self.agent_activity.submitted_text(&agent.kind, &text);
-            }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
         }
@@ -851,6 +853,9 @@ impl TerminalView {
                 submit_bytes,
             });
         }
+        if submit && let Some(agent) = agent.as_ref() {
+            self.agent_activity.submitted_text(&agent.kind, &text);
+        }
         if codex_submit {
             let bytes = crate::input::terminal_input::build_runtime_codex_submission(
                 &text,
@@ -863,9 +868,6 @@ impl TerminalView {
         if submit {
             self.awaiting_input = false;
             self.mark_command_running();
-            if let Some(agent) = agent {
-                self.agent_activity.submitted_text(&agent.kind, &text);
-            }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
         }

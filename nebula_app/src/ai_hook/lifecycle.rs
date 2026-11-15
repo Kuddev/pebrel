@@ -4,6 +4,7 @@
 //! Command ownership ends at the shell boundary, never because output goes quiet.
 
 use crate::ai_agents::{AgentStatus, AgentStatusSource, Detection};
+use std::collections::HashSet;
 
 use super::{AiHookEvent, AiHookKind};
 
@@ -43,6 +44,11 @@ pub(crate) struct AgentActivity {
     screen_blocked_fallback: Option<(AgentStatusSource, Option<String>)>,
     turn_observed: bool,
     pending_submit: bool,
+    /// A Claude prompt was typed while the previous turn was still Working.
+    /// The current turn's completion must still be recorded, but an automatic
+    /// retry would submit one prompt too many. Cleared when the provider
+    /// accepts a new prompt, a new turn is observed, or the session ends.
+    queued_prompt: bool,
     /// A completion-only hook latches its result until an idle screen or an
     /// explicit submission separates the old frame from a new turn.
     screen_armed: bool,
@@ -52,6 +58,12 @@ pub(crate) struct AgentActivity {
     /// Removing a title marker cannot manufacture a completion or approval.
     native_title: Option<AgentStatus>,
     turn_id: Option<String>,
+    /// Keep every prompt identity for this Claude session so delayed hooks
+    /// cannot become valid again after a bounded history evicts them.
+    claude_prompt_ids: HashSet<String>,
+    /// Reject Claude events whose ingress sequence predates the last input,
+    /// including raw remote envelopes parsed only after leaving the mailbox.
+    submit_receive_sequence: u64,
     last_remote_sequence: Option<u64>,
     /// Reject title snapshots captured before a newer submission or Hook.
     last_activity_at: Option<std::time::Instant>,
@@ -70,11 +82,14 @@ impl Default for AgentActivity {
             screen_blocked_fallback: None,
             turn_observed: false,
             pending_submit: false,
+            queued_prompt: false,
             screen_armed: true,
             command_ended: false,
             native_codex: false,
             native_title: None,
             turn_id: None,
+            claude_prompt_ids: HashSet::new(),
+            submit_receive_sequence: 0,
             last_remote_sequence: None,
             last_activity_at: None,
         }
@@ -85,9 +100,21 @@ impl AgentActivity {
     pub fn status(&self) -> AgentStatus {
         self.native_title.unwrap_or(self.status)
     }
+
+    pub fn is_current_turn(&self, turn_id: &str) -> bool {
+        self.turn_id.as_deref() == Some(turn_id)
+    }
+
+    /// Whether a prompt typed during the current turn is still waiting for its
+    /// provider-confirmed identity. Automatic retry must not add another one.
+    pub fn queued_prompt_pending(&self) -> bool {
+        self.queued_prompt
+    }
+
     pub fn source(&self) -> AgentStatusSource {
         if self.native_title.is_some() { AgentStatusSource::Title } else { self.source }
     }
+
     pub fn rule(&self) -> Option<&str> {
         match self.native_title {
             Some(AgentStatus::Blocked) => Some("codex.title.action_required"),
@@ -95,12 +122,15 @@ impl AgentActivity {
             _ => self.rule.as_deref(),
         }
     }
+
     pub fn hook_seen(&self) -> bool {
         self.coverage != HookCoverage::None
     }
+
     pub fn primary_pid(&self) -> Option<u32> {
         self.owner.as_ref().and_then(|owner| owner.pid)
     }
+
     pub fn allows_screen(&self) -> bool {
         !self.command_ended
             && self.native_title.is_none()
@@ -138,6 +168,7 @@ impl AgentActivity {
         if signal == Some(AgentStatus::Working) {
             self.turn_observed = true;
             self.screen_armed = true;
+            self.queued_prompt = false;
         }
         true
     }
@@ -170,6 +201,10 @@ impl AgentActivity {
     /// A concrete runtime submission or accepted confirmation starts work. The
     /// previous input frame must not manufacture a completion before work starts.
     pub fn submitted(&mut self) {
+        self.submitted_at(super::current_receive_sequence());
+    }
+
+    pub fn submitted_at(&mut self, received_sequence: u64) {
         self.native_title = None;
         self.status = AgentStatus::Working;
         self.source = AgentStatusSource::Process;
@@ -177,23 +212,43 @@ impl AgentActivity {
         self.screen_blocked_fallback = None;
         self.turn_observed = true;
         self.pending_submit = true;
+        self.queued_prompt = false;
         self.last_activity_at = Some(std::time::Instant::now());
-        self.input_sent();
+        self.input_sent_at(received_sequence);
+    }
+
+    /// Input sent while Claude is still working may queue the next prompt.
+    /// Record the current turn's completion normally, but do not auto-retry
+    /// over the prompt the user already queued.
+    pub fn queued_submit(&mut self) {
+        self.pending_submit = true;
+        self.queued_prompt = true;
+        self.last_activity_at = Some(std::time::Instant::now());
+        self.input_sent_at(super::current_receive_sequence());
     }
 
     pub fn submitted_text(&mut self, program: &str, text: &str) {
+        self.submitted_text_at(program, text, super::current_receive_sequence());
+    }
+
+    pub fn submitted_text_at(&mut self, program: &str, text: &str, received_sequence: u64) {
         // Codex /plan 只切换交互模式，不触发任务 hook；若先制造 Running，
         // 对话输入会一直等一个不存在的完成事件。普通任务仍保留提交屏障。
         if program == "codex" && text.trim() == "/plan" {
-            self.input_sent();
+            self.input_sent_at(received_sequence);
         } else {
-            self.submitted();
+            self.submitted_at(received_sequence);
         }
     }
 
     /// Physical Enter alone can also dismiss a menu. It only permits observing a
     /// new turn; it is not itself a successful submission or a completion.
     pub fn input_sent(&mut self) {
+        self.input_sent_at(super::current_receive_sequence());
+    }
+
+    fn input_sent_at(&mut self, received_sequence: u64) {
+        self.submit_receive_sequence = received_sequence;
         self.screen_armed = true;
         self.reset_screen_samples();
     }
@@ -208,6 +263,11 @@ impl AgentActivity {
     /// Check ownership before the ordering gate records this event. An ignored
     /// legacy notification must not reopen the gate's already completed stream.
     pub fn accepts_hook(&self, event: &AiHookEvent) -> bool {
+        // Claude has no provider sequence. The ingress fence prevents old local
+        // or queued remote events from crossing new input.
+        if event.source == "claude" && event.received_sequence < self.submit_receive_sequence {
+            return false;
+        }
         if self.command_ended && event.kind != AiHookKind::SessionStart {
             return false;
         }
@@ -220,7 +280,46 @@ impl AgentActivity {
         if self.native_codex && event.source == "codex" && event.codex_hooks.is_none() {
             return false;
         }
-        if event.codex_hooks.is_some()
+        if event.source == "claude"
+            && event.kind == AiHookKind::PromptSubmit
+            && event
+                .turn_id
+                .as_deref()
+                .is_some_and(|turn_id| self.claude_prompt_ids.contains(turn_id))
+        {
+            return false;
+        }
+        // Claude provides no source sequence, so the provider-confirmed prompt
+        // identity is the authority. A distinct unseen ID may start the next
+        // turn even when a keybinding submitted it without a local Enter;
+        // replayed or still-current IDs cannot consume the submit guard.
+        if event.source == "claude"
+            && event.kind == AiHookKind::PromptSubmit
+            && self.turn_id.is_some()
+            && (event.turn_id.is_none() || event.turn_id.as_deref() == self.turn_id.as_deref())
+        {
+            return false;
+        }
+        // An explicit local submission is waiting for its provider identity;
+        // the previous turn's completion must not close the new turn. A plain
+        // Enter during Working may have queued nothing, so its completion is
+        // recorded normally and only the automatic retry is suppressed.
+        if event.source == "claude"
+            && self.pending_submit
+            && !self.queued_prompt
+            && event.kind != AiHookKind::SessionStart
+            && event.kind != AiHookKind::PromptSubmit
+            && self.turn_id.is_some()
+            && event.turn_id.as_deref() == self.turn_id.as_deref()
+        {
+            return false;
+        }
+        if (event.codex_hooks.is_some()
+            || event.source == "claude"
+                && matches!(
+                    event.kind,
+                    AiHookKind::TurnDone | AiHookKind::NeedsAttention | AiHookKind::ToolComplete
+                ))
             && self.turn_id.is_some()
             && event.turn_id.is_some()
             && self.turn_id != event.turn_id
@@ -229,7 +328,8 @@ impl AgentActivity {
             return false;
         }
         if event.kind == AiHookKind::TurnDone
-            && self.status == AgentStatus::Done
+            && (self.status == AgentStatus::Done
+                || event.source == "claude" && self.status == AgentStatus::Idle)
             && event.turn_id.is_some()
             && event.turn_id == self.turn_id
         {
@@ -302,6 +402,30 @@ impl AgentActivity {
     pub fn apply_hook(&mut self, event: &AiHookEvent) -> bool {
         if !self.accepts_hook(event) {
             return false;
+        }
+        if event.source == "claude"
+            && event.kind == AiHookKind::SessionStart
+            && !event.session_compacted
+            && event.session_id.as_ref().is_some_and(|session_id| {
+                self.owner.as_ref().and_then(|owner| owner.session.as_ref()) != Some(session_id)
+            })
+        {
+            self.claude_prompt_ids.clear();
+        }
+        if event.source == "claude"
+            && event.kind == AiHookKind::SessionStart
+            && !event.session_compacted
+        {
+            self.queued_prompt = false;
+        }
+        if event.source == "claude" && event.kind == AiHookKind::PromptSubmit {
+            self.queued_prompt = false;
+        }
+        if event.source == "claude"
+            && event.kind == AiHookKind::PromptSubmit
+            && let Some(turn_id) = event.turn_id.as_ref()
+        {
+            self.claude_prompt_ids.insert(turn_id.clone());
         }
         self.record_owner(event);
         self.native_title = None;
@@ -439,6 +563,7 @@ impl AgentActivity {
                     return false;
                 }
                 self.pending_submit = false;
+                self.queued_prompt = false;
                 self.turn_observed |= status == AgentStatus::Working;
                 status
             },
