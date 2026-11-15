@@ -268,6 +268,9 @@ pub(super) fn shutdown() {
 }
 
 fn read_message(stream: &mut UnixStream, stop: &AtomicBool) -> io::Result<Vec<u8>> {
+    // BSD accept inherits the listener's nonblocking flag. The connected stream
+    // needs blocking reads for the existing per-message timeout to take effect.
+    stream.set_nonblocking(false)?;
     const MAX: usize = 1024 * 1024;
     let deadline = Instant::now() + Duration::from_secs(1);
     let mut bytes = Vec::with_capacity(4096);
@@ -350,6 +353,20 @@ mod tests {
         let mut ack = [0; 1];
         stream.read_exact(&mut ack).unwrap();
         assert_eq!(ack, *b"\n");
+    }
+
+    #[test]
+    fn inherited_nonblocking_stream_still_waits_for_the_message_deadline() {
+        let (mut stream, _peer) = UnixStream::pair().unwrap();
+        // Reproduce the accepted descriptor's BSD flags on every Unix test host.
+        stream.set_nonblocking(true).unwrap();
+        let started = Instant::now();
+        let error = read_message(&mut stream, &AtomicBool::new(false)).unwrap_err();
+        assert!(matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut));
+        assert!(
+            started.elapsed() >= Duration::from_millis(500),
+            "a connected peer without data must get the existing one-second read budget"
+        );
     }
 
     /// 多个连接按建立顺序被接受，每个事件都能收到自己的 ack。
