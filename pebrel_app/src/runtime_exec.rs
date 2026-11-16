@@ -101,16 +101,26 @@ impl PaneExecContext {
     }
 
     pub(crate) fn from_pty_options(options: &pebrel_terminal::tty::Options) -> Self {
-        let location = options
-            .shell
-            .as_ref()
-            .filter(|shell| is_wsl_program(shell.program()))
-            .map_or(ExecLocation::Host, |shell| ExecLocation::Wsl {
+        let wsl = options.shell.as_ref().is_some_and(|shell| is_wsl_program(shell.program()));
+        Self::from_classified_options(options, wsl)
+    }
+
+    pub(crate) fn from_literal_pty_options(options: &pebrel_terminal::tty::Options) -> Self {
+        let wsl = options.shell.as_ref().is_some_and(|shell| {
+            crate::platform::launch_directory::is_wsl_program(shell.program())
+        });
+        Self::from_classified_options(options, wsl)
+    }
+
+    fn from_classified_options(options: &pebrel_terminal::tty::Options, wsl: bool) -> Self {
+        let location = options.shell.as_ref().filter(|_| wsl).map_or(ExecLocation::Host, |shell| {
+            ExecLocation::Wsl {
                 distro: crate::shell_detect::wsl_launch_distro(shell.program(), shell.args())
                     .map(str::to_owned),
                 user: crate::shell_detect::wsl_launch_user(shell.program(), shell.args())
                     .map(str::to_owned),
-            });
+            }
+        });
         let mut env = options.env.clone();
         if matches!(location, ExecLocation::Wsl { .. }) {
             crate::shell_detect::strip_wsl_zsh_takeover(&mut env);
@@ -421,6 +431,23 @@ fn join_capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_programs_use_host_scope_when_native_wsl_is_unavailable() {
+        let options = pebrel_terminal::tty::Options {
+            shell: Some(pebrel_terminal::tty::Shell::new(
+                "wsl.exe".into(),
+                vec!["-d".into(), "Ubuntu".into()],
+            )),
+            ..Default::default()
+        };
+        let context = PaneExecContext::from_literal_pty_options(&options);
+        if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+            assert_eq!(context.wsl_distribution(), Some(Some("Ubuntu")));
+        } else {
+            assert_eq!(context.wsl_distribution(), None);
+        }
+    }
 
     #[test]
     fn launch_location_distinguishes_host_default_wsl_and_named_wsl() {

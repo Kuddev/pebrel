@@ -788,6 +788,18 @@ pub(crate) fn wsl_args_in_directory(
     wsl_args_with_directory(program, args, Some(&wsl_raw_arg(cwd)?))
 }
 
+/// Direct-command argv is escaped once by the native PTY encoder.
+pub(crate) fn wsl_literal_args_in_directory(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+) -> Option<Vec<String>> {
+    if cwd.is_empty() || cwd.chars().any(char::is_control) || !wsl_accepts_startup_arg(cwd) {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(cwd))
+}
+
 /// A value as one raw argument of the command line `wsl.exe` splits itself: a
 /// value with whitespace is quoted whole (see [`wsl_accepts_startup_arg`]).
 fn wsl_raw_arg(value: &str) -> Option<String> {

@@ -26,6 +26,8 @@ mod tests;
 
 pub(crate) use cli::request_once_bounded;
 pub use cli::run_cli;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use cli::test_tab_launch_params;
 pub use command::RuntimeCommand;
 use command::{
     RuntimeWaitState, SubscribeParams, WaitParams, default_read_lines, default_true, parse_params,
