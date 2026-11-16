@@ -240,9 +240,8 @@ fn application_drag_stays_with_the_original_pane(cx: &mut TestAppContext) {
     // RESIZE_SETTLE_DELAY, possibly one paint later than this test's gesture.
     // Settle both resize gates and redraw first, or the drag encodes against
     // the constructor grid while `view.cols` already reports the widened one.
-    cx.executor().advance_clock(
-        TerminalView::STARTUP_GRID_GRACE + TerminalView::RESIZE_SETTLE_DELAY,
-    );
+    cx.executor()
+        .advance_clock(TerminalView::STARTUP_GRID_GRACE + TerminalView::RESIZE_SETTLE_DELAY);
     window.run_until_parked();
     draw(&mut window);
     for (source, target) in [(0, 1), (1, 0)] {
