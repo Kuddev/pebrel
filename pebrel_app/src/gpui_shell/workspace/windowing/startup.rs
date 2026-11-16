@@ -208,9 +208,7 @@ mod startup_tests {
     #[gpui::test]
     fn invalid_explicit_shell_cannot_create_a_runtime_window(cx: &mut gpui::TestAppContext) {
         let error = cx
-            .update(|cx| {
-                open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into()), None, None)
-            })
+            .update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into())))
             .unwrap_err();
         assert_eq!(error.code, "invalid_shell");
         assert!(cx.update(|cx| cx.windows().is_empty()));

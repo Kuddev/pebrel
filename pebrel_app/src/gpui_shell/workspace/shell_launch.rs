@@ -44,6 +44,19 @@ pub(super) fn runtime_tab_launch(
         LaunchSession::Ssh { .. } | LaunchSession::Serial { .. } => false,
     };
     let cwd = if wsl { cwd } else { host_cwd.or(cwd) };
+    if wsl && let Some(cwd) = cwd.as_deref() {
+        let usable = crate::platform::launch_directory::wsl_argument(cwd).is_some_and(|value| {
+            !value.is_empty()
+                && !value.chars().any(char::is_control)
+                && crate::shell_detect::wsl_accepts_startup_arg(&value)
+        });
+        if !usable {
+            return Err(crate::runtime_api::ApiError::new(
+                "invalid_params",
+                "cwd cannot be passed to the selected WSL program",
+            ));
+        }
+    }
     Ok((at_explicit_directory(launch, cwd.as_deref()), cwd))
 }
 

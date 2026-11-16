@@ -482,6 +482,17 @@ impl RuntimeCommand {
             },
             "tab.new" => {
                 let params: NewTabParams = parse_params(&request.params)?;
+                for (name, directory) in
+                    [("cwd", params.cwd.as_ref()), ("host_cwd", params.host_cwd.as_ref())]
+                {
+                    if directory
+                        .is_some_and(|path| path.as_os_str().as_encoded_bytes().contains(&0))
+                    {
+                        return Err(ApiError::invalid_params(format!(
+                            "{name} must not contain NUL"
+                        )));
+                    }
+                }
                 if let Some(host_cwd) = &params.host_cwd {
                     if params
                         .cwd

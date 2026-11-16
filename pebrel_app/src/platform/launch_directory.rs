@@ -29,52 +29,6 @@ pub(crate) fn cli_directory(path: &Path) -> std::io::Result<(PathBuf, Option<Pat
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_non_utf8_directory(root: &Path) -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        Some(root.join(std::ffi::OsString::from_vec(b"project-\xff".to_vec())))
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStringExt;
-        Some(root.join(std::ffi::OsString::from_wide(&[b'p' as u16, 0xd800])))
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = root;
-        None
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_posix_echo_alias(directory: &Path) -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        let path = directory.join("wsl");
-        std::os::unix::fs::symlink("/bin/echo", &path).unwrap();
-        Some(path)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = directory;
-        None
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_ambiguous_cli_directory(host: &Path) -> PathBuf {
-    #[cfg(windows)]
-    {
-        let host = host.to_str().unwrap().trim_start_matches(r"\\?\");
-        assert_eq!(host.as_bytes()[1], b':', "fixture needs a native drive path");
-        PathBuf::from(host[2..].replace('\\', "/"))
-    }
-    #[cfg(not(windows))]
-    host.to_owned()
-}
-
 /// Explicit guest paths are validated by the selected guest when it starts.
 /// Host paths keep the existing directory/existence and absolute-path checks.
 pub(crate) fn validate(path: PathBuf, wsl: bool) -> Option<PathBuf> {
@@ -138,6 +92,52 @@ fn prepare_wsl_arguments(options: &mut Options, configured: Option<&str>, litera
     if guest.is_some() {
         options.working_directory = None;
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_posix_echo_alias(directory: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        let path = directory.join("wsl");
+        std::os::unix::fs::symlink("/bin/echo", &path).unwrap();
+        Some(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        None
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_non_utf8_directory(root: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Some(root.join(std::ffi::OsString::from_vec(b"project-\xff".to_vec())))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        Some(root.join(std::ffi::OsString::from_wide(&[b'p' as u16, 0xd800])))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = root;
+        None
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_ambiguous_cli_directory(host: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let host = host.to_str().unwrap().trim_start_matches(r"\\?\");
+        assert_eq!(host.as_bytes()[1], b':', "fixture needs a native drive path");
+        PathBuf::from(host[2..].replace('\\', "/"))
+    }
+    #[cfg(not(windows))]
+    host.to_owned()
 }
 
 #[cfg(test)]

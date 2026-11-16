@@ -467,21 +467,29 @@ fn open_runtime_window(
     cx: &mut App,
     cwd: Option<PathBuf>,
     shell_id: Option<String>,
+) -> Result<(u64, u64), ApiError> {
+    let startup = runtime_window_startup(cwd, shell_id.as_deref())?;
+    open_runtime_startup(cx, startup)
+}
+
+fn open_runtime_tab_window(
+    cx: &mut App,
+    cwd: Option<PathBuf>,
+    shell_id: Option<String>,
     command: Option<crate::config::ui_config::Program>,
     host_cwd: Option<PathBuf>,
 ) -> Result<(u64, u64), ApiError> {
-    let startup = if command.is_some() || host_cwd.is_some() {
-        let (launch, cwd) = super::shell_launch::runtime_tab_launch(
-            cwd,
-            host_cwd,
-            shell_id.as_deref(),
-            command.as_ref(),
-            cx,
-        )?;
-        WorkspaceStartup::LaunchTerminal { cwd, launch }
-    } else {
-        runtime_window_startup(cwd, shell_id.as_deref())?
-    };
+    let (launch, cwd) = super::shell_launch::runtime_tab_launch(
+        cwd,
+        host_cwd,
+        shell_id.as_deref(),
+        command.as_ref(),
+        cx,
+    )?;
+    open_runtime_startup(cx, WorkspaceStartup::LaunchTerminal { cwd, launch })
+}
+
+fn open_runtime_startup(cx: &mut App, startup: WorkspaceStartup) -> Result<(u64, u64), ApiError> {
     let (window_id, workspace) =
         open_workspace_window(cx, startup, None, None, false, WindowRole::Regular)
             .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
@@ -926,7 +934,7 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             return;
         },
         RuntimeCommand::NewWindow { cwd, shell_id } => {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone(), None, None).map(
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
                 |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
@@ -942,7 +950,7 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             if pebrel_settings::RuntimeSettings::load().windowing_behavior
                 == pebrel_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(
+            let response = open_runtime_tab_window(
                 cx,
                 cwd.clone(),
                 shell_id.clone(),
@@ -997,7 +1005,7 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             else {
                 unreachable!()
             };
-            let response = open_runtime_window(
+            let response = open_runtime_tab_window(
                 cx,
                 cwd.clone(),
                 shell_id.clone(),

@@ -257,6 +257,18 @@ fn cli_directory_is_interpreted_by_the_residents_default_or_imported_program(
                     } else {
                         assert!(params.get("host_cwd").is_none());
                     }
+                    if windows && profile.name == "wsl.exe" {
+                        let before = cx.global::<WindowRegistry>().entries.len();
+                        for alternate in [true, false] {
+                            let mut invalid = params.clone();
+                            invalid["cwd"] = json!("/guest\"directory");
+                            if !alternate {
+                                invalid.as_object_mut().unwrap().remove("host_cwd");
+                            }
+                            assert_eq!(deliver(invalid, cx).unwrap_err().code, "invalid_params");
+                            assert_eq!(cx.global::<WindowRegistry>().entries.len(), before);
+                        }
+                    }
                     let result = deliver(params, cx).unwrap();
                     let window_id = result["action"]["window_id"].as_u64().unwrap();
                     if route == "existing" {

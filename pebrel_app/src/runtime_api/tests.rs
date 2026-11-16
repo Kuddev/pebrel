@@ -460,6 +460,8 @@ fn tab_new_preserves_and_validates_the_callers_native_directory_alternative() {
         json!({"cwd": "//server/share", "host_cwd": host.path()}),
         json!({"cwd": "/bad\npath", "host_cwd": host.path()}),
         json!({"cwd": "/guest", "host_cwd": "relative"}),
+        json!({"cwd": "bad\u{0}path"}),
+        json!({"cwd": "/guest", "host_cwd": format!("{}\0suffix", host.path().display())}),
     ] {
         assert_eq!(parse(params).unwrap_err().code, "invalid_params");
     }
