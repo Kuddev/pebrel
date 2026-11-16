@@ -158,7 +158,7 @@ impl NebulaWorkspace {
                 let truncated = history.was_truncated();
                 let saved = SleepingTab {
                     grid: (current.grid_cols() as u16, current.grid_rows() as u16),
-                    title: current.tab_label().into(),
+                    title: current.tab_label(cx).into(),
                     cwd: candidate.cwd,
                     focus: cx.focus_handle(),
                     launch: candidate.launch,

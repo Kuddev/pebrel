@@ -33,6 +33,22 @@ fn ssh_label(destination: Option<&str>, directory: &std::path::Path) -> Option<S
     profiles.labels().remove(destination)
 }
 
+/// Resolve a tab title without looking up the directory if a title is already known.
+fn resolve_label<'a>(
+    static_titles: bool,
+    ai_task: impl FnOnce() -> Option<&'a str>,
+    ssh: Option<(&str, Option<&str>)>,
+    directory: impl FnOnce() -> Option<String>,
+) -> String {
+    if !static_titles && let Some(task) = ai_task() {
+        return task.to_owned();
+    }
+    if let Some((destination, saved)) = ssh {
+        return saved.unwrap_or(destination).to_owned();
+    }
+    directory().unwrap_or_else(|| ".".to_owned())
+}
+
 impl TerminalView {
     pub(crate) fn inherits_windows_host_token(&self) -> bool {
         self.ssh_destination.is_none()
@@ -77,22 +93,24 @@ impl TerminalView {
             ssh_label(self.ssh_destination.as_deref(), &crate::display::nebula_data_dir());
     }
 
-    /// Native AI task titles name the focused pane; ordinary shells retain their
-    /// directory or saved SSH host name. Workspace manual names take precedence.
-    pub fn tab_label(&self) -> String {
-        if let Some(task) = self.reported_ai_task() {
-            return task.to_owned();
-        }
-        if let Some(destination) = &self.ssh_destination {
-            return self.ssh_label.as_ref().unwrap_or(destination).clone();
-        }
-        last_path_component(&self.cwd)
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .and_then(|path| last_path_component(&path.to_string_lossy()))
-            })
-            .unwrap_or_else(|| ".".to_owned())
+    /// Follow the current AI task unless the user keeps the directory or SSH
+    /// name. Workspace manual names take precedence over either mode.
+    pub fn tab_label(&self, cx: &gpui::App) -> String {
+        let static_titles = crate::gpui_shell::config::static_tab_titles(cx);
+        resolve_label(
+            static_titles,
+            || self.reported_ai_task(),
+            self.ssh_destination
+                .as_deref()
+                .map(|destination| (destination, self.ssh_label.as_deref())),
+            || {
+                last_path_component(&self.cwd).or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .and_then(|path| last_path_component(&path.to_string_lossy()))
+                })
+            },
+        )
     }
 
     fn reported_ai_task(&self) -> Option<&str> {
@@ -179,6 +197,31 @@ mod tests {
         assert_eq!(
             ssh_label(Some("root@192.0.2.10:2222"), &directory.path().join("isolated")),
             None
+        );
+    }
+
+    #[test]
+    fn static_titles_keep_the_directory_and_following_mode_prefers_the_ai_task() {
+        let local = || Some("pebrel".into());
+        assert_eq!(
+            resolve_label(true, || panic!("fixed titles do not read the task"), None, local),
+            "pebrel"
+        );
+        for static_titles in [false, true] {
+            assert_eq!(resolve_label(static_titles, || None, None, local), "pebrel");
+            assert_eq!(resolve_label(static_titles, || None, None, || None), ".");
+        }
+    }
+
+    #[test]
+    fn task_and_ssh_labels_do_not_resolve_the_directory() {
+        let unused = || panic!("the directory is only needed for a local fallback");
+        let host = Some(("deploy@host", Some("prod")));
+        assert_eq!(resolve_label(false, || Some("Build fix"), host, unused), "Build fix");
+        assert_eq!(resolve_label(true, || Some("Build fix"), host, unused), "prod");
+        assert_eq!(
+            resolve_label(false, || None, Some(("deploy@host", None)), unused),
+            "deploy@host"
         );
     }
 }
