@@ -76,12 +76,14 @@ pub(super) fn select(
     assets: &[GitHubReleaseAsset],
     names: &[String],
 ) -> Option<UpdateAsset> {
-    let asset = names.iter().find_map(|name| assets.iter().find(|asset| asset.name == *name))?;
+    let asset = names
+        .iter()
+        .find_map(|name| assets.iter().find(|asset| asset.name == *name && asset.size > 0))?;
     Some(UpdateAsset {
         version: version.into(),
         name: asset.name.clone(),
         download_url: asset.browser_download_url.clone(),
-        size: (asset.size > 0).then_some(asset.size),
+        size: Some(asset.size),
         sha256: asset
             .digest
             .as_deref()
@@ -140,6 +142,31 @@ mod tests {
             assert_eq!(select("1.9.0", "", &assets, &names).unwrap().name, names[0]);
         }
     }
+    #[test]
+    fn empty_installer_does_not_hide_a_usable_alternate() {
+        let version = "2.5.9";
+        let names = macos_names(version, "aarch64");
+        let assets = [
+            GitHubReleaseAsset {
+                name: names[0].clone(),
+                browser_download_url: "https://example.invalid/starter.dmg".into(),
+                size: 0,
+                digest: None,
+            },
+            GitHubReleaseAsset {
+                name: names[1].clone(),
+                browser_download_url: "https://example.invalid/preview.dmg".into(),
+                size: 42,
+                digest: Some(format!("sha256:{}", "a".repeat(64))),
+            },
+        ];
+        let selected = select(version, "", &assets, &names).unwrap();
+        assert_eq!(selected.name, names[1]);
+        assert_eq!(selected.size, Some(42));
+        assert_eq!(selected.sha256, Some("a".repeat(64)));
+        assert!(select(version, "", &assets[..1], &names).is_none());
+    }
+
     #[test]
     fn windows_architectures_are_exact() {
         let version = "1.9.2";
