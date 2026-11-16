@@ -8,7 +8,7 @@ import { runInNewContext } from "node:vm";
 
 // Execute the shipped bridge with a fake Pi event bus and child process sink.
 // No installed extensions, user sessions, or actual helper processes are touched.
-const embedded = readFileSync(new URL("../../nebula_app/res/hooks/pi.ts", import.meta.url), "utf8");
+const embedded = readFileSync(new URL("../../pebrel_app/res/hooks/pi.ts", import.meta.url), "utf8");
 const code = stripTypeScriptTypes(embedded)
   .replace('import { spawn } from "node:child_process";', "")
   .replace('import { openSync, readSync, closeSync } from "node:fs";', "")

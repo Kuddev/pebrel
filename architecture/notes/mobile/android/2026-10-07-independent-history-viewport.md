@@ -15,9 +15,9 @@ permission even for reading. Adding inertia alone could not expose older output.
 
 ## Evidence
 
-- `nebula_app/src/runtime_api/terminal_read.rs` captures live, desktop viewport and
+- `pebrel_app/src/runtime_api/terminal_read.rs` captures live, desktop viewport and
   independent history from the same terminal grid, without changing its offset.
-- `nebula_terminal/src/grid/mod.rs` owns the dropped-row counter used by prompt
+- `pebrel_terminal/src/grid/mod.rs` owns the dropped-row counter used by prompt
   marks. Append and eviction preserve absolute physical coordinates; column reflow
   can change the identity of physical rows.
 - `TerminalSnapshotView`
