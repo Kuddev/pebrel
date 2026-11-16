@@ -129,9 +129,10 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             language.text(crate::i18n::Message::SettingsHelpChoosesWhetherTheSidebarShows),
             Some(language.text(crate::i18n::Message::SettingsHelpAutoDetectChecksForGit)),
         ),
-        "static_tab_titles" => {
-            (language.text(crate::i18n::Message::SettingsHelpTabTitlesStayOnTheDirectory), None)
-        },
+        "static_tab_titles" => (
+            language.text(crate::i18n::Message::SettingsHelpTabTitlesStayOnTheDirectory),
+            Some(language.text(crate::i18n::Message::SettingsHelpTabTitlesHostAndTask)),
+        ),
         "keep_session" => (
             language.text(crate::i18n::Message::SettingsHelpKeepsTerminalsRunningAfterClosing),
             Some(language.text(crate::i18n::Message::SettingsHelpWhenDisabledClosingTheWindow)),
