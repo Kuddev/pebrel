@@ -34,7 +34,10 @@ replaced only by `refresh_detection()`, which eagerly re-runs discovery. The new
 tab shell palette (`Workspace::open_shell_palette`) and the settings pane
 (`SettingsPane::new`) call it when they open, so a shell installed while Pebrel
 runs becomes visible without a restart. All other callers keep reusing the
-snapshot.
+snapshot, with one exception: an id lookup that misses the snapshot re-runs
+discovery once before reporting an unknown id, so `--shell`, IPC requests and
+the configured default still resolve a shell installed while Pebrel runs. That
+scan happens only on the miss path.
 
 Shell ids that only need the WSL decision no longer resolve a shell at all:
 `shell_launch::requests_wsl`/`is_wsl_shell_id` decide from the `-e` program or
@@ -60,12 +63,15 @@ an explicit unknown id still returns an error, and `resolve_id` still returns
 
 ## Consequences
 
-A shell installed after startup stays invisible until one of the two pickers
-opens, or until the process restarts; removing a shell likewise stays visible
-until then. Imported terminal profiles are still read from disk on each picker
-build. For an imported profile id whose program is `wsl.exe`, the startup-
-directory WSL/host decision now follows the id prefix instead of resolving the
-profile; the profile itself still resolves normally when the pane launches.
+A shell installed after startup stays invisible in the pickers' lists until
+one of them opens, or until the process restarts; removing a shell likewise
+stays listed until then. Resolution is fresher than the lists: an id lookup
+that misses the snapshot re-runs discovery once, paying the same ~17 ms pass
+the settings fallback paid before this change. Imported terminal profiles are
+still read from disk on each picker build. For an imported profile id whose
+program is `wsl.exe`, the startup-directory WSL/host decision now follows the
+id prefix instead of resolving the profile; the profile itself still resolves
+normally when the pane launches.
 The snapshot costs one clone of a handful of strings per call. Detection
 remains synchronous when a picker opens (~17 ms), the same cost those paths
 paid before, but now once per open instead of once per process-wide lookup.
@@ -77,6 +83,9 @@ paid before, but now once per open instead of once per process-wide lookup.
   after `refresh_detection()`.
 - `shell_detect::resolve_id_keeps_unknown_ids_unresolved` holds the
   no-fall-back contract, including an unregistered `wsl:` id.
+- `shell_launch::unknown_id_rescans_detection_before_failing` counts discovery
+  on the calling thread: a snapshot miss re-runs discovery exactly once before
+  the unknown-id error.
 - Existing `shell_detect` and `shell_launch` tests (WSL option parsing, spawn
   composition, startup shell) pass unchanged.
 - `cargo check -p pebrel --bin pebrel --features gpui-shell --tests`,
