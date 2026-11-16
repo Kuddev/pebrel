@@ -265,7 +265,7 @@ function Scroll([int]$Delta) {
 }
 
 $server = $null; $sampler = $null; $script:process = $null
-$oldConfig = $env:PEBREL_CONFIG_DIR; $oldDocument = $env:NEBULA_GPUI_OPEN_DOC
+$oldConfig = $env:PEBREL_CONFIG_DIR; $oldDocument = $env:PEBREL_GPUI_OPEN_DOC
 $success = $false
 try {
     for ($i = 0; $i -lt 32; $i++) {
@@ -366,7 +366,7 @@ fn item_INDEX() -> usize {
     Write-Utf8 (Join-Path $OutputDirectory 'manifest.json') ($manifest | ConvertTo-Json -Depth 6)
     Write-Utf8 (Join-Path $OutputDirectory 'pebrel_settings.txt') (@('language=zh-CN','theme=SilverLight','opacity=1','blur=off','restore_session=false','resume_ai=false','windowing_behavior=UseNew','panel_resize=on','auto_check_updates=off',"startup_directory=$OutputDirectory") -join "`n")
     $env:PEBREL_CONFIG_DIR = $OutputDirectory
-    $env:NEBULA_GPUI_OPEN_DOC = if ($TerminalOnly) { $null } else { $document }
+    $env:PEBREL_GPUI_OPEN_DOC = if ($TerminalOnly) { $null } else { $document }
     $script:process = Start-Process $Executable -WorkingDirectory $OutputDirectory -PassThru -ArgumentList '-e','cmd.exe','/d','/k','prompt MemoryCheck' -RedirectStandardOutput (Join-Path $OutputDirectory 'stdout.log') -RedirectStandardError (Join-Path $OutputDirectory 'stderr.log')
     Write-Utf8 (Join-Path $OutputDirectory 'pid.txt') ([string]$script:process.Id)
     for ($retry = 0; $retry -lt 100; $retry++) {
@@ -473,7 +473,7 @@ fn item_INDEX() -> usize {
     if ($script:process) { Write-Utf8 (Join-Path $OutputDirectory "stop-sampling-$($script:process.Id)") 'stop' }
     $samplingComplete = if ($sampler) { $sampler.WaitForExit(5000) -and $sampler.ExitCode -eq 0 } else { $false }
     if ($server) { [void]$server.WaitForExit(3000) }
-    $env:PEBREL_CONFIG_DIR = $oldConfig; $env:NEBULA_GPUI_OPEN_DOC = $oldDocument
+    $env:PEBREL_CONFIG_DIR = $oldConfig; $env:PEBREL_GPUI_OPEN_DOC = $oldDocument
     $rows = @()
     $sampleFile = Join-Path $OutputDirectory 'samples.csv'
     if (Test-Path $sampleFile) { $rows = @(Import-Csv $sampleFile | Where-Object valid -eq 'True') }
