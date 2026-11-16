@@ -12,10 +12,21 @@ pub(crate) fn is_wsl_program(program: &str) -> bool {
     cfg!(windows) && crate::shell_detect::is_wsl_launcher(program)
 }
 
-fn guest_path(path: &Path) -> Option<&str> {
+pub(crate) fn guest_path(path: &Path) -> Option<&str> {
     let path = path.to_str()?;
     (path.starts_with('/') && !path.starts_with("//") && !path.chars().any(char::is_control))
         .then_some(path)
+}
+
+/// The resident selects the shell; a Windows caller cannot classify `/path`
+/// before that selection. Preserve both interpretations until it does.
+pub(crate) fn cli_directory(path: &Path) -> std::io::Result<(PathBuf, Option<PathBuf>)> {
+    let host = std::path::absolute(path)?;
+    if cfg!(windows) && guest_path(path).is_some() {
+        Ok((path.to_owned(), Some(host)))
+    } else {
+        Ok((host, None))
+    }
 }
 
 /// Explicit guest paths are validated by the selected guest when it starts.
@@ -37,6 +48,14 @@ pub(crate) fn wsl_argument(path: &Path) -> Option<String> {
 /// Apply the directory policy only at the final Windows PTY boundary. Earlier
 /// copy/restore decisions can first encode their verified guest cwd in --cd.
 pub(crate) fn prepare_wsl(options: &mut Options, configured: Option<&str>) {
+    #[cfg(windows)]
+    let literal = options.escape_args;
+    #[cfg(not(windows))]
+    let literal = false;
+    prepare_wsl_arguments(options, configured, literal);
+}
+
+fn prepare_wsl_arguments(options: &mut Options, configured: Option<&str>, literal: bool) {
     let Some(shell) = options.shell.as_ref() else { return };
     let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args()) else {
         return;
@@ -56,11 +75,19 @@ pub(crate) fn prepare_wsl(options: &mut Options, configured: Option<&str>) {
             .and_then(|path| path.into_os_string().into_string().ok())
             .or_else(|| Some("~".to_owned()))
     };
-    if let Some(directory) = directory
-        && let Some(args) =
+    if let Some(directory) = directory {
+        let args = if literal {
+            crate::shell_detect::wsl_literal_args_in_directory(
+                shell.program(),
+                shell.args(),
+                &directory,
+            )
+        } else {
             crate::shell_detect::wsl_args_in_directory(shell.program(), shell.args(), &directory)
-    {
-        options.shell = Some(Shell::new(shell.program().to_owned(), args));
+        };
+        if let Some(args) = args {
+            options.shell = Some(Shell::new(shell.program().to_owned(), args));
+        }
     }
     if guest.is_some() {
         options.working_directory = None;
@@ -68,8 +95,87 @@ pub(crate) fn prepare_wsl(options: &mut Options, configured: Option<&str>) {
 }
 
 #[cfg(test)]
+pub(crate) fn test_posix_echo_alias(directory: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        let path = directory.join("wsl");
+        std::os::unix::fs::symlink("/bin/echo", &path).unwrap();
+        Some(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        None
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_non_utf8_directory(root: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Some(root.join(std::ffi::OsString::from_vec(b"project-\xff".to_vec())))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        Some(root.join(std::ffi::OsString::from_wide(&[b'p' as u16, 0xd800])))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = root;
+        None
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_ambiguous_cli_directory(host: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let host = host.to_str().unwrap().trim_start_matches(r"\\?\");
+        assert_eq!(host.as_bytes()[1], b':', "fixture needs a native drive path");
+        PathBuf::from(host[2..].replace('\\', "/"))
+    }
+    #[cfg(not(windows))]
+    host.to_owned()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_argv_keeps_the_guest_directory_unquoted_until_native_encoding() {
+        let mut launch = options(
+            &["-d", "Team Linux", "--exec", "tool", "two words", ""],
+            Some("/guest directory"),
+        );
+        prepare_wsl_arguments(&mut launch, None, true);
+        assert_eq!(
+            launch.shell.unwrap().args(),
+            &["--cd", "/guest directory", "-d", "Team Linux", "--exec", "tool", "two words", ""]
+        );
+        assert!(launch.working_directory.is_none());
+    }
+
+    #[test]
+    fn cli_paths_keep_guest_and_native_interpretations_until_shell_resolution() {
+        let guest = Path::new("/home/pebrel-fixture/project space");
+        let (cwd, host) = cli_directory(guest).unwrap();
+        if cfg!(windows) {
+            assert_eq!(cwd, guest);
+            assert_eq!(host, Some(std::path::absolute(guest).unwrap()));
+        } else {
+            assert_eq!(cwd, std::path::absolute(guest).unwrap());
+            assert!(host.is_none());
+        }
+        let relative = Path::new("project space");
+        let (cwd, host) = cli_directory(relative).unwrap();
+        assert_eq!(cwd, std::env::current_dir().unwrap().join(relative));
+        assert!(host.is_none());
+        assert_eq!(is_wsl_program("wsl.exe"), cfg!(windows));
+        assert!(!is_wsl_program("native-profile.exe"));
+    }
 
     fn options(args: &[&str], cwd: Option<&str>) -> Options {
         Options {

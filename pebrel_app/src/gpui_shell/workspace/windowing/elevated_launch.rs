@@ -196,8 +196,8 @@ mod tests {
             ] {
                 let workspace = workspace.read(cx);
                 let metadata = workspace.meta(index);
-                let Some(LaunchSession::Shell { program, args, .. }) = &metadata.launch else {
-                    panic!("explicit startup identity was replaced by the default shell");
+                let Some(LaunchSession::Command { program, args, .. }) = &metadata.launch else {
+                    panic!("explicit startup lost its literal command identity");
                 };
                 assert_eq!(program, "pebrel-test-missing-shell-executable");
                 assert_eq!(args, &[argument.to_owned()]);

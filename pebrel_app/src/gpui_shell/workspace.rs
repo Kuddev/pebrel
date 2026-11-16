@@ -1064,59 +1064,6 @@ impl NebulaWorkspace {
         this
     }
 
-    /// `LaunchSession::Default` 的口语短标。
-    ///
-    /// 这里不能再读运行时的“当前默认 Shell”：`Default` 已经是这个 Tab 创建
-    /// 时冻结下来的启动身份，PTY 侧实际走的是引擎默认 PowerShell。恢复时若
-    /// 重新读取设置，只会让右侧短标漂成新的默认值，和仍在运行/恢复出来的
-    /// 进程身份相互矛盾。
-    fn default_shell_tag() -> SharedString {
-        crate::shell_detect::shell_short_tag(&crate::platform::shell::default_shell_id()).into()
-    }
-
-    /// 把一份冻结的会话 launch 还原为一次 GPUI PTY 启动。逐 pane 选择
-    /// 与旧快照回退由 session_recovery 统一负责。
-    pub(super) fn terminal_launch_from_session(
-        launch: &crate::session::LaunchSession,
-        cwd: Option<std::path::PathBuf>,
-    ) -> crate::gpui_shell::terminal::view::TerminalLaunch {
-        use crate::gpui_shell::terminal::view::TerminalLaunch;
-        use crate::session::LaunchSession;
-
-        match launch {
-            LaunchSession::Default => TerminalLaunch::Local { cwd, shell: None, shell_name: None },
-            LaunchSession::Shell { name, program, args } => TerminalLaunch::Local {
-                cwd,
-                shell: Some(pebrel_terminal::tty::Shell::new(program.clone(), args.clone())),
-                shell_name: Some(name.clone()),
-            },
-            LaunchSession::Profile { .. } => {
-                let profile = crate::profile_launch::resolve(launch).expect("profile variant");
-                TerminalLaunch::Profile { cwd: profile.cwd.clone().or(cwd), profile }
-            },
-            LaunchSession::Ssh { host } => {
-                TerminalLaunch::Ssh { destination: host.clone(), cwd: None, resume_target: None }
-            },
-            LaunchSession::Serial { destination } => {
-                TerminalLaunch::Serial { destination: destination.clone() }
-            },
-        }
-    }
-
-    fn launch_shell_tag(launch: &crate::session::LaunchSession) -> Option<SharedString> {
-        match launch {
-            crate::session::LaunchSession::Default => Some(Self::default_shell_tag()),
-            crate::session::LaunchSession::Shell { name, .. } => {
-                Some(crate::shell_detect::shell_short_tag(name).into())
-            },
-            crate::session::LaunchSession::Ssh { .. } => Some("ssh".into()),
-            crate::session::LaunchSession::Serial { .. } => Some("serial".into()),
-            crate::session::LaunchSession::Profile { name, shell_id, .. } => Some(
-                crate::shell_detect::shell_short_tag(shell_id.as_deref().unwrap_or(name)).into(),
-            ),
-        }
-    }
-
     /// 设置或系统外观变化后的统一热应用：重载全局 `Settings`（主题经
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
