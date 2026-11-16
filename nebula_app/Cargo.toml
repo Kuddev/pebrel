@@ -150,6 +150,9 @@ unicode-segmentation = "1.13.3"
 # 注册表 socks= 条目错拼成 http:// 代理。
 ureq = { version = "3", features = ["json", "socks-proxy"] }
 zeroize = "1"
+# Constant-time bearer-token comparison for the loopback services (bearer_token.rs).
+# The lock already pins 2.6.1 through the crypto crates; nothing new is downloaded.
+subtle = "2.6"
 winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "serde"] }
 global-hotkey = "0.8.0"
 getrandom = "0.3.3"

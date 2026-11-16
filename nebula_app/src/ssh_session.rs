@@ -1928,7 +1928,7 @@ fn clear_secret(secret: &mut Option<Vec<u8>>) {
 }
 
 fn remote_hook_token() -> io::Result<String> {
-    crate::ai_hook::remote::new_token()
+    crate::bearer_token::generate()
 }
 
 fn render_error<H: SshEventHost>(

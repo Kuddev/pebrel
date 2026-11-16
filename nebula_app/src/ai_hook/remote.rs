@@ -14,17 +14,6 @@ const BRIDGE: &str = include_str!("../../res/hooks/remote_bridge.py");
 const SHELL: &str = include_str!("../../res/hooks/remote_shell.py");
 pub(crate) const TOKEN_ENV: &str = "PEBREL_REMOTE_HOOK_TOKEN";
 
-pub(crate) fn new_token() -> std::io::Result<String> {
-    use std::fmt::Write as _;
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
-    let mut token = String::with_capacity(32);
-    for byte in bytes {
-        let _ = write!(token, "{byte:02x}");
-    }
-    Ok(token)
-}
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct Snapshot {
     version: u8,

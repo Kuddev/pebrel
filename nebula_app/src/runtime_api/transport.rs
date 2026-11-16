@@ -78,7 +78,7 @@ pub(super) fn handle_connection(
     };
     // Authentication precedes detailed validation so an unauthenticated local
     // process cannot use parse errors as a protocol oracle.
-    if raw.get("token").and_then(Value::as_str) != Some(token) {
+    if !crate::bearer_token::matches(token, raw.get("token").and_then(Value::as_str)) {
         return Ok(());
     }
     let id = raw.get("id").and_then(Value::as_str).unwrap_or("unknown").to_owned();
@@ -132,7 +132,7 @@ pub(super) fn handle_legacy(
 ) -> Result<(), IoError> {
     let mut parts = line.split_whitespace();
     let verb = parts.next().unwrap_or("");
-    if parts.next() != Some(token) {
+    if !crate::bearer_token::matches(token, parts.next()) {
         return Ok(());
     }
     match verb {

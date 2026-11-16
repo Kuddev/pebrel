@@ -86,7 +86,7 @@ pub(crate) fn prepare(options: &mut tty::Options) {
     if nebula_settings::RawSettings::load().bool_on("ai_hooks") == Some(false) {
         return;
     }
-    let token = match remote::new_token() {
+    let token = match crate::bearer_token::generate() {
         Ok(token) => token,
         Err(error) => {
             log::warn!("ai_hook: WSL channel unavailable: {error}");
