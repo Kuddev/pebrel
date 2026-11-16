@@ -750,7 +750,8 @@ mod output_tests {
         else {
             return;
         };
-        std::fs::create_dir(&cwd).unwrap();
+        // Native argv can carry a path that APFS refuses to create. Reject its
+        // encoding at the JSON boundary before any filesystem validation.
         assert!(cwd.to_str().is_none());
         let error = tab_launch_params(crate::cli::TabLaunchOptions {
             window: None,
