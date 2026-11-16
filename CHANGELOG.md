@@ -4,6 +4,68 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.5.10 - Unreleased
+
+- `Pebrel-v2.5.10-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.5.10-windows-x64.zip`: `PENDING FINAL BUILD`
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Fixed
+
+- Fixed Runtime discovery files on Linux and macOS so that only the owner can read them. Runtime access tokens now use the operating system's secure random source.
+- Fixed commands typed with a leading space appearing in Pebrel's command history.
+- Fixed command history always saving new entries to disk. Set `command_history_persist=0` in `pebrel_settings.txt` and restart to keep new entries only in memory.
+- Fixed command history records being lost when multiple Pebrel instances save at the same time.
+- Fixed SSH fallback applying a later jump host even when an earlier `ProxyCommand none` disables the proxy.
+- Fixed redundant shell discovery at startup and when opening a pane. A cached shell is checked before launch.
+- Fixed the updater selecting an empty installer upload. It now uses a usable matching package when available.
+- Fixed automatic command views hiding original terminal colors when users need raw output. Set `automatic_command_views=0` in `pebrel_settings.txt` and restart to keep the original ANSI output.
+- Fixed the Agent session index ignoring `PEBREL_CONFIG_DIR`. Each profile now saves and reads its own hook session index.
+- Fixed Git worktree creation and cleanup for repositories whose directory names end with a space or newline.
+- Fixed the Windows tray icon disappearing after Explorer rebuilds the taskbar.
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 修复
+
+- 修复 Linux 和 macOS 的 Runtime 发现文件权限，仅允许文件所有者读取。Runtime 访问令牌改用系统的安全随机源生成。
+- 修复以空格开头的命令被写入 Pebrel 命令历史的问题。
+- 修复命令历史总是将新记录写入磁盘的问题。在 `pebrel_settings.txt` 中设置 `command_history_persist=0` 并重启，新记录仅保留在内存中。
+- 修复多个 Pebrel 实例同时保存命令历史时记录丢失的问题。
+- 修复 SSH 回退解析在前面的 `ProxyCommand none` 已关闭代理时，仍套用后续跳板机的问题。
+- 修复启动和打开窗格时重复扫描 Shell 的问题。启动前会检查缓存中的 Shell 是否仍可用。
+- 修复更新器误选空安装包的问题。有可用的匹配安装包时，会选用可用包。
+- 修复需要原始输出时，自动命令视图覆盖终端颜色的问题。在 `pebrel_settings.txt` 中设置 `automatic_command_views=0` 并重启，即可保留原始 ANSI 输出。
+- 修复 Agent 会话索引忽略 `PEBREL_CONFIG_DIR` 的问题。各配置目录分别保存和读取自己的 Hook 会话索引。
+- 修复仓库目录名以空格或换行结尾时，Git 工作树无法创建和清理的问题。
+- 修复 Explorer 重建任务栏后 Windows 托盘图标消失的问题。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/drchiodo"><img src="https://avatars.githubusercontent.com/u/30090207?v=4&amp;s=96" width="48" height="48" alt="drchiodo" title="drchiodo" /></a>
+  <a href="https://github.com/not-exist"><img src="https://avatars.githubusercontent.com/u/121529946?v=4&amp;s=96" width="48" height="48" alt="not-exist" title="not-exist" /></a>
+</p>
+
+- [@Kuddev](https://github.com/Kuddev)
+- [@drchiodo](https://github.com/drchiodo)
+- [@not-exist](https://github.com/not-exist)
+
 ## 2.5.9 - 2026-11-16
 
 ```text
