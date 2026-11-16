@@ -28,6 +28,7 @@ const RESET_KEYS: &[&str] = &[
     "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
+    "static_tab_titles",
     "terminal_proxy",
     "refresh_environment",
     "powerline",
@@ -193,6 +194,21 @@ mod tests {
         let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
         assert_eq!(runtime.scrollback_lines, 10_000);
         assert_eq!(runtime.scroll_speed, 1.0);
+    }
+
+    #[test]
+    fn static_tab_titles_round_trip_and_reset_without_erasing_other_settings() {
+        for text in ["", "static_tab_titles=\n", "static_tab_titles=invalid\n"] {
+            assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(text)).static_tab_titles);
+        }
+        let original = "custom=keep\n";
+        let enabled = crate::apply_updates(original, &[("static_tab_titles", "1".into())]);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).static_tab_titles);
+        let disabled = crate::apply_updates(&enabled, &[("static_tab_titles", "0".into())]);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&disabled)).static_tab_titles);
+        let restored = default_settings_text(&enabled);
+        assert_eq!(restored, original);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).static_tab_titles);
     }
 
     #[test]
