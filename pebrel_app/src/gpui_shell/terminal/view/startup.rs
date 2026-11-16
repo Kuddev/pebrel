@@ -96,10 +96,21 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
+        let (launch, profile_launch, profile_env) = match launch {
+            TerminalLaunch::Profile { profile, cwd } => {
+                let shell = crate::profile_launch::shell(&profile);
+                let shell_name = profile.shell_id.clone().or_else(|| Some(profile.name.clone()));
+                let env = profile.env.clone();
+                let identity = crate::profile_launch::snapshot(profile);
+                (TerminalLaunch::Local { cwd, shell: Some(shell), shell_name }, Some(identity), env)
+            },
+            launch => (launch, None, Default::default()),
+        };
         let mut initial_cwd = match &launch {
             TerminalLaunch::Local { cwd, .. } => {
                 cwd.as_ref().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
             },
+            TerminalLaunch::Profile { .. } => unreachable!("profile normalized above"),
             TerminalLaunch::Ssh { destination, cwd, .. } => {
                 cwd.clone().unwrap_or_else(|| destination.clone())
             },
@@ -153,7 +164,10 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(spawn_shell, pane_id, cwd);
+                let session_launch = profile_launch.unwrap_or(session_launch);
+                let global_env = cx.try_global::<Settings>().map(|settings| &settings.env);
+                let options =
+                    session::local_options(spawn_shell, pane_id, cwd, global_env, &profile_env);
                 if let Some(cwd) = &options.working_directory {
                     initial_cwd = cwd.to_string_lossy().into_owned();
                 }
@@ -187,6 +201,7 @@ impl TerminalView {
                     spawned,
                 )
             },
+            TerminalLaunch::Profile { .. } => unreachable!("profile normalized above"),
             TerminalLaunch::Ssh { destination, cwd, resume_target } => (
                 Some(destination.clone()),
                 destination.clone(),

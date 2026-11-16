@@ -82,29 +82,6 @@ pub(super) fn configured_directory() -> Option<std::path::PathBuf> {
     )
 }
 
-pub(super) fn profile_directory(program: &str, cwd: Option<&str>) -> Option<std::path::PathBuf> {
-    crate::platform::launch_directory::validate(
-        cwd?.into(),
-        crate::platform::launch_directory::is_wsl_program(program),
-    )
-}
-
-pub(super) fn profile_shell(
-    profile: &crate::config::ui_config::Profile,
-) -> pebrel_terminal::tty::Shell {
-    let shell = profile.shell();
-    if let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
-        && !launch.chooses_directory
-        && let Some(cwd) =
-            profile.cwd.as_deref().and_then(crate::platform::launch_directory::wsl_argument)
-        && let Some(args) =
-            crate::shell_detect::wsl_args_in_directory(shell.program(), shell.args(), &cwd)
-    {
-        return pebrel_terminal::tty::Shell::new(shell.program().to_owned(), args);
-    }
-    shell
-}
-
 /// The shell the first local pane of this process spawns, resolved with the
 /// same authority as that pane: `--shell <id>`, else the runtime `shell`
 /// setting, through [`resolve_shell_id`] (detected shells, terminal profiles,
@@ -120,6 +97,7 @@ pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<pebrel_terminal:
         .unwrap_or(crate::session::LaunchSession::Default);
     let shell = match super::NebulaWorkspace::terminal_launch_from_session(&launch, None) {
         TerminalLaunch::Local { shell, .. } => shell,
+        TerminalLaunch::Profile { profile, .. } => Some(crate::profile_launch::shell(&profile)),
         TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => return None,
     };
     crate::platform::shell::snapshot_shell(shell)
@@ -171,7 +149,7 @@ fn profile_launch_for_id(
 ) -> Option<crate::session::LaunchSession> {
     profiles
         .into_iter()
-        .find(|profile| profile.settings_id().as_deref() == Some(requested))
+        .find(|profile| profile.matches_settings_id(requested))
         .map(profile_launch_session)
 }
 
@@ -205,13 +183,7 @@ fn wsl_launch_for_id(shell_id: &str) -> Option<crate::session::LaunchSession> {
 pub(super) fn profile_launch_session(
     profile: crate::config::ui_config::Profile,
 ) -> crate::session::LaunchSession {
-    crate::session::LaunchSession::Profile {
-        name: profile.name,
-        command: profile.command,
-        args: profile.args,
-        cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
-        shell_id: profile.shell_id,
-    }
+    crate::profile_launch::snapshot(profile)
 }
 
 /// `wsl:<发行版>` / 裸 `wsl` 的 id 语义：显示名与 argv 尾部。
@@ -247,6 +219,7 @@ mod tests {
                 cwd: None,
                 shell_id: Some("sh".into()),
                 terminal_profile_id: Some(format!("qa-{name}")),
+                env: Default::default(),
             })
             .collect();
         for name in ["Project", "project"] {

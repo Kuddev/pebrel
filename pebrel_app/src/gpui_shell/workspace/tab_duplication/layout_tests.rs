@@ -97,6 +97,8 @@ fn duplicate_rebuilds_nested_mixed_layout_with_fresh_sessions(cx: &mut TestAppCo
             args: vec!["--login".into()],
             cwd: Some(startup.path().to_string_lossy().into_owned()),
             shell_id: Some("profile-shell".into()),
+            profile_id: None,
+            env_snapshot: None,
         },
         LaunchSession::Ssh { host: "pebrel-test@127.0.0.1:1".into() },
     ];

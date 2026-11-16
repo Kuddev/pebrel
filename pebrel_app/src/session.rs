@@ -55,6 +55,10 @@ pub enum LaunchSession {
         cwd: Option<String>,
         #[serde(default)]
         shell_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_id: Option<String>,
+        #[serde(skip)]
+        env_snapshot: Option<crate::profile_environment::ProfileEnvironment>,
     },
     /// A saved SSH destination; restoring reconnects automatically.
     Ssh {

@@ -166,6 +166,7 @@ impl TerminalProfiles {
                 cwd: profile.cwd.clone(),
                 shell_id: profile.shell_id.clone().or_else(|| infer_shell_id(&profile.command)),
                 terminal_profile_id: Some(profile.id.clone()),
+                env: profile.env.clone(),
             })
             .collect()
     }
@@ -416,13 +417,13 @@ mod tests {
             let found = scan_directory(temp.path()).unwrap();
             let zsh = found
                 .iter()
-                .find(|profile| profile.shell_id == "zsh")
+                .find(|profile| profile.shell_id.as_deref() == Some("zsh"))
                 .unwrap_or_else(|| panic!("Zsh missing from {layout:?}: {found:?}"));
             let command = directory.join("zsh.exe").canonicalize().unwrap();
             assert_eq!(zsh.command, command);
             assert_eq!(zsh.name, "Zsh");
             assert_eq!(zsh.args, ["--login", "-i"]);
-            assert!(found.iter().any(|profile| profile.shell_id == "bash"));
+            assert!(found.iter().any(|profile| profile.shell_id.as_deref() == Some("bash")));
 
             let mut store = TerminalProfiles::default();
             store.upsert(zsh.clone()).unwrap();
@@ -507,7 +508,7 @@ mod tests {
         assert_eq!(TerminalProfiles::load_from(&path).unwrap(), store);
         let config = store.as_config_profiles();
         assert_ne!(config[0].settings_id(), config[1].settings_id());
-        assert_eq!(store.profiles()[0].env.0["EMPTY"], "");
+        assert_eq!(config[0].env.0["EMPTY"], "");
         let mut edited = alpha.clone();
         edited.env.0.insert("QA_VALUE".into(), "next-launch".into());
         let edited_store =
@@ -567,9 +568,9 @@ mod tests {
         profiles.upsert(custom).unwrap();
         let profile = &profiles.as_config_profiles()[0];
         assert!(profile.shell_id.is_none());
-        assert!(profile.settings_id().is_none());
-        assert_eq!(profile.terminal_profile_id.as_deref(), Some("pwsh-test"));
-        assert_ne!(profile.terminal_profile_id.as_deref(), Some("PWSH-TEST"));
+        assert_eq!(profile.settings_id().as_deref(), Some("profile:custom|pwsh-test"));
+        assert!(profile.matches_settings_id("profile:zsh|pwsh-test"));
+        assert!(!profile.matches_settings_id("profile:custom|PWSH-TEST"));
         let stored = TerminalProfile {
             id: "custom-known".into(),
             name: "Known".into(),
@@ -582,10 +583,7 @@ mod tests {
         let mut inferred = TerminalProfiles::default();
         inferred.upsert(stored).unwrap();
         assert_eq!(inferred.as_config_profiles()[0].shell_id.as_deref(), Some("zsh"));
-        assert_eq!(
-            inferred.as_config_profiles()[0].settings_id().as_deref(),
-            Some("profile:zsh|custom-known")
-        );
+        assert!(inferred.as_config_profiles()[0].matches_settings_id("profile:bash|custom-known"));
     }
 
     fn profile(command: std::path::PathBuf, name: &str) -> TerminalProfile {
