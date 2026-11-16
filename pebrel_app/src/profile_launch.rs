@@ -18,7 +18,8 @@ pub(crate) fn snapshot(profile: Profile) -> LaunchSession {
 
 pub(crate) fn shell(profile: &crate::config::ui_config::Profile) -> pebrel_terminal::tty::Shell {
     let shell = profile.shell();
-    if let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
+    if crate::platform::launch_directory::is_wsl_program(shell.program())
+        && let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
         && !launch.chooses_directory
         && let Some(cwd) =
             profile.cwd.as_deref().and_then(crate::platform::launch_directory::wsl_argument)

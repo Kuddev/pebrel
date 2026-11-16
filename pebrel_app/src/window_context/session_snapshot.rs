@@ -12,6 +12,10 @@ impl WindowContext {
         let launch = tab.launch.as_ref().unwrap_or(&session::LaunchSession::Default);
         match launch {
             session::LaunchSession::Serial { .. } => return false,
+            session::LaunchSession::Command { .. } => {
+                log::warn!("Explicit command restoration requires the GPUI runtime");
+                return false;
+            },
             session::LaunchSession::Default => {
                 self.append_default_tab(tab);
             },

@@ -223,6 +223,17 @@ fn launch_classifies_named_default_wsl_and_direct_ssh() {
 }
 
 #[test]
+fn literal_program_scope_uses_the_native_wsl_capability() {
+    let actual = literal_launch_environment("wsl.exe", &["-d".into(), "Ubuntu".into()]);
+    if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+        assert_eq!(actual, SuggestEnv::Wsl { distro: "Ubuntu".into() });
+    } else {
+        assert_eq!(actual, SuggestEnv::Local);
+    }
+    assert_eq!(literal_launch_environment("ordinary-program", &[]), SuggestEnv::Local);
+}
+
+#[test]
 fn unnamed_wsl_uses_the_distro_reported_by_its_shell() {
     let state = pane(SuggestEnv::Wsl { distro: String::new() }, "wsl|Ubuntu|bash:guest");
     assert_eq!(state.suggest_env, SuggestEnv::Wsl { distro: "Ubuntu".into() });

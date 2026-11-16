@@ -37,6 +37,14 @@ pub(crate) fn wsl_argument(path: &Path) -> Option<String> {
 /// Apply the directory policy only at the final Windows PTY boundary. Earlier
 /// copy/restore decisions can first encode their verified guest cwd in --cd.
 pub(crate) fn prepare_wsl(options: &mut Options, configured: Option<&str>) {
+    #[cfg(windows)]
+    let literal = options.escape_args;
+    #[cfg(not(windows))]
+    let literal = false;
+    prepare_wsl_arguments(options, configured, literal);
+}
+
+fn prepare_wsl_arguments(options: &mut Options, configured: Option<&str>, literal: bool) {
     let Some(shell) = options.shell.as_ref() else { return };
     let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args()) else {
         return;
@@ -56,11 +64,19 @@ pub(crate) fn prepare_wsl(options: &mut Options, configured: Option<&str>) {
             .and_then(|path| path.into_os_string().into_string().ok())
             .or_else(|| Some("~".to_owned()))
     };
-    if let Some(directory) = directory
-        && let Some(args) =
+    if let Some(directory) = directory {
+        let args = if literal {
+            crate::shell_detect::wsl_literal_args_in_directory(
+                shell.program(),
+                shell.args(),
+                &directory,
+            )
+        } else {
             crate::shell_detect::wsl_args_in_directory(shell.program(), shell.args(), &directory)
-    {
-        options.shell = Some(Shell::new(shell.program().to_owned(), args));
+        };
+        if let Some(args) = args {
+            options.shell = Some(Shell::new(shell.program().to_owned(), args));
+        }
     }
     if guest.is_some() {
         options.working_directory = None;
@@ -68,8 +84,37 @@ pub(crate) fn prepare_wsl(options: &mut Options, configured: Option<&str>) {
 }
 
 #[cfg(test)]
+pub(crate) fn test_posix_echo_alias(directory: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        let path = directory.join("wsl");
+        std::os::unix::fs::symlink("/bin/echo", &path).unwrap();
+        Some(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        None
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_argv_keeps_the_guest_directory_unquoted_until_native_encoding() {
+        let mut launch = options(
+            &["-d", "Team Linux", "--exec", "tool", "two words", ""],
+            Some("/guest directory"),
+        );
+        prepare_wsl_arguments(&mut launch, None, true);
+        assert_eq!(
+            launch.shell.unwrap().args(),
+            &["--cd", "/guest directory", "-d", "Team Linux", "--exec", "tool", "two words", ""]
+        );
+        assert!(launch.working_directory.is_none());
+    }
 
     fn options(args: &[&str], cwd: Option<&str>) -> Options {
         Options {

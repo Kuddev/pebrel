@@ -99,6 +99,8 @@ use crate::runtime_api::{
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod command_launch_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_notify_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_resize_tests;

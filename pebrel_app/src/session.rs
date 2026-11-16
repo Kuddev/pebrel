@@ -47,6 +47,13 @@ pub enum LaunchSession {
         program: String,
         args: Vec<String>,
     },
+    /// Explicit program with literal argv, including on Windows. Shell launches
+    /// retain their existing platform bootstrap/command-line-fragment contract.
+    Command {
+        name: String,
+        program: String,
+        args: Vec<String>,
+    },
     /// A quick-launch profile, embedded rather than referenced by name.
     Profile {
         name: String,
