@@ -94,7 +94,7 @@ impl NebulaWorkspace {
         match self.tabs.get(ix) {
             Some(tab @ WorkspaceTab::Terminal { .. }) => tab
                 .focused_view()
-                .map(|view| view.read(cx).tab_label())
+                .map(|view| view.read(cx).tab_label(cx))
                 .unwrap_or_else(|| self.tab_title(ix, cx).to_string()),
             _ => self.tab_title(ix, cx).to_string(),
         }
