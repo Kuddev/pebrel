@@ -46,6 +46,7 @@ mod app_icon;
 mod assistant_answer;
 mod atomic_file;
 mod backup_remote;
+mod bearer_token;
 mod brand;
 mod chemistry;
 mod cli;
@@ -103,6 +104,8 @@ mod plugins;
 #[cfg(all(unix, feature = "legacy-shell"))]
 mod polling;
 mod process_tree;
+mod profile_environment;
+mod profile_launch;
 mod prompt_suggestions;
 mod provider_test;
 mod proxy_test;
@@ -528,6 +531,8 @@ fn nebula(mut options: Options) -> Result<(), Box<dyn Error>> {
     // 摘掉托盘图标：进程退出后残影会留在通知区直到用户悬停。
     #[cfg(windows)]
     tray::shutdown();
+
+    directory_history::shutdown();
 
     // `Processor` must be dropped before calling `FreeConsole`.
     //

@@ -82,29 +82,6 @@ pub(super) fn configured_directory() -> Option<std::path::PathBuf> {
     )
 }
 
-pub(super) fn profile_directory(program: &str, cwd: Option<&str>) -> Option<std::path::PathBuf> {
-    crate::platform::launch_directory::validate(
-        cwd?.into(),
-        crate::platform::launch_directory::is_wsl_program(program),
-    )
-}
-
-pub(super) fn profile_shell(
-    profile: &crate::config::ui_config::Profile,
-) -> pebrel_terminal::tty::Shell {
-    let shell = profile.shell();
-    if let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
-        && !launch.chooses_directory
-        && let Some(cwd) =
-            profile.cwd.as_deref().and_then(crate::platform::launch_directory::wsl_argument)
-        && let Some(args) =
-            crate::shell_detect::wsl_args_in_directory(shell.program(), shell.args(), &cwd)
-    {
-        return pebrel_terminal::tty::Shell::new(shell.program().to_owned(), args);
-    }
-    shell
-}
-
 /// The shell the first local pane of this process spawns, resolved with the
 /// same authority as that pane: `--shell <id>`, else the runtime `shell`
 /// setting, through [`resolve_shell_id`] (detected shells, terminal profiles,
@@ -120,6 +97,7 @@ pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<pebrel_terminal:
         .unwrap_or(crate::session::LaunchSession::Default);
     let shell = match super::NebulaWorkspace::terminal_launch_from_session(&launch, None) {
         TerminalLaunch::Local { shell, .. } => shell,
+        TerminalLaunch::Profile { profile, .. } => Some(crate::profile_launch::shell(&profile)),
         TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => return None,
     };
     crate::platform::shell::snapshot_shell(shell)
@@ -135,17 +113,33 @@ pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<pebrel_terminal:
 /// [`configured_local_launch`]）自己决定要不要吞掉这个错，而显式请求
 /// （`--shell`、IPC 的 `shell`）必须让调用方看见——静默把"用 Ubuntu 打开"
 /// 变成 PowerShell 标签是最难查的一类失败。
+///
+/// 进程快照是启动时的探测结果，只有 picker 打开时才替换；因此三处都落空时
+/// 先 [`crate::shell_detect::refresh_detection`] 重扫一次再报错——运行期新装
+/// 的 shell 不会被旧快照判成未知 id（驻留进程从不打开 picker）。只有落空
+/// 路径付扫描代价。
 pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchSession, String> {
     let requested = shell_id.trim();
     if requested.is_empty() {
         return Err("--shell needs a shell id".to_owned());
     }
+    if let Some(launch) = resolve_from_snapshot(requested) {
+        return Ok(launch);
+    }
+    crate::shell_detect::refresh_detection();
+    resolve_from_snapshot(requested).ok_or_else(|| {
+        format!("unknown shell id \"{requested}\"; available: {}", shell_id_menu().join(", "))
+    })
+}
+
+/// 一次快照内的解析链：已安装 shell → 导入 profile → WSL 合成兜底。
+fn resolve_from_snapshot(requested: &str) -> Option<crate::session::LaunchSession> {
     if let Some(detected) = crate::shell_detect::detect_shells()
         .into_iter()
         .find(|shell| shell.id.eq_ignore_ascii_case(requested))
     {
         let shell = detected.shell();
-        return Ok(crate::session::LaunchSession::Shell {
+        return Some(crate::session::LaunchSession::Shell {
             name: detected.name,
             program: shell.program().to_owned(),
             args: shell.args().to_vec(),
@@ -155,12 +149,9 @@ pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchS
         .ok()
         .and_then(|store| profile_launch_for_id(store.as_config_profiles(), requested))
     {
-        return Ok(launch);
+        return Some(launch);
     }
-    if let Some(launch) = wsl_launch_for_id(requested) {
-        return Ok(launch);
-    }
-    Err(format!("unknown shell id \"{requested}\"; available: {}", shell_id_menu().join(", ")))
+    wsl_launch_for_id(requested)
 }
 
 // Imported profile ids are opaque and may include case-sensitive directory names.
@@ -171,7 +162,7 @@ fn profile_launch_for_id(
 ) -> Option<crate::session::LaunchSession> {
     profiles
         .into_iter()
-        .find(|profile| profile.settings_id().as_deref() == Some(requested))
+        .find(|profile| profile.matches_settings_id(requested))
         .map(profile_launch_session)
 }
 
@@ -205,13 +196,7 @@ fn wsl_launch_for_id(shell_id: &str) -> Option<crate::session::LaunchSession> {
 pub(super) fn profile_launch_session(
     profile: crate::config::ui_config::Profile,
 ) -> crate::session::LaunchSession {
-    crate::session::LaunchSession::Profile {
-        name: profile.name,
-        command: profile.command,
-        args: profile.args,
-        cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
-        shell_id: profile.shell_id,
-    }
+    crate::profile_launch::snapshot(profile)
 }
 
 /// `wsl:<发行版>` / 裸 `wsl` 的 id 语义：显示名与 argv 尾部。
@@ -236,6 +221,27 @@ fn wsl_launch_args(shell_id: &str) -> Option<(String, Vec<String>)> {
 #[cfg(test)]
 mod tests {
 
+    /// 显式请求的未知 id 必须报错：进程缓存不能把它变成默认 shell。
+    #[test]
+    fn unknown_explicit_shell_ids_stay_errors() {
+        assert!(super::resolve_shell_id("no-such-shell-is-installed").is_err());
+        assert!(super::resolve_shell_id("  ").is_err());
+    }
+
+    /// 快照落空时必须重扫一次再报错：运行期新装的 shell 不能因为旧快照被拒。
+    #[test]
+    fn unknown_id_rescans_detection_before_failing() {
+        // 先把快照建好，保证下面第一次查找不会自己触发扫描。
+        crate::shell_detect::refresh_detection();
+        crate::shell_detect::detection_probe::start();
+        assert!(super::resolve_shell_id("no-such-shell-is-installed").is_err());
+        assert_eq!(
+            crate::shell_detect::detection_probe::stop(),
+            1,
+            "a snapshot miss must re-run discovery exactly once"
+        );
+    }
+
     #[test]
     fn profile_ids_preserve_case_sensitive_directory_identity() {
         let profiles: Vec<_> = ["Project", "project"]
@@ -247,6 +253,7 @@ mod tests {
                 cwd: None,
                 shell_id: Some("sh".into()),
                 terminal_profile_id: Some(format!("qa-{name}")),
+                env: Default::default(),
             })
             .collect();
         for name in ["Project", "project"] {

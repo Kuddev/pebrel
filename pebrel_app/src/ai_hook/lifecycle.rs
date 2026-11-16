@@ -5,7 +5,7 @@
 
 use crate::ai_agents::{AgentStatus, AgentStatusSource, Detection};
 
-use super::{AiHookEvent, AiHookKind};
+use super::{AiHookEvent, AiHookKind, AttentionKind};
 
 /// A stop from these sources proves nothing about the answer unless it carries a result, so
 /// an unclassified one returns the pane to idle instead of announcing completion.
@@ -35,6 +35,7 @@ pub(crate) struct AgentActivity {
     status: AgentStatus,
     source: AgentStatusSource,
     rule: Option<String>,
+    attention_kind: AttentionKind,
     coverage: HookCoverage,
     owner: Option<Owner>,
     idle_samples: u8,
@@ -63,6 +64,7 @@ impl Default for AgentActivity {
             status: AgentStatus::Unknown,
             source: AgentStatusSource::Unknown,
             rule: None,
+            attention_kind: AttentionKind::Unknown,
             coverage: HookCoverage::None,
             owner: None,
             idle_samples: 0,
@@ -94,6 +96,12 @@ impl AgentActivity {
             Some(AgentStatus::Working) => Some("codex.title.working"),
             _ => self.rule.as_deref(),
         }
+    }
+    pub fn attention_kind(&self) -> Option<AttentionKind> {
+        (self.status == AgentStatus::Blocked).then_some(match self.source {
+            AgentStatusSource::Hook => self.attention_kind,
+            _ => AttentionKind::Unknown,
+        })
     }
     pub fn hook_seen(&self) -> bool {
         self.coverage != HookCoverage::None
@@ -176,6 +184,7 @@ impl AgentActivity {
         self.rule = None;
         self.screen_blocked_fallback = None;
         self.turn_observed = true;
+        self.attention_kind = AttentionKind::Unknown;
         self.pending_submit = true;
         self.last_activity_at = Some(std::time::Instant::now());
         self.input_sent();
@@ -330,6 +339,11 @@ impl AgentActivity {
             HookCoverage::Completion
         };
         self.coverage = coverage;
+        self.attention_kind = if event.kind == AiHookKind::SessionStart && event.session_compacted {
+            self.attention_kind().unwrap_or_default()
+        } else {
+            event.attention.as_ref().map(|attention| attention.kind).unwrap_or_default()
+        };
         self.source = AgentStatusSource::Hook;
         self.rule = None;
         self.screen_blocked_fallback = None;

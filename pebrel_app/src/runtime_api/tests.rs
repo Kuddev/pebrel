@@ -137,7 +137,40 @@ fn detected_agent(kind: &str, session_id: Option<&str>) -> RuntimeAgent {
         session_id: session_id.map(str::to_owned),
         state_source: RuntimeAgentStateSource::Hook,
         state_rule: None,
+        attention_kind: None,
         hook_seen: true,
+    }
+}
+
+#[test]
+fn agent_attention_details_are_optional_and_round_trip_as_stable_strings() {
+    let mut agent = detected_agent("claude", Some("session"));
+    let legacy = serde_json::to_value(&agent).unwrap();
+    assert!(legacy.get("attention_kind").is_none());
+    assert_eq!(serde_json::from_value::<RuntimeAgent>(legacy).unwrap(), agent);
+    let schema: Value =
+        serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json")).unwrap();
+    let kinds =
+        schema["$defs"]["agent"]["properties"]["attention_kind"]["enum"].as_array().unwrap();
+    assert_eq!(kinds.len(), 5);
+    assert!(
+        !schema["$defs"]["agent"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("attention_kind"))
+    );
+    for (kind, name) in [
+        (crate::ai_hook::AttentionKind::Permission, "permission"),
+        (crate::ai_hook::AttentionKind::Selection, "selection"),
+        (crate::ai_hook::AttentionKind::Confirmation, "confirmation"),
+        (crate::ai_hook::AttentionKind::Input, "input"),
+        (crate::ai_hook::AttentionKind::Unknown, "unknown"),
+    ] {
+        agent.attention_kind = Some(kind);
+        let json = serde_json::to_value(&agent).unwrap();
+        assert_eq!(json["attention_kind"], name);
+        assert!(kinds.contains(&json["attention_kind"]));
+        assert_eq!(serde_json::from_value::<RuntimeAgent>(json).unwrap(), agent);
     }
 }
 
@@ -392,6 +425,12 @@ fn layout_mutations_parse_and_enforce_their_bounds() {
         Ok(RuntimeCommand::ZoomPane { pane_id: 17, zoomed: false, .. })
     ));
     assert!(matches!(
+        parse("pane.notify", json!({ "pane_id": 17, "title": "ssh", "message": "touch the key" })),
+        Ok(RuntimeCommand::Notify { pane_id: 17, title: Some(ref title), ref message, .. })
+            if title == "ssh" && message == "touch the key"
+    ));
+    assert!(parse("pane.notify", json!({ "pane_id": 17, "message": "" })).is_err());
+    assert!(matches!(
         parse("pane.resize", json!({ "pane_id": 17, "ratio": 0.6 })),
         Ok(RuntimeCommand::ResizePane { pane_id: 17, ratio, .. })
             if (ratio - 0.6).abs() < f32::EPSILON
@@ -423,6 +462,26 @@ fn runtime_capabilities_match_the_versioned_schema() {
         .map(|method| method.as_str().expect("capability string"))
         .collect();
     assert_eq!(schema_methods, described_methods);
+}
+
+#[test]
+fn notification_validation_identifies_the_message_or_title_field() {
+    for field in ["message", "title"] {
+        for value in [
+            " ".to_owned(),
+            "line\nbreak".into(),
+            "tab\tvalue".into(),
+            "\0".into(),
+            "x".repeat(MAX_PROMPT_BYTES + 1),
+        ] {
+            let mut params = json!({ "pane_id": 17, "message": "valid message" });
+            params[field] = json!(value);
+            let request = ApiRequest::new("token".into(), "pane.notify", params);
+            let error = RuntimeCommand::from_request(&request).unwrap_err();
+            assert_eq!(error.code, "invalid_params");
+            assert!(error.message.contains(&format!("notification {field}")), "{}", error.message);
+        }
+    }
 }
 
 #[test]
@@ -1204,6 +1263,7 @@ fn agents_list_projection_keeps_window_and_tab_identity() {
         session_id: Some("thread-7".into()),
         state_source: RuntimeAgentStateSource::Hook,
         state_rule: None,
+        attention_kind: None,
         hook_seen: true,
     });
     let hub = RuntimeHub::new();
