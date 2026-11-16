@@ -466,7 +466,7 @@ class CompletionEditorTests(unittest.TestCase):
         os.write(session.master, b"\x1b[46~")
         time.sleep(0.4)
         os.write(session.master, b"\n")
-        output = session.wait(b"LINE:original")
+        output = session.wait(b"LINE:original\r\n")
         self.assertIn(b"LINE:original\r\n", output)
         self.assertNotIn(b"originaL", session.output)
 
