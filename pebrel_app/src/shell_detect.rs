@@ -259,14 +259,16 @@ fn detection_cache() -> &'static ShellDetection {
 /// Detect every installed shell, menu order.
 ///
 /// The result is a process-wide snapshot; repeated calls do not touch the
-/// registry or PATH again. Call [`refresh_detection`] when a picker opens.
+/// registry or PATH again. Call [`refresh_detection`] at an explicit boundary:
+/// a picker opening, or a shell-id lookup that missed the snapshot.
 pub fn detect_shells() -> Vec<DetectedShell> {
     detection_cache().snapshot()
 }
 
 /// Re-run discovery, replace the process-wide snapshot and return it, so a
-/// shell installed after startup shows up in the next picker that opens. This
-/// is the only path that intentionally repeats the scan.
+/// shell installed after startup shows up in the next picker that opens. Only
+/// explicit boundaries call this: a picker opening, or a shell-id lookup that
+/// missed the snapshot.
 pub fn refresh_detection() -> Vec<DetectedShell> {
     let shells = detect_uncached();
     detection_cache().replace(shells.clone());
@@ -287,7 +289,7 @@ fn detect_uncached() -> Vec<DetectedShell> {
 }
 
 #[cfg(test)]
-mod detection_probe {
+pub(crate) mod detection_probe {
     use std::cell::Cell;
 
     // Per-thread so parallel tests and their unrelated detection cannot skew
@@ -296,11 +298,11 @@ mod detection_probe {
         static DETECTIONS: Cell<Option<usize>> = const { Cell::new(None) };
     }
 
-    pub(super) fn start() {
+    pub(crate) fn start() {
         DETECTIONS.with(|count| count.set(Some(0)));
     }
 
-    pub(super) fn record() {
+    pub(crate) fn record() {
         DETECTIONS.with(|count| {
             if let Some(value) = count.get() {
                 count.set(Some(value + 1));
@@ -308,7 +310,7 @@ mod detection_probe {
         });
     }
 
-    pub(super) fn stop() -> usize {
+    pub(crate) fn stop() -> usize {
         DETECTIONS.with(|count| count.replace(None).unwrap_or(0))
     }
 }
