@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 
+mod command_history;
 mod config_defaults;
 pub use config_defaults::{UiValueKind, install_config_defaults, ui_value_kind};
 mod agent_hooks;

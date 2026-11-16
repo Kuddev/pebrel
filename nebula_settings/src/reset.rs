@@ -38,6 +38,7 @@ const RESET_KEYS: &[&str] = &[
     "ghost",
     "accept",
     "completion_style",
+    crate::command_history::COMMAND_HISTORY_PERSIST,
     "prompt_suggestions_enabled",
     "prompt_suggestions_provider_id",
     "prompt_suggestions_model",
@@ -323,6 +324,26 @@ mod tests {
         let restored = default_settings_text("refresh_environment=0\nprivate_key=keep\n");
         assert_eq!(restored, "private_key=keep\n");
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).refresh_environment);
+    }
+
+    #[test]
+    fn command_history_persistence_defaults_on_and_resets() {
+        let persists = |text: &str| RawSettings::from_text(text).command_history_persists();
+        assert!(persists(""));
+        assert!(persists("command_history_persist=invalid"));
+        let disabled = crate::apply_updates(
+            "custom=keep\n",
+            &[(crate::command_history::COMMAND_HISTORY_PERSIST, "0".into())],
+        );
+        assert!(!persists(&disabled));
+        let enabled = crate::apply_updates(
+            &disabled,
+            &[(crate::command_history::COMMAND_HISTORY_PERSIST, "1".into())],
+        );
+        assert!(persists(&enabled));
+        let restored = default_settings_text(&disabled);
+        assert_eq!(restored, "custom=keep\n");
+        assert!(persists(&restored));
     }
 
     #[test]

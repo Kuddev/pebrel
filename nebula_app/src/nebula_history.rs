@@ -144,11 +144,16 @@ impl HistoryIndex {
 #[derive(Debug, Default)]
 pub struct NebulaHistory {
     pools: HashMap<HistoryScope, HistoryIndex>,
+    memory_only: bool,
 }
 
 impl NebulaHistory {
     pub fn load() -> Self {
-        let mut history = Self::default();
+        // Read once when the store loads. If the preference file is unreadable,
+        // keep new commands in memory until it can be read on a later launch.
+        let persist = nebula_settings::RawSettings::try_load()
+            .is_ok_and(|settings| settings.command_history_persists());
+        let mut history = Self { memory_only: !persist, ..Self::default() };
         for scope in [
             HistoryScope::Local,
             HistoryScope::Wsl(String::new()),
@@ -176,12 +181,16 @@ impl NebulaHistory {
             return;
         }
         let pool = self.pools.entry(scope.clone()).or_default();
-        append(&scope, cmd, cwd);
+        if !self.memory_only {
+            append(&scope, cmd, cwd);
+        }
         pool.insert(cmd.to_owned());
-        history_debug_log(format!(
-            "history_record scope={scope:?} cmd={cmd:?} cwd={cwd:?} entries={}",
-            pool.entries.len()
-        ));
+        if !self.memory_only {
+            history_debug_log(format!(
+                "history_record scope={scope:?} cmd={cmd:?} cwd={cwd:?} entries={}",
+                pool.entries.len()
+            ));
+        }
     }
 
     /// Popup search retains spelling and ranks matching commands by frequency, then recency.
@@ -447,6 +456,15 @@ mod tests {
         history.record(&scope, "   echo hidden-too", "/");
         // `record` returns before `append`, so no history file sees these lines.
         assert!(history.pools.get(&scope.normalized()).is_none());
+    }
+
+    #[test]
+    fn memory_only_commands_still_feed_scoped_suggestions() {
+        let mut history = NebulaHistory { memory_only: true, ..NebulaHistory::default() };
+        let scope = HistoryScope::Ssh("memory-only-fixture".into());
+        history.record(&scope, "echo retained", "/");
+        assert_eq!(history.hint(&scope, "echo "), Some("retained"));
+        assert!(history.hint(&HistoryScope::Local, "echo ").is_none());
     }
 
     #[test]
