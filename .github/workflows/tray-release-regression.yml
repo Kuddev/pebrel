@@ -1,0 +1,74 @@
+name: Windows tray restart acceptance
+
+on:
+  push:
+    branches: [qa/pebrel-2.5.10-tray-20261116]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  tray:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Fetch the exact baseline and candidate packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runId = 43852577552
+          $commit = "7ee71645f5953d02dbf5fde3848d4a7e34607b0f"
+          $root = Join-Path $env:RUNNER_TEMP "pebrel-tray-release"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $run = gh api "repos/Kuddev/pebrel/actions/runs/$runId" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -ne $commit -or $run.event -ne "workflow_dispatch") {
+            throw "Candidate artifact run does not match the release source."
+          }
+          $stage = Join-Path $root "artifact"
+          gh run download $runId -R Kuddev/pebrel --name stable-package-windows-x64 --dir $stage
+          if ($LASTEXITCODE -ne 0) { throw "Download of the Windows candidate failed." }
+          $baselineZip = Join-Path $root "Pebrel-v2.5.9-windows-x64.zip"
+          Invoke-WebRequest -Uri "https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-x64.zip" -OutFile $baselineZip
+          $baseDigest = (Get-FileHash $baselineZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($baseDigest -ne "140514042062641feb09484cf00f5e9fcc6344b84d949ca2e67fbb8025926cd5") {
+            throw "The public v2.5.9 baseline ZIP has an unexpected digest."
+          }
+          $candidateZip = Join-Path $stage "Pebrel-v2.5.10-windows-x64.zip"
+          Expand-Archive -LiteralPath $baselineZip -DestinationPath (Join-Path $root "baseline")
+          Expand-Archive -LiteralPath $candidateZip -DestinationPath (Join-Path $root "candidate")
+          @{
+            release_run = $runId
+            commit = $commit
+            baseline_zip_sha256 = $baseDigest
+            candidate_zip_sha256 = (Get-FileHash $candidateZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Path (Join-Path $root "identity.json") -Encoding utf8
+      - name: Restart Explorer and verify notification icon recovery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "pebrel-tray-release"
+          $baseline = @(Get-ChildItem -Path (Join-Path $root "baseline") -Filter "pebrel.exe" -Recurse -File)
+          $candidate = @(Get-ChildItem -Path (Join-Path $root "candidate") -Filter "pebrel.exe" -Recurse -File)
+          if ($baseline.Count -ne 1 -or $candidate.Count -ne 1) { throw "Expected exactly one binary per ZIP." }
+          $report = Join-Path $root "restart.json"
+          python scripts/conformance/tray_restart_probe.py --baseline $baseline[0].FullName --candidate $candidate[0].FullName --report $report
+          if ($LASTEXITCODE -ne 0) { throw "Explorer restart acceptance failed." }
+          $proof = Get-Content (Join-Path $root "identity.json") -Raw | ConvertFrom-Json -AsHashtable
+          $proof["test"] = Get-Content $report -Raw | ConvertFrom-Json -AsHashtable
+          $proof | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $root "tray-evidence.json") -Encoding utf8
+          Get-Content $report
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tray-restart-evidence
+          path: ${{ runner.temp }}/pebrel-tray-release/tray-evidence.json
+          if-no-files-found: error
+          retention-days: 14
