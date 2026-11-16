@@ -22,6 +22,7 @@
 - Windows PowerShell 剪贴板粘贴与当前编辑器能力的边界见 [`terminal/view`](../architecture/notes/pebrel_app/gpui_shell/terminal/view/)。
 - Windows 回收站调用的消息重入与后台 COM 生命周期见 [`file_operations`](../architecture/notes/pebrel_app/display/file_operations/2026-11-11-recycle-bin-reentrancy.md)。
 - Runtime 地址发现与隔离实例的生命周期边界见 [`runtime_api`](../architecture/notes/pebrel_app/runtime_api/)。
+- 本地控制服务共享的令牌生成、比较与私有发现文件合同见 [`bearer_token`](../architecture/notes/pebrel_app/bearer_token/2026-11-16-loopback-token-contract.md)。
 - 补齐数据源选择和请求快照归 `completion.rs`，界面仅拥有任务与交互；边界依据见 [`completion`](../architecture/notes/pebrel_app/completion/)。
 - 目录历史的内存 frecency 更新保持同步，磁盘合并/写入归单个后台 worker；边界与去抖取舍见 [`directory_history`](../architecture/notes/pebrel_app/directory_history/)。
 - 旧渲染入口的窗口动画状态归 `display/animations.rs`；迁移及显式 legacy 验证依据见 [`display`](../architecture/notes/pebrel_app/display/)。
