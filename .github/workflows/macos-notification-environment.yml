@@ -1,0 +1,58 @@
+name: Native notification environment
+on:
+  push:
+    branches: [verify/macos-notification-env-20261117]
+permissions:
+  contents: read
+jobs:
+  environment:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect native UI test capabilities without requesting permission
+        shell: bash
+        run: |
+          set -euo pipefail
+          qa_dir="$RUNNER_TEMP/notification-environment"
+          mkdir -p "$qa_dir" tmp/notification-environment
+          cat > "$qa_dir/probe.m" <<'OBJC'
+          #import <Cocoa/Cocoa.h>
+          #import <ApplicationServices/ApplicationServices.h>
+          int main(void) {
+              @autoreleasepool {
+                  uint32_t displays = 0;
+                  CGError display_error = CGGetActiveDisplayList(0, NULL, &displays);
+                  NSDictionary *facts = @{
+                      @"probe_ax_trusted": @(AXIsProcessTrusted()),
+                      @"probe_post_event_access": @(CGPreflightPostEventAccess()),
+                      @"probe_screen_capture_access": @(CGPreflightScreenCaptureAccess()),
+                      @"active_displays": @(displays),
+                      @"display_query_error": @(display_error)
+                  };
+                  NSData *data = [NSJSONSerialization dataWithJSONObject:facts
+                      options:NSJSONWritingPrettyPrinted error:nil];
+                  NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                  printf("%s\n", text.UTF8String);
+              }
+              return 0;
+          }
+          OBJC
+          clang -fobjc-arc "$qa_dir/probe.m" -framework Cocoa -framework ApplicationServices -o "$qa_dir/probe"
+          "$qa_dir/probe" > tmp/notification-environment/environment.json
+          cat tmp/notification-environment/environment.json
+          xcodebuild -version
+          xcrun --find xctest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notification-environment-${{ matrix.os }}
+          path: tmp/notification-environment/environment.json
+          if-no-files-found: error
+          retention-days: 7
