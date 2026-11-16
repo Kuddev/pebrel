@@ -256,9 +256,12 @@ impl TerminalView {
     pub(super) fn try_open_hovered_link(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(hover) = self.link_hover.as_ref() else { return };
         let Some(session) = self.session.as_ref() else { return };
-        let text = {
+        let (text, repaired_uri) = {
             let term = session.term.lock();
-            hover.hint.text(&*term).map(|t| t.into_owned())
+            (
+                hover.hint.text(&*term).map(|t| t.into_owned()),
+                hover.hint.repaired_hyperlink_uri(&*term),
+            )
         };
         let Some(text) = text else { return };
         let cwd =
@@ -268,6 +271,7 @@ impl TerminalView {
         super::super::osc_links::open_hint_match(
             &hover.hint,
             &text,
+            repaired_uri.as_deref(),
             cwd.as_deref(),
             self.wsl_distro(),
             window,
