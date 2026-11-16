@@ -1066,19 +1066,32 @@ impl TerminalView {
         if self.agent_activity.hook_seen() {
             return;
         }
-        let mode = pebrel_settings::RuntimeSettings::load().bell;
-        if mode == pebrel_settings::BellModeName::None {
+        if !self.play_bell_cue(cx) {
             return;
-        }
-        let audible_ok = if mode.audible() { Self::ring_audible() } else { false };
-        if mode.visual() || (mode.audible() && !audible_ok) {
-            self.flash_bell(cx);
         }
         cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Bell {
             program: self.running_program.clone(),
         }));
         cx.emit(TerminalViewEvent::Bell);
         cx.notify();
+    }
+
+    /// Flash and/or beep according to the bell mode; false when the mode is `none`.
+    pub(crate) fn play_bell_cue(&mut self, cx: &mut Context<Self>) -> bool {
+        let mode = pebrel_settings::RuntimeSettings::load().bell;
+        if mode == pebrel_settings::BellModeName::None {
+            return false;
+        }
+        let audible_ok = if mode.audible() { Self::ring_audible() } else { false };
+        if mode.visual() || (mode.audible() && !audible_ok) {
+            self.flash_bell(cx);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bell_flash_generation(&self) -> u64 {
+        self.bell_flash_epoch
     }
 
     fn ring_audible() -> bool {

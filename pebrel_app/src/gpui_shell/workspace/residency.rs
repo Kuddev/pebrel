@@ -199,6 +199,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::ClosePane { .. }
             | RuntimeCommand::ZoomPane { .. }
             | RuntimeCommand::ResizePane { .. }
+            | RuntimeCommand::Notify { .. }
             | RuntimeCommand::ReadPane { .. }
             | RuntimeCommand::ScrollPane { .. }
             | RuntimeCommand::Procs { .. }
@@ -518,6 +519,29 @@ impl NebulaWorkspace {
                         "pane_id": pane_id,
                         "ratio": ratio
                     }),
+                    window,
+                    cx,
+                )
+            },
+            RuntimeCommand::Notify { window_id, pane_id, title, message } => {
+                self.runtime_window_requested(*window_id)?;
+                if self.tab_of_pane(*pane_id).is_none() {
+                    return Err(ApiError::new(
+                        "target_not_found",
+                        format!("pane {pane_id} does not exist"),
+                    ));
+                }
+                self.deliver_pane_notification(
+                    *pane_id,
+                    crate::notify::Notification::Runtime {
+                        title: title.clone(),
+                        message: message.clone(),
+                    },
+                    window,
+                    cx,
+                );
+                self.runtime_result(
+                    json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
                     window,
                     cx,
                 )

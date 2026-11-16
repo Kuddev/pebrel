@@ -79,6 +79,7 @@
             "pane.close",
             "pane.zoom",
             "pane.resize",
+            "pane.notify",
             "pane.prompt",
             "pane.paste",
             "pane.read",
@@ -439,6 +440,22 @@
             "properties": {
               "params": {
                 "$ref": "#/$defs/pane_zoom_params"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "pane.notify"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/pane_notify_params"
               }
             }
           }
@@ -1791,6 +1808,34 @@
         },
         "zoomed": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pane_notify_params": {
+      "type": "object",
+      "required": [
+        "pane_id",
+        "message"
+      ],
+      "properties": {
+        "window_id": {
+          "$ref": "#/$defs/nullable_window_id"
+        },
+        "pane_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "additionalProperties": false

@@ -182,6 +182,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `pane.close` | 关闭空闲 Pane；忙碌 Pane 返回显式确认错误 | `window_id?`, `pane_id` |
 | `pane.zoom` | 幂等设置 Pane 所在 Tab 的显式缩放状态 | `window_id?`, `pane_id`, `zoomed` |
 | `pane.resize` | 设置目标 Pane 在直接父分屏中的占比 | `window_id?`, `pane_id`, `ratio` |
+| `pane.notify` | 以内建响铃闪烁/声音（遵循 `bell` 设置）和通知中心 toast 提醒用户；不聚焦窗口、不写入终端 | `window_id?`, `pane_id`, `title?`, `message` |
 | `pane.prompt` | 写入一行纯文本，可追加 Enter | `window_id?`, `pane_id`, `text`, `submit` |
 | `pane.paste` | 通过 bracketed paste 写入有界 UTF-8 文本 | `window_id?`, `pane_id`, `text`, `submit` |
 | `pane.read` | 从真实终端 Grid 尾部读取最近逻辑行 | `window_id?`, `pane_id`, `lines` |
