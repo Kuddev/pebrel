@@ -12,6 +12,10 @@ jobs:
   tray:
     runs-on: windows-2022
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, candidate]
     env:
       PYTHONUTF8: "1"
     steps:
@@ -60,7 +64,7 @@ jobs:
           $candidate = @(Get-ChildItem -Path (Join-Path $root "candidate") -Filter "pebrel.exe" -Recurse -File)
           if ($baseline.Count -ne 1 -or $candidate.Count -ne 1) { throw "Expected exactly one binary per ZIP." }
           $report = Join-Path $root "restart.json"
-          python scripts/conformance/tray_restart_probe.py --baseline $baseline[0].FullName --candidate $candidate[0].FullName --report $report
+          python scripts/conformance/tray_restart_probe.py --baseline $baseline[0].FullName --candidate $candidate[0].FullName --variant '${{ matrix.variant }}' --report $report
           if ($LASTEXITCODE -ne 0) { throw "Explorer restart acceptance failed." }
           $proof = Get-Content (Join-Path $root "identity.json") -Raw | ConvertFrom-Json -AsHashtable
           $proof["test"] = Get-Content $report -Raw | ConvertFrom-Json -AsHashtable
@@ -68,7 +72,7 @@ jobs:
           Get-Content $report
       - uses: actions/upload-artifact@v4
         with:
-          name: tray-restart-evidence
+          name: tray-restart-${{ matrix.variant }}
           path: ${{ runner.temp }}/pebrel-tray-release/tray-evidence.json
           if-no-files-found: error
           retention-days: 14

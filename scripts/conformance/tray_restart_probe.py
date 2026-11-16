@@ -127,48 +127,52 @@ def run_variant(desktop, app, root, expect_recovery):
     config.mkdir()
     (config / "pebrel_settings.txt").write_text("tray=1\n", encoding="utf-8")
     env = dict(os.environ, PEBREL_CONFIG_DIR=str(config))
-    with (config / "app.log").open("wb") as log:
-        process = subprocess.Popen(
-            [str(app.resolve(strict=True)), "--gpui", "--working-directory", str(config)],
-            cwd=app.resolve().parent, env=env, stdout=log, stderr=subprocess.STDOUT,
-        )
-        try:
-            hwnd = wait_for("Pebrel's tray window", lambda: desktop.tray_window(process.pid))
-            before = wait_for("Pebrel's initial tray icon", lambda: desktop.icon_rect(hwnd))
-            old_shell, new_shell = desktop.restart_explorer()
-            after = None
-            if expect_recovery:
-                after = wait_for("the candidate's restored tray icon", lambda: desktop.icon_rect(hwnd))
-                desktop.verify_tray_menu(hwnd)
-            else:
-                # Sample the released build after the replacement desktop is ready.
-                end = time.monotonic() + 5
-                while time.monotonic() < end:
-                    if desktop.icon_rect(hwnd):
-                        raise AssertionError("the released build already restores its tray icon")
-                    time.sleep(0.1)
-            if process.poll() is not None or desktop.tray_window(process.pid) != hwnd:
-                raise AssertionError("the original Pebrel process or tray window exited")
-            return {"app_pid": process.pid, "old_explorer": old_shell, "new_explorer": new_shell,
-                    "icon_before": before, "icon_after": after, "menu_opens": expect_recovery}
-        finally:
-            if process.poll() is None:
-                process.terminate()
-            process.wait(timeout=10)
+    process = subprocess.Popen(
+        [str(app.resolve(strict=True)), "--gpui", "--working-directory", str(config)],
+        cwd=app.resolve().parent, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        hwnd = wait_for("Pebrel's tray window", lambda: desktop.tray_window(process.pid))
+        before = wait_for("Pebrel's initial tray icon", lambda: desktop.icon_rect(hwnd))
+        print(f"Initial icon {before} for Pebrel PID {process.pid}", flush=True)
+        old_shell, new_shell = desktop.restart_explorer()
+        print(f"Explorer restarted from PID {old_shell} to {new_shell}", flush=True)
+        after = None
+        if expect_recovery:
+            after = wait_for("the candidate's restored tray icon", lambda: desktop.icon_rect(hwnd))
+            desktop.verify_tray_menu(hwnd)
+        else:
+            # Sample the released build after the replacement desktop is ready.
+            end = time.monotonic() + 5
+            while time.monotonic() < end:
+                if desktop.icon_rect(hwnd):
+                    raise AssertionError("the released build already restores its tray icon")
+                time.sleep(0.1)
+        if process.poll() is not None or desktop.tray_window(process.pid) != hwnd:
+            raise AssertionError("the original Pebrel process or tray window exited")
+        return {"app_pid": process.pid, "old_explorer": old_shell, "new_explorer": new_shell,
+                "icon_before": before, "icon_after": after, "menu_opens": expect_recovery}
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=10)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--variant", choices=("baseline", "candidate"), required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     if os.name != "nt" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         parser.error("requires a dedicated GitHub-hosted Windows desktop")
-    with tempfile.TemporaryDirectory(prefix="pebrel-tray-restart-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="pebrel-tray-restart-", ignore_cleanup_errors=True) as temporary:
         desktop, root = Desktop(), Path(temporary)
-        report = {"baseline": run_variant(desktop, args.baseline, root, False),
-                  "candidate": run_variant(desktop, args.candidate, root, True)}
+        candidate = args.variant == "candidate"
+        app = args.candidate if candidate else args.baseline
+        print(f"Starting {args.variant} with Explorer PID {desktop.taskbar()}", flush=True)
+        report = {args.variant: run_variant(desktop, app, root, candidate)}
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
