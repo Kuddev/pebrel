@@ -681,7 +681,8 @@
       "restored_tabs_start_new_shells": "Restored tabs start new shells; terminated programs are not resumed.",
       "continues_the_previous_conversation_when": "Continues the previous conversation when restoring an AI tab.",
       "shows_ai_session_status_in": "Shows AI session status in the notification area.",
-      "tab_titles_stay_on_the_directory": "When enabled, local tabs show the working directory and SSH tabs show the saved host name or address. Hover over a tab to see the current AI task."
+      "tab_titles_stay_on_the_directory": "Tabs show the current folder or SSH host.",
+      "tab_titles_host_and_task": "SSH tabs use the saved host name or address. Hover over a tab to see the current AI task."
     },
     "pane": {
       "keep_tab_titles": "Keep directory and host names in tab titles",

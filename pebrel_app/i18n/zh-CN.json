@@ -681,7 +681,8 @@
       "restored_tabs_start_new_shells": "恢复的标签会启动新的 Shell，不会让已结束的程序继续运行。",
       "continues_the_previous_conversation_when": "恢复 AI 标签时，继续上次的对话。",
       "shows_ai_session_status_in": "在通知区域查看 AI 会话状态。",
-      "tab_titles_stay_on_the_directory": "开启后，本地标签显示当前目录，SSH 标签显示保存的主机名或地址。悬停标签仍可查看当前 AI 任务。"
+      "tab_titles_stay_on_the_directory": "标签显示当前目录或 SSH 主机。",
+      "tab_titles_host_and_task": "SSH 标签显示保存的主机名或地址。悬停标签可查看当前 AI 任务。"
     },
     "pane": {
       "keep_tab_titles": "标签标题保留目录名或主机名",
