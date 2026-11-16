@@ -348,6 +348,14 @@ fn prompt_line_snapshot(
         && let Some((head, input)) = text.split_once('>')
         && cmd_path_prompt(head)
     {
+        // Without an OSC 133;B boundary the grid cannot tell a `$P$G ` separator from
+        // a typed leading space. The keystroke mirror can: drop the space only when the
+        // rest is exactly what was typed. Recall, completion and cursor edits keep it,
+        // so history skips a line whose leading space has no known origin.
+        let input = match input.strip_prefix(' ') {
+            Some(rest) if !typed_tail.is_empty() && rest == typed_tail => rest,
+            _ => input,
+        };
         return Some(PromptLineSnapshot { prompt: format!("{head}>"), input: input.to_owned() });
     }
     if typed_tail.is_empty() || !text.ends_with(typed_tail) {
@@ -606,6 +614,41 @@ mod tests {
             Some("git st".to_owned())
         );
         assert_eq!(input_after_prompt("Password: secret", "secret", &env, false), None);
+    }
+
+    #[test]
+    fn cmd_prompt_without_boundary_keeps_a_typed_leading_space_for_history() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::event_loop::StreamProcessor;
+        use nebula_terminal::grid::Grid;
+
+        // (screen after the prompt, keystroke mirror, input). `$P$G` prints `C:\work>`
+        // and `$P$G ` prints `C:\work> `; neither emits an OSC 133;B boundary here.
+        // A leading space in the input keeps the line out of history.
+        for (screen, typed, input) in [
+            ("dir", "dir", "dir"),
+            (" echo private", " echo private", " echo private"),
+            (" dir", "dir", "dir"),
+            ("  echo private", " echo private", " echo private"),
+            // History recall leaves no mirror: the plain line is recorded, and a
+            // leading space of unknown origin keeps the line out of history.
+            ("dir", "", "dir"),
+            (" dir", "", " dir"),
+        ] {
+            let size = Grid::<Cell>::new(2, 80, 0);
+            let mut terminal = Term::new(Default::default(), &size, VoidListener);
+            let bytes = format!(r"C:\work>{screen}");
+            StreamProcessor::default().feed(&mut terminal, &VoidListener, bytes.as_bytes());
+            let snapshot = nebula_prompt_line_from_raw_grid(
+                &terminal,
+                terminal.grid().cursor.point,
+                typed,
+                &SuggestEnv::Local,
+            )
+            .unwrap_or_else(|| panic!("{screen:?} typed {typed:?}"));
+            assert_eq!(snapshot.prompt, r"C:\work>");
+            assert_eq!(snapshot.input, input, "{screen:?} typed {typed:?}");
+        }
     }
 
     #[test]

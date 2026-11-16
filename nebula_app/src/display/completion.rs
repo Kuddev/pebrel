@@ -18,14 +18,14 @@ impl Display {
         // (truncated CJK paths were the visible symptom). Better no history
         // entry than a corrupted one.
         #[cfg(windows)]
-        let line = state.screen_line.trim().to_owned();
+        let raw = state.screen_line.clone();
         #[cfg(not(windows))]
-        let line = if state.screen_line.trim().is_empty() {
-            state.line_buf.trim()
+        let raw = if state.screen_line.trim().is_empty() {
+            state.line_buf.clone()
         } else {
-            state.screen_line.trim()
-        }
-        .to_owned();
+            state.screen_line.clone()
+        };
+        let line = raw.trim().to_owned();
         nebula_debug_log(format!(
             "input_commit cwd={:?} line={line:?} line_buf={:?} screen_line={:?}",
             state.cwd, state.line_buf, state.screen_line
@@ -35,7 +35,7 @@ impl Display {
         if line.is_empty() {
             state.completion_submitted(&state.line_buf.clone());
         } else {
-            state.record_completion_command(&mut self.nebula_history, &line);
+            state.record_completion_command(&mut self.nebula_history, &raw);
         }
         // Kept for CommandStart (OSC 133;C): by the time it arrives from the
         // PTY these buffers are already cleared, so the program identity for
