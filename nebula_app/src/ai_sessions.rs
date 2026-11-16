@@ -159,9 +159,10 @@ fn registry_path() -> PathBuf {
 }
 
 fn settings_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("NEBULA_CONFIG_DIR").filter(|path| !path.is_empty()) {
-        return PathBuf::from(path);
+    if let Some(path) = nebula_settings::settings_dir_override() {
+        return path;
     }
+    // Existing default installations keep reading and updating their original index.
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
@@ -527,6 +528,40 @@ fn codex_details(head: &str) -> (Option<String>, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_uses_active_profile() {
+        const EXPECTED_DIR: &str = "PEBREL_TEST_REGISTRY_PROFILE";
+        if let Some(expected) = std::env::var_os(EXPECTED_DIR) {
+            let path = PathBuf::from(expected).join("ai_sessions.json");
+            assert_eq!(registry_path(), path);
+            record_hook_session("opencode", "profile-fixture", "/workspace", None).unwrap();
+            assert!(path.is_file());
+            let sessions = registry_sessions();
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].id, "profile-fixture");
+            return;
+        }
+
+        // Set overrides only in the subprocess; other unit tests can run in parallel.
+        let root = tempfile::tempdir().unwrap();
+        let preferred = root.path().join("preferred");
+        let legacy = root.path().join("legacy");
+        for (active, expected) in [(preferred.as_os_str(), &preferred), ("".as_ref(), &legacy)] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "ai_sessions::tests::registry_uses_active_profile"])
+                .env("PEBREL_CONFIG_DIR", active)
+                .env("NEBULA_CONFIG_DIR", &legacy)
+                .env(EXPECTED_DIR, expected)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+            assert!(expected.join("ai_sessions.json").is_file());
+            if expected == &preferred {
+                assert!(!legacy.exists());
+            }
+        }
+    }
 
     #[test]
     fn a_compacted_claude_session_titles_from_its_summary_line() {

@@ -66,7 +66,7 @@ pub use reset::restore_default_settings;
 mod paths;
 pub use paths::{
     canonical_data_file_name, is_migration_artifact, legacy_data_file_name, migrate_legacy_data,
-    settings_dir, settings_path,
+    settings_dir, settings_dir_override, settings_path,
 };
 
 /// `nebula_settings.txt` 的键值视图。行格式 `key=value`；键大小写不敏感，

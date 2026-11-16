@@ -14,7 +14,8 @@ fn first_override(mut variable: impl FnMut(&str) -> Option<OsString>) -> Option<
         .map(PathBuf::from)
 }
 
-fn override_dir() -> Option<PathBuf> {
+/// The explicit settings directory, including the legacy input alias.
+pub fn settings_dir_override() -> Option<PathBuf> {
     first_override(|name| std::env::var_os(name))
 }
 
@@ -47,7 +48,7 @@ fn default_dir(name: &str) -> PathBuf {
 
 /// Pebrel's data directory. The legacy override remains an input alias.
 pub fn settings_dir() -> PathBuf {
-    override_dir().unwrap_or_else(|| default_dir("Pebrel"))
+    settings_dir_override().unwrap_or_else(|| default_dir("Pebrel"))
 }
 
 pub fn settings_path() -> PathBuf {
@@ -57,7 +58,7 @@ pub fn settings_path() -> PathBuf {
 /// Run at process startup before settings, databases or background tasks open.
 pub fn migrate_legacy_data() -> io::Result<()> {
     let destination = settings_dir();
-    let source = override_dir().unwrap_or_else(|| default_dir("Nebula"));
+    let source = settings_dir_override().unwrap_or_else(|| default_dir("Nebula"));
     migration::migrate_data_at(&source, &destination).map_err(|error| {
         io::Error::new(
             error.kind(),
