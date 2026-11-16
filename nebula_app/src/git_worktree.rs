@@ -387,7 +387,9 @@ fn git_text_os<const N: usize>(
     if !output.status.success() {
         return Err(git_failure(code, message, &output, json!({ "cwd": cwd })));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Git terminates these outputs with a newline; whitespace before it may be part of a path.
+    Ok(crate::platform::process::strip_output_newline(&stdout).to_owned())
 }
 
 fn run_git_os<I, S>(cwd: &Path, args: I) -> Result<Output, ApiError>
@@ -503,6 +505,33 @@ mod tests {
         transaction.rollback().expect("owned worktree should roll back");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn worktree_roots_preserve_trailing_whitespace_from_git() {
+        let workspace = tempfile::tempdir().unwrap();
+        for name in ["source ", "source\n", "source\r"] {
+            let source = workspace.path().join(name);
+            std::fs::create_dir(&source).unwrap();
+            init_repository(&source);
+            let source = source.canonicalize().unwrap();
+            let transaction = WorktreeTransaction::prepare(WorktreeRequest {
+                source_cwd: source.clone(),
+                agent_name: "reviewer".into(),
+                branch: None,
+                base: None,
+                path: None,
+                allow_dirty_source: false,
+            })
+            .expect("worktree should be created for the literal path");
+            let target = transaction.provenance().path.clone();
+            assert_eq!(transaction.provenance().source_root, source);
+            assert_eq!(transaction.provenance().repo_root, source);
+            assert!(target.join("tracked.txt").is_file());
+            transaction.rollback().unwrap();
+            assert!(!target.exists());
+        }
+    }
+
     #[test]
     fn dirty_source_requires_explicit_opt_in() {
         let repository = test_repository();
@@ -522,13 +551,17 @@ mod tests {
 
     fn test_repository() -> tempfile::TempDir {
         let directory = tempfile::tempdir().expect("create repository directory");
-        assert!(git_output(directory.path(), ["init", "--initial-branch=main"]).status.success());
-        std::fs::write(directory.path().join("tracked.txt"), "tracked")
-            .expect("write tracked file");
-        assert!(git_output(directory.path(), ["add", "tracked.txt"]).status.success());
+        init_repository(directory.path());
+        directory
+    }
+
+    fn init_repository(directory: &Path) {
+        assert!(git_output(directory, ["init", "--initial-branch=main"]).status.success());
+        std::fs::write(directory.join("tracked.txt"), "tracked").expect("write tracked file");
+        assert!(git_output(directory, ["add", "tracked.txt"]).status.success());
         assert!(
             git_output(
-                directory.path(),
+                directory,
                 [
                     "-c",
                     "user.name=Nebula Test",
@@ -542,7 +575,6 @@ mod tests {
             .status
             .success()
         );
-        directory
     }
 
     fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Output {

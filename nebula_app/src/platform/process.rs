@@ -26,6 +26,12 @@ use std::os::windows::io::{
 };
 use std::process::{Child, Command};
 
+/// Remove one native line ending from captured text without trimming its content.
+pub(crate) fn strip_output_newline(text: &str) -> &str {
+    let Some(line) = text.strip_suffix('\n') else { return text };
+    if cfg!(windows) { line.strip_suffix('\r').unwrap_or(line) } else { line }
+}
+
 /// Native status encoding belongs to the process adapter, including event fixtures.
 #[cfg(test)]
 pub(crate) fn test_exit_status(code: u32) -> std::process::ExitStatus {
