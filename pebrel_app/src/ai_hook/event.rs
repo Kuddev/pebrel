@@ -185,6 +185,7 @@ pub struct AiBackgroundTasks {
 /// 体积限制的副本；它绝不能等同于 provider 的原始 stdin，也不能进 Debug 日志。
 #[derive(Clone)]
 pub struct AttentionContext {
+    pub kind: super::AttentionKind,
     pub source: String,
     pub pane_id: Option<u64>,
     pub session_id: Option<String>,
@@ -211,6 +212,7 @@ pub struct AttentionContext {
 impl std::fmt::Debug for AttentionContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AttentionContext")
+            .field("kind", &self.kind)
             .field("source", &self.source)
             .field("pane_id", &self.pane_id)
             .field("session_id", &self.session_id)
