@@ -1,0 +1,62 @@
+name: Non-UI integration legacy compile
+on:
+  push:
+    branches: [verify/nonui-legacy-20261116]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nonui-legacy-validation
+  cancel-in-progress: true
+jobs:
+  legacy:
+    name: Legacy compile (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      PROFILE_SOURCE: 8e5eef3839f1a8f5c45e62aa21a3673f1dbc6a91
+      RUST_TOOLCHAIN: "1.97.1"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8e5eef3839f1a8f5c45e62aa21a3673f1dbc6a91
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify reviewed source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$PROFILE_SOURCE"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libasound2-dev libdbus-1-dev libudev-dev \
+            libfontconfig1-dev libfreetype6-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxcb-xinput-dev libxcb-xkb-dev libxi-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: -release-check-v2
+          target: target/ci
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Prepare Windows console runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+      - name: Compile legacy adapter and tests
+        run: cargo check --locked --config .github/ci-profile.toml --profile ci -p pebrel --bin pebrel --features gpui-shell,gpui-test-support,legacy-shell,x11 --tests
