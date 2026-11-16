@@ -140,12 +140,20 @@ pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchS
     if requested.is_empty() {
         return Err("--shell needs a shell id".to_owned());
     }
-    if let Some(detected) = crate::shell_detect::detect_shells()
-        .into_iter()
-        .find(|shell| shell.id.eq_ignore_ascii_case(requested))
-    {
+    if let Some(launch) = resolve_from_snapshot(requested) {
+        return Ok(launch);
+    }
+    crate::shell_detect::refresh_detection();
+    resolve_from_snapshot(requested).ok_or_else(|| {
+        format!("unknown shell id \"{requested}\"; available: {}", shell_id_menu().join(", "))
+    })
+}
+
+/// 一次快照内的解析链：已安装 shell → 导入 profile → WSL 合成兜底。
+fn resolve_from_snapshot(requested: &str) -> Option<crate::session::LaunchSession> {
+    if let Some(detected) = crate::shell_detect::detected_id_in_snapshot(requested) {
         let shell = detected.shell();
-        return Ok(crate::session::LaunchSession::Shell {
+        return Some(crate::session::LaunchSession::Shell {
             name: detected.name,
             program: shell.program().to_owned(),
             args: shell.args().to_vec(),
@@ -155,12 +163,9 @@ pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchS
         .ok()
         .and_then(|store| profile_launch_for_id(store.as_config_profiles(), requested))
     {
-        return Ok(launch);
+        return Some(launch);
     }
-    if let Some(launch) = wsl_launch_for_id(requested) {
-        return Ok(launch);
-    }
-    Err(format!("unknown shell id \"{requested}\"; available: {}", shell_id_menu().join(", ")))
+    wsl_launch_for_id(requested)
 }
 
 // Imported profile ids are opaque and may include case-sensitive directory names.
@@ -235,6 +240,20 @@ fn wsl_launch_args(shell_id: &str) -> Option<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+
+    /// 快照落空时必须重扫一次再报错：运行期新装的 shell 不能因为旧快照被拒。
+    #[test]
+    fn unknown_id_rescans_detection_before_failing() {
+        // 先把快照建好，保证下面第一次查找不会自己触发扫描。
+        crate::shell_detect::refresh_detection();
+        crate::shell_detect::detection_probe::start();
+        assert!(super::resolve_shell_id("no-such-shell-is-installed").is_err());
+        assert_eq!(
+            crate::shell_detect::detection_probe::stop(),
+            1,
+            "a snapshot miss must re-run discovery exactly once"
+        );
+    }
 
     #[test]
     fn profile_ids_preserve_case_sensitive_directory_identity() {

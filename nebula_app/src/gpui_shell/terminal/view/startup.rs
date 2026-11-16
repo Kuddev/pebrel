@@ -55,7 +55,6 @@ impl TerminalView {
             palette,
             term_config,
             copy_on_select,
-            shell,
         ) = match cx.try_global::<Settings>() {
             Some(settings) => (
                 [
@@ -72,14 +71,6 @@ impl TerminalView {
                 Arc::new(settings.palette.clone()),
                 settings.term_config(),
                 settings.copy_on_select,
-                // 设置选定的默认 shell（旧壳 default_shell_launch 同径：
-                // resolve 失败或 PTY 集成 id 落回引擎默认）。WSL id 在
-                // 这里换上 bash 集成注入，cwd/git 分支经 NEBULA| 标题回流。
-                settings
-                    .shell_id
-                    .as_deref()
-                    .and_then(crate::shell_detect::resolve_id)
-                    .map(|detected| detected.shell()),
             ),
             None => (
                 std::array::from_fn(|_| REQUIRED_FONT_FAMILY.to_owned()),
@@ -92,7 +83,6 @@ impl TerminalView {
                 nebula_terminal::term::Config::default(),
                 // 旧壳的出厂默认即开。
                 true,
-                None,
             ),
         };
         let ligatures =
@@ -133,7 +123,12 @@ impl TerminalView {
             TerminalLaunch::Local { cwd, shell: launch_shell, shell_name } => {
                 // 显式 launch（会话恢复/创建时冻结）优先；只有旧会话没有
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
-                let effective = launch_shell.or(shell);
+                let effective = launch_shell.or_else(|| {
+                    cx.try_global::<Settings>()
+                        .and_then(|settings| settings.shell_id.as_deref())
+                        .and_then(crate::shell_detect::resolve_id)
+                        .map(|detected| detected.shell())
+                });
                 startup_intro = scrollback.is_none() && accepts_startup_intro(effective.as_ref());
                 let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
                 // The WSL distribution is resolved once, at spawn, and pinned into

@@ -1753,7 +1753,7 @@ impl NebulaWorkspace {
         );
         let language = workspace_ui_language();
         let rows = shell_palette_rows(
-            crate::shell_detect::detect_shells(),
+            crate::shell_detect::refresh_detection(), // 打开即重扫：新装的 shell 不用重启
             crate::terminal_profiles::TerminalProfiles::load()
                 .map(|store| store.as_config_profiles())
                 .unwrap_or_default(),

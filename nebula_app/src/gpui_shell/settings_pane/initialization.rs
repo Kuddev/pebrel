@@ -279,6 +279,7 @@ impl SettingsPane {
 
         // 与旧壳的默认 Shell 菜单共用检测层：不能在设置页另维护一份两项
         // 白名单，否则 CMD/Nushell/WSL 会出现在新建终端菜单，却无法设为默认。
+        crate::shell_detect::refresh_detection();
         let (shell_items, shell_index) = shell_select_items(&shell_current, language);
         let shell_select = cx.new(|cx| {
             SelectState::new(shell_items, Some(IndexPath::default().row(shell_index)), window, cx)
