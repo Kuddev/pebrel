@@ -7,6 +7,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+from contextlib import contextmanager
+from types import SimpleNamespace
 import tempfile
 import time
 
@@ -24,6 +27,81 @@ class GuiThreadInfo(ctypes.Structure):
         ("focus", wt.HWND), ("capture", wt.HWND), ("menu_owner", wt.HWND),
         ("move_size", wt.HWND), ("caret", wt.HWND), ("caret_rect", wt.RECT),
     ]
+
+
+from windows_standard_user import ProcessInfo, StartupInfo, WindowsTokens
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conformance.harness import _WindowsJob
+
+
+@contextmanager
+def ordinary_product(app, profile):
+    api = WindowsTokens()
+    source = api.current_token(0x008B)
+    token = None
+    job = _WindowsJob()
+    process = ProcessInfo()
+    try:
+        elevated = api.elevated(source)
+        token = api.restrict(source) if elevated else source
+        args = [str(app), "--gpui", "--working-directory", str(profile)]
+        command = ctypes.create_unicode_buffer(subprocess.list2cmdline(args))
+        startup = StartupInfo()
+        startup.cb = ctypes.sizeof(startup)
+        env = dict(os.environ, PEBREL_CONFIG_DIR=str(profile), NEBULA_CONFIG_DIR=str(profile))
+        environment = ctypes.create_unicode_buffer(
+            "\0".join(f"{k}={v}" for k, v in sorted(env.items(), key=lambda item: item[0].casefold())) + "\0"
+        )
+        api.require(api.security.CreateProcessAsUserW(
+            token, str(app), command, None, None, False, 0x00000404,
+            ctypes.cast(environment, wt.LPVOID), str(app.parent),
+            ctypes.byref(startup), ctypes.byref(process),
+        ))
+        try:
+            job.assign(SimpleNamespace(_handle=process.hProcess))
+            resume = api.kernel.ResumeThread
+            resume.argtypes, resume.restype = [wt.HANDLE], wt.DWORD
+            if resume(process.hThread) == 0xFFFFFFFF:
+                raise ctypes.WinError(ctypes.get_last_error())
+            yield process.dwProcessId, lambda: api.kernel.WaitForSingleObject(process.hProcess, 0) == 0x102
+        finally:
+            terminate = api.kernel.TerminateProcess
+            terminate.argtypes, terminate.restype = [wt.HANDLE, wt.UINT], wt.BOOL
+            terminate(process.hProcess, 1)
+            job.terminate()
+    finally:
+        job.close()
+        if process.hThread:
+            api.kernel.CloseHandle(process.hThread)
+        if process.hProcess:
+            api.kernel.CloseHandle(process.hProcess)
+        if token and token != source:
+            api.kernel.CloseHandle(token)
+        api.kernel.CloseHandle(source)
+
+
+def is_elevated(pid):
+    api = WindowsTokens()
+    open_process = api.kernel.OpenProcess
+    open_process.argtypes, open_process.restype = [wt.DWORD, wt.BOOL, wt.DWORD], wt.HANDLE
+    process = open_process(0x1000, False, pid)
+    if not process:
+        raise ctypes.WinError(ctypes.get_last_error())
+    token = wt.HANDLE()
+    try:
+        api.require(api.security.OpenProcessToken(process, 0x0008, ctypes.byref(token)))
+        return api.elevated(token)
+    finally:
+        if token:
+            api.kernel.CloseHandle(token)
+        api.kernel.CloseHandle(process)
+
+
+def fresh_icon_rect(hwnd):
+    return json.loads(subprocess.check_output(
+        [sys.executable, __file__, "--query-icon", str(hwnd)], timeout=5, text=True,
+    ))
 
 
 def wait_for(description, predicate, timeout=20):
@@ -126,36 +204,30 @@ def run_variant(desktop, app, root, expect_recovery):
     config = root / ("candidate" if expect_recovery else "baseline")
     config.mkdir()
     (config / "pebrel_settings.txt").write_text("tray=1\n", encoding="utf-8")
-    env = dict(os.environ, PEBREL_CONFIG_DIR=str(config))
-    process = subprocess.Popen(
-        [str(app.resolve(strict=True)), "--gpui", "--working-directory", str(config)],
-        cwd=app.resolve().parent, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    try:
-        hwnd = wait_for("Pebrel's tray window", lambda: desktop.tray_window(process.pid))
+    with ordinary_product(app.resolve(strict=True), config) as (pid, alive):
+        hwnd = wait_for("Pebrel's tray window", lambda: desktop.tray_window(pid))
+        assert not is_elevated(pid), "Pebrel is unexpectedly elevated"
         before = wait_for("Pebrel's initial tray icon", lambda: desktop.icon_rect(hwnd))
-        print(f"Initial icon {before} for Pebrel PID {process.pid}", flush=True)
+        print(f"Initial icon {before} for ordinary Pebrel PID {pid}", flush=True)
         old_shell, new_shell = desktop.restart_explorer()
-        print(f"Explorer restarted from PID {old_shell} to {new_shell}", flush=True)
+        elevated_shell = is_elevated(new_shell)
+        print(f"Explorer restarted from PID {old_shell} to {new_shell}; elevated={elevated_shell}",
+              flush=True)
         after = None
         if expect_recovery:
-            after = wait_for("the candidate's restored tray icon", lambda: desktop.icon_rect(hwnd))
+            after = wait_for("the candidate's restored tray icon", lambda: fresh_icon_rect(hwnd))
             desktop.verify_tray_menu(hwnd)
         else:
-            # Sample the released build after the replacement desktop is ready.
             end = time.monotonic() + 5
             while time.monotonic() < end:
-                if desktop.icon_rect(hwnd):
+                if fresh_icon_rect(hwnd):
                     raise AssertionError("the released build already restores its tray icon")
                 time.sleep(0.1)
-        if process.poll() is not None or desktop.tray_window(process.pid) != hwnd:
+        if not alive() or desktop.tray_window(pid) != hwnd:
             raise AssertionError("the original Pebrel process or tray window exited")
-        return {"app_pid": process.pid, "old_explorer": old_shell, "new_explorer": new_shell,
+        return {"app_pid": pid, "app_elevated": False, "old_explorer": old_shell,
+                "new_explorer": new_shell, "explorer_elevated": elevated_shell,
                 "icon_before": before, "icon_after": after, "menu_opens": expect_recovery}
-    finally:
-        if process.poll() is None:
-            process.terminate()
-        process.wait(timeout=10)
 
 
 def main():
@@ -177,4 +249,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if (len(sys.argv) == 3 and sys.argv[1] == "--query-icon"
+            and os.name == "nt" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"):
+        print(json.dumps(Desktop().icon_rect(int(sys.argv[2]))))
+    else:
+        main()
