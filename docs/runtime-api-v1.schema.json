@@ -1523,14 +1523,73 @@
             "null"
           ]
         },
+        "host_cwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional absolute native interpretation captured by the caller; requires cwd. The resident uses cwd for a resolved WSL program and host_cwd for a native program."
+        },
         "shell": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "argv": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "string"
+          },
+          "description": "Direct PTY program argv, mutually exclusive with shell. No shell expansion; server validates a non-empty program, rejects NUL and enforces a 32768-byte aggregate limit."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "shell",
+          "argv"
+        ],
+        "properties": {
+          "shell": {
+            "type": "string"
+          },
+          "argv": {
+            "type": "array"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "host_cwd"
+            ],
+            "properties": {
+              "host_cwd": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "cwd"
+            ],
+            "properties": {
+              "cwd": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^/([^/]|$)"
+              }
+            }
+          }
+        }
+      ]
     },
     "tab_target_params": {
       "type": "object",

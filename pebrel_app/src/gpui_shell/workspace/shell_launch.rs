@@ -12,8 +12,52 @@
 //! * **`wsl:<发行版>` 永远落得下去**。枚举不到也合成 `wsl.exe -d <发行版>`，
 //!   让 wsl.exe 自己报错，而不是换成用户没要的 PowerShell。
 
+use super::NebulaWorkspace;
 use gpui::App;
 use std::path::Path;
+
+/// Resolve the selected program before interpreting the caller's directory.
+pub(super) fn runtime_tab_launch(
+    cwd: Option<std::path::PathBuf>,
+    host_cwd: Option<std::path::PathBuf>,
+    shell_id: Option<&str>,
+    command: Option<&crate::config::ui_config::Program>,
+    cx: &App,
+) -> Result<(crate::session::LaunchSession, Option<std::path::PathBuf>), crate::runtime_api::ApiError>
+{
+    use crate::session::LaunchSession;
+    let launch = match (command, shell_id) {
+        (Some(command), _) => command_launch(command, None),
+        (None, Some(id)) => resolve_shell_id(id)
+            .map_err(|error| crate::runtime_api::ApiError::new("invalid_shell", error))?,
+        (None, None) => configured_local_launch(cx),
+    };
+    let wsl = match &launch {
+        LaunchSession::Shell { program, .. }
+        | LaunchSession::Command { program, .. }
+        | LaunchSession::Profile { command: program, .. } => {
+            crate::platform::launch_directory::is_wsl_program(program)
+        },
+        LaunchSession::Default => crate::platform::launch_directory::is_wsl(
+            crate::platform::shell::snapshot_shell(None).as_ref(),
+        ),
+        LaunchSession::Ssh { .. } | LaunchSession::Serial { .. } => false,
+    };
+    let cwd = if wsl { cwd } else { host_cwd.or(cwd) };
+    Ok((at_explicit_directory(launch, cwd.as_deref()), cwd))
+}
+
+/// Freeze an explicit program as a literal launch identity.
+pub(super) fn command_launch(
+    command: &crate::config::ui_config::Program,
+    cwd: Option<&Path>,
+) -> crate::session::LaunchSession {
+    let program = command.program().to_owned();
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
+    let launch =
+        crate::session::LaunchSession::Command { name, program, args: command.args().to_vec() };
+    at_explicit_directory(launch, cwd)
+}
 
 /// Resolve one explicit request, applying its directory only to the launch snapshot.
 pub(super) fn resolve_shell_at(
@@ -28,21 +72,29 @@ pub(super) fn at_explicit_directory(
     cwd: Option<&Path>,
 ) -> crate::session::LaunchSession {
     let Some(cwd) = cwd else { return launch };
+    let literal = matches!(launch, crate::session::LaunchSession::Command { .. });
     let (program, args) = match &mut launch {
         crate::session::LaunchSession::Profile { command, args, cwd: saved_cwd, .. } => {
             *saved_cwd = Some(cwd.to_string_lossy().into_owned());
             (command, args)
         },
-        crate::session::LaunchSession::Shell { program, args, .. } => (program, args),
+        crate::session::LaunchSession::Shell { program, args, .. }
+        | crate::session::LaunchSession::Command { program, args, .. } => (program, args),
         _ => return launch,
     };
     // Encode explicit directories before the PTY fallback sees an inherited cwd.
     // Both guest paths and validated host paths go through WSL's own --cd parser.
-    if crate::shell_detect::is_wsl_launcher(program)
+    if crate::platform::launch_directory::is_wsl_program(program)
         && let Some(directory) = crate::platform::launch_directory::wsl_argument(cwd)
-        && let Some(updated) = crate::shell_detect::wsl_args_in_directory(program, args, &directory)
     {
-        *args = updated;
+        let updated = if literal {
+            crate::shell_detect::wsl_literal_args_in_directory(program, args, &directory)
+        } else {
+            crate::shell_detect::wsl_args_in_directory(program, args, &directory)
+        };
+        if let Some(updated) = updated {
+            *args = updated;
+        }
     }
     launch
 }
@@ -98,6 +150,7 @@ pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<pebrel_terminal:
     let shell = match super::NebulaWorkspace::terminal_launch_from_session(&launch, None) {
         TerminalLaunch::Local { shell, .. } => shell,
         TerminalLaunch::Profile { profile, .. } => Some(crate::profile_launch::shell(&profile)),
+        TerminalLaunch::Command { shell, .. } => Some(shell),
         TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => return None,
     };
     crate::platform::shell::snapshot_shell(shell)
@@ -316,3 +369,66 @@ mod tests {
 
 #[cfg(test)]
 mod directory_tests;
+
+impl NebulaWorkspace {
+    /// `LaunchSession::Default` 的口语短标。
+    ///
+    /// 这里不能再读运行时的“当前默认 Shell”：`Default` 已经是这个 Tab 创建
+    /// 时冻结下来的启动身份，PTY 侧实际走的是引擎默认 PowerShell。恢复时若
+    /// 重新读取设置，只会让右侧短标漂成新的默认值，和仍在运行/恢复出来的
+    /// 进程身份相互矛盾。
+    pub(super) fn default_shell_tag() -> gpui::SharedString {
+        crate::shell_detect::shell_short_tag(&crate::platform::shell::default_shell_id()).into()
+    }
+
+    /// 把一份冻结的会话 launch 还原为一次 GPUI PTY 启动。逐 pane 选择
+    /// 与旧快照回退由 session_recovery 统一负责。
+    pub(in crate::gpui_shell) fn terminal_launch_from_session(
+        launch: &crate::session::LaunchSession,
+        cwd: Option<std::path::PathBuf>,
+    ) -> crate::gpui_shell::terminal::view::TerminalLaunch {
+        use crate::gpui_shell::terminal::view::TerminalLaunch;
+        use crate::session::LaunchSession;
+
+        match launch {
+            LaunchSession::Default => TerminalLaunch::Local { cwd, shell: None, shell_name: None },
+            LaunchSession::Shell { name, program, args } => TerminalLaunch::Local {
+                cwd,
+                shell: Some(pebrel_terminal::tty::Shell::new(program.clone(), args.clone())),
+                shell_name: Some(name.clone()),
+            },
+            LaunchSession::Command { name, program, args } => TerminalLaunch::Command {
+                cwd,
+                name: name.clone(),
+                shell: pebrel_terminal::tty::Shell::new(program.clone(), args.clone()),
+            },
+            LaunchSession::Profile { .. } => {
+                let profile = crate::profile_launch::resolve(launch).expect("profile variant");
+                TerminalLaunch::Profile { cwd: profile.cwd.clone().or(cwd), profile }
+            },
+            LaunchSession::Ssh { host } => {
+                TerminalLaunch::Ssh { destination: host.clone(), cwd: None, resume_target: None }
+            },
+            LaunchSession::Serial { destination } => {
+                TerminalLaunch::Serial { destination: destination.clone() }
+            },
+        }
+    }
+
+    pub(super) fn launch_shell_tag(
+        launch: &crate::session::LaunchSession,
+    ) -> Option<gpui::SharedString> {
+        match launch {
+            crate::session::LaunchSession::Default => Some(Self::default_shell_tag()),
+            crate::session::LaunchSession::Shell { name, .. }
+            | crate::session::LaunchSession::Command { name, .. } => {
+                Some(crate::shell_detect::shell_short_tag(name).into())
+            },
+            crate::session::LaunchSession::Ssh { .. } => Some("ssh".into()),
+            crate::session::LaunchSession::Serial { .. } => Some("serial".into()),
+            crate::session::LaunchSession::Profile { name, shell_id, .. } => Some(
+                crate::shell_detect::shell_short_tag(shell_id.as_deref().unwrap_or(name)).into(),
+            ),
+        }
+    }
+}

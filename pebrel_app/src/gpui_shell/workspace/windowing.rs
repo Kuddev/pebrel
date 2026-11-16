@@ -99,9 +99,13 @@ use crate::runtime_api::{
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod command_launch_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_notify_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_resize_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tab_launch_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod transfer_tests;
 
@@ -463,8 +467,21 @@ fn open_runtime_window(
     cx: &mut App,
     cwd: Option<PathBuf>,
     shell_id: Option<String>,
+    command: Option<crate::config::ui_config::Program>,
+    host_cwd: Option<PathBuf>,
 ) -> Result<(u64, u64), ApiError> {
-    let startup = runtime_window_startup(cwd, shell_id.as_deref())?;
+    let startup = if command.is_some() || host_cwd.is_some() {
+        let (launch, cwd) = super::shell_launch::runtime_tab_launch(
+            cwd,
+            host_cwd,
+            shell_id.as_deref(),
+            command.as_ref(),
+            cx,
+        )?;
+        WorkspaceStartup::LaunchTerminal { cwd, launch }
+    } else {
+        runtime_window_startup(cwd, shell_id.as_deref())?
+    };
     let (window_id, workspace) =
         open_workspace_window(cx, startup, None, None, false, WindowRole::Regular)
             .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
@@ -909,7 +926,7 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             return;
         },
         RuntimeCommand::NewWindow { cwd, shell_id } => {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone(), None, None).map(
                 |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
@@ -921,19 +938,24 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             dispatch.respond(response);
             return;
         },
-        RuntimeCommand::NewTab { window_id: None, cwd, shell_id }
+        RuntimeCommand::NewTab { window_id: None, cwd, host_cwd, shell_id, command }
             if pebrel_settings::RuntimeSettings::load().windowing_behavior
                 == pebrel_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+            let response = open_runtime_window(
+                cx,
+                cwd.clone(),
+                shell_id.clone(),
+                command.clone(),
+                host_cwd.clone(),
+            )
+            .map(|(window_id, pane_id)| {
+                let snapshot = publish_runtime_snapshot(cx);
+                json!({
+                    "action": { "window_id": window_id, "pane_id": pane_id },
+                    "snapshot": snapshot
+                })
+            });
             dispatch.respond(response);
             return;
         },
@@ -971,18 +993,24 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
         Err(_error)
             if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
         {
-            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command else {
+            let RuntimeCommand::NewTab { cwd, host_cwd, shell_id, command, .. } = &dispatch.command
+            else {
                 unreachable!()
             };
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+            let response = open_runtime_window(
+                cx,
+                cwd.clone(),
+                shell_id.clone(),
+                command.clone(),
+                host_cwd.clone(),
+            )
+            .map(|(window_id, pane_id)| {
+                let snapshot = publish_runtime_snapshot(cx);
+                json!({
+                    "action": { "window_id": window_id, "pane_id": pane_id },
+                    "snapshot": snapshot
+                })
+            });
             dispatch.respond(response);
             return;
         },
@@ -1781,7 +1809,13 @@ mod tests {
         let preserve = vec![
             RuntimeCommand::Snapshot,
             RuntimeCommand::CloseWindow { window_id: Some(1) },
-            RuntimeCommand::NewTab { window_id: Some(1), cwd: None, shell_id: None },
+            RuntimeCommand::NewTab {
+                window_id: Some(1),
+                cwd: None,
+                host_cwd: None,
+                shell_id: None,
+                command: None,
+            },
             RuntimeCommand::CloseTab { window_id: Some(1), tab_index: 0 },
             RuntimeCommand::RenameTab {
                 window_id: Some(1),

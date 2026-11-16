@@ -31,8 +31,12 @@ pub enum RuntimeCommand {
     NewTab {
         window_id: Option<u64>,
         cwd: Option<PathBuf>,
+        /// Caller-resolved native interpretation of an ambiguous Windows path.
+        host_cwd: Option<PathBuf>,
         /// 见 [`RuntimeCommand::NewWindow::shell_id`]。
         shell_id: Option<String>,
+        /// Literal PTY command; mutually exclusive with an explicit shell id.
+        command: Option<crate::config::ui_config::Program>,
     },
     CloseTab {
         window_id: Option<u64>,
@@ -171,6 +175,13 @@ pub enum RuntimeCommand {
     },
 }
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl RuntimeCommand {
+    pub(crate) fn test_request(method: &str, params: Value) -> Result<Self, ApiError> {
+        Self::from_request(&ApiRequest::new("fixture".into(), method, params))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TargetParams {
@@ -193,6 +204,16 @@ struct WindowParams {
     /// 老客户端不带这个字段的行为不变。
     #[serde(default)]
     shell: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewTabParams {
+    window_id: Option<u64>,
+    cwd: Option<PathBuf>,
+    host_cwd: Option<PathBuf>,
+    shell: Option<String>,
+    argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -460,11 +481,41 @@ impl RuntimeCommand {
                 Ok(Self::Focus { window_id: params.window_id, pane_id: params.pane_id })
             },
             "tab.new" => {
-                let params: WindowParams = parse_params(&request.params)?;
+                let params: NewTabParams = parse_params(&request.params)?;
+                if let Some(host_cwd) = &params.host_cwd {
+                    if params
+                        .cwd
+                        .as_deref()
+                        .and_then(crate::platform::launch_directory::guest_path)
+                        .is_none()
+                        || !host_cwd.is_absolute()
+                    {
+                        return Err(ApiError::invalid_params(
+                            "host_cwd requires a rooted guest cwd and an absolute native path",
+                        ));
+                    }
+                }
+                let command = params
+                    .argv
+                    .map(|argv| {
+                        validate_exec_argv(&argv)?;
+                        if params.shell.is_some() {
+                            return Err(ApiError::invalid_params(
+                                "shell and argv are mutually exclusive",
+                            ));
+                        }
+                        Ok(crate::config::ui_config::Program::WithArgs {
+                            program: argv[0].clone(),
+                            args: argv[1..].to_vec(),
+                        })
+                    })
+                    .transpose()?;
                 Ok(Self::NewTab {
                     window_id: params.window_id,
                     cwd: params.cwd,
+                    host_cwd: params.host_cwd,
                     shell_id: params.shell,
+                    command,
                 })
             },
             "tab.close" => {

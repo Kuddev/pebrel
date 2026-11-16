@@ -4,6 +4,31 @@ use crate::gpui_shell::workspace::NebulaWorkspace;
 use crate::session::LaunchSession;
 
 #[test]
+fn native_wsl_named_program_receives_only_literal_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let Some(program) = crate::platform::launch_directory::test_posix_echo_alias(directory.path())
+    else {
+        return;
+    };
+    let command = crate::config::ui_config::Program::WithArgs {
+        program: program.to_str().unwrap().into(),
+        args: vec!["literal value".into()],
+    };
+    let LaunchSession::Command { program, args, .. } =
+        command_launch(&command, Some(directory.path()))
+    else {
+        panic!("expected a direct command");
+    };
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"literal value\n");
+}
+
+#[test]
 fn explicit_directory_reaches_the_terminal_without_changing_the_saved_profile() {
     let saved = tempfile::tempdir().unwrap();
     let requested = tempfile::tempdir().unwrap();
@@ -85,6 +110,10 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
             _ => panic!("expected WSL to launch through the local PTY"),
         };
         assert_eq!(cwd.as_deref(), Some(requested.path()));
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            assert_eq!(shell.args(), args.as_slice());
+            continue;
+        }
         assert_eq!(
             shell.args(),
             &[
@@ -121,7 +150,11 @@ fn explicit_relative_host_directory_is_absolute_before_wsl_receives_it() {
     let value = directory.to_str().unwrap();
     let encoded =
         if value.contains([' ', '\t']) { format!("\"{value}\"") } else { value.to_owned() };
-    assert_eq!(args, vec!["--cd".to_owned(), encoded]);
+    if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+        assert_eq!(args, vec!["--cd".to_owned(), encoded]);
+    } else {
+        assert!(args.is_empty(), "native programs keep their literal arguments");
+    }
 }
 
 #[test]
@@ -140,6 +173,10 @@ fn explicit_guest_directory_survives_to_the_wsl_launch() {
     };
     let mut options =
         pebrel_terminal::tty::Options { shell, working_directory: cwd, ..Default::default() };
+    if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+        assert_eq!(options.shell.unwrap().args(), &["-d", "Ubuntu", "--user", "guest"]);
+        return;
+    }
     crate::platform::launch_directory::prepare_wsl(&mut options, Some("/different"));
     assert_eq!(
         options.shell.unwrap().args(),
@@ -171,6 +208,11 @@ fn profile_directory_precedes_guest_home_but_explicit_wsl_cd_keeps_precedence() 
             working_directory: cwd,
             ..Default::default()
         };
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            assert_eq!(options.shell.unwrap().args(), profile.args.as_slice());
+            assert_eq!(options.working_directory.as_deref(), Some(directory.path()));
+            continue;
+        }
         crate::platform::launch_directory::prepare_wsl(&mut options, None);
         assert_eq!(
             options.shell.unwrap().args(),
