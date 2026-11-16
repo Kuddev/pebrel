@@ -1,0 +1,63 @@
+name: Non-UI integration ConPTY diagnosis
+on:
+  push:
+    branches: [verify/nonui-conpty-20261116]
+permissions:
+  contents: read
+concurrency:
+  group: nonui-conpty-diagnosis
+  cancel-in-progress: true
+jobs:
+  conpty:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+      RUST_BACKTRACE: "1"
+      RUST_TOOLCHAIN: "1.97.1"
+      REVIEWED_SOURCE: 8e5eef3839f1a8f5c45e62aa21a3673f1dbc6a91
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8e5eef3839f1a8f5c45e62aa21a3673f1dbc6a91
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify reviewed source
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:REVIEWED_SOURCE) {
+            throw 'Unexpected source revision'
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: -release-check-v2
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Prepare pinned Windows console runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          ./scripts/tests/windows-runtime.tests.ps1 -Architecture x64
+      - name: Repeat the ConPTY reader regression on the reviewed source
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Output "ConPTY regression repetition $attempt of 3"
+            cargo nextest run --config .github/ci-profile.toml --cargo-profile ci --locked --workspace --features pebrel/gpui-test-support --no-fail-fast --retries 0 -E 'test(=platform::keyboard::tests::modified_enter_reaches_native_and_byte_readers_through_conpty)'
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
