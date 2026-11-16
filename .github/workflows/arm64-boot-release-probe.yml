@@ -1,0 +1,78 @@
+name: Windows ARM64 package startup comparison
+on:
+  push:
+    branches: [qa/pebrel-2.5.10-arm64-20261116]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  boot:
+    runs-on: windows-11-arm
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, candidate]
+    env:
+      PYTHONUTF8: "1"
+      NEBULA_BOOT_TRACE: "1"
+      NEBULA_RESIZE_TRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Fetch the published baseline or exact release candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_VARIANT: ${{ matrix.variant }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "arm64-startup"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          if ($env:TEST_VARIANT -eq "baseline") {
+            $zip = Join-Path $root "Pebrel-v2.5.9-windows-arm64.zip"
+            Invoke-WebRequest -Uri "https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-arm64.zip" -OutFile $zip
+            if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne "d83c8e904cadb72f6c9fdd86f4008722c890422232dcb179776abbdb047562d8") {
+              throw "Published baseline hash changed."
+            }
+          } else {
+            $runId = 43857798653
+            $run = gh api "repos/Kuddev/pebrel/actions/runs/$runId" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.head_sha -ne "64c371c720f9c22a88771b5dea3389075c5de5ec") {
+              throw "Wrong artifact source."
+            }
+            gh run download $runId -R Kuddev/pebrel --name stable-package-windows-arm64 --dir $root
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch the candidate artifact." }
+            $zip = Join-Path $root "Pebrel-v2.5.10-windows-arm64.zip"
+          }
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -Path (Join-Path $root "artifact-sha256.txt") -Encoding utf8
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $root "app")
+      - name: Apply the same PowerShell launch environment as release CI
+        shell: pwsh
+        run: ./scripts/conformance/windows_arm64_module_path.ps1
+      - name: Run the existing native smoke tests twice on the package
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "arm64-startup"
+          $bin = @(Get-ChildItem -Path (Join-Path $root "app") -Filter "pebrel.exe" -Recurse -File)
+          if ($bin.Count -ne 1) { throw "Could not resolve Pebrel in the ZIP." }
+          $passed = $true
+          foreach ($attempt in 1..2) {
+            python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app ($bin[0].FullName) --platform windows-aarch64 --output (Join-Path $root "$attempt.json")
+            if ($LASTEXITCODE -ne 0) { $passed = $false }
+          }
+          if (!$passed) { throw "One or more fresh package launches failed." }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm64-startup-${{ matrix.variant }}
+          path: |
+            ${{ runner.temp }}/arm64-startup/*.json
+            ${{ runner.temp }}/arm64-startup/*.txt
+          if-no-files-found: error
+          retention-days: 14
