@@ -311,6 +311,10 @@ fn history_debug_log(message: impl AsRef<str>) {
 }
 
 fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
+    append_at(&history_path(scope.file_name()), scope, cmd, cwd);
+}
+
+fn append_at(path: &Path, scope: &HistoryScope, cmd: &str, cwd: &str) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -327,9 +331,12 @@ fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
         );
         record["target"] = serde_json::Value::String(identity.to_owned());
     }
-    let path = history_path(scope.file_name());
+    // Formatting directly into the file emits several writes. Assemble the
+    // complete line before appending so other processes cannot interleave fields.
+    let mut line = record.to_string();
+    line.push('\n');
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{record}");
+        let _ = file.write_all(line.as_bytes());
     }
 }
 
@@ -465,6 +472,36 @@ mod tests {
         history.record(&scope, "echo retained", "/");
         assert_eq!(history.hint(&scope, "echo "), Some("retained"));
         assert!(history.hint(&HistoryScope::Local, "echo ").is_none());
+    }
+
+    #[test]
+    fn concurrent_appenders_preserve_complete_history_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(LOCAL_HISTORY_FILE);
+        let writers = 8;
+        let per_writer = 64;
+        let barrier = std::sync::Barrier::new(writers);
+        std::thread::scope(|tasks| {
+            for writer in 0..writers {
+                let (path, barrier) = (&path, &barrier);
+                tasks.spawn(move || {
+                    barrier.wait();
+                    for index in 0..per_writer {
+                        let command = format!("echo fixture-{writer}-{index}");
+                        append_at(path, &HistoryScope::Local, &command, "/fixture");
+                    }
+                });
+            }
+        });
+        let contents = std::fs::read_to_string(path).unwrap();
+        let mut commands = std::collections::HashSet::new();
+        for line in contents.lines() {
+            let (scope, command) = parse_record(&HistoryScope::Local, line)
+                .expect("each append must remain a complete history record");
+            assert_eq!(scope, HistoryScope::Local);
+            assert!(commands.insert(command));
+        }
+        assert_eq!(commands.len(), writers * per_writer);
     }
 
     #[test]
