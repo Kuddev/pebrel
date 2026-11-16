@@ -87,6 +87,8 @@ impl TerminalView {
         };
         let ligatures =
             cx.try_global::<Settings>().map(|settings| settings.ligatures).unwrap_or(true);
+        let automatic_command_views =
+            cx.try_global::<Settings>().is_none_or(|settings| settings.automatic_command_views);
         let default_cursor_style = term_config.default_cursor_style;
         let (cell_w, line_h) = Self::cell_metrics(window, cx);
         // 像素口径与 viewport 上报一致（设备 px），避免首帧一次像素级差异。
@@ -168,8 +170,13 @@ impl TerminalView {
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
-                let spawned =
-                    session::spawn_with_scrollback(initial, term_config, options, scrollback);
+                let spawned = session::spawn_with_scrollback(
+                    initial,
+                    term_config,
+                    options,
+                    scrollback,
+                    automatic_command_views,
+                );
                 if spawned.is_ok()
                     && let Some(cwd) = history_cwd
                 {
@@ -199,7 +206,14 @@ impl TerminalView {
                 crate::display::SuggestEnv::Ssh { destination: destination.clone() },
                 None,
                 crate::session::LaunchSession::Ssh { host: destination.clone() },
-                session::spawn_ssh(destination, cwd, resume_target, initial, term_config),
+                session::spawn_ssh(
+                    destination,
+                    cwd,
+                    resume_target,
+                    initial,
+                    term_config,
+                    automatic_command_views,
+                ),
             ),
             TerminalLaunch::Serial { destination } => (
                 None,
@@ -210,7 +224,7 @@ impl TerminalView {
                 },
                 None,
                 crate::session::LaunchSession::Serial { destination: destination.clone() },
-                session::spawn_serial(&destination, initial, term_config),
+                session::spawn_serial(&destination, initial, term_config, automatic_command_views),
             ),
         };
         let shell_artwork = exec_context.as_ref().and_then(|context| {
