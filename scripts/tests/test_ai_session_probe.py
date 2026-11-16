@@ -25,7 +25,7 @@ class ActiveRolloutProbeTests(unittest.TestCase):
     def test_probe_binds_custom_home_to_exact_instance_and_pane(self):
         import pty
 
-        source = (ROOT / "nebula_app/src/platform/ai_session_identity.rs").read_text(encoding="utf-8")
+        source = (ROOT / "pebrel_app/src/platform/ai_session_identity.rs").read_text(encoding="utf-8")
         script = source.split('const PROBE_SCRIPT: &str = r###"', 1)[1].split('"###;', 1)[0]
         with tempfile.TemporaryDirectory(prefix="pebrel-identity-") as temporary:
             codex_directory = Path(temporary) / "custom codex"
