@@ -102,20 +102,6 @@ pub(super) fn endpoint_addr(endpoint: &Endpoint) -> SocketAddr {
     SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port))
 }
 
-fn fresh_token() -> String {
-    use std::hash::{BuildHasher, Hasher, RandomState};
-    let mut a = RandomState::new().build_hasher();
-    let mut b = RandomState::new().build_hasher();
-    a.write_u32(std::process::id());
-    b.write_u128(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0),
-    );
-    format!("{:016x}{:016x}", a.finish(), b.finish())
-}
-
 /// 普通二次启动并入驻留实例：先恢复/聚焦窗口，再新建一个默认 shell 标签页。
 pub fn try_open_default_tab_existing(shell: Option<&str>) -> bool {
     try_open_tab_existing(None, shell)
@@ -251,13 +237,20 @@ impl RuntimeServer {
             return None;
         }
 
+        // Fail closed: a guessable token would expose the control plane to local processes.
+        let token = match crate::ai_hook::remote::new_token() {
+            Ok(token) => token,
+            Err(error) => {
+                warn!("Runtime API: no OS entropy for the token: {error}; control plane disabled");
+                return None;
+            },
+        };
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
-        let endpoint = Endpoint { port: listener.local_addr().ok()?.port(), token: fresh_token() };
+        let endpoint = Endpoint { port: listener.local_addr().ok()?.port(), token };
         let contents = format!("{} {} {}\n", endpoint.port, endpoint.token, PROTOCOL_VERSION);
-        if path
-            .as_ref()
-            .is_some_and(|path| crate::atomic_file::write(path, contents.as_bytes()).is_err())
-        {
+        if path.as_ref().is_some_and(|path| {
+            crate::atomic_file::write_private(path, contents.as_bytes()).is_err()
+        }) {
             warn!("Runtime API: cannot write {path:?}; control plane disabled");
             return None;
         }
@@ -427,6 +420,10 @@ mod tests {
             Some(path.clone()),
         )
         .unwrap();
+        // The discovery record carries the bearer token: owner-only on Unix.
+        crate::platform::private_file::assert_private(&path);
+        assert_eq!(resident.endpoint.token.len(), 32);
+        assert!(resident.endpoint.token.bytes().all(|byte| byte.is_ascii_hexdigit()));
         // A resident launched from a private terminal must replace that pin,
         // including differently cased Windows environment keys.
         env.insert(ENDPOINT_ENV.to_ascii_lowercase(), "old private endpoint".into());

@@ -44,7 +44,6 @@ impl TerminalView {
             palette,
             term_config,
             copy_on_select,
-            shell,
         ) = match cx.try_global::<Settings>() {
             Some(settings) => (
                 [
@@ -61,14 +60,6 @@ impl TerminalView {
                 Arc::new(settings.palette.clone()),
                 settings.term_config(),
                 settings.copy_on_select,
-                // 设置选定的默认 shell（旧壳 default_shell_launch 同径：
-                // resolve 失败或 PTY 集成 id 落回引擎默认）。WSL id 在
-                // 这里换上 bash 集成注入，cwd/git 分支经 NEBULA| 标题回流。
-                settings
-                    .shell_id
-                    .as_deref()
-                    .and_then(crate::shell_detect::resolve_id)
-                    .map(|detected| detected.shell()),
             ),
             None => (
                 std::array::from_fn(|_| REQUIRED_FONT_FAMILY.to_owned()),
@@ -81,7 +72,6 @@ impl TerminalView {
                 pebrel_terminal::term::Config::default(),
                 // 旧壳的出厂默认即开。
                 true,
-                None,
             ),
         };
         let ligatures =
@@ -96,10 +86,21 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
+        let (launch, profile_launch, profile_env) = match launch {
+            TerminalLaunch::Profile { profile, cwd } => {
+                let shell = crate::profile_launch::shell(&profile);
+                let shell_name = profile.shell_id.clone().or_else(|| Some(profile.name.clone()));
+                let env = profile.env.clone();
+                let identity = crate::profile_launch::snapshot(profile);
+                (TerminalLaunch::Local { cwd, shell: Some(shell), shell_name }, Some(identity), env)
+            },
+            launch => (launch, None, Default::default()),
+        };
         let mut initial_cwd = match &launch {
             TerminalLaunch::Local { cwd, .. } => {
                 cwd.as_ref().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
             },
+            TerminalLaunch::Profile { .. } => unreachable!("profile normalized above"),
             TerminalLaunch::Ssh { destination, cwd, .. } => {
                 cwd.clone().unwrap_or_else(|| destination.clone())
             },
@@ -123,7 +124,14 @@ impl TerminalView {
             TerminalLaunch::Local { cwd, shell: launch_shell, shell_name } => {
                 // 显式 launch（会话恢复/创建时冻结）优先；只有旧会话没有
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
-                let effective = launch_shell.or(shell);
+                // 设置里的 shell 只在这一刻解析：SSH/串口和已冻结的 launch
+                // 用不到它，提前解析只会白做一次注册表/PATH 探测。
+                let effective = launch_shell.or_else(|| {
+                    cx.try_global::<Settings>()
+                        .and_then(|settings| settings.shell_id.as_deref())
+                        .and_then(crate::shell_detect::resolve_id)
+                        .map(|detected| detected.shell())
+                });
                 startup_intro = accepts_startup_intro(effective.as_ref());
                 let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
                 // The WSL distribution is resolved once, at spawn, and pinned into
@@ -153,7 +161,10 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(spawn_shell, pane_id, cwd);
+                let session_launch = profile_launch.unwrap_or(session_launch);
+                let global_env = cx.try_global::<Settings>().map(|settings| &settings.env);
+                let options =
+                    session::local_options(spawn_shell, pane_id, cwd, global_env, &profile_env);
                 if let Some(cwd) = &options.working_directory {
                     initial_cwd = cwd.to_string_lossy().into_owned();
                 }
@@ -187,6 +198,7 @@ impl TerminalView {
                     spawned,
                 )
             },
+            TerminalLaunch::Profile { .. } => unreachable!("profile normalized above"),
             TerminalLaunch::Ssh { destination, cwd, resume_target } => (
                 Some(destination.clone()),
                 destination.clone(),

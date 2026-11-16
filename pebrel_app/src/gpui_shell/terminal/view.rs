@@ -247,24 +247,8 @@ pub enum TerminalViewEvent {
 /// `shell` 是 Tab 创建/恢复时已经裁定好的启动命令。不能只传 cwd 再在
 /// `TerminalView::new` 里读取“此刻的默认 Shell”，否则恢复混合的 PowerShell /
 /// WSL 工作区时，每个 Tab 都会被重新解释成同一个当前默认值。
-pub enum TerminalLaunch {
-    Local {
-        cwd: Option<std::path::PathBuf>,
-        shell: Option<pebrel_terminal::tty::Shell>,
-        /// 只用于欢迎屏选择 PowerShell/Bash 形态，不参与 PTY 启动。
-        shell_name: Option<String>,
-    },
-    Ssh {
-        destination: String,
-        /// Remote cwd inherited by duplicate-tab. `None` starts in the
-        /// account's ordinary login directory.
-        cwd: Option<String>,
-        resume_target: Option<crate::ssh_session::ResumeTarget>,
-    },
-    Serial {
-        destination: String,
-    },
-}
+mod launch;
+pub use launch::TerminalLaunch;
 
 pub(crate) fn last_path_component(path: &str) -> Option<String> {
     let name = path
@@ -1086,19 +1070,32 @@ impl TerminalView {
         if self.agent_activity.hook_seen() {
             return;
         }
-        let mode = pebrel_settings::RuntimeSettings::load().bell;
-        if mode == pebrel_settings::BellModeName::None {
+        if !self.play_bell_cue(cx) {
             return;
-        }
-        let audible_ok = if mode.audible() { Self::ring_audible() } else { false };
-        if mode.visual() || (mode.audible() && !audible_ok) {
-            self.flash_bell(cx);
         }
         cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Bell {
             program: self.running_program.clone(),
         }));
         cx.emit(TerminalViewEvent::Bell);
         cx.notify();
+    }
+
+    /// Flash and/or beep according to the bell mode; false when the mode is `none`.
+    pub(crate) fn play_bell_cue(&mut self, cx: &mut Context<Self>) -> bool {
+        let mode = pebrel_settings::RuntimeSettings::load().bell;
+        if mode == pebrel_settings::BellModeName::None {
+            return false;
+        }
+        let audible_ok = if mode.audible() { Self::ring_audible() } else { false };
+        if mode.visual() || (mode.audible() && !audible_ok) {
+            self.flash_bell(cx);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bell_flash_generation(&self) -> u64 {
+        self.bell_flash_epoch
     }
 
     fn ring_audible() -> bool {
@@ -1728,6 +1725,7 @@ impl Render for TerminalView {
             .py(px(8.0))
             .px(px(12.0))
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_send_string))
             .on_action(cx.listener(Self::on_terminal_tab))
             .on_action(cx.listener(Self::on_terminal_back_tab))
             .on_key_down(cx.listener(Self::on_key_down))

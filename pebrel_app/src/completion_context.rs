@@ -94,7 +94,7 @@ impl NebulaPaneState {
         let scope = self.suggest_env.history_scope();
         history.record(&scope, line, &self.cwd);
         self.completion_context.pending_history = Some((scope, line.trim().to_owned()));
-        self.completion_submitted(line);
+        self.completion_submitted(line.trim());
     }
 
     pub(crate) fn completion_submitted(&mut self, line: &str) {

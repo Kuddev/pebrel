@@ -99,6 +99,8 @@ use crate::runtime_api::{
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod runtime_notify_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_resize_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod transfer_tests;
@@ -161,7 +163,7 @@ enum RuntimeWindowPolicy {
 /// | `new-window`、需要新窗的 `new-tab` | 创建可见窗口（`focus=false`） | 否 |
 /// | `snapshot`、`read`、`procs`、`agent-read`、`exec` | 否 | 否 |
 /// | `close-*`、`rename-tab`、`move-tab`、`split`、`zoom`、`resize` | 否 | 否 |
-/// | `prompt`、`paste`、`send-key`、`run`、`agent-*`、现有窗 `new-tab` | 否 | 否 |
+/// | `prompt`、`paste`、`notify`、`send-key`、`run`、`agent-*`、现有窗 `new-tab` | 否 | 否 |
 ///
 /// `describe`、`agents`、`wait`、`subscribe` 在 runtime server 内直接应答，
 /// 不会进入此窗口分发器，因此天然不 show、不 activate。
@@ -181,6 +183,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::ClosePane { .. }
         | RuntimeCommand::ZoomPane { .. }
         | RuntimeCommand::ResizePane { .. }
+        | RuntimeCommand::Notify { .. }
         | RuntimeCommand::Prompt { .. }
         | RuntimeCommand::Paste { .. }
         | RuntimeCommand::ReadPane { .. }
@@ -713,6 +716,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::ClosePane { window_id, pane_id }
         | RuntimeCommand::ZoomPane { window_id, pane_id, .. }
         | RuntimeCommand::ResizePane { window_id, pane_id, .. }
+        | RuntimeCommand::Notify { window_id, pane_id, .. }
         | RuntimeCommand::ReadPane { window_id, pane_id, .. }
         | RuntimeCommand::Procs { window_id, pane_id }
         | RuntimeCommand::SendKey { window_id, pane_id, .. }

@@ -182,6 +182,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `pane.close` | 关闭空闲 Pane；忙碌 Pane 返回显式确认错误 | `window_id?`, `pane_id` |
 | `pane.zoom` | 幂等设置 Pane 所在 Tab 的显式缩放状态 | `window_id?`, `pane_id`, `zoomed` |
 | `pane.resize` | 设置目标 Pane 在直接父分屏中的占比 | `window_id?`, `pane_id`, `ratio` |
+| `pane.notify` | 以内建响铃闪烁/声音（遵循 `bell` 设置）和通知中心 toast 提醒用户；不聚焦窗口、不写入终端 | `window_id?`, `pane_id`, `title?`, `message` |
 | `pane.prompt` | 写入一行纯文本，可追加 Enter | `window_id?`, `pane_id`, `text`, `submit` |
 | `pane.paste` | 通过 bracketed paste 写入有界 UTF-8 文本 | `window_id?`, `pane_id`, `text`, `submit` |
 | `pane.read` | 从真实终端 Grid 尾部读取最近逻辑行 | `window_id?`, `pane_id`, `lines` |
@@ -333,6 +334,15 @@ SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，�
 `RuntimeTaskState` 投影。优先级为失败、attention、等待输入、运行、完成、空闲；
 `RuntimeHub` 再对真正的状态跃迁盖 `state_change_seq`，因此外部客户端不需要自行解析标题或
 终端文本来猜生命周期。
+
+当 `task_state` 为 `attention` 时，Agent 对象还提供可选的 `attention_kind`，用于区分
+工具权限、计划确认、选项问答和自由输入；字段定义以
+[`agent` schema](runtime-api-v1.schema.json#/$defs/agent) 为准。分类来自已接收的结构化
+hook；原生通知沿用解析器已接受的类别。屏幕规则、OSC 7501 或已接受但问题元数据
+缺失、损坏的 hook 返回 `unknown`，不会从提示正文猜测。自由输入需要显式空选项数组；
+选择题需要带有效标签的选项对象。
+请求解决或 pane 失败后省略该字段；旧服务端也可能没有它。此细节不改变 `pane.wait` 的
+状态条件或 `state_change_seq`，也不表示调用者已获准自动回答权限请求。
 
 `pane.read` 直接锁定 pane 的 `Term`，通过 `bounds_to_string` 读取 Grid/scrollback；它不使用
 截图或渲染快照，也不会改变用户的滚动位置、选区和光标。范围固定锚定 buffer 底部，所以用户

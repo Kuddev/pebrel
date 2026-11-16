@@ -2,13 +2,15 @@
 use serde_json::Value;
 
 use super::payload::{attention_message, context_string};
-use super::{AiHookKind, AiTurnOutcome};
+use super::{AiHookKind, AiTurnOutcome, AttentionKind};
 
-pub(super) fn parse(
-    source: &str,
-    event: &str,
-    payload: &Value,
-) -> Option<(AiHookKind, Option<String>)> {
+pub(super) struct NativeEvent {
+    pub kind: AiHookKind,
+    pub message: Option<String>,
+    pub attention_kind: Option<AttentionKind>,
+}
+
+pub(super) fn parse(source: &str, event: &str, payload: &Value) -> Option<NativeEvent> {
     let kind = match event {
         "session-start" => AiHookKind::SessionStart,
         "prompt" => AiHookKind::PromptSubmit,
@@ -24,17 +26,20 @@ pub(super) fn parse(
         "notification" => {
             let category =
                 context_string(payload, &["notification_type", "notificationType", "type"]);
-            let actionable = category
-                .as_deref()
-                .is_some_and(|value| value == "elicitation_dialog" || value == "permission_prompt");
-            if !actionable {
-                return None;
-            }
-            return Some((AiHookKind::NeedsAttention, attention_message(payload)));
+            let attention_kind = match category.as_deref() {
+                Some("elicitation_dialog") => AttentionKind::Input,
+                Some("permission_prompt") => AttentionKind::Permission,
+                _ => return None,
+            };
+            return Some(NativeEvent {
+                kind: AiHookKind::NeedsAttention,
+                message: attention_message(payload),
+                attention_kind: Some(attention_kind),
+            });
         },
         _ => return None,
     };
-    Some((kind, None))
+    Some(NativeEvent { kind, message: None, attention_kind: None })
 }
 
 pub(super) fn outcome(source: &str, event: &str, payload: &Value) -> AiTurnOutcome {

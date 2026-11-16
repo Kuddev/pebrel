@@ -165,6 +165,11 @@ impl NebulaHistory {
     }
 
     pub fn record(&mut self, scope: &HistoryScope, cmd: &str, cwd: &str) {
+        // A leading space keeps the command out of memory and disk, like bash's
+        // `HISTCONTROL=ignorespace`. Callers must pass the line before trimming it.
+        if cmd.starts_with(' ') {
+            return;
+        }
         let scope = scope.clone().normalized();
         let cmd = cmd.trim();
         if cmd.is_empty() {
@@ -432,6 +437,16 @@ mod tests {
             pool.insert((*command).to_owned());
         }
         history
+    }
+
+    #[test]
+    fn leading_space_commands_stay_out_of_memory_and_disk() {
+        let scope = HistoryScope::Ssh("leading-space-unit".into());
+        let mut history = NebulaHistory::default();
+        history.record(&scope, " echo hidden", "/");
+        history.record(&scope, "   echo hidden-too", "/");
+        // `record` returns before `append`, so no history file sees these lines.
+        assert!(history.pools.get(&scope.normalized()).is_none());
     }
 
     #[test]

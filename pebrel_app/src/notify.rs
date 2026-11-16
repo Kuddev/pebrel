@@ -28,6 +28,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+pub(crate) mod test_delivery;
+
+pub(crate) fn notification_now() -> Instant {
+    #[cfg(test)]
+    if let Some(now) = test_delivery::time() {
+        return now;
+    }
+    Instant::now()
+}
+
 #[cfg(feature = "legacy-shell")]
 use winit::event_loop::EventLoopProxy;
 
@@ -106,6 +117,9 @@ pub enum Notification {
     /// CLI needs the user NOW (permission prompt / idle reminder) rather
     /// than "turn finished".
     AiTurn { program: String, message: Option<String>, attention: bool },
+    /// Message an agent composed through the runtime `pane.notify` API because
+    /// it needs the user's action; shown even while the pane is in front.
+    Runtime { title: Option<String>, message: String },
     /// The provider stopped without a confirmed successful answer.
     AiTurnIssue { program: String, message: Option<String>, outcome: crate::ai_hook::AiTurnOutcome },
 }
@@ -206,6 +220,7 @@ impl Notification {
     pub(crate) fn is_ai(&self) -> bool {
         let program = match self {
             Self::AiTurn { .. } | Self::AiTurnIssue { .. } => return true,
+            Self::Runtime { .. } => return false,
             Self::Bell { program }
             | Self::CommandDone { program, .. }
             | Self::CommandFailed { program, .. }
@@ -253,6 +268,9 @@ impl Notification {
                     ],
                 ),
             ),
+            Self::Runtime { title, message } => {
+                (title.clone().unwrap_or_else(|| crate::brand::NAME.to_owned()), message.clone())
+            },
             Self::Text { body, program } => match program {
                 Some(p) => (p.clone(), body.clone()),
                 None => (crate::brand::NAME.to_owned(), body.clone()),
@@ -375,9 +393,16 @@ impl PaneFailureThrottle {
 }
 
 #[cfg(any(feature = "gpui-shell", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum NativeNotificationChannel {
+    Activity { attention: bool, request: Option<u64> },
+    Runtime,
+}
+
+#[cfg(any(feature = "gpui-shell", test))]
 #[derive(Default)]
 struct PaneNotificationThrottle {
-    recent: HashMap<(u64, bool, Option<u64>), Instant>,
+    recent: HashMap<(u64, NativeNotificationChannel), Instant>,
 }
 
 #[cfg(any(feature = "gpui-shell", test))]
@@ -393,11 +418,38 @@ impl PaneNotificationThrottle {
         request: Option<u64>,
         now: Instant,
     ) -> bool {
+        self.accepts_channel(
+            pane_id,
+            NativeNotificationChannel::Activity { attention, request },
+            now,
+        )
+    }
+
+    fn accepts_notification(
+        &mut self,
+        notification: &Notification,
+        pane_id: u64,
+        request: Option<u64>,
+        now: Instant,
+    ) -> bool {
+        if matches!(notification, Notification::Runtime { .. }) {
+            self.accepts_channel(pane_id, NativeNotificationChannel::Runtime, now)
+        } else {
+            self.accepts_request(pane_id, notification.is_attention(), request, now)
+        }
+    }
+
+    fn accepts_channel(
+        &mut self,
+        pane_id: u64,
+        channel: NativeNotificationChannel,
+        now: Instant,
+    ) -> bool {
         self.recent.retain(|_, last| now.saturating_duration_since(*last) < TOAST_THROTTLE);
-        if self.recent.contains_key(&(pane_id, attention, request)) {
+        if self.recent.contains_key(&(pane_id, channel)) {
             return false;
         }
-        self.recent.insert((pane_id, attention, request), now);
+        self.recent.insert((pane_id, channel), now);
         true
     }
 }
@@ -418,11 +470,11 @@ pub(crate) fn deliver_gpui_with_choices(
         .get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .accepts_request(
+        .accepts_notification(
+            notification,
             pane_id,
-            notification.is_attention(),
             confirmation.as_ref().map(|c| c.0),
-            Instant::now(),
+            notification_now(),
         );
     if !accepted {
         log::debug!("notify: toast suppressed for pane={pane_id}: {notification:?}");
@@ -527,12 +579,43 @@ fn spawn_actionable_toast(
     activation: Option<ToastActivation>,
     actions: Vec<crate::platform::notifications::ToastAction>,
 ) {
+    #[cfg(test)]
+    if test_delivery::record(&title, &body) {
+        return;
+    }
     crate::platform::notifications::dispatch(title, body, activation, actions);
 }
 
 #[cfg(test)]
 mod delivery_tests {
     use super::*;
+
+    #[test]
+    fn runtime_notifications_do_not_consume_task_completion_cooldowns() {
+        let now = Instant::now();
+        let runtime = Notification::Runtime { title: None, message: "touch the key".into() };
+        let completion = Notification::AiTurn {
+            program: "codex".into(),
+            message: Some("finished".into()),
+            attention: false,
+        };
+        for notes in [[&runtime, &completion], [&completion, &runtime]] {
+            let mut gate = PaneNotificationThrottle::default();
+            for note in notes {
+                assert!(gate.accepts_notification(note, 42, None, now));
+                assert!(!gate.accepts_notification(
+                    note,
+                    42,
+                    None,
+                    now + Duration::from_millis(200)
+                ));
+                assert!(gate.accepts_notification(note, 43, None, now));
+            }
+            for note in notes {
+                assert!(gate.accepts_notification(note, 42, None, now + TOAST_THROTTLE));
+            }
+        }
+    }
 
     #[test]
     fn notification_fallbacks_follow_the_requested_language() {
