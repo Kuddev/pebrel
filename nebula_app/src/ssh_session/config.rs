@@ -84,7 +84,10 @@ pub(super) fn resolve_from_ssh_config_text(
             "proxyjump" => {
                 proxy_jump.get_or_insert_with(|| value.clone());
             },
-            "proxycommand" if value.eq_ignore_ascii_case("none") => {},
+            "proxycommand" if value.eq_ignore_ascii_case("none") => {
+                // ProxyCommand and ProxyJump share the same first-match slot.
+                proxy_jump.get_or_insert_with(|| value.clone());
+            },
             _ => return Err(invalid(format!("{keyword} requires the system SSH client"))),
         }
     }

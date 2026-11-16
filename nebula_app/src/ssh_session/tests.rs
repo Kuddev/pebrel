@@ -157,6 +157,23 @@ fn fallback_refuses_incomplete_routes_instead_of_connecting_directly() {
 }
 
 #[test]
+fn fallback_proxy_command_none_and_proxy_jump_use_first_match() {
+    let config = concat!(
+        "Host direct\n User deploy\n ProxyCommand none\n ProxyJump unwanted.invalid\n",
+        "Host via\n User deploy\n ProxyJump wanted.invalid\n ProxyCommand none\n",
+    );
+    let direct = resolve_from_ssh_config_text("direct", config).unwrap().unwrap();
+    assert!(direct.proxy_jump.is_none());
+    let via = resolve_from_ssh_config_text("via", config).unwrap().unwrap();
+    assert_eq!(via.proxy_jump.as_deref(), Some("wanted.invalid"));
+
+    let defaults = "ProxyCommand None\nHost target\n User deploy\n ProxyJump bypassed.invalid\n";
+    assert!(
+        resolve_from_ssh_config_text("target", defaults).unwrap().unwrap().proxy_jump.is_none()
+    );
+}
+
+#[test]
 fn openssh_probe_normalizes_legacy_destinations_with_explicit_ports() {
     assert_eq!(
         ssh_config_probe_target("root@154.64.232.109:20222"),
