@@ -98,6 +98,7 @@ mod win {
     /// 托盘窗口句柄（isize 形态跨线程存取；0 = 线程未起或窗口未建）。
     static HWND: AtomicIsize = AtomicIsize::new(0);
     static THREAD_STARTED: AtomicBool = AtomicBool::new(false);
+    static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
 
     fn state() -> std::sync::MutexGuard<'static, Shared> {
         // 中毒只表示某线程带锁 panic；清单本身是普通数据，继续用。
@@ -195,8 +196,16 @@ mod win {
         use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             CW_USEDEFAULT, CreateWindowExW, DispatchMessageW, GetMessageW, MSG, RegisterClassW,
-            TranslateMessage, WNDCLASSW, WS_OVERLAPPED,
+            RegisterWindowMessageW, TranslateMessage, WNDCLASSW, WS_OVERLAPPED,
         };
+
+        // Explorer broadcasts this to top-level windows after rebuilding the taskbar.
+        let taskbar_created = unsafe { RegisterWindowMessageW(windows_sys::w!("TaskbarCreated")) };
+        if taskbar_created != 0 {
+            let _ = TASKBAR_CREATED.set(taskbar_created);
+        } else {
+            log::warn!("tray: could not register the taskbar restart message");
+        }
 
         let class_name = wide("NebulaTrayWindow");
         // SAFETY: 类名/实例句柄在调用期间有效；重复注册返回 0 也无妨——
@@ -266,6 +275,13 @@ mod win {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             DefWindowProcW, PostQuitMessage, WM_LBUTTONUP, WM_RBUTTONUP,
         };
+        if TASKBAR_CREATED.get() == Some(&msg) {
+            // The same broadcast can follow a DPI change. Delete any surviving
+            // registration before re-adding so this is safe to run repeatedly.
+            remove_icon(hwnd);
+            apply_enabled(hwnd);
+            return 0;
+        }
         match msg {
             WM_APP_TRAY => {
                 match lparam as u32 {
