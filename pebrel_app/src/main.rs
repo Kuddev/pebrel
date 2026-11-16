@@ -104,6 +104,7 @@ mod plugins;
 #[cfg(all(unix, feature = "legacy-shell"))]
 mod polling;
 mod process_tree;
+mod profile_environment;
 mod prompt_suggestions;
 mod provider_test;
 mod proxy_test;
