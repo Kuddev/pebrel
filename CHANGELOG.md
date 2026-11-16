@@ -34,7 +34,6 @@ macOS, Linux, and Android downloads are Preview builds.
 - Fixed automatic command views hiding original terminal colors when users need raw output. Set `automatic_command_views=0` in `pebrel_settings.txt` and restart to keep the original ANSI output.
 - Fixed the Agent session index ignoring `PEBREL_CONFIG_DIR`. Each profile now saves and reads its own hook session index.
 - Fixed Git worktree creation and cleanup for repositories whose directory names end with a space or newline.
-- Fixed the Windows tray icon disappearing after Explorer rebuilds the taskbar.
 
 ### 中文
 
@@ -52,7 +51,6 @@ macOS、Linux 和 Android 下载为预览版。
 - 修复需要原始输出时，自动命令视图覆盖终端颜色的问题。在 `pebrel_settings.txt` 中设置 `automatic_command_views=0` 并重启，即可保留原始 ANSI 输出。
 - 修复 Agent 会话索引忽略 `PEBREL_CONFIG_DIR` 的问题。各配置目录分别保存和读取自己的 Hook 会话索引。
 - 修复仓库目录名以空格或换行结尾时，Git 工作树无法创建和清理的问题。
-- 修复 Explorer 重建任务栏后 Windows 托盘图标消失的问题。
 
 ### Contributors
 
