@@ -416,13 +416,13 @@ mod tests {
             let found = scan_directory(temp.path()).unwrap();
             let zsh = found
                 .iter()
-                .find(|profile| profile.shell_id == "zsh")
+                .find(|profile| profile.shell_id.as_deref() == Some("zsh"))
                 .unwrap_or_else(|| panic!("Zsh missing from {layout:?}: {found:?}"));
             let command = directory.join("zsh.exe").canonicalize().unwrap();
             assert_eq!(zsh.command, command);
             assert_eq!(zsh.name, "Zsh");
             assert_eq!(zsh.args, ["--login", "-i"]);
-            assert!(found.iter().any(|profile| profile.shell_id == "bash"));
+            assert!(found.iter().any(|profile| profile.shell_id.as_deref() == Some("bash")));
 
             let mut store = TerminalProfiles::default();
             store.upsert(zsh.clone()).unwrap();

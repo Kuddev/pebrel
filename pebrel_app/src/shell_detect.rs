@@ -411,10 +411,10 @@ fn find_windows_zsh(directories: impl IntoIterator<Item = PathBuf>) -> Option<De
         let profile = crate::terminal_profiles::scan_directory(&directory)
             .ok()?
             .into_iter()
-            .find(|profile| profile.shell_id == "zsh")?;
+            .find(|profile| profile.shell_id.as_deref() == Some("zsh"))?;
         Some(DetectedShell {
             name: profile.name,
-            id: profile.shell_id,
+            id: profile.shell_id?,
             program: profile.command.to_string_lossy().into_owned(),
             args: profile.args,
         })
