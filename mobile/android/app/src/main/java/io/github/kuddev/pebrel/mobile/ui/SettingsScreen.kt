@@ -60,10 +60,9 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
             "about" -> R.string.about
             else -> R.string.settings
         }
-        Column(Modifier.fillMaxSize()) {
-            PageHeader(stringResource(title), ::back)
-            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp, vertical = 8.dp)) {
+        GlassPage(topBar = { PageHeader(stringResource(title), ::back) }) { padding, source ->
+            Column(Modifier.fillMaxSize().then(source).verticalScroll(rememberScrollState())
+                .padding(top = padding.calculateTopPadding()).padding(horizontal = 22.dp, vertical = 8.dp)) {
                 when (route) {
                     "" -> {
                         SettingsGroup(stringResource(R.string.raw_terminal)) {

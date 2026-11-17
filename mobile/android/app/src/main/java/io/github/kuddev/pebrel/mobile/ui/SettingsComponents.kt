@@ -3,7 +3,6 @@ package io.github.kuddev.pebrel.mobile.ui
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
@@ -27,19 +26,18 @@ internal fun SettingsGroup(title: String, content: @Composable ColumnScope.() ->
         Text(title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
         Column(Modifier.fillMaxWidth().clip(shape).background(MaterialTheme.colorScheme.surface)
-            .border(.5.dp, MaterialTheme.colorScheme.outlineVariant, shape), content = content)
+            .border(GlassHairline, glassPalette().hairline, shape), content = content)
     }
 }
 
 @Composable
 internal fun SettingDivider() {
-    HorizontalDivider(Modifier.padding(start = 48.dp), thickness = .5.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f))
+    HorizontalDivider(Modifier.padding(start = 48.dp), thickness = GlassHairline, color = glassPalette().hairline)
 }
 
 @Composable
 internal fun SettingsRow(@DrawableRes icon: Int, title: String, detail: String = "", onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 60.dp)
+    Row(Modifier.fillMaxWidth().pressClickable(onClick = onClick).heightIn(min = 60.dp)
         .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Glyph(icon)
