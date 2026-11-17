@@ -35,6 +35,8 @@ jobs:
           persist-credentials: false
       - name: Compile native UI probe
         run: clang -fobjc-arc "$RUNNER_TEMP/notification-qa/native_ui.m" -framework Cocoa -framework ApplicationServices -o "$RUNNER_TEMP/notification-qa/native-ui"
+      - name: Prepare the native notification UI agent
+        run: python3 "$RUNNER_TEMP/notification-qa/prepare_environment.py"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
