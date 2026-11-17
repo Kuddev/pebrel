@@ -1,0 +1,64 @@
+name: Antigravity foreground completion regression
+on:
+  push:
+    branches: [verify/antigravity-probe-20261117]
+permissions:
+  contents: read
+env:
+  SOURCE: be2a2471d97f70b4273b20548609cd5354228717
+  BASELINE: b6d0c0575149bca2a685c5aaa2183251722e6fc5
+  PYTHONUTF8: "1"
+jobs:
+  regression:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          target: target/ci
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Run all current AI hook regressions
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          mkdir -p tmp/antigravity-evidence
+          cargo test --locked --config .github/ci-profile.toml --profile ci -p pebrel --bin pebrel --features gpui-test-support ai_hook -- --test-threads=1 2>&1 | tee tmp/antigravity-evidence/fixed.log
+      - name: Verify that the previous probe loses the confirmed completion
+        run: |
+          set -euo pipefail
+          git show "$BASELINE:pebrel_app/src/ai_hook/native_events.rs" > pebrel_app/src/ai_hook/native_events.rs
+          set +e
+          cargo test --locked --config .github/ci-profile.toml --profile ci -p pebrel --bin pebrel --features gpui-test-support ai_hook::native_events::subagent_tests::antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_identity -- --exact --test-threads=1 > tmp/antigravity-evidence/baseline.log 2>&1
+          baseline_status=$?
+          set -e
+          test "$baseline_status" = 101
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path('tmp/antigravity-evidence')
+          text = (root / 'baseline.log').read_text(encoding='utf-8')
+          assert 'assertion failed: route_antigravity_hook(activity, active_session, event)' in text
+          assert 'test result: FAILED. 0 passed; 1 failed;' in text
+          result = {'source': os.environ['SOURCE'], 'baseline': os.environ['BASELINE'],
+                    'fixed_hook_suite': 'passed', 'baseline_completion_regression': 'expected_failure',
+                    'baseline_failure': 'current foreground completion was dropped while the probe worker was occupied'}
+          (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: antigravity-probe-regression
+          path: tmp/antigravity-evidence
+          if-no-files-found: warn
+          retention-days: 7
