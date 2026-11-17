@@ -1,0 +1,58 @@
+name: Nix package and profile verification
+on:
+  push:
+    branches: [verify/nonui-nix-424-20261117]
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CANDIDATE: d488a7ddf40cfdc23ac7a0e9fe3f00c3770d1c86
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE }}
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          enable_kvm: false
+      - name: Check the derivation and its dependency hash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(uname -m)" = x86_64
+          nix eval --raw .#pebrel.version
+          nix build --no-link -L .#pebrel.cargoDeps 2>&1 | tee "$RUNNER_TEMP/nix-vendor.log"
+      - name: Build package and install in fresh profile
+        run: |
+          set -euo pipefail
+          df -h / /nix/store
+          nix build -L .#pebrel
+          nix profile add --profile "$RUNNER_TEMP/test-profile" .#pebrel
+          prefix="$RUNNER_TEMP/test-profile"
+          for name in pebrel pebrel-hook; do
+            test -x "$prefix/bin/$name"
+            test "$(realpath "$prefix/bin/$name")" = "$(realpath "result/bin/$name")"
+          done
+          test -s "$prefix/share/applications/io.github.kuddev.pebrel.desktop"
+          test -s "$prefix/share/metainfo/io.github.kuddev.pebrel.metainfo.xml"
+          test -s "$prefix/share/icons/hicolor/1024x1024/apps/io.github.kuddev.pebrel.png"
+          test -s "$prefix/share/zsh/vendor-completions/_pebrel"
+          test -s "$prefix/share/bash-completion/completions/pebrel"
+          test -s "$prefix/share/fish/vendor_completions.d/pebrel.fish"
+          "$prefix/bin/pebrel" --version | grep -F "$(nix eval --raw .#pebrel.version)"
+      - name: Exercise the installed app under X11
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils zsh mesa-vulkan-drivers
+          xvfb-run -a -s '-screen 0 1600x1000x24' python3 scripts/conformance/run.py --app "$RUNNER_TEMP/test-profile/bin/pebrel" --platform linux-x86_64-nix --output "$RUNNER_TEMP/nix-conformance.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nix-package-evidence
+          path: |
+            ${{ runner.temp }}/nix-vendor.log
+            ${{ runner.temp }}/nix-conformance.json
+          if-no-files-found: warn
