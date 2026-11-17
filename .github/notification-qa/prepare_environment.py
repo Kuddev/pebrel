@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import subprocess
 import sys
@@ -9,12 +10,10 @@ import time
 
 assert sys.platform == "darwin"
 domain = f"gui/{os.getuid()}"
-label = "com.apple.notificationcenterui"
-service = f"{domain}/{label}"
-plist = Path("/System/Library/LaunchAgents") / f"{label}.plist"
+plist = Path("/System/Library/LaunchAgents/com.apple.notificationcenterui.plist")
 output = Path("tmp/notification-evidence/environment.json")
 output.parent.mkdir(parents=True, exist_ok=True)
-facts = {"service": service, "commands": [], "status": "failed"}
+facts = {"commands": [], "status": "failed"}
 
 
 def run(*args):
@@ -32,12 +31,17 @@ def state():
 
 
 try:
+    assert plist.is_file(), "standard Notification Center agent is unavailable"
+    metadata = plistlib.loads(plist.read_bytes())
+    label = metadata["Label"]
+    assert label.startswith("com.apple.notificationcenterui"), "unexpected system agent label"
+    service = f"{domain}/{label}"
+    facts.update(service=service, plist=str(plist), session=metadata.get("LimitLoadToSessionType"))
     disabled = run("launchctl", "print-disabled", domain)
     disabled.check_returncode()
     match = re.search(r'"' + re.escape(label) + r'"\s*=>\s*(true|false)', disabled.stdout)
     facts["disabled_override_before"] = match.group(1) if match else "absent"
     facts["before"] = before = state()
-    assert plist.is_file(), "standard Notification Center agent is unavailable"
     if before.get("state") != "running":
         commands = [["launchctl", "enable", service]]
         if not before["registered"]:
@@ -45,7 +49,8 @@ try:
         commands.append(["launchctl", "kickstart", service])
         for command in commands:
             result = run(*command)
-            facts["commands"].append({"argv": command, "exit_code": result.returncode})
+            facts["commands"].append({"argv": command, "exit_code": result.returncode,
+                                      "error": result.stderr.strip() if result.returncode else ""})
             result.check_returncode()
     deadline = time.monotonic() + 10
     while True:
