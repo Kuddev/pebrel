@@ -55,6 +55,7 @@ use pebrel_terminal::event::{Event as TermEvent, Notify as _, OnResize as _, Win
 use pebrel_terminal::event_loop::Msg;
 use pebrel_terminal::grid::{Dimensions as _, Scroll};
 use pebrel_terminal::index::{Column, Line, Point as TermPoint, Side};
+use pebrel_terminal::inline_image::ImageFormat;
 use pebrel_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
 use pebrel_terminal::selection::{Selection, SelectionType};
 use pebrel_terminal::term::TermMode;
@@ -729,7 +730,20 @@ impl TerminalView {
                 }
             },
             TermEvent::TextAreaSizeRequest(formatter) => {
-                self.write_bytes(formatter(self.window_size).into_bytes());
+                // The geometry captured at spawn can lag the live grid by a whole
+                // resize: a reader that divides this answer by its cell size then
+                // lays pages out for a pane that no longer exists. Answer from the
+                // grid the session is actually rendering.
+                let mut size = self.window_size;
+                let grid = self.session.as_ref().map(|session| {
+                    let term = session.term.lock();
+                    (term.screen_lines(), term.columns())
+                });
+                if let Some((lines, columns)) = grid {
+                    size.num_lines = lines.min(usize::from(u16::MAX)) as u16;
+                    size.num_cols = columns.min(usize::from(u16::MAX)) as u16;
+                }
+                self.write_bytes(formatter(size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
                 self.retain_failed_session |= !code.success() && self.local_startup_unconfirmed();
@@ -787,10 +801,17 @@ impl TerminalView {
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }
             },
-            // APC graphics: pixels arrive raw, already placed in the grid, so
+            // APC graphics: raw pixels arrive already placed in the grid, so
             // decoding is the only work left — and it happens off the UI thread.
+            // A container (PNG) is inflated on that same thread.
             TermEvent::KittyImage { data, channels, placement } => {
-                match self.inline_images.enqueue_pixels(data, channels, placement) {
+                let queued = match placement.format {
+                    ImageFormat::Png => self.inline_images.enqueue_container(data, placement),
+                    ImageFormat::Raw => {
+                        self.inline_images.enqueue_pixels(data, channels, placement)
+                    },
+                };
+                match queued {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("APC image dropped: {error}"),
                 }
@@ -867,6 +888,15 @@ impl TerminalView {
                 view.drive_inline_image_decode(cx);
                 cx.notify();
             });
+            // A decode that finishes between frames can leave the freshly inserted
+            // texture unpresented until the next input event. Ask for one more frame
+            // shortly after, so a page that arrives while the user is idle still
+            // appears without a click.
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(40)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
         })
         .detach();
     }
