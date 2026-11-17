@@ -461,6 +461,21 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
         let send = |event: &str, id: &str, transcript: &Path| {
             parse_antigravity_hook(event, id, transcript, Some(9001), json!({}))
         };
+        let finish_foreground =
+            |activity: &mut AgentActivity, active_session: &mut Option<String>| {
+                let event = parse_antigravity_hook(
+                    "done",
+                    root_id,
+                    &root_transcript,
+                    Some(9001),
+                    json!({"terminationReason": "model_stop", "fullyIdle": true}),
+                );
+                assert!(route_antigravity_hook(activity, active_session, event));
+                assert_eq!(activity.status(), AgentStatus::Done);
+                assert_eq!(active_session.as_deref(), Some(root_id));
+                activity.submitted_text("antigravity", "next prompt");
+                assert_eq!(activity.status(), AgentStatus::Working);
+            };
 
         let mut activity = AgentActivity::default();
         let mut active_session = None;
@@ -521,6 +536,7 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
 
         // 2. Fill the remaining queue capacity so `try_send` fails immediately (`Full`);
         // full queue must also keep the unverified child dropped.
+        finish_foreground(&mut activity, &mut active_session);
         for _ in 0..8 {
             let gate_queued = Arc::clone(&gate);
             let _ = PROBE_WORKER.tx.as_ref().unwrap().try_send(Box::new(move || {
@@ -537,6 +553,7 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
         assert!(full_started.elapsed() < Duration::from_millis(100));
         route_antigravity_hook(&mut activity, &mut active_session, queue_full);
         assert_eq!(active_session.as_deref(), Some(root_id));
+        finish_foreground(&mut activity, &mut active_session);
 
         drop(release);
         let (drained_tx, drained_rx) = mpsc::sync_channel(1);
