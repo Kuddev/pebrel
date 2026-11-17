@@ -103,6 +103,71 @@ fn wait_file(pty: &mut tty::Pty, path: &Path) -> Vec<u8> {
     }
 }
 
+fn write_input(writer: &mut impl Write, mut input: &[u8], timeout: Duration) -> io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while !input.is_empty() {
+        match writer.write(input) {
+            Ok(count) => input = &input[count..],
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) => {},
+            Err(error) => return Err(error),
+        }
+        if !input.is_empty() {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "ConPTY input remained blocked",
+                ));
+            }
+            // The evented writer reports zero while its asynchronous pipe is busy.
+            // Retain the unaccepted suffix; no input or reader assertion is retried.
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn conpty_fixture_write_preserves_partial_input_and_bounds_backpressure() {
+    #[derive(Default)]
+    struct Backpressure {
+        step: usize,
+        accepted: Vec<u8>,
+    }
+    impl Write for Backpressure {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.step += 1;
+            match self.step {
+                1 => return Ok(0),
+                2 => return Err(io::ErrorKind::WouldBlock.into()),
+                4 => return Err(io::ErrorKind::Interrupted.into()),
+                _ => {},
+            }
+            let count = bytes.len().min(2);
+            self.accepted.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let input = b"\x1b[13;2u~";
+    let mut previous = Backpressure::default();
+    assert_eq!(previous.write_all(input).unwrap_err().kind(), io::ErrorKind::WriteZero);
+    let mut writer = Backpressure::default();
+    write_input(&mut writer, input, Duration::from_secs(1)).unwrap();
+    assert_eq!(writer.accepted, input);
+    let mut stalled = Backpressure::default();
+    assert_eq!(
+        write_input(&mut stalled, input, Duration::ZERO).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert!(stalled.accepted.is_empty());
+}
+
 #[test]
 fn modified_enter_reaches_native_and_byte_readers_through_conpty() {
     let native = TermMode::WIN32_INPUT_MODE;
@@ -145,7 +210,7 @@ fn modified_enter_reaches_native_and_byte_readers_through_conpty() {
         if reader == "bytes" {
             input.push(b'~');
         }
-        pty.writer().write_all(&input).unwrap();
+        write_input(pty.writer(), &input, Duration::from_secs(10)).unwrap();
         let result = wait_file(&mut pty, &directory.path().join("result"));
         assert_eq!(result, expected, "{program}: {mode:?}");
     }

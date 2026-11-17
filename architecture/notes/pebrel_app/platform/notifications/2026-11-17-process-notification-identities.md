@@ -2,7 +2,8 @@
 
 ## Status
 
-Implemented for review of PR #289; native App acceptance is pending.
+Implemented for integration of PR #289. Bundled App acceptance passed on macOS 26
+Apple Silicon and Intel for notification commit `6b253485` on 2026-11-17.
 
 ## Context
 
@@ -55,8 +56,13 @@ the new process; current requests still use their existing activation/choice pat
 
 Registry cases cover default and valid choices, malformed choices, consumption,
 previous-generation responses, eviction and sequence exhaustion. Native acceptance
-uses the current bundled App and the normal permission flow; registry tests do
-not establish operating-system authorization or visible delivery.
+used the bundled App and the normal permission flow in
+[run 43998356666](https://github.com/Kuddev/pebrel/actions/runs/43998356666). Both Mac
+architectures granted the real system permission, displayed the foreground
+notification in Notification Center, and returned from a different tab to the
+originating pane after a native click. Package identities and screenshots were
+retained with the run. The hosted image needed its standard Notification Center
+agent started; application authorization used the normal native Allow action.
 
 ## Supersedes
 
