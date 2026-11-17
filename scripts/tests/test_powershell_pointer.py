@@ -30,11 +30,25 @@ class PowerShellSession(ShellSession):
             block = os.read(self.master, 65536)
             self.consume(block)
 
+    def turn(self) -> None:
+        # PSReadLine accepts an ESC-prefixed chord only while the rest of the
+        # sequence is already readable; a chord written into the previous turn's
+        # render burst is torn into a standalone Escape plus literal tail keys
+        # under load (the line is reverted or littered, and the handler never
+        # runs). Anchor every chord on the editor's first reaction, then drain
+        # the burst, so each chord is parsed from a quiescent input queue.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if select.select([self.master], [], [], 0.02)[0]:
+                self.consume(os.read(self.master, 65536))
+                break
+        self.settle()
+
     def wait(self, marker: bytes) -> bytes:
         collected = b""
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
-            if select.select([self.master], [], [], 0.1)[0]:
+            if select.select([self.master], [], [], 0.02)[0]:
                 block = os.read(self.master, 65536)
                 collected += block
                 self.consume(block)
@@ -117,7 +131,7 @@ class PowerShellPointerTests(unittest.TestCase):
         return base64.b64decode(match[1]).decode().split("\n", 3)
 
     def action(self, session: PowerShellSession, argument: int) -> None:
-        session.settle()
+        session.turn()
         digits = b"".join(b"\x1b[21;6~" + digit.encode() for digit in str(argument))
         os.write(session.master, digits + b"\x1b[24;6~")
 
@@ -126,7 +140,7 @@ class PowerShellPointerTests(unittest.TestCase):
         return self.value(session, "pebrel_pointer")
 
     def snapshot(self, session: PowerShellSession) -> tuple[int, str]:
-        session.settle()
+        session.turn()
         os.write(session.master, b"\x1b[24;6~")
         owner, unit, cursor, line = self.value(session, "pebrel_editor")
         self.assertEqual((owner, unit), ("pwsh:fixture", "utf16"))
