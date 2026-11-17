@@ -712,6 +712,25 @@ mod tests {
     }
 
     #[test]
+    fn png_transfer_converts_supported_sixteen_bit_samples_to_bgra() {
+        let pixels =
+            image::ImageBuffer::from_pixel(2, 1, image::Rgba([65535_u16, 0, 32896, 65535]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba16(pixels).write_to(&mut png, ImageFormat::Png).unwrap();
+        let data = Arc::new(png.into_inner());
+        let owner = ImageIdentity::new();
+        let mut placement = placement(&owner);
+        placement.format = TransferFormat::Png;
+        let mut store = InlineImageStore::default();
+        store.enqueue_kitty(Arc::downgrade(&data), 0, placement).unwrap();
+        let (_, decoded) = decode(store.start_next().unwrap()).unwrap();
+        assert_eq!(
+            decoded.image.as_bytes(0),
+            Some([128, 0, 255, 255, 128, 0, 255, 255].as_slice())
+        );
+    }
+
+    #[test]
     fn kitty_queue_has_reserved_weak_slots_and_deduplicates_resource_decodes() {
         let mut store = InlineImageStore::default();
         let encoded_ids: Vec<_> = (0..MAX_QUEUED_IMAGES).map(|_| ImageIdentity::new()).collect();
@@ -768,8 +787,6 @@ mod tests {
             height_cells: 1.0,
             offset_x_cells: 0.0,
             offset_y_cells: 0.0,
-            column: 0,
-            row: 0,
             columns: 2,
             rows: 1,
         });
@@ -842,8 +859,6 @@ mod tests {
                     height_cells: 1.0,
                     offset_x_cells: 0.0,
                     offset_y_cells: 0.0,
-                    column: usize::from(column),
-                    row: usize::from(row),
                     columns: 1,
                     rows: 1,
                 });

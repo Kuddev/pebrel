@@ -13,7 +13,8 @@ fn value(control: &[u8], key: u8) -> Option<&[u8]> {
 }
 
 pub(super) fn single_query(bytes: &[u8]) -> bool {
-    value(bytes, b'a') == Some(b"q") && value(bytes, b'm') != Some(b"1")
+    value(bytes, b'a') == Some(b"q")
+        && (value(bytes, b'e').is_some() || value(bytes, b'm') != Some(b"1"))
 }
 
 pub(super) fn is_delete(bytes: &[u8]) -> bool {
@@ -31,6 +32,7 @@ fn number(control: &[u8], key: u8) -> Result<Option<u32>> {
 #[derive(Clone, Copy, Default)]
 pub(super) struct Reply {
     pub id: Option<u32>,
+    pub number: Option<u32>,
     pub placement: Option<u32>,
     pub quiet: u32,
 }
@@ -39,20 +41,26 @@ impl Reply {
     pub fn read(control: &[u8]) -> Self {
         Self {
             id: number(control, b'i').ok().flatten().filter(|id| *id != 0),
+            number: number(control, b'I').ok().flatten().filter(|id| *id != 0),
             placement: number(control, b'p').ok().flatten().filter(|id| *id != 0),
             quiet: number(control, b'q').ok().flatten().filter(|q| *q <= 2).unwrap_or(0),
         }
     }
 
     pub fn message(self, features: Option<&str>, result: Result<()>) -> Option<String> {
-        let id = self.id?;
+        let identity = match (self.id, self.number) {
+            (Some(id), Some(number)) => format!("i={id},I={number}"),
+            (Some(id), None) => format!("i={id}"),
+            (None, Some(number)) => format!("I={number}"),
+            (None, None) => return None,
+        };
         if self.quiet >= 2 || self.quiet == 1 && result.is_ok() {
             return None;
         }
         let placement = self.placement.map(|id| format!(",p={id}")).unwrap_or_default();
         let features = features.map(|features| format!(",{features}")).unwrap_or_default();
         let status = result.err().unwrap_or("OK");
-        Some(format!("\x1b_Gi={id}{placement}{features};{status}\x1b\\"))
+        Some(format!("\x1b_G{identity}{placement}{features};{status}\x1b\\"))
     }
 }
 
@@ -67,6 +75,7 @@ pub(super) struct Control {
     /// Byte count per pixel for raw payloads; zero when `format` is [`ImageFormat::Png`].
     pub channels: u8,
     pub format: ImageFormat,
+    pub format_specified: bool,
     pub selector: u8,
     pub columns: Option<u32>,
     pub rows: Option<u32>,
@@ -79,8 +88,6 @@ pub(super) struct Control {
     pub keep_cursor: bool,
     /// `e=<action>` of a feature query, kept so the reply can echo its keys.
     pub feature: Option<u8>,
-    /// Number of newest images a `d=n` delete asks for (`I`).
-    pub count: u32,
     /// Verbatim control string, needed to echo unsupported-by-default query keys.
     query: Vec<u8>,
 }
@@ -90,6 +97,7 @@ impl Control {
         if bytes.len() > 1024 {
             return Err("E2BIG");
         }
+        let probing = value(bytes, b'a') == Some(b"q") && value(bytes, b'e').is_some();
         let mut seen = [false; 128];
         for pair in bytes.split(|byte| *byte == b',').filter(|pair| !pair.is_empty()) {
             let key = *pair.first().ok_or("EINVAL")? as usize;
@@ -97,7 +105,7 @@ impl Control {
                 return Err("EINVAL");
             }
             seen[key] = true;
-            if !b"aipqmsvfcdrxywhXYCtoUzIe".contains(&(key as u8)) {
+            if !probing && !b"aipqmsvfcdrxywhXYCtoUzIe".contains(&(key as u8)) {
                 return Err("ENOTSUP");
             }
         }
@@ -119,7 +127,8 @@ impl Control {
         }
         // A feature query never acts, so the keys it names are answered by the
         // reply rather than narrowed to the subset this terminal accepts.
-        let probing = feature.is_some();
+        let numeric =
+            |key| if probing { Ok(number(bytes, key).ok().flatten()) } else { number(bytes, key) };
         if !probing
             && (!matches!(value(bytes, b't'), None | Some(b"d"))
                 || value(bytes, b'o').is_some()
@@ -130,13 +139,13 @@ impl Control {
         // `z` is the signed placement layer; `o=z` independently selects zlib
         // compression. Accept the reader's z=-1 in the existing image overlay
         // order. Independent layer sorting is not advertised by feature queries.
-        if let Some(layer) = value(bytes, b'z') {
+        if let Some(layer) = value(bytes, b'z').filter(|_| !probing) {
             std::str::from_utf8(layer)
                 .ok()
                 .and_then(|text| text.parse::<i32>().ok())
                 .ok_or("EINVAL")?;
         }
-        let (channels, format) = match number(bytes, b'f')?.unwrap_or(32) {
+        let (channels, format) = match numeric(b'f')?.unwrap_or(32) {
             24 => (3, ImageFormat::Raw),
             32 => (4, ImageFormat::Raw),
             // PNG carries its own geometry, so the pixel budget is checked after
@@ -150,18 +159,27 @@ impl Control {
             return Err("EINVAL");
         }
         let more = number(bytes, b'm')?.unwrap_or(0);
-        let cursor = number(bytes, b'C')?.unwrap_or(0);
-        if more > 1 || cursor > 1 {
+        let cursor = numeric(b'C')?.unwrap_or(0);
+        if more > 1 || !probing && cursor > 1 {
+            return Err("EINVAL");
+        }
+        let image_number = number(bytes, b'I')?;
+        if image_number == Some(0) || image_number.is_some() && value(bytes, b'i').is_some() {
             return Err("EINVAL");
         }
         let reply = Reply {
             id: number(bytes, b'i')?.filter(|id| *id != 0),
+            number: image_number,
             placement: number(bytes, b'p')?.filter(|id| *id != 0),
             quiet: quiet.unwrap_or(0),
         };
+        if action == Some(b'q') && reply.id.is_none() {
+            return Err("EINVAL");
+        }
         let selector = match value(bytes, b'd') {
             None => b'a',
             Some([selector]) => *selector,
+            _ if probing => 0,
             _ => return Err("EINVAL"),
         };
         Ok(Self {
@@ -169,22 +187,22 @@ impl Control {
             reply,
             quiet,
             more: more == 1,
-            width: number(bytes, b's')?,
-            height: number(bytes, b'v')?,
+            width: numeric(b's')?,
+            height: numeric(b'v')?,
             channels,
             format,
+            format_specified: value(bytes, b'f').is_some(),
             selector,
-            columns: number(bytes, b'c')?.filter(|n| *n != 0),
-            rows: number(bytes, b'r')?.filter(|n| *n != 0),
-            x: number(bytes, b'x')?.unwrap_or(0),
-            y: number(bytes, b'y')?.unwrap_or(0),
-            crop_width: number(bytes, b'w')?.filter(|n| *n != 0),
-            crop_height: number(bytes, b'h')?.filter(|n| *n != 0),
-            offset_x: number(bytes, b'X')?.unwrap_or(0),
-            offset_y: number(bytes, b'Y')?.unwrap_or(0),
+            columns: numeric(b'c')?.filter(|n| *n != 0),
+            rows: numeric(b'r')?.filter(|n| *n != 0),
+            x: numeric(b'x')?.unwrap_or(0),
+            y: numeric(b'y')?.unwrap_or(0),
+            crop_width: numeric(b'w')?.filter(|n| *n != 0),
+            crop_height: numeric(b'h')?.filter(|n| *n != 0),
+            offset_x: numeric(b'X')?.unwrap_or(0),
+            offset_y: numeric(b'Y')?.unwrap_or(0),
             keep_cursor: cursor == 1,
             feature,
-            count: number(bytes, b'I')?.unwrap_or(0),
             query: if feature.is_some() { bytes.to_vec() } else { Vec::new() },
         })
     }
@@ -200,15 +218,38 @@ impl Control {
     /// `key=value` form the reply expects; unsupported keys stay absent.
     pub fn features(&self, action: u8) -> String {
         let mut reply = format!("e={}", char::from(action));
-        for key in [b'C', b'U', b'X', b'Y', b'c', b'r', b'x', b'y', b'w', b'h', b't', b'f', b'd'] {
+        for key in [
+            b'p', b'C', b'U', b'X', b'Y', b'c', b'r', b'x', b'y', b'w', b'h', b's', b'v', b't',
+            b'f', b'd',
+        ] {
             let Some(value) = value(&self.query, key) else { continue };
+            let placing = matches!(action, b'T' | b'p');
             let supported = match key {
-                b'C' => matches!(value, b"0" | b"1"),
-                b'U' => value == b"0",
-                b't' => value == b"d",
-                b'f' => matches!(value, b"24" | b"32" | b"100"),
-                b'd' => Self::selector_supported(value),
-                _ => std::str::from_utf8(value).is_ok_and(|text| text.parse::<u32>().is_ok()),
+                b'p' => {
+                    self.reply.placement.is_some()
+                        && (placing
+                            || action == b'd'
+                                && matches!(self.selector.to_ascii_lowercase(), b'i' | b'n'))
+                },
+                b'C' => placing && value == b"1",
+                b'U' | b't' => false,
+                b'f' => matches!(action, b't' | b'T') && matches!(value, b"24" | b"100"),
+                b'd' => action == b'd' && value != b"a" && Self::selector_supported(value),
+                b's' | b'v' => {
+                    matches!(action, b't' | b'T')
+                        && self.format == ImageFormat::Raw
+                        && std::str::from_utf8(value)
+                            .is_ok_and(|text| text.parse::<u32>().is_ok_and(|number| number != 0))
+                },
+                _ => {
+                    let selector = self.selector.to_ascii_lowercase();
+                    let cell_parameter = key == b'x' && matches!(selector, b'p' | b'r' | b'x')
+                        || key == b'y' && matches!(selector, b'p' | b'r' | b'y');
+                    let relevant = placing || action == b'd' && cell_parameter;
+                    relevant
+                        && std::str::from_utf8(value)
+                            .is_ok_and(|text| text.parse::<u32>().is_ok_and(|number| number != 0))
+                },
             };
             if !supported {
                 continue;
@@ -250,7 +291,6 @@ impl Control {
         viewport: WindowSize,
         resource: Arc<ImageIdentity>,
         identity: &Arc<ImageIdentity>,
-        origin: (usize, usize),
     ) -> Result<Arc<KittyPlacement>> {
         if self.x >= width || self.y >= height {
             return Err("EINVAL");
@@ -302,8 +342,6 @@ impl Control {
             offset_y_cells,
             columns,
             rows,
-            column: origin.0,
-            row: origin.1,
         }))
     }
 }

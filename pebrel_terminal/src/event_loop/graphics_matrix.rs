@@ -80,7 +80,7 @@ fn png(width: u32, height: u32) -> Vec<u8> {
         let mut out = (body.len() as u32).to_be_bytes().to_vec();
         out.extend_from_slice(tag);
         out.extend_from_slice(body);
-        let mut crc = crc32(tag, body);
+        let crc = crc32(tag, body);
         out.extend_from_slice(&crc.to_be_bytes());
         out
     }
@@ -318,19 +318,80 @@ fn matrix_delete_by_range_only_touches_the_ids_inside_it() {
 }
 
 #[test]
-fn matrix_delete_newest_count_removes_the_tail() {
+fn matrix_image_numbers_return_unique_ids_and_delete_the_newest_matching_resource() {
     let (mut terminal, mut stream, listener) = terminal();
     let payload = base64(&rgb(20, 10, [10, 120, 120]));
-    let mut wire = Vec::new();
-    for (line, ident) in [(1, 300u32), (5, 301), (9, 302)] {
-        wire.extend_from_slice(format!("\x1b[{line};1H").as_bytes());
-        wire.extend(command(&format!("a=T,f=24,s=20,v=10,i={ident},c=5,r=2,C=1"), &payload));
+    for (line, number) in [(1, 7), (5, 9), (9, 7)] {
+        let mut wire = format!("\x1b[{line};1H").into_bytes();
+        wire.extend(command(&format!("a=T,f=24,s=20,v=10,I={number},c=5,r=2,C=1"), &payload));
+        feed(&mut stream, &mut terminal, &listener, &wire);
     }
-    feed(&mut stream, &mut terminal, &listener, &wire);
-    assert_eq!(image_cells(&terminal), 30, "three placements own thirty cells");
+    let replies = listener.replies();
+    assert_eq!(replies.len(), 3);
+    let ids: Vec<u32> = replies
+        .iter()
+        .zip([7, 9, 7])
+        .map(|(reply, number)| {
+            assert!(reply.contains(&format!(",I={number};OK")), "{reply}");
+            reply.strip_prefix("\x1b_Gi=").unwrap().split(',').next().unwrap().parse().unwrap()
+        })
+        .collect();
+    assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+    let first_resource = listener.images()[0].0.id;
+    assert_eq!(image_cells(&terminal), 30);
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=n,I=7", ""));
+    assert_eq!(image_cells(&terminal), 20);
+    assert!(cell_image(&terminal, 0, 0) && cell_image(&terminal, 4, 0));
+    assert!(!cell_image(&terminal, 8, 0));
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=N,I=7", ""));
+    feed(&mut stream, &mut terminal, &listener, &command("a=p,I=7,c=5,r=2,C=1", ""));
+    assert_eq!(listener.images().last().unwrap().0.id, first_resource);
+}
 
-    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=n,I=2", ""));
-    assert_eq!(image_cells(&terminal), 10, "only the oldest placement survives");
+#[test]
+fn matrix_cell_deletion_uses_one_based_current_grid_positions_after_scroll() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let mut wire = b"\x1b[4;3H".to_vec();
+    wire.extend(command("a=T,i=7,s=1,v=1,c=1,r=1,C=1", "AQIDBA=="));
+    wire.extend_from_slice(b"\x1b[12;1H\n");
+    feed(&mut stream, &mut terminal, &listener, &wire);
+    assert!(cell_image(&terminal, 2, 2));
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=p,x=0,y=3", ""));
+    assert!(cell_image(&terminal, 2, 2), "invalid zero coordinate cannot erase a cell");
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=p,x=3,y=3", ""));
+    assert!(!cell_image(&terminal, 2, 2));
+}
+
+#[test]
+fn matrix_row_and_column_deletion_follow_reflowed_cells() {
+    for selector in ["x", "y"] {
+        let (mut terminal, mut stream, listener) = terminal();
+        let mut wire = b"\x1b[3;25H".to_vec();
+        wire.extend(command("a=T,i=7,s=1,v=1,c=1,r=1,C=1", "AQIDBA=="));
+        feed(&mut stream, &mut terminal, &listener, &wire);
+        terminal.resize(TermSize::new(20, 12));
+        let position = (0..terminal.screen_lines())
+            .find_map(|row| {
+                (0..terminal.columns())
+                    .find(|column| cell_image(&terminal, row as i32, *column))
+                    .map(|column| (column, row))
+            })
+            .expect("reflow preserves the image cell");
+        assert_ne!(position, (24, 2));
+        let control = format!("a=d,d={selector},x={},y={}", position.0 + 1, position.1 + 1);
+        feed(&mut stream, &mut terminal, &listener, &command(&control, ""));
+        assert_eq!(image_cells(&terminal), 0);
+    }
+}
+
+#[test]
+fn matrix_png_query_checks_the_container_without_retaining_an_image() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let payload = base64(&png(2, 2));
+    feed(&mut stream, &mut terminal, &listener, &command("a=q,i=11,f=100", &payload));
+    assert!(listener.replies().iter().any(|reply| reply == "\x1b_Gi=11;OK\x1b\\"));
+    assert!(listener.images().is_empty());
+    assert_eq!(image_cells(&terminal), 0);
 }
 
 #[test]
