@@ -58,15 +58,15 @@ Windows 右键菜单与 F2 快捷键冲突反馈。它是验收合同，不表�
 ## 当前测试入口
 
 ```powershell
-cargo test --locked -p nebula --bin pebrel --features gpui-shell rename
-cargo test --locked -p nebula_hook
-cargo test --locked -p nebula --bin pebrel --features gpui-shell platform::environment::tests
-cargo test --locked -p nebula --bin pebrel --features gpui-shell ai_hook::
-cargo test --locked -p nebula --bin pebrel --features gpui-shell display::hint::tests
-cargo test --locked -p nebula --bin pebrel --features gpui-shell config::ui_config::tests
-cargo test --locked -p nebula --bin pebrel --features gpui-shell gpui_shell::terminal::link_underline::tests
-cargo test --locked -p nebula --bin pebrel --features gpui-shell gpui_shell::terminal::element::tests
-cargo test --locked -p nebula --bin pebrel --features gpui-shell display::terminal_color::tests
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell rename
+cargo test --locked -p pebrel_hook
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell platform::environment::tests
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell ai_hook::
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell display::hint::tests
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell config::ui_config::tests
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell gpui_shell::terminal::link_underline::tests
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell gpui_shell::terminal::element::tests
+cargo test --locked -p pebrel --bin pebrel --features gpui-shell display::terminal_color::tests
 ```
 
 安装器既有入口为 `scripts/tests/installer.tests.ps1`、

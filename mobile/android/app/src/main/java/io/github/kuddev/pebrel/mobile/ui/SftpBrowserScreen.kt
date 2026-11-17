@@ -141,7 +141,7 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
         } else onFile(entry)
     }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().glassBar().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             GlyphButton(R.drawable.ic_back, stringResource(R.string.back), ::back)
             Column(Modifier.weight(1f).clip(MaterialTheme.shapes.medium).clickable { clearSelection(); naming = "path" }
                 .padding(horizontal = 8.dp, vertical = 6.dp)) {

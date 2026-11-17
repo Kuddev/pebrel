@@ -17,6 +17,7 @@ data class RemoteAttachment(val session: RemoteSession, val window: RemoteWindow
 
 /** Discovery is read-only, bounded by the native query channel, and never enters a PTY. */
 object RemoteSessions {
+    private const val workspaceKeybindings = "HERDR_REMOTE_KEYBINDINGS"
     private const val path = "PATH=\"${'$'}PATH:/opt/homebrew/bin:/usr/local/bin:${'$'}HOME/.local/bin:${'$'}HOME/.cargo/bin\"; export PATH; "
     private fun posix(script: String) = "sh -c '${script.replace("'", "'\"'\"'")}'"
     internal fun posixWithPath(script: String) = posix(path + script)
@@ -146,6 +147,15 @@ object RemoteSessions {
         return "'${value.replace("'", "''")}'"
     }
 
+    internal fun reconnectWorkspace(name: String): String = posixWithPath(existingWorkspaceClient(name))
+
+    private fun existingWorkspaceClient(name: String): String {
+        require(validRemoteSessionName(SshSessionMode.HERDR, name))
+        val target = if (name.isEmpty()) "" else "--session ${quote(name)} "
+        // Use the existing server's keymap and keep the client on this SSH host.
+        return "$workspaceKeybindings=server exec herdr ${target}client"
+    }
+
     fun attachCommand(attachment: RemoteAttachment): String {
         val session = attachment.session
         val window = attachment.window
@@ -153,7 +163,8 @@ object RemoteSessions {
             require(session.kind == "herdr" && validRemoteSessionName(SshSessionMode.HERDR, session.id))
             val selected = window?.let { "& herdr --session ${psQuote(session.id)} tab focus ${psQuote(it.id)}; " +
                 "if (${ '$' }LASTEXITCODE -ne 0) { exit ${ '$' }LASTEXITCODE }; " }.orEmpty()
-            return powershell(selected + "& herdr session attach ${psQuote(session.id)}; exit ${ '$' }LASTEXITCODE")
+            return powershell(selected + "${'$'}env:$workspaceKeybindings = 'server'; " +
+                "& herdr --session ${psQuote(session.id)} client; exit ${ '$' }LASTEXITCODE")
         }
         return posix(path + when (session.kind) {
             "tmux" -> {
@@ -173,9 +184,10 @@ object RemoteSessions {
                     "exec \"${'$'}{SHELL:-/bin/sh}\" -l"
             }
             "herdr" -> {
-                require(validRemoteSessionName(SshSessionMode.HERDR, session.id))
+                require(session.id.isNotEmpty())
+                val client = existingWorkspaceClient(session.id)
                 val selected = window?.let { "herdr --session ${quote(session.id)} tab focus ${quote(it.id)} && " }.orEmpty()
-                selected + "exec herdr session attach ${quote(session.id)}"
+                selected + client
             }
             else -> error("unsupported_session")
         })
