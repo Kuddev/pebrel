@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      CANDIDATE: f630182e3315f3b6a731c2e1946da3ecb8936839
+      CANDIDATE: 60668ee09b7a5b47a77f6793ad1bb94d638f5ba4
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,7 +47,25 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils zsh mesa-vulkan-drivers
-          xvfb-run -a -s '-screen 0 1600x1000x24' python3 scripts/conformance/run.py --app "$RUNNER_TEMP/test-profile/bin/pebrel" --platform linux-x86_64-nix --output "$RUNNER_TEMP/nix-conformance.json"
+          GITHUB_SHA="$CANDIDATE" xvfb-run -a -s '-screen 0 1600x1000x24' \
+            python3 scripts/conformance/run.py --app "$RUNNER_TEMP/test-profile/bin/pebrel" \
+              --platform linux-x86_64-nix --output "$RUNNER_TEMP/nix-conformance.json" \
+              --artifacts "$RUNNER_TEMP/nix-conformance-artifacts"
+      - name: Retain the startup error from the isolated X11 test
+        if: failure()
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, re
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          report = root / 'nix-conformance.json'
+          if report.is_file() and json.loads(report.read_text())['cases']['boot']['status'] == 'failed':
+              log = root / 'nix-conformance-artifacts' / 'pebrel-1.log'
+              lines = log.read_text(errors='replace').splitlines()
+              diagnosis = re.compile(r'panicked at|caused by|error|not found|could not|failed', re.I)
+              selected = {j for i, line in enumerate(lines) if diagnosis.search(line)
+                          for j in range(i, min(i + 2, len(lines)))}
+              (root / 'nix-boot-error.txt').write_text(''.join(lines[i][:1200] + '\n' for i in sorted(selected)[:35]))
+          PYTHON
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -55,4 +73,5 @@ jobs:
           path: |
             ${{ runner.temp }}/nix-vendor.log
             ${{ runner.temp }}/nix-conformance.json
+            ${{ runner.temp }}/nix-boot-error.txt
           if-no-files-found: warn
