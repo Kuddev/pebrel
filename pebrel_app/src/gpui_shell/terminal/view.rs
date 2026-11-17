@@ -729,7 +729,20 @@ impl TerminalView {
                 }
             },
             TermEvent::TextAreaSizeRequest(formatter) => {
-                self.write_bytes(formatter(self.window_size).into_bytes());
+                // The geometry captured at spawn can lag the live grid by a whole
+                // resize: a reader that divides this answer by its cell size then
+                // lays pages out for a pane that no longer exists. Answer from the
+                // grid the session is actually rendering.
+                let mut size = self.window_size;
+                let grid = self.session.as_ref().map(|session| {
+                    let term = session.term.lock();
+                    (term.screen_lines(), term.columns())
+                });
+                if let Some((lines, columns)) = grid {
+                    size.num_lines = lines.min(usize::from(u16::MAX)) as u16;
+                    size.num_cols = columns.min(usize::from(u16::MAX)) as u16;
+                }
+                self.write_bytes(formatter(size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
                 self.retain_failed_session |= !code.success() && self.local_startup_unconfirmed();
@@ -787,10 +800,11 @@ impl TerminalView {
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }
             },
-            // APC graphics: pixels arrive raw, already placed in the grid, so
+            // APC graphics: raw pixels arrive already placed in the grid, so
             // decoding is the only work left — and it happens off the UI thread.
+            // A container (PNG) is inflated on that same thread.
             TermEvent::KittyImage { data, channels, placement } => {
-                match self.inline_images.enqueue_pixels(data, channels, placement) {
+                match self.inline_images.enqueue_kitty(data, channels, placement) {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("APC image dropped: {error}"),
                 }
