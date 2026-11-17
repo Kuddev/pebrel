@@ -1,0 +1,55 @@
+name: Installed Niu shell lifecycle
+on:
+  push:
+    branches: [verify/niu-installed-950-20261117]
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: windows-2022
+    timeout-minutes: 75
+    env:
+      SOURCE: e6078110f30d0402d98cc4a8eff777330d09640a
+      PYTHONUTF8: '1'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preserve acceptance driver
+        run: Copy-Item .github/niu-proof "$env:RUNNER_TEMP/niu-proof" -Recurse
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: -release-check-v2
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: 'false'
+      - name: Install the pinned upstream Windows x64 package into the disposable user directory
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'niu-1.5.0-setup.exe'
+          Invoke-WebRequest 'https://github.com/unixwin/niubash/releases/download/v1.5.0/niubash-v1.5.0-win-x64-setup.exe' -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne 'daf7663a60ee2e656a4bef8e3a00cc2f592e6daf2f510bb417c8f0ac61792a43') { throw 'installer checksum mismatch' }
+          $installed = Start-Process -Wait -PassThru $installer -ArgumentList '/VERYSILENT /NORESTART /SP- /SUPPRESSMSGBOXES /TASKS=""'
+          if ($installed.ExitCode -ne 0) { throw "installer exited $($installed.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs/Niubash'
+          if (!(Test-Path (Join-Path $dir 'niu.exe'))) { throw 'missing installed executable' }
+          "NIU_PROOF_INSTALL=$dir" >> $env:GITHUB_ENV
+      - name: Verify import, default selection, restart and new interactive terminal
+        run: python "$env:RUNNER_TEMP/niu-proof/verify.py"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: niu-native-lifecycle
+          path: tmp/niu-native-evidence
+          if-no-files-found: warn
+          retention-days: 7
