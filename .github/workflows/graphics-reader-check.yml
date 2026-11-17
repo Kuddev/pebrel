@@ -1,0 +1,54 @@
+name: Graphics PNG admission verification
+on:
+  push:
+    branches: [verify/graphics-reader-20261117]
+permissions:
+  contents: read
+env:
+  SOURCE: e8660788f2f16163a8a8dc7691054bb7e992c637
+  PYTHONUTF8: "1"
+  CARGO_TERM_COLOR: never
+jobs:
+  decode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preserve verification driver
+        run: cp .github/graphics-reader-check.py "$RUNNER_TEMP/graphics-reader-check.py"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE }}
+          persist-credentials: false
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libasound2-dev libdbus-1-dev libudev-dev \
+            libfontconfig1-dev libfreetype6-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-xinput-dev libxcb-xkb-dev libxi-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: -release-check-v2
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Test current ownership and replay the former limits
+        run: python3 "$RUNNER_TEMP/graphics-reader-check.py"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: graphics-reader-admission
+          path: tmp/graphics-reader-evidence
+          if-no-files-found: warn
+          retention-days: 7
