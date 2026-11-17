@@ -1,0 +1,76 @@
+name: Bundled macOS notification acceptance
+on:
+  push:
+    branches: [verify/macos-notification-env-20261117]
+    paths:
+      - .github/notification-qa/**
+      - .github/workflows/macos-notification-acceptance.yml
+permissions:
+  contents: read
+env:
+  SOURCE: 6b253485b07a5f8949830c8e41cc7deb7bbc4694
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+  PYTHONUTF8: "1"
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            architecture: aarch64
+          - os: macos-26-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preserve verification harness
+        run: cp -R .github/notification-qa "$RUNNER_TEMP/notification-qa"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE }}
+          persist-credentials: false
+      - name: Compile native UI probe
+        run: clang -fobjc-arc "$RUNNER_TEMP/notification-qa/native_ui.m" -framework Cocoa -framework ApplicationServices -o "$RUNNER_TEMP/notification-qa/native-ui"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: release
+          target: target/release
+          save-if: "false"
+      - name: Compile current GPUI product
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
+      - name: Retain compilation for this verification branch
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
+      - name: Package and install private candidate
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pebrel_app/Cargo.toml", "rb"))["package"]["version"])')"
+          bash scripts/package-macos.sh --channel preview --preview-id notify1011 --binary target/release/pebrel --version "$version" --architecture "${{ matrix.architecture }}" --build-number "$GITHUB_RUN_NUMBER" --output-directory tmp/notification-package
+          mount="$RUNNER_TEMP/notification-mount"
+          mkdir -p "$mount" "$RUNNER_TEMP/notification-install"
+          hdiutil attach tmp/notification-package/*.dmg -nobrowse -readonly -mountpoint "$mount"
+          ditto "$mount/Pebrel Preview.app" "$RUNNER_TEMP/notification-install/Pebrel Preview.app"
+          hdiutil detach "$mount"
+      - name: Exercise normal notification permission and native click
+        run: |
+          python3 "$RUNNER_TEMP/notification-qa/accept.py" --source "$SOURCE" --app "$RUNNER_TEMP/notification-install/Pebrel Preview.app" --ui "$RUNNER_TEMP/notification-qa/native-ui" --output tmp/notification-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notification-acceptance-${{ matrix.os }}
+          path: tmp/notification-evidence
+          if-no-files-found: warn
+          retention-days: 7
