@@ -11,10 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 0da436d58b1564b3ce9b8a861e2cb82b7647eeb8
+          path: candidate
           persist-credentials: false
       - name: Test selected source in isolation
         run: |
-          git worktree add --detach "$RUNNER_TEMP/source" 09799008849f965b5815f1e36684ad7af4f44658
           docker --version
-          python3 scripts/tests/verify_resource_559.py "$RUNNER_TEMP/source"
+          python3 scripts/tests/verify_resource_559.py candidate
