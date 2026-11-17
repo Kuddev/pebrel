@@ -9,11 +9,15 @@ report={'source':source,'original':[]}
 def run(tag,positive):
  p=out/(tag+'.log');
  with p.open('w',encoding='utf8') as log:rc=sp.run(cmd,stdout=log,stderr=sp.STDOUT).returncode
- t=p.read_text(errors='replace');summary=[l.strip() for l in t.splitlines() if 'Summary [' in l];assert summary and (rc==0 if positive else rc!=0), (tag,rc,t[-900:]);assert any(('1 passed' if positive else '1 failed') in x for x in summary);return summary
-for n in range(3):report['original'].append(run('exact-source-'+str(n+1),True))
-needle='        let mut activity = AgentActivity::default();';assert target.count(needle)==1
+ t=p.read_text(errors='replace');summary=[l.strip() for l in t.splitlines() if 'Summary [' in l];assert summary and (rc==0 if positive else rc!=0), (tag,rc,t[-900:]);assert any(('7 passed' if positive else '1 failed') in x for x in summary);return summary
+cmd[-1]='test(ai_hook::native_events::subagent_tests::)'
+for n in range(3):report['original'].append(run('all-subagent-'+str(n+1),True))
+cmd[-1]='test('+name+')'
+production=Path('pebrel_app/src/ai_hook/native_events.rs');base=production.read_text(encoding='utf8')
 try:
- path.write_text(pre+'fn '+name+'()'+target.replace(needle,needle+'\n        let _paused = PausedProbe::new();'),encoding='utf8');report['controlled_delay']=run('paused-before-session-start',False)
- t=(out/'paused-before-session-start.log').read_text(errors='replace');assert 'called `Option::unwrap()` on a `None` value' in t
- line=next(i for i,l in enumerate(path.read_text().splitlines(),1) if i>path.read_text().split('fn '+name+'()')[0].count('\n') and '.apply_hook(&send("session-start"' in l); assert f'subagent_tests.rs:{line}:' in t;report['expected_failure']='same setup unwrap before scan-limit assertions';(out/'result.json').write_text(json.dumps(report,indent=2))
-finally:path.write_text(orig,encoding='utf8')
+    needle='let confirmed_foreground = is_confirmed_antigravity_foreground(&id);'; timeout='else if is_confirmed_antigravity_foreground(&id) {';assert base.count(needle)==base.count(timeout)==1
+    production.write_text(base.replace(needle,'let confirmed_foreground = false;').replace(timeout,'else if false {'),encoding='utf8')
+    report['unconfirmed_regression']=run('remove-confirmed-foreground-treatment',False)
+    text=(out/'remove-confirmed-foreground-treatment.log').read_text(errors='replace');assert 'confirmed foreground session must not drop its own completion at scan limit' in text
+    report['expected_failure']='removing confirmed foreground treatment fails the final completion, after setup';(out/'result.json').write_text(json.dumps(report,indent=2))
+finally:production.write_text(base,encoding='utf8')

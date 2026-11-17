@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE: 58b1481dece136102ce3092124b3143b1ebdb7c6
+  SOURCE: ec960e694b9c325b5589a6ff59a5e3f938a0b25b
   PYTHONUTF8: "1"
   CARGO_TERM_COLOR: never
 jobs:
@@ -52,7 +52,7 @@ jobs:
         run: |
           ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture arm64
           ./scripts/tests/windows-runtime.tests.ps1 -Architecture arm64
-      - name: Check exact-source foreground flow and isolate worker delay during setup
+      - name: Check the repaired fixture and its sensitivity to loss of foreground ownership
         shell: pwsh
         run: python "$env:RUNNER_TEMP/foreground-setup-check.py"
       - uses: actions/upload-artifact@v4
