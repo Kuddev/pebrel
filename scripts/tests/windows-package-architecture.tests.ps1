@@ -15,6 +15,17 @@ try {
             [IO.File]::WriteAllBytes((Join-Path $fixtureRoot $name), $bytes)
         }
         Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture
+        New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'context-menu') -Force | Out-Null
+        foreach ($name in @('pebrel_context_menu.dll', 'pebrel-context-menu-setup.exe')) {
+            [IO.File]::WriteAllBytes((Join-Path $fixtureRoot "context-menu/$name"), $bytes)
+        }
+        Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture -ContextMenu
+        [IO.File]::WriteAllBytes((Join-Path $fixtureRoot 'context-menu/pebrel-context-menu-setup.exe'), [byte[]]@(0, 1, 2))
+        $rejected = $false
+        try { Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture -ContextMenu } catch {
+            $rejected = $_.Exception.Message -match 'pebrel-context-menu-setup.exe'
+        }
+        if (-not $rejected) { throw 'Invalid context-menu helper was accepted' }
         Copy-Item -LiteralPath (Join-Path $fixtureRoot 'pebrel-cli.exe') -Destination (Join-Path $fixtureRoot 'pebrel.com')
         Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture -CliExecutable 'pebrel.com'
         [IO.File]::WriteAllBytes((Join-Path $fixtureRoot 'pebrel.com'), [byte[]]@(0, 1, 2))

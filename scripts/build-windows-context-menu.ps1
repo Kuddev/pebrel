@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet('debug', 'release')][string] $Configuration = 'release',
-    [string] $TargetDirectory
+    [string] $TargetDirectory,
+    [string] $SignedPackage
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -11,6 +12,9 @@ if (-not [IO.Path]::IsPathRooted($TargetDirectory)) { $TargetDirectory = Join-Pa
 $targetRoot = [IO.Path]::GetFullPath($TargetDirectory)
 $helper = Join-Path $repo 'tools/windows-context-menu'
 $helperTarget = Join-Path $targetRoot 'windows-context-menu'
+$versionSource = [IO.File]::ReadAllText((Join-Path $repo 'pebrel_app/Cargo.toml'))
+$version = [regex]::Match($versionSource, '(?m)^version = "([0-9]+\.[0-9]+\.[0-9]+)"').Groups[1].Value
+if (-not $version) { throw 'Context menu requires the application numeric version' }
 $buildArgs = @('build', '--locked', '--manifest-path', (Join-Path $helper 'Cargo.toml'), '--target-dir', $helperTarget)
 if ($Configuration -eq 'release') { $buildArgs += '--release' }
 & cargo @buildArgs
@@ -23,8 +27,32 @@ $architecture = if ($compiler -contains 'host: x86_64-pc-windows-msvc') { 'x64' 
 $stage = Join-Path $targetRoot "$Configuration/context-menu"
 New-Item -ItemType Directory -Path (Join-Path $stage 'assets') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $helperTarget "$Configuration/pebrel_context_menu.dll") -Destination $stage
+Copy-Item -LiteralPath (Join-Path $helperTarget "$Configuration/pebrel-context-menu-setup.exe") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $helper 'package/assets/logo.png') -Destination (Join-Path $stage 'assets/logo.png')
 $manifest = [IO.File]::ReadAllText((Join-Path $helper 'package/AppxManifest.xml'))
 $manifest = $manifest.Replace('ProcessorArchitecture="x64"', "ProcessorArchitecture=`"$architecture`"")
+$manifest = $manifest.Replace('Version="1.0.3.0"', "Version=`"$version.0`"")
+if ($SignedPackage) {
+    $SignedPackage = (Resolve-Path -LiteralPath $SignedPackage).Path
+    if ((Get-AuthenticodeSignature -LiteralPath $SignedPackage).Status -ne 'Valid') {
+        throw 'The context-menu MSIX must have a trusted signature'
+    }
+    $archive = [IO.Compression.ZipFile]::OpenRead($SignedPackage)
+    try {
+        $entry = $archive.GetEntry('AppxManifest.xml')
+        if ($null -eq $entry) { throw 'Context-menu MSIX manifest is missing' }
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try { [xml] $signedManifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally { $archive.Dispose() }
+    [xml] $expected = $manifest
+    $expected.Package.Identity.Publisher = $signedManifest.Package.Identity.Publisher
+    if ($expected.OuterXml -cne $signedManifest.OuterXml) {
+        throw 'Signed context-menu manifest does not match this version, architecture and extension'
+    }
+    $manifest = $signedManifest.OuterXml
+    Copy-Item -LiteralPath $SignedPackage -Destination (Join-Path $stage 'Pebrel.ContextMenu.msix')
+} elseif (Test-Path -LiteralPath (Join-Path $stage 'Pebrel.ContextMenu.msix')) {
+    throw 'A staged signed package exists; supply -SignedPackage explicitly or use a fresh target directory'
+}
 [IO.File]::WriteAllText((Join-Path $stage 'AppxManifest.xml'), $manifest, [Text.UTF8Encoding]::new($false))
 Write-Output "Explorer extension staged at $stage"

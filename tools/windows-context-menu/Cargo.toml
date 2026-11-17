@@ -11,14 +11,24 @@ license = "GPL-3.0-or-later"
 [lib]
 crate-type = ["cdylib"]
 
+[[bin]]
+name = "pebrel-context-menu-setup"
+path = "src/setup.rs"
+
 [dependencies]
 windows = { version = "=0.58.0", features = [
     "implement",
+    "ApplicationModel",
+    "Data_Xml_Dom",
+    "Foundation_Collections",
+    "Management_Deployment",
+    "Storage",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
+    "Win32_System_WinRT",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
 ] }

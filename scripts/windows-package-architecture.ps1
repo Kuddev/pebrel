@@ -4,11 +4,14 @@ function Assert-WindowsPackageArchitecture {
         [Parameter(Mandatory = $true)][string] $Root,
         [ValidateSet('x64', 'arm64')][string] $Architecture = 'x64',
         [string] $RuntimeDirectory = $Root,
-        [ValidateSet('pebrel-cli.exe', 'pebrel.com')][string] $CliExecutable = 'pebrel-cli.exe'
+        [ValidateSet('pebrel-cli.exe', 'pebrel.com')][string] $CliExecutable = 'pebrel-cli.exe',
+        [switch] $ContextMenu
     )
     $machine = if ($Architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
-    foreach ($name in @('pebrel.exe', $CliExecutable, 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
-        $directory = if ($name -in @('pebrel.exe', $CliExecutable)) { $Root } else { $RuntimeDirectory }
+    $files = @('pebrel.exe', $CliExecutable, 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')
+    if ($ContextMenu) { $files += @('context-menu/pebrel_context_menu.dll', 'context-menu/pebrel-context-menu-setup.exe') }
+    foreach ($name in $files) {
+        $directory = if ($name -in @('pebrel.exe', $CliExecutable) -or $name.StartsWith('context-menu/')) { $Root } else { $RuntimeDirectory }
         $path = Join-Path $directory $name
         $stream = [IO.File]::OpenRead($path)
         $reader = [IO.BinaryReader]::new($stream)

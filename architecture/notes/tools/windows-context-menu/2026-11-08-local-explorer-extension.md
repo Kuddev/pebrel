@@ -4,6 +4,9 @@
 
 Implemented for local installation verification; not a signed public package.
 
+Superseded for deployment lifecycle by
+[installer ownership](../../packaging/2026-11-17-explorer-menu-lifecycle.md).
+
 ## Context
 
 The user supplied `E:\PebrelContextMenu`, an already registered development
