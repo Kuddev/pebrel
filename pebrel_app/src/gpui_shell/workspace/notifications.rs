@@ -27,7 +27,7 @@ fn delivery_channels(
             || matches!(notification, Notification::Runtime { .. }))
             && (ai_toasts || !notification.is_ai()),
         // Keep native notification routing independent of the in-app preference.
-        system: !visible,
+        system: !visible || crate::platform::CAPABILITIES.foreground_system_notifications,
     }
 }
 
@@ -198,6 +198,7 @@ mod tests {
 
     #[test]
     fn disabling_in_app_ai_toasts_keeps_background_system_notifications() {
+        let foreground_system = crate::platform::CAPABILITIES.foreground_system_notifications;
         for attention in [false, true] {
             let notification =
                 Notification::AiTurn { program: "codex".into(), message: None, attention };
@@ -211,11 +212,11 @@ mod tests {
             );
             assert_eq!(
                 delivery_channels(&notification, true, false),
-                DeliveryChannels { in_app: false, system: false }
+                DeliveryChannels { in_app: false, system: foreground_system }
             );
             assert_eq!(
                 delivery_channels(&notification, true, true),
-                DeliveryChannels { in_app: attention, system: false }
+                DeliveryChannels { in_app: attention, system: foreground_system }
             );
         }
     }
@@ -242,7 +243,10 @@ mod tests {
         let notification = Notification::Runtime { title: None, message: "touch the key".into() };
         assert_eq!(
             delivery_channels(&notification, true, true),
-            DeliveryChannels { in_app: true, system: false }
+            DeliveryChannels {
+                in_app: true,
+                system: crate::platform::CAPABILITIES.foreground_system_notifications
+            }
         );
         assert_eq!(
             delivery_channels(&notification, false, false),
