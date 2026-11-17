@@ -16,12 +16,21 @@ import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.InteractionSource
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
 
 enum class PebrelNavigationDirection {
@@ -88,6 +97,14 @@ data class PebrelMotion(
     fun <T> tweenOrSnap(durationMillis: Int): FiniteAnimationSpec<T> =
         if (animationsEnabled) tween(durationMillis) else snap()
 
+    /** Expanding content and sheets: settles with a slight overshoot. */
+    fun <T> expandSpring(): FiniteAnimationSpec<T> =
+        if (animationsEnabled) spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow) else snap()
+
+    /** Toggles and press feedback: critically damped and quick. */
+    fun <T> toggleSpring(): FiniteAnimationSpec<T> =
+        if (animationsEnabled) spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium) else snap()
+
     fun contentSizeSpec(): FiniteAnimationSpec<IntSize> {
         if (!animationsEnabled) return snap()
         return spring(
@@ -95,6 +112,30 @@ data class PebrelMotion(
             stiffness = Spring.StiffnessMediumLow,
         )
     }
+}
+
+/** Scale and fade while pressed. Read in the draw phase, so a press does not recompose its content. */
+@Composable
+internal fun Modifier.pressFeedback(interactions: InteractionSource, enabled: Boolean = true): Modifier {
+    val motion = rememberPebrelMotion()
+    if (!motion.animationsEnabled) return this
+    val pressed = interactions.collectIsPressedAsState()
+    val progress = animateFloatAsState(if (pressed.value && enabled) 1f else 0f, motion.toggleSpring(), label = "press")
+    return graphicsLayer {
+        val scale = 1f - .03f * progress.value
+        scaleX = scale
+        scaleY = scale
+        alpha = 1f - .1f * progress.value
+    }
+}
+
+/** A clickable whose whole surface answers the press; library ripple and semantics are unchanged. */
+@Composable
+internal fun Modifier.pressClickable(enabled: Boolean = true, role: Role? = null, onClickLabel: String? = null,
+                                     onClick: () -> Unit): Modifier {
+    val interactions = remember { MutableInteractionSource() }
+    return pressFeedback(interactions, enabled)
+        .clickable(interactions, ripple(), enabled, onClickLabel, role, onClick)
 }
 
 @Composable

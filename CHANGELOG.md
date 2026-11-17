@@ -4,89 +4,264 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.3.2 - 2026-11-01
+## 2.5.0 - 2026-11-09
 
-- `Pebrel-v2.3.2-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-linux-x64-preview.deb`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-windows-x64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-windows-x64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-windows-arm64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-android-universal-preview.apk`: `PENDING FINAL BUILD`
-- `Pebrel-v2.3.2-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+```text
+PENDING FINAL BUILD  Pebrel-v2.5.0-android-universal-preview.apk
+PENDING FINAL BUILD  Pebrel-v2.5.0-linux-x64-preview.AppImage
+PENDING FINAL BUILD  Pebrel-v2.5.0-linux-x64-preview.deb
+PENDING FINAL BUILD  Pebrel-v2.5.0-linux-x64-preview.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.0-macos-arm64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.0-macos-x64-preview.dmg
+PENDING FINAL BUILD  Pebrel-v2.5.0-relay-manual.tar.gz
+PENDING FINAL BUILD  Pebrel-v2.5.0-windows-arm64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.0-windows-arm64.zip
+PENDING FINAL BUILD  Pebrel-v2.5.0-windows-x64-setup.exe
+PENDING FINAL BUILD  Pebrel-v2.5.0-windows-x64.zip
+```
 
 ### English
 
-This release brings independently configurable next-prompt prediction to supported native AI CLI editors, native shell pointer editing, and fixes for startup, SSH, input, tabs and settings. This is a Windows x64 release candidate; publication remains pending.
+macOS, Linux, and Android downloads are Preview builds.
 
 #### Added
 
-- Predict the next message when the native input is empty in supported local Claude Code, Pi and OpenCode sessions launched or resumed through Pebrel. Choose a separate provider and model without changing the agent's main model. Bundled adapters handle installation, Tab fills the suggestion without submitting it, and Pi/OpenCode display the selected model with animated dots while waiting. Prediction is off by default and uses recent conversation context and the application's language.
-- Click to position the cursor and drag to select a range for deletion in supported Bash/Readline, Zsh/ZLE and PowerShell/PSReadLine input. Edits stay in the shell's native buffer and undo history; unsupported keymaps and ambiguous layouts retain ordinary terminal selection.
-- Display directly transmitted, uncompressed RGB/RGBA images using the Kitty graphics protocol with bounded storage, chunked transfers, cropping and independent placements. This supported profile does not include file/shared-memory transport, PNG payloads, Unicode placeholders or animation. Existing OSC 1337 image support remains available. ([#767](https://github.com/Kuddev/pebrel/pull/767))
+- Add a Community page to the theme picker for browsing, previewing, and installing community themes.
+- Add `pebrel theme catalog` and `pebrel theme install` for community themes.
+- Add a Plugins page in Settings to install plugins from a folder, enable, disable, and uninstall them.
+- Add `pebrel plugin install`, `list`, `enable`, `disable`, and `uninstall`.
+- Add plugins that bundle or generate themes, with theme library access granted at install and nothing applied automatically.
+- Add Shift+Insert paste on Windows and Linux. ([#814](https://github.com/Kuddev/pebrel/pull/814))
+- Add a Japanese README. ([#872](https://github.com/Kuddev/pebrel/pull/872))
 
 #### Fixed
 
-- Prevent dozens of duplicate tabs when a launch request reaches the resident process but its acknowledgement is lost. Addresses [#797](https://github.com/Kuddev/nebula/issues/797).
-- Keep localhost HTTP clients working when terminal proxying is enabled with an empty bypass list, including local OpenCode startup. Addresses [#807](https://github.com/Kuddev/nebula/issues/807).
-- Prevent an out-of-bounds crash when rendering a stale cursor during terminal resize and selection. Addresses [#788](https://github.com/Kuddev/nebula/issues/788).
-- Run the welcome command correctly from fish, both with Fastfetch installed and with the fallback output. Addresses [#803](https://github.com/Kuddev/nebula/issues/803).
-- Restore workspace keyboard shortcuts while an image tab has focus. Addresses [#774](https://github.com/Kuddev/nebula/issues/774).
-- Find settings and shortcut actions using Japanese text and current-language action labels while retaining English/Chinese aliases and prediction search terms. Addresses [#821](https://github.com/Kuddev/nebula/issues/821).
-- Preserve nested file paths after native Tab completion instead of treating a path suffix as a new command. Addresses [#676](https://github.com/Kuddev/nebula/issues/676).
-- Preserve the complete workspace snapshot during Windows shutdown so restored tabs retain their saved agent sessions. Cancelling shutdown resumes normal saving. Addresses [#792](https://github.com/Kuddev/nebula/issues/792).
-- Discover MSYS2 Zsh installations and preserve Zsh identity when importing a terminal executable. Addresses [#812](https://github.com/Kuddev/nebula/issues/812).
-- Stop the misleading busy animation for ordinary full-screen TUI tools while preserving reported progress, agent activity and connection status. This addresses the existing indicator behavior, without adding custom tab titles. Addresses [#805](https://github.com/Kuddev/nebula/issues/805).
-- Open an ordinary SSH shell when the server cannot preserve the quoting required by POSIX startup integration, avoiding the reported immediate disconnect on Windows SSH hosts. Addresses [#810](https://github.com/Kuddev/nebula/issues/810).
-- Make Shift+Enter insert a newline in recognized CodeBuddy sessions using its published terminal binding; preserve native Codex/PowerShell input and negotiated keyboard protocols. Addresses [#839](https://github.com/Kuddev/nebula/issues/839).
-- Correct the shell/profile ID instructions in CLI help, shell completions and configuration documentation. Lua profile names do not register launch aliases; custom WSL arguments can be passed through `-e`. Addresses [#665](https://github.com/Kuddev/nebula/issues/665).
-- Bound X11 input-method property names during long-running Linux sessions while preserving ordered text and preedit delivery. ([#668](https://github.com/Kuddev/pebrel/pull/668))
-- Restore missing Hermes artwork and use the intended colors for supported agent icons. ([#832](https://github.com/Kuddev/pebrel/pull/832))
+- Fix OpenCode sessions not resuming when no session ID was captured. Addresses [#651](https://github.com/Kuddev/nebula/issues/651).
+- Fix saved Antigravity conversations not resuming. ([#852](https://github.com/Kuddev/pebrel/pull/852))
+- Fix duplicate OpenCode completions and false progress from unreported permission replies.
+- Fix Agent recognition inside multiplexers whose panes cannot be observed.
+- Fix tabs spinning while an interactive SSH login waits for input.
+- Fix idle built-in SSH sessions ending after about a minute of silence. Addresses [#816](https://github.com/Kuddev/nebula/issues/816).
+- Fix stray `PEBREL_PTY` output after JumpServer direct logins. Addresses [#856](https://github.com/Kuddev/nebula/issues/856).
+- Fix panes hanging on remote `rz` and `sz` by cancelling the unsupported ZMODEM session and suggesting scp or SFTP. Addresses [#806](https://github.com/Kuddev/nebula/issues/806).
+- Fix the mouse pointer flickering on every keystroke on Windows. Addresses [#868](https://github.com/Kuddev/nebula/issues/868).
+- Fix wrong CJK glyphs in bold and italic text on Windows. Addresses [#744](https://github.com/Kuddev/nebula/issues/744).
+- Fix file-tree icons showing as missing glyph boxes on macOS. Addresses [#870](https://github.com/Kuddev/nebula/issues/870).
+- Fix Cmd+M not minimizing the window on macOS. ([#814](https://github.com/Kuddev/pebrel/pull/814))
+- Fix application mouse drags being lost when the pointer crosses a pane boundary or leaves the reportable area.
+- Fix mouse-wheel paging in full-screen Pi. ([#854](https://github.com/Kuddev/pebrel/pull/854))
+- Fix editor commands such as `nvim` and `code` suggesting stale history instead of files in the current directory. ([#847](https://github.com/Kuddev/pebrel/pull/847))
+- Fix undeclared plugin Runtime calls reporting success when wrapped in `pcall`.
+- Fix paired LAN and relay connections not being retained on Android. ([#855](https://github.com/Kuddev/pebrel/pull/855))
+- Fix Android terminal input stopping when IME composition starts while viewing tmux history.
+- Fix Android conversation refreshes resetting the reader.
 
 #### Improved
 
-- Localize settings help and option labels in Japanese, with the existing fallback for untranslated languages. ([#793](https://github.com/Kuddev/pebrel/pull/793))
+- Improve sidebar mode with a centered hover grip for moving panes and the active pane name centered in the title area.
+- Improve fresh Android installs by defaulting to MintLight while keeping saved themes.
+- Improve the Android SSH overflow menu icon with solid dots.
 
 ### 中文
 
-本版为受支持的 AI CLI 原生输入框加入可独立配置模型的下一句预测，加入 Shell 原生光标与选区编辑，并修复启动、SSH、输入、标签和设置问题。本候选版本面向 Windows x64，尚未正式发布。
+macOS、Linux 和 Android 下载为预览版。
 
 #### 新增
 
-- 在通过 Pebrel 本地启动或恢复的受支持 Claude Code、Pi、OpenCode 会话中，输入框为空时预测下一条消息。可单独指定服务商和模型，不改变 Agent 主模型；适配器随应用提供并自动装载，Tab 填入建议但不提交。Pi/OpenCode 等待时显示模型名称与循环圆点。预测默认关闭，依据近期对话上下文与软件语言生成。
-- 在受支持的 Bash/Readline、Zsh/ZLE、PowerShell/PSReadLine 输入中，点击移动光标、拖选区间后删除。编辑保留在 Shell 原生输入缓冲和撤销历史中；不支持的键位模式及无法确认的布局继续使用普通终端选区。
-- 通过 Kitty 图形协议显示直接传输、未压缩的 RGB/RGBA 图像，支持有界存储、分块传输、裁剪与独立放置。本次支持范围不含文件或共享内存传输、PNG 载荷、Unicode 占位符或动画；已有 OSC 1337 图像支持继续可用。 ([#767](https://github.com/Kuddev/pebrel/pull/767))
+- 主题选择器新增「社区」页，可浏览、预览并安装社区主题。
+- 新增 `pebrel theme catalog` 和 `pebrel theme install`，用于社区主题。
+- 设置新增「插件」页，可从文件夹安装插件，并启用、停用和卸载。
+- 新增 `pebrel plugin install`、`list`、`enable`、`disable` 和 `uninstall`。
+- 插件可自带或生成主题；写入主题库需在安装时授权，且不会自动应用。
+- Windows 和 Linux 新增 Shift+Insert 粘贴。 ([#814](https://github.com/Kuddev/pebrel/pull/814))
+- 新增日文 README。 ([#872](https://github.com/Kuddev/pebrel/pull/872))
 
 #### 修复
 
-- 修复启动请求已到达驻留进程但确认响应丢失时，重复打开几十个标签页的问题。对应 [#797](https://github.com/Kuddev/nebula/issues/797)。
-- 修复启用终端代理且绕过列表为空时，本地 HTTP 客户端被错误送入代理的问题，包括本地 OpenCode 无法启动。对应 [#807](https://github.com/Kuddev/nebula/issues/807)。
-- 修复终端缩放与选区操作期间，绘制过期光标位置引发的越界崩溃。对应 [#788](https://github.com/Kuddev/nebula/issues/788)。
-- 修复 fish 无法执行欢迎命令的问题，兼容已安装 Fastfetch 和使用回退输出两种情况。对应 [#803](https://github.com/Kuddev/nebula/issues/803)。
-- 修复图片标签获得焦点后工作区快捷键失效的问题。对应 [#774](https://github.com/Kuddev/nebula/issues/774)。
-- 修复日语设置关键词和当前语言快捷键动作名称搜索，同时保留中英文别名以及补齐、预测关键词。对应 [#821](https://github.com/Kuddev/nebula/issues/821)。
-- 修复原生 Tab 补全后嵌套文件路径被截断、路径后缀被误当成新命令的问题。对应 [#676](https://github.com/Kuddev/nebula/issues/676)。
-- 修复 Windows 关机时工作区快照被清空或覆盖，保留标签内已保存的 Agent 会话信息；取消关机后恢复正常保存。对应 [#792](https://github.com/Kuddev/nebula/issues/792)。
-- 修复 MSYS2 Zsh 无法自动发现，以及手动导入终端程序后仍被识别为 Bash 的问题。对应 [#812](https://github.com/Kuddev/nebula/issues/812)。
-- 修复普通全屏 TUI 工具运行时错误显示忙碌转圈的问题，保留程序上报的进度、Agent 活动和连接状态。本项修复已有状态指示，不包含自定义标签标题。对应 [#805](https://github.com/Kuddev/nebula/issues/805)。
-- 修复部分 Windows SSH 主机无法保留 POSIX 启动脚本引号、连接后立即断开的问题；能力检查不通过时打开服务端普通 Shell。对应 [#810](https://github.com/Kuddev/nebula/issues/810)。
-- 修复已识别 CodeBuddy 会话中 Shift+Enter 无法换行的问题，使用其官方终端绑定，同时保留 Codex、PowerShell 原生输入和已协商的键盘协议。对应 [#839](https://github.com/Kuddev/nebula/issues/839)。
-- 修正 CLI 帮助、Shell 补全及配置文档中的 Shell/profile ID 说明：Lua 配置名称不会注册启动别名；自定义 WSL 参数可通过 `-e` 传入。对应 [#665](https://github.com/Kuddev/nebula/issues/665)。
-- 修复 Linux 长时间运行时 X11 输入法属性名称持续累积的问题，保留文本提交、预编辑与消息顺序。 ([#668](https://github.com/Kuddev/pebrel/pull/668))
-- 恢复缺失的 Hermes 图标，并为受支持 Agent 图标恢复预期颜色。 ([#832](https://github.com/Kuddev/pebrel/pull/832))
+- 修复未捕获会话 ID 时无法恢复 OpenCode 会话的问题。 对应 [#651](https://github.com/Kuddev/nebula/issues/651)。
+- 修复已保存的 Antigravity 对话无法恢复的问题。 ([#852](https://github.com/Kuddev/pebrel/pull/852))
+- 修复 OpenCode 重复报告完成，以及未上报的权限回复造成虚假进度的问题。
+- 修复无法观察窗格的终端复用器内 Agent 识别失败的问题。
+- 修复交互式 SSH 登录等待输入时标签一直转圈的问题。
+- 修复内置 SSH 会话空闲约一分钟无响应后被断开的问题。 对应 [#816](https://github.com/Kuddev/nebula/issues/816)。
+- 修复 JumpServer 直连登录后出现多余 `PEBREL_PTY` 输出的问题。 对应 [#856](https://github.com/Kuddev/nebula/issues/856)。
+- 修复远程 `rz`、`sz` 导致窗格卡死的问题：现在会取消不支持的 ZMODEM 会话，并提示改用 scp 或 SFTP。 对应 [#806](https://github.com/Kuddev/nebula/issues/806)。
+- 修复 Windows 上每次按键鼠标指针都闪烁的问题。 对应 [#868](https://github.com/Kuddev/nebula/issues/868)。
+- 修复 Windows 上中日韩粗体和斜体文字显示成错误字形的问题。 对应 [#744](https://github.com/Kuddev/nebula/issues/744)。
+- 修复 macOS 上文件树图标显示为缺字方框的问题。 对应 [#870](https://github.com/Kuddev/nebula/issues/870)。
+- 修复 macOS 上 Cmd+M 无法最小化窗口的问题。 ([#814](https://github.com/Kuddev/pebrel/pull/814))
+- 修复指针越过窗格边界或离开可上报区域时，应用内鼠标拖动丢失的问题。
+- 修复全屏 Pi 中的鼠标滚轮翻页。 ([#854](https://github.com/Kuddev/pebrel/pull/854))
+- 修复 `nvim`、`code` 等编辑器命令补全到过期历史、而不是当前目录文件的问题。 ([#847](https://github.com/Kuddev/pebrel/pull/847))
+- 修复插件用 `pcall` 包裹未声明的 Runtime 调用时仍报告成功的问题。
+- 修复 Android 未保留已配对的局域网和中转连接的问题。 ([#855](https://github.com/Kuddev/pebrel/pull/855))
+- 修复 Android 在查看 tmux 历史时开始输入法组字后终端输入中断的问题。
+- 修复 Android 刷新对话时阅读状态被重置的问题。
 
 #### 改进
 
-- 补充日语设置帮助和选项标签，未翻译语言继续遵循既有回退规则。 ([#793](https://github.com/Kuddev/pebrel/pull/793))
+- 改进侧栏模式：用居中的悬停手柄拖动窗格，活动窗格名称居中显示在标题区。
+- 改进 Android 全新安装：默认使用 MintLight，已保存的主题保持不变。
+- 改进 Android SSH 溢出菜单图标，改用实心圆点。
 
 ### Contributors
 
-Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [M1nt-Ch0c0](https://github.com/M1nt-Ch0c0), [galact-byte](https://github.com/galact-byte), [glitch-cmyk658](https://github.com/glitch-cmyk658), [Tettu0530](https://github.com/Tettu0530) and [MeshedPoto](https://github.com/MeshedPoto) for the changes included since 2.3.1.
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/YinBuLiao"><img src="https://avatars.githubusercontent.com/u/35324248?v=4&amp;s=96" width="48" height="48" alt="YinBuLiao" title="YinBuLiao" /></a>
+  <a href="https://github.com/onlynet"><img src="https://avatars.githubusercontent.com/u/21923781?v=4&amp;s=96" width="48" height="48" alt="onlynet" title="onlynet" /></a>
+  <a href="https://github.com/eltociear"><img src="https://avatars.githubusercontent.com/u/22633385?v=4&amp;s=96" width="48" height="48" alt="eltociear" title="eltociear" /></a>
+</p>
 
-感谢以上贡献者参与 2.3.1 之后纳入本版的修复、功能与翻译。
+Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [YinBuLiao](https://github.com/YinBuLiao), [onlynet](https://github.com/onlynet), and [eltociear](https://github.com/eltociear).
+
+感谢 [Kuddev](https://github.com/Kuddev)、[Aschenbath](https://github.com/Aschenbath)、[YinBuLiao](https://github.com/YinBuLiao)、[onlynet](https://github.com/onlynet)、[eltociear](https://github.com/eltociear)。
+
+## 2.4.0 - 2026-11-03
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Added
+
+- Add streaming SFTP previews for remote UTF-8 files.
+- Add SFTP editing and conflict checks for UTF-8 files up to 8 MiB.
+- Add progressive image previews with progress, cancel, and retry.
+- Add Luau configuration and plugin commands, with legacy filenames still recognized.
+- Add font, opacity, tab, and pane defaults in `pebrel.luau`.
+- Add GLSL background and terminal effects alongside WGSL.
+- Add shader controls for animation speed, frame rate, and parameters.
+- Add opt-in next-message suggestions for supported local Claude Code, Pi, and OpenCode sessions.
+- Add a separate provider and model for next-message suggestions.
+- Add native click-to-place and drag selection in supported Bash, Zsh, and PowerShell input.
+- Add directly transmitted, uncompressed RGB/RGBA images via the Kitty graphics protocol. ([#767](https://github.com/Kuddev/pebrel/pull/767))
+- Add SFTP Name and Size columns, a full-height file list, and a status bar.
+- Add copy and download actions on SFTP file rows.
+- Add file and folder uploads plus remote copy and paste in SFTP.
+- Add Ctrl/Shift selection and batch downloads in SFTP.
+- Add drag-out downloads from the SFTP list.
+- Add Japanese translations for settings help and option labels. ([#793](https://github.com/Kuddev/pebrel/pull/793))
+
+#### Fixed
+
+- Fix SFTP preview opening for PNG, JPEG, WebP, BMP, and GIF first frames. Addresses [#861](https://github.com/Kuddev/nebula/issues/861).
+- Fix Codex permission requests showing a busy spinner.
+- Fix misaligned activity icons in the sidebar and top tabs.
+- Fix explicit agent states being overwritten when full Hooks are available.
+- Fix generic notifications incorrectly showing the input-request indicator.
+- Fix OpenCode permission and question replies, and busy and retry indicators.
+- Fix OpenCode idle events being mistaken for success.
+- Fix agent Hook routing after reattaching supported SSH sessions.
+- Fix SSH task titles falling out of sync with the active pane after reattaching.
+- Fix duplicate CLI spinners and progress symbols in AI task titles.
+- Fix native pointer editing with remapped PSReadLine chords in Windows PowerShell.
+- Fix duplicate tabs when the running process receives a launch but its reply is lost. Addresses [#797](https://github.com/Kuddev/nebula/issues/797).
+- Fix localhost proxying with an empty bypass list, including OpenCode startup. Addresses [#807](https://github.com/Kuddev/nebula/issues/807).
+- Fix a stale cursor crash during terminal resize or selection. Addresses [#788](https://github.com/Kuddev/nebula/issues/788).
+- Fix the welcome command in fish with or without Fastfetch. Addresses [#803](https://github.com/Kuddev/nebula/issues/803).
+- Fix workspace shortcuts while an image tab has focus. Addresses [#774](https://github.com/Kuddev/nebula/issues/774).
+- Fix search for Japanese settings and localized shortcut actions. Addresses [#821](https://github.com/Kuddev/nebula/issues/821).
+- Fix nested paths being cut off after native Tab completion. Addresses [#676](https://github.com/Kuddev/nebula/issues/676).
+- Fix workspace and agent session restoration after Windows shutdown. Addresses [#792](https://github.com/Kuddev/nebula/issues/792).
+- Fix MSYS2 Zsh discovery and shell detection for imported executables. Addresses [#812](https://github.com/Kuddev/nebula/issues/812).
+- Fix false busy indicators for ordinary full-screen terminal tools. Addresses [#805](https://github.com/Kuddev/nebula/issues/805).
+- Fix immediate disconnects on Windows SSH hosts that cannot run POSIX startup integration. Addresses [#810](https://github.com/Kuddev/nebula/issues/810).
+- Fix Shift+Enter so it inserts a newline in recognized CodeBuddy sessions. Addresses [#839](https://github.com/Kuddev/nebula/issues/839).
+- Fix shell and profile ID instructions in CLI help, completions, and docs. Addresses [#665](https://github.com/Kuddev/nebula/issues/665).
+- Fix unbounded X11 input method property names in long Linux sessions. ([#668](https://github.com/Kuddev/pebrel/pull/668))
+- Fix missing Hermes artwork and incorrect agent icon colors. ([#832](https://github.com/Kuddev/pebrel/pull/832))
+- Fix cramped hover spacing on the Project and Support entries. Addresses [#859](https://github.com/Kuddev/nebula/issues/859).
+- Fix small click targets for the Clear and Restore keymap buttons. ([#644](https://github.com/Kuddev/pebrel/pull/644))
+
+### 中文
+
+macOS、Linux 和 Android 下载包为预览版。
+
+#### 新增
+
+- 新增 SFTP 远端 UTF-8 文件的分块预览。
+- 新增 8 MiB 以内 UTF-8 文件的远端编辑和保存冲突检查。
+- 新增 SFTP 图片渐进预览，支持查看进度、取消和重试。
+- 新增 Luau 配置和插件命令，仍识别旧配置文件名。
+- 新增 `pebrel.luau` 字体、透明度、标签和窗格默认设置。
+- 新增 GLSL 背景与终端效果，兼容原有 WGSL。
+- 新增着色器的动画速度、帧率和参数设置。
+- 新增受支持的本地 Claude Code、Pi 和 OpenCode 会话的下一句建议，默认关闭。
+- 新增下一句建议专用的服务商和模型设置。
+- 新增受支持的 Bash、Zsh 和 PowerShell 原生输入点击定位和拖选。
+- 新增 Kitty 图形协议直接传输未压缩 RGB/RGBA 图片的支持。 ([#767](https://github.com/Kuddev/pebrel/pull/767))
+- 新增 SFTP 名称和大小列、全高文件列表及底部状态栏。
+- 新增 SFTP 文件行的复制和下载按钮。
+- 新增 SFTP 文件和文件夹上传，以及远端复制粘贴。
+- 新增 SFTP Ctrl/Shift 多选和批量下载。
+- 新增从 SFTP 列表拖出文件下载。
+- 新增设置帮助和选项标签的日语翻译。 ([#793](https://github.com/Kuddev/pebrel/pull/793))
+
+#### 修复
+
+- 修复 SFTP 无法打开 PNG、JPEG、WebP、BMP 和 GIF 首帧预览的问题。对应 [#861](https://github.com/Kuddev/nebula/issues/861)。
+- 修复 Codex 申请权限时错误显示转圈的问题。
+- 修复侧栏和顶部标签的活动图标偏移。
+- 修复完整 Hook 上报的 Agent 状态被推断覆盖的问题。
+- 修复普通通知错误显示等待输入手掌的问题。
+- 修复 OpenCode 权限和问答回复，以及忙碌和重试状态。
+- 修复将 OpenCode 空闲事件误判为成功的问题。
+- 修复重新挂接受支持的 SSH 会话后 Agent Hook 路由失效的问题。
+- 修复 SSH 会话重新挂接后任务标题没有跟随活动窗格的问题。
+- 修复 AI 任务标题重复显示 CLI 转圈和进度符号的问题。
+- 修复 Windows PowerShell 更换 PSReadLine 组合键后原生鼠标编辑失效的问题。
+- 修复驻留进程收到启动请求但响应丢失时重复开标签的问题。对应 [#797](https://github.com/Kuddev/nebula/issues/797)。
+- 修复绕过列表为空时本地请求走代理的问题，包括 OpenCode 启动。对应 [#807](https://github.com/Kuddev/nebula/issues/807)。
+- 修复终端缩放或选区操作时因光标过期引发的崩溃。对应 [#788](https://github.com/Kuddev/nebula/issues/788)。
+- 修复 fish 中的欢迎命令，兼容有无 Fastfetch 的情况。对应 [#803](https://github.com/Kuddev/nebula/issues/803)。
+- 修复图片标签获得焦点时工作区快捷键失效的问题。对应 [#774](https://github.com/Kuddev/nebula/issues/774)。
+- 修复日语设置和本地化快捷键动作的搜索。对应 [#821](https://github.com/Kuddev/nebula/issues/821)。
+- 修复原生 Tab 补全后嵌套路径被截断的问题。对应 [#676](https://github.com/Kuddev/nebula/issues/676)。
+- 修复 Windows 关机后工作区和 Agent 会话无法完整恢复的问题。对应 [#792](https://github.com/Kuddev/nebula/issues/792)。
+- 修复 MSYS2 Zsh 自动发现及手动导入时的 Shell 识别。对应 [#812](https://github.com/Kuddev/nebula/issues/812)。
+- 修复普通全屏终端工具错误显示忙碌转圈的问题。对应 [#805](https://github.com/Kuddev/nebula/issues/805)。
+- 修复不支持 POSIX 启动集成的 Windows SSH 主机连接后立即断开的问题。对应 [#810](https://github.com/Kuddev/nebula/issues/810)。
+- 修复已识别的 CodeBuddy 会话中 Shift+Enter 无法换行的问题。对应 [#839](https://github.com/Kuddev/nebula/issues/839)。
+- 修复 CLI 帮助、补全和文档中的 Shell 与配置 ID 说明。对应 [#665](https://github.com/Kuddev/nebula/issues/665)。
+- 修复 Linux 长时间运行时 X11 输入法属性名称持续累积的问题。 ([#668](https://github.com/Kuddev/pebrel/pull/668))
+- 修复 Hermes 图标缺失和部分 Agent 图标颜色错误的问题。 ([#832](https://github.com/Kuddev/pebrel/pull/832))
+- 修复“项目与支持”入口悬停背景左右留白不足的问题。对应 [#859](https://github.com/Kuddev/nebula/issues/859)。
+- 修复按键映射页“清除”和“恢复默认”按钮的点击区域过小的问题。 ([#644](https://github.com/Kuddev/pebrel/pull/644))
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/M1nt-Ch0c0"><img src="https://avatars.githubusercontent.com/u/232783406?v=4&amp;s=96" width="48" height="48" alt="M1nt-Ch0c0" title="M1nt-Ch0c0" /></a>
+  <a href="https://github.com/galact-byte"><img src="https://avatars.githubusercontent.com/u/94279960?v=4&amp;s=96" width="48" height="48" alt="galact-byte" title="galact-byte" /></a>
+  <a href="https://github.com/glitch-cmyk658"><img src="https://avatars.githubusercontent.com/u/278580960?v=4&amp;s=96" width="48" height="48" alt="glitch-cmyk658" title="glitch-cmyk658" /></a>
+  <a href="https://github.com/Tettu0530"><img src="https://avatars.githubusercontent.com/u/89886910?v=4&amp;s=96" width="48" height="48" alt="Tettu0530" title="Tettu0530" /></a>
+  <a href="https://github.com/MeshedPoto"><img src="https://avatars.githubusercontent.com/u/123916728?v=4&amp;s=96" width="48" height="48" alt="MeshedPoto" title="MeshedPoto" /></a>
+  <a href="https://github.com/WilliamWang1721"><img src="https://avatars.githubusercontent.com/u/140129782?v=4&amp;s=96" width="48" height="48" alt="GeekMr" title="GeekMr" /></a>
+</p>
+
+Thanks to [Kuddev](https://github.com/Kuddev), [Aschenbath](https://github.com/Aschenbath), [M1nt-Ch0c0](https://github.com/M1nt-Ch0c0), [galact-byte](https://github.com/galact-byte), [glitch-cmyk658](https://github.com/glitch-cmyk658), [Tettu0530](https://github.com/Tettu0530), [MeshedPoto](https://github.com/MeshedPoto) and [GeekMr](https://github.com/WilliamWang1721) for the features, fixes, translations and release integration included since 2.3.1.
+
+感谢 [Kuddev](https://github.com/Kuddev)、[Aschenbath](https://github.com/Aschenbath)、[M1nt-Ch0c0](https://github.com/M1nt-Ch0c0)、[galact-byte](https://github.com/galact-byte)、[glitch-cmyk658](https://github.com/glitch-cmyk658)、[Tettu0530](https://github.com/Tettu0530)、[MeshedPoto](https://github.com/MeshedPoto) 和 [GeekMr](https://github.com/WilliamWang1721) 参与 2.3.1 之后纳入本版的功能、修复、翻译与发布整合。
+
+### SHA256
+
+```text
+cbe20caf54c1a4afc24ddd2b104ac58852ea6d77f8d78357032820c490bcd606  Pebrel-v2.4.0-android-universal-preview.apk
+f8e6d5e1cb600b9a11773f77675c1fae6af5c9e906444675d35dc4681e299dfe  Pebrel-v2.4.0-linux-x64-preview.AppImage
+a46302426ec8bce9f50215cb2c27c18afdc768d0c71c41652a5125ac26609666  Pebrel-v2.4.0-linux-x64-preview.deb
+45306ba9fa5487421a4ca9662e0650f1e7863376ecc6377bbe98a85d779c5c3c  Pebrel-v2.4.0-linux-x64-preview.tar.gz
+0c8a423d14db87851a8f9ffb38b05b576a941d02bb9ce3d90a42344663ef02eb  Pebrel-v2.4.0-macos-arm64-preview.dmg
+35ddd24b24767875d3ee272b221eb8c4d0216018fd4e09be5a835d3bbb391dac  Pebrel-v2.4.0-macos-x64-preview.dmg
+70719726207b8328c20277bd30aa24ae58b7cc718cbc98826d39e414e765609c  Pebrel-v2.4.0-relay-manual.tar.gz
+ef65aee0f03f9fe60fecf495fdbe4ef1b7603800262ef41708286b5cee5cf49e  Pebrel-v2.4.0-windows-arm64-setup.exe
+14e22a37b1cfab797c964468d336508745c1a16ca4853e6e540e42ec5c7ec01d  Pebrel-v2.4.0-windows-arm64.zip
+95f967e2a6e3d6f5fcfcc89abe248ce81e6c260a2ec66fc52f67b894d1626736  Pebrel-v2.4.0-windows-x64-setup.exe
+c3d88a428db402aff27af3a45e2550c8e3b8a5a77a079e580687ed56445c3dc7  Pebrel-v2.4.0-windows-x64.zip
+```
 
 ## 2.3.1 - 2026-10-27
 

@@ -13,8 +13,8 @@ DOCUMENTS = (
     "docs/internationalization.md", "architecture/notes/AGENTS.md",
 )
 AGENT_GUIDES = (
-    "AGENTS.md", "nebula_app/AGENTS.md", "nebula_terminal/AGENTS.md",
-    "nebula_settings/AGENTS.md", "scripts/AGENTS.md", "packaging/AGENTS.md",
+    "AGENTS.md", "pebrel_app/AGENTS.md", "pebrel_terminal/AGENTS.md",
+    "pebrel_settings/AGENTS.md", "scripts/AGENTS.md", "packaging/AGENTS.md",
     "docs/AGENTS.md", "docs/release-notes/AGENTS.md",
 )
 PUBLIC_GUIDES = DOCUMENTS + AGENT_GUIDES
@@ -142,12 +142,12 @@ class GovernanceTests(unittest.TestCase):
             "scripts/conformance/tests/test_harness.py", "scripts/launch_probe_instance.ps1",
             "scripts/probe_ssh_connect.ps1", "tools/probe_ime.rs",
             "tools/i18n-contract/Cargo.toml", "tools/i18n-contract/Cargo.lock",
-            "nebula_app/tests/i18n_contract.rs", "nebula_app/tests/fixtures/page.html",
-            "nebula_app/i18n/fr-FR.json", "third_party/winit-0.30.13/Cargo.toml",
+            "pebrel_app/tests/i18n_contract.rs", "pebrel_app/tests/fixtures/page.html",
+            "pebrel_app/i18n/fr-FR.json", "third_party/winit-0.30.13/Cargo.toml",
             "third_party/winit-0.30.13/src/lib.rs", "docs/screenshots/SHOTLIST.md",
             "docs/screenshots/hero.png", "docs/release-notes/v1.5.0.md",
             "docs/skills/pebrel-runtime/SKILL.md",
-            "architecture/notes/nebula_terminal/input/2026-09-19-example.md",
+            "architecture/notes/pebrel_terminal/input/2026-09-19-example.md",
         )
         self.assertEqual(self.ignored_paths(paths), set())
 

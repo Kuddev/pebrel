@@ -38,7 +38,8 @@ class RelayConnectionTest {
         val encoded = RemoteSessions.attachCommand(RemoteAttachment(windows.sessions.single(), RemoteWindow("tab_1", "Editor")))
         val script = String(java.util.Base64.getDecoder().decode(encoded.substringAfterLast(' ')), Charsets.UTF_16LE)
         assertTrue(script.contains("tab focus 'tab_1'"))
-        assertTrue(script.contains("session attach 'work.dev'"))
+        assertTrue(script.contains("--session 'work.dev' client"))
+        assertTrue(script.contains("HERDR_REMOTE_KEYBINDINGS = 'server'"))
         assertFalse(script.contains("exec "))
         assertEquals("ubuntu", RemoteSessions.parse("\u001eos\nLinux\n\u001edistro\nID=ubuntu\n\u001eend\n").os)
     }

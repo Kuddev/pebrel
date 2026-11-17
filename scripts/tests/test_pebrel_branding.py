@@ -15,28 +15,28 @@ class PebrelBrandingTests(unittest.TestCase):
         return tomllib.loads(self.source(path))
 
     def test_visible_identity_and_cli_use_pebrel(self):
-        brand = self.source("nebula_app/src/brand.rs")
-        cli = self.source("nebula_app/src/cli.rs")
+        brand = self.source("pebrel_app/src/brand.rs")
+        cli = self.source("pebrel_app/src/cli.rs")
         self.assertIn('pub const NAME: &str = "Pebrel";', brand)
         self.assertIn('bin_name = "pebrel"', cli)
         self.assertIn('display_name = crate::brand::NAME', cli)
         self.assertIn('version = env!("VERSION")', cli)
         self.assertEqual(
-            [target["name"] for target in self.manifest("nebula_app/Cargo.toml")["bin"]],
+            [target["name"] for target in self.manifest("pebrel_app/Cargo.toml")["bin"]],
             ["pebrel", "pebrel-cli"],
         )
         self.assertEqual(
-            [target["name"] for target in self.manifest("nebula_hook/Cargo.toml")["bin"]],
+            [target["name"] for target in self.manifest("pebrel_hook/Cargo.toml")["bin"]],
             ["pebrel-hook"],
         )
-        window = self.source("nebula_app/src/config/window.rs")
+        window = self.source("pebrel_app/src/config/window.rs")
         self.assertIn('DEFAULT_NAME: &str = crate::brand::NAME;', window)
         self.assertIn('DEFAULT_CLASS: &str = "Pebrel";', window)
-        gpui = self.source("nebula_app/src/gpui_shell/workspace/windowing.rs")
+        gpui = self.source("pebrel_app/src/gpui_shell/workspace/windowing.rs")
         self.assertIn('window.set_window_title(crate::brand::NAME)', gpui)
         self.assertIn("startup_geometry::options(", gpui)
         geometry = self.source(
-            "nebula_app/src/gpui_shell/workspace/windowing/startup_geometry.rs"
+            "pebrel_app/src/gpui_shell/workspace/windowing/startup_geometry.rs"
         )
         for fallback in ('pebrel', 'pebrel-quick-terminal'):
             self.assertRegex(geometry, rf'application_id\(\s*"{fallback}"\s*,?\s*\)')
@@ -48,7 +48,7 @@ class PebrelBrandingTests(unittest.TestCase):
             entry = self.source(f'packaging/linux/{desktop}.desktop')
             self.assertIn(f'StartupWMClass={desktop}', entry.splitlines())
             self.assertIn(f'Icon={desktop}', entry.splitlines())
-        welcome = self.source("nebula_app/src/window_context/welcome.rs")
+        welcome = self.source("pebrel_app/src/window_context/welcome.rs")
         self.assertIn('crate::brand::NAME', welcome)
         self.assertNotIn('Nebula Terminal', welcome)
 
@@ -96,8 +96,8 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn('"/DArchitecture=$Architecture"', builder)
 
     def test_update_asset_validation_shares_current_and_legacy_names(self):
-        check = self.source("nebula_app/src/update_check.rs")
-        download = self.source("nebula_app/src/update_download.rs")
+        check = self.source("pebrel_app/src/update_check.rs")
+        download = self.source("pebrel_app/src/update_download.rs")
         self.assertIn('format!("Pebrel-{version}-windows-x64-setup.exe")', check)
         self.assertIn('format!("Pebrel-v{version}-windows-x64-setup.exe")', check)
         self.assertIn('format!("NebulaTerminal-{version}-windows-x64-setup.exe")', check)
@@ -105,7 +105,7 @@ class PebrelBrandingTests(unittest.TestCase):
         # Discovery and validation now route through the shared native selector.
         # Retain the Windows brand contract while also checking the macOS path;
         # executable Rust regressions cover accepted brands and rejected URLs.
-        assets = self.source("nebula_app/src/update_check/assets.rs")
+        assets = self.source("pebrel_app/src/update_check/assets.rs")
         self.assertIn("assets::native_names(&version)", check)
         self.assertIn("assets::native_names(&asset.version)", download)
         self.assertIn("super::windows_x64_installer_names(version).to_vec()", assets)
@@ -113,24 +113,24 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn("if !names.contains(&asset.name)", download)
 
     def test_notification_identity_uses_pebrel(self):
-        source = self.source("nebula_app/src/platform/notifications.rs")
-        brand = self.source("nebula_app/src/brand.rs")
-        taskbar = self.source("nebula_app/src/app_icon/windows/taskbar.rs")
+        source = self.source("pebrel_app/src/platform/notifications.rs")
+        brand = self.source("pebrel_app/src/brand.rs")
+        taskbar = self.source("pebrel_app/src/app_icon/windows/taskbar.rs")
         self.assertIn('WINDOWS_APP_ID: &str = "com.pebrel.terminal";', brand)
         self.assertIn('AUMID: &str = crate::brand::WINDOWS_APP_ID;', source)
         self.assertIn('set_string(&store, &APP_ID, crate::brand::WINDOWS_APP_ID)', taskbar)
         self.assertIn('set_reg_sz(&subkey, "DisplayName", crate::brand::NAME)', source)
 
     def test_config_directory_uses_pebrel_and_migrates_legacy_data(self):
-        paths = self.source("nebula_settings/src/paths.rs")
+        paths = self.source("pebrel_settings/src/paths.rs")
         self.assertIn('"PEBREL_CONFIG_DIR", "NEBULA_CONFIG_DIR"', paths)
         self.assertIn('default_dir("Pebrel")', paths)
         self.assertIn('default_dir("Nebula")', paths)
         self.assertIn('"pebrel_settings.txt"', paths)
-        migration = self.source("nebula_settings/src/paths/migration.rs")
+        migration = self.source("pebrel_settings/src/paths/migration.rs")
         self.assertIn('("nebula_settings.txt", "pebrel_settings.txt")', migration)
-        startup = self.source("nebula_app/src/main.rs")
-        self.assertIn("nebula_settings::migrate_legacy_data()", startup)
+        startup = self.source("pebrel_app/src/main.rs")
+        self.assertIn("pebrel_settings::migrate_legacy_data()", startup)
 
     def test_project_identity_without_local_preview_notice(self):
         readme = self.source("README.md")
@@ -142,7 +142,7 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertNotIn("A name change does not create a new published release", readme)
 
     def test_current_changelog_matches_bilingual_release_notes(self):
-        version = self.manifest("nebula_app/Cargo.toml")["package"]["version"]
+        version = self.manifest("pebrel_app/Cargo.toml")["package"]["version"]
         notes = self.source(f"docs/release-notes/v{version}.md")
         self.assertTrue(notes.startswith(f"# Pebrel {version}\n"))
         body = notes.split("## English\n", 1)[1].split("## SHA256", 1)[0]

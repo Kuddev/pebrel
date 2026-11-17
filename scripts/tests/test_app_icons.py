@@ -95,13 +95,13 @@ def contrast(first, second):
 
 class AppIconTests(unittest.TestCase):
     def test_shared_resource_budget_and_titanium_default(self):
-        primary = ROOT / "nebula_app/windows/nebula.ico"
+        primary = ROOT / "pebrel_app/windows/nebula.ico"
         coverage = ROOT / "extra/logo/nebula-coverage.png"
         self.assertLessEqual(primary.stat().st_size + coverage.stat().st_size, 96 * 1024)
-        self.assertEqual((ROOT / "nebula_app/windows/nebula-titanium.ico").read_bytes(), primary.read_bytes())
+        self.assertEqual((ROOT / "pebrel_app/windows/nebula-titanium.ico").read_bytes(), primary.read_bytes())
         self.assertEqual((ROOT / "extra/logo/nebula.png").read_bytes(),
                          (ROOT / "extra/logo/nebula-titanium.png").read_bytes())
-        resource = (ROOT / "nebula_app/windows/nebula.rc").read_text()
+        resource = (ROOT / "pebrel_app/windows/nebula.rc").read_text()
         self.assertEqual(resource.count(' ICON "'), 1)
         for variant in VARIANTS:
             self.assertNotIn(f'"nebula-{variant}.ico"', resource)
@@ -126,7 +126,7 @@ class AppIconTests(unittest.TestCase):
         for number, colors in enumerate(original_colors, 1):
             self.assertEqual(tuple(entries[f"{number:02}"][key] for key in ("tile", "mark", "border")),
                              tuple(f"#{value}" for value in colors.split()))
-        source = (ROOT / "nebula_settings/src/app_icon.rs").read_text()
+        source = (ROOT / "pebrel_settings/src/app_icon.rs").read_text()
         canonical = re.findall(
             r'\w+\s*=>\s*\(\s*"([^"]+)"\s*,\s*"(\d+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,'
             r'\s*0x([\dA-Fa-f]{6})\s*,\s*0x([\dA-Fa-f]{6})\s*,\s*0x([\dA-Fa-f]{6})\s*\)', source)
@@ -169,7 +169,7 @@ class AppIconTests(unittest.TestCase):
             source = ET.parse(ROOT / "extra/logo" / f"nebula-{variant}.svg").getroot()
             tile = color(source.find("svg:rect", NAMESPACE).get("fill"))
             mark = color(source.find("svg:use", NAMESPACE).get("color"))
-            for size, frame in ico_frames(ROOT / "nebula_app/windows" / f"nebula-{variant}.ico").items():
+            for size, frame in ico_frames(ROOT / "pebrel_app/windows" / f"nebula-{variant}.ico").items():
                 with self.subTest(variant=variant, size=size):
                     width, height, pixels = decode_png(frame)
                     self.assertEqual((width, height), (size, size))
