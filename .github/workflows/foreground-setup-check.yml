@@ -1,0 +1,64 @@
+name: Native foreground setup diagnosis
+on:
+  push:
+    branches: [verify/foreground-setup-1018-20261117]
+permissions:
+  contents: read
+env:
+  SOURCE: 58b1481dece136102ce3092124b3143b1ebdb7c6
+  PYTHONUTF8: "1"
+  CARGO_TERM_COLOR: never
+jobs:
+  native:
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preserve verification driver
+        shell: pwsh
+        run: Copy-Item .github/foreground-setup-check.py "$env:RUNNER_TEMP/foreground-setup-check.py"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - name: Verify native ARM compiler
+        shell: pwsh
+        run: |
+          if ((rustc -vV | Out-String) -notmatch 'host: aarch64-pc-windows-msvc') {
+            throw 'Native ARM64 compiler required'
+          }
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: -release-check-v2
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Prepare native console runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture arm64
+          ./scripts/tests/windows-runtime.tests.ps1 -Architecture arm64
+      - name: Check exact-source foreground flow and isolate worker delay during setup
+        shell: pwsh
+        run: python "$env:RUNNER_TEMP/foreground-setup-check.py"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: foreground-setup-native-arm
+          path: tmp/foreground-setup-evidence
+          if-no-files-found: warn
+          retention-days: 7
