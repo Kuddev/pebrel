@@ -1,0 +1,20 @@
+name: Resource sampler native regression
+on:
+  push:
+    branches: [verify/nonui-resource-559-20261117]
+permissions:
+  contents: read
+jobs:
+  sampler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Test selected source in isolation
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/source" 09799008849f965b5815f1e36684ad7af4f44658
+          docker --version
+          python3 scripts/tests/verify_resource_559.py "$RUNNER_TEMP/source"
