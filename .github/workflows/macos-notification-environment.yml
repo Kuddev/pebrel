@@ -2,6 +2,7 @@ name: Native notification environment
 on:
   push:
     branches: [verify/macos-notification-env-20261117]
+    paths: [.github/workflows/macos-notification-environment.yml]
 permissions:
   contents: read
 jobs:

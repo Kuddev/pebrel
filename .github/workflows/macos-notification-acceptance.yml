@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE: 6b253485b07a5f8949830c8e41cc7deb7bbc4694
+  SOURCE: 1516ae67dd540077d597ebf5e18d6d71326ee4b1
   MACOSX_DEPLOYMENT_TARGET: "14.0"
   PYTHONUTF8: "1"
 jobs:
@@ -52,6 +52,7 @@ jobs:
         id: rust-cache
         with:
           key: release
+          revision: ${{ env.SOURCE }}
           target: target/release
           save-if: "false"
       - name: Compile current GPUI product
