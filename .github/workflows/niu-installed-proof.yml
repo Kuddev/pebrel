@@ -44,6 +44,8 @@ jobs:
           $dir = Join-Path $env:LOCALAPPDATA 'Programs/Niubash'
           if (!(Test-Path (Join-Path $dir 'niu.exe'))) { throw 'missing installed executable' }
           "NIU_PROOF_INSTALL=$dir" >> $env:GITHUB_ENV
+      - name: Build the unmodified product and separate settings test binary
+        run: python "$env:RUNNER_TEMP/niu-proof/verify.py" --prepare
       - name: Verify import, default selection, restart and new interactive terminal
         run: python scripts/conformance/windows_standard_user.py "$env:RUNNER_TEMP/niu-proof/verify.py"
       - uses: actions/upload-artifact@v4
