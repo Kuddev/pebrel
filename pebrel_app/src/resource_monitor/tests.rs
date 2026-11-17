@@ -213,6 +213,57 @@ fn cancellation_during_device_read_discards_the_sample() {
     assert!(collector.refreshed.is_none() && collector.network_refreshed.is_none());
 }
 
+/// A repeat request inside sysinfo's interval must not publish cached CPU percentages as fresh.
+#[test]
+fn immediate_sample_omits_cpu_without_postponing_the_next_interval() {
+    let mut collector = Collector::new();
+    let capture = |_: Request, _: &Arc<AtomicBool>| Tools::default();
+    let request = Request { docker: false, processes: true };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let first = collector.sample_with_devices(request, &cancel, capture).unwrap();
+    assert!(first.cpu.is_none());
+    // Place this call at the beginning of an interval even on a slow filesystem runner.
+    let previous = Instant::now();
+    collector.refreshed = Some(previous);
+    let early = collector.sample_with_devices(request, &cancel, capture).unwrap();
+    assert!(early.cpu.is_none() && early.summary.cpu_cores.iter().all(Option::is_none));
+    assert!(early.processes.iter().all(|p| p.cpu.is_none()));
+    assert_eq!(collector.refreshed, Some(previous));
+}
+
+/// A newly observed PID has no first CPU delta; an idle process later has a measured zero.
+#[cfg(target_os = "linux")]
+#[test]
+fn new_process_needs_its_own_cpu_baseline() {
+    struct Sleeper(std::process::Child);
+    impl Drop for Sleeper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut collector = Collector::new();
+    let mut sample = || {
+        collector
+            .sample_with_devices(
+                Request { docker: false, processes: true },
+                &Arc::new(AtomicBool::new(false)),
+                |_, _| Tools::default(),
+            )
+            .unwrap()
+    };
+    let interval = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + Duration::from_millis(30);
+    sample();
+    let child = Sleeper(std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap());
+    let child_cpu = |s: &Snapshot| s.processes.iter().find(|p| p.pid == child.0.id()).unwrap().cpu;
+    std::thread::sleep(interval);
+    let first = sample();
+    assert!(first.cpu.is_some());
+    assert_eq!(child_cpu(&first), None);
+    std::thread::sleep(interval);
+    assert_eq!(child_cpu(&sample()), Some(0.0));
+}
+
 /// Interface changes and counter resets cannot create negative or unrelated traffic rates.
 #[test]
 fn network_rates_require_matching_interfaces_and_monotonic_counters() {

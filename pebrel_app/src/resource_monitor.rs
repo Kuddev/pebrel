@@ -210,7 +210,7 @@ pub(crate) struct Snapshot {
     pub disks: Probe<Vec<Disk>>,
     /// Visible processes only; protected processes may lack individual counters.
     pub processes: Vec<Process>,
-    /// True only for a response collected while process details were requested.
+    /// True when every row of the latest native process inventory is included.
     pub processes_complete: bool,
     /// NVIDIA telemetry availability and per-device measurements.
     pub gpus: Probe<Vec<Gpu>>,
@@ -228,7 +228,7 @@ pub(crate) struct Collector {
     network_previous: Option<Network>,
     /// Native network sampling time, independent of slower optional device queries.
     network_refreshed: Option<Instant>,
-    /// Native refresh timestamp; absent before the first sample.
+    /// End of the last CPU and process refresh; early requests reuse that inventory.
     refreshed: Option<Instant>,
     /// Whether the previous native sample collected process I/O, delimiting valid I/O deltas.
     refreshed_details: bool,
@@ -270,15 +270,29 @@ impl Collector {
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        self.native.refresh_cpu_usage();
+        // Reading processes also advances sysinfo's per-PID counters. Keep that read on the
+        // same cadence as the host CPU counters, even when a caller only wants fresh memory.
+        let refresh_processes =
+            self.refreshed.is_none_or(|at| at.elapsed() >= sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        let previous_processes = if refresh_processes && self.refreshed.is_some() {
+            self.native.processes().iter().map(|(pid, p)| (*pid, p.start_time())).collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         self.native.refresh_memory();
-        let mut refresh = sysinfo::ProcessRefreshKind::new().with_cpu().with_memory();
-        if request.processes {
-            refresh = refresh.with_disk_usage();
+        if refresh_processes {
+            self.native.refresh_cpu_usage();
+            let mut refresh = sysinfo::ProcessRefreshKind::new().with_cpu().with_memory();
+            if request.processes {
+                refresh = refresh.with_disk_usage();
+            }
+            self.native.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, refresh);
         }
-        self.native.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, refresh);
         let now = Instant::now();
-        let seconds = self.refreshed.map(|at| now.duration_since(at).as_secs_f64());
+        let seconds = self
+            .refreshed
+            .filter(|_| refresh_processes)
+            .map(|at| now.duration_since(at).as_secs_f64());
         let cores = self.native.cpus().len().max(1) as f32;
         let mut processes = self
             .native
@@ -286,17 +300,19 @@ impl Collector {
             .iter()
             .map(|(pid, process)| {
                 let usage = process.disk_usage();
+                let comparable = process.start_time() != 0
+                    && previous_processes.contains(&(*pid, process.start_time()));
                 Process {
                     pid: pid.as_u32(),
                     name: process.name().to_string_lossy().into_owned(),
-                    cpu: seconds.map(|_| (process.cpu_usage() / cores).clamp(0.0, 100.0)),
+                    cpu: comparable.then(|| (process.cpu_usage() / cores).clamp(0.0, 100.0)),
                     memory: process.memory(),
-                    io_rate: seconds.filter(|_| request.processes && self.refreshed_details).map(
-                        |s| {
+                    io_rate: seconds
+                        .filter(|_| comparable && request.processes && self.refreshed_details)
+                        .map(|s| {
                             usage.read_bytes.saturating_add(usage.written_bytes) as f64
                                 / s.max(0.001)
-                        },
-                    ),
+                        }),
                     vram: None,
                 }
             })
@@ -377,8 +393,10 @@ impl Collector {
         self.check_after_native_refresh(cancel)?;
         self.network_previous = snapshot.summary.network.clone();
         self.network_refreshed = Some(network_now);
-        self.refreshed = Some(now);
-        self.refreshed_details = request.processes;
+        if refresh_processes {
+            self.refreshed = Some(now);
+            self.refreshed_details = request.processes;
+        }
         Ok(snapshot)
     }
 
