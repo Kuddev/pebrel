@@ -9,7 +9,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 75
     env:
-      SOURCE: e6078110f30d0402d98cc4a8eff777330d09640a
+      SOURCE: 303a7f4e750f8c60998df47423f028ae425540a2
       PYTHONUTF8: '1'
       CARGO_TERM_COLOR: never
     steps:

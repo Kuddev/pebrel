@@ -47,7 +47,7 @@ def check_shell(pane,marker):
                 seen[pid]=buf.value
         finally:k.CloseHandle(h)
     (out/(marker+'-pane.json')).write_text(json.dumps({'root_pid':tree['root_pid'],'processes':seen},indent=2))
-    candidates=[pid for pid,path in seen.items() if Path(path).resolve()==niu.resolve()]
+    candidates=[pid for pid,path in seen.items() if Path(path).is_file() and Path(path).samefile(niu)]
     assert candidates, ('installed Niu missing from pane',pane,seen)
     return candidates
 try:
@@ -56,7 +56,7 @@ try:
     assert re.search(r'test result: ok. 1 passed; 0 failed;', (out/'select.log').read_text(errors='replace'))
     assert re.search(r'(?m)^shell\s*=\s*profile:niu\|',settings.read_text(encoding='utf-8'))
     profiles=json.loads((cfg/'terminal_profiles.json').read_text(encoding='utf-8'))['profiles']
-    imported=next(x for x in profiles if x.get('shell_id')=='niu' and Path(x['command']).resolve()==niu.resolve())
+    imported=next(x for x in profiles if x.get('shell_id')=='niu' and Path(x['command']).is_file() and Path(x['command']).samefile(niu))
     assert imported['args']==['--login','-i'],imported['args']
     closed_ms=ctx.close_and_wait(timeout=20)
     ctx.start(explicit_working_directory=False);ctx.refresh_targets();second_pid=ctx.snapshot()['process_id']
