@@ -60,17 +60,6 @@
       <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">访问 AIAPI</a></p>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="240">
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
-    </td>
-    <td>
-      <p><strong>一个入口，接入并管理全球主流 AI 模型</strong></p>
-      <p>感谢 Sidrune AI 赞助本项目！Sidrune AI 面向个人开发者、技术团队与企业，通过统一 API 接入并管理全球主流 AI 模型；通过多线路动态调度提升可用性，模型表现、响应时间与费用透明可查。根据不同模型与线路，API 调用成本较官方或基准价格可降低 40%—98%。</p>
-      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">立即访问并注册</a>，即可获得 $3 API 额度。</p>
-    </td>
-  </tr>
 </table>
 
 商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
@@ -80,11 +69,11 @@
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-11.jpg"><img src="extra/community/wechat-group-2026-11-11.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 11 日前有效" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 24 日前有效" width="300" /></a>
 </p>
 
 <p align="center">
-  微信扫码加入，2026 年 11 月 11 日前有效。点击图片可查看原图。
+  微信扫码加入，2026 年 11 月 24 日前有效。点击图片可查看原图。
 </p>
 
 ## 一个工作区
@@ -112,11 +101,11 @@ Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行
   其他窗口对无关命令的修改。
 - 终端快捷键的改绑或清空会保留名称、命令等输入框自身的粘贴键；恢复默认立即作用于
   当前应用窗口，无需重启。运行时改为替换旧覆盖规则，避免追加方式留下禁用记录，
-  配置文件格式保持兼容。详见[快捷键归属说明](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)。
+  配置文件格式保持兼容。详见[快捷键归属说明](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)。
 - Windows 本地 PowerShell 提示符支持将多行剪贴板粘贴保留在 PSReadLine 中检查，
   按 Enter 才提交，一次撤销可移除整次粘贴。需要 Shell 集成生效且托管粘贴键没有被用户占用。
   PSReadLine 会统一 CRLF 换行并将 Tab 展开为四个空格；其他编辑器沿用已协商的粘贴协议
-  或现有确认行为。详见[剪贴板粘贴边界](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
+  或现有确认行为。详见[剪贴板粘贴边界](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
 
 ### 智能补齐
 
@@ -258,7 +247,7 @@ pebrel config check
 安装项目固定的 Rust 工具链与对应平台依赖后运行：
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 内部 Cargo 包名仍为 `nebula`，应用与命令名为 `pebrel`。GPUI 是正式产品界面，

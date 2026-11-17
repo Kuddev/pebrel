@@ -24,7 +24,7 @@ class ShellPointerTests(unittest.TestCase):
         if requires_pointer and not self.has_numeric_pointer(shell):
             self.skipTest("numeric Readline callbacks require Bash 5.2")
         session = self.editor.start(shell, setup)
-        adapter = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty/pointer.sh"
+        adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
         session.command(f"source {shlex.quote(str(adapter))}", b"\x1b]133;A\x07")
         return session
 
@@ -47,7 +47,7 @@ class ShellPointerTests(unittest.TestCase):
         if version < (4, 0):
             self.skipTest("Bash 3 has no native completion query")
         session = self.editor.start_bootstrap("bash", "ssh")
-        adapter = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty/pointer.sh"
+        adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
         boundary = b"\x1b]133;B\x07"
         session.command(f"source {shlex.quote(str(adapter))}", boundary)
         self.assertIn(b"SetUserVar=pebrel_editor_ready=", session.output)
@@ -160,7 +160,7 @@ class ShellPointerTests(unittest.TestCase):
             session.wait(boundary)
         # Repeated prompt changes and re-sourcing must retain exactly one
         # boundary, after all printable user prompt cells.
-        adapter = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty/pointer.sh"
+        adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/pointer.sh"
         session.command(f"source {shlex.quote(str(adapter))}", boundary)
         output = session.command(":", boundary)
         self.assertEqual(output.count(b"\x1b]133;B\x07"), 1, output)

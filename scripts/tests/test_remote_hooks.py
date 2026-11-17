@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-ASSETS = Path(__file__).resolve().parents[2] / "nebula_app/res/hooks"
+ASSETS = Path(__file__).resolve().parents[2] / "pebrel_app/res/hooks"
 TOKEN = "0123456789abcdef0123456789abcdef"
 
 

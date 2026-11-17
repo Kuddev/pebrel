@@ -27,7 +27,7 @@ TextView 控件在深浅主题与宽窄布局下的鼠标拖选、键盘复制�
 （默认 480），然后运行：
 
 ```text
-cargo test --locked -p nebula --bin pebrel --features gpui-test-support native_reader_selection_preview -- --ignored --nocapture --test-threads=1
+cargo test --locked -p pebrel --bin pebrel --features gpui-test-support native_reader_selection_preview -- --ignored --nocapture --test-threads=1
 ```
 
 测试只对自己的原生 TextView 窗口分发选择事件，不启动终端或 AI 会话、不改系统
