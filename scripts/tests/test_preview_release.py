@@ -99,7 +99,7 @@ class PreviewReleaseTests(unittest.TestCase):
     def test_packaging_rejects_stale_binary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "nebula_app/res/shell/zshrc"
+            source = root / "pebrel_app/res/shell/zshrc"
             source.parent.mkdir(parents=True)
             source.write_text("updated script", encoding="utf-8")
             binary = root / "nebula"

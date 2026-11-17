@@ -66,7 +66,8 @@ class DesktopRecoveryTest {
         assertEquals(listOf("Ctrl+C"), sent)
     }
 
-    private class Link(private val autoSnapshot: Boolean = true, private val scrollSupported: Boolean = false, private val historySupported: Boolean = false) : DesktopTransport {
+    private class Link(private val autoSnapshot: Boolean = true, private val scrollSupported: Boolean = false, private val historySupported: Boolean = false,
+                       private val failure: DesktopFailureKind? = null) : DesktopTransport {
         lateinit var receive: (JSONObject) -> Unit
         lateinit var lost: (Throwable?) -> Unit
         var closed = false
@@ -75,6 +76,7 @@ class DesktopRecoveryTest {
         override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
             this.receive = receive
             lost = disconnected
+            failure?.let { throw DesktopConnectionFailure(it) }
             receive(JSONObject().put("type", "mobile.ready").put("protocol", "pebrel.mobile.relay").put("version", 1)
                 .put("capabilities", JSONObject().put("input", true).put("terminal_scroll", scrollSupported).put("terminal_history", historySupported)))
         }
@@ -133,6 +135,50 @@ class DesktopRecoveryTest {
             withContext(Dispatchers.IO) { delay(5) }
         }
         fail("repository did not reach expected state")
+    }
+
+    @Test fun pairedLanAndRelaySurviveReconnectAndFallbackKeepsTheWorkspace() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val links = mutableListOf<Link>()
+        val modes = mutableListOf<String>()
+        var lanFailure: DesktopFailureKind? = null
+        val repository = SessionRepository(ApplicationProvider.getApplicationContext()) { profile ->
+            modes += profile.mode
+            Link(failure = if (profile.mode == "lan") lanFailure else null).also(links::add)
+        }
+        fun profile(mode: String) = RelayProfile(if (mode == "lan") "wss://192.0.2.1:4000" else "wss://relay.example.com",
+            mode, "a".repeat(43), "PC", "sha256/${"a".repeat(43)}=", mode,
+            SecureRelayProfile("b".repeat(43), "grant-$mode", "c".repeat(43), false))
+        try {
+            repository.foregroundChanged(true)
+            val id = repository.connectRelay(profile("relay"))
+            awaitState { repository.desktops.value.singleOrNull()?.status == "ready" }
+            assertEquals(id, repository.connectRelay(profile("lan")))
+            awaitState { links.size == 2 && repository.desktops.value.single().status == "ready" }
+            assertEquals(listOf("lan", "relay"), repository.relays.value.single().connectionRoutes().map { it.mode })
+            repository.setDraft("$id:1:2", "unsent draft")
+            lanFailure = DesktopFailureKind.NETWORK
+            links.last().lost(java.io.IOException("LAN unavailable"))
+            awaitState { repository.desktops.value.single().status == "disconnected" }
+            advanceTimeBy(501); runCurrent()
+            awaitState { links.size == 4 && repository.desktops.value.single().status == "ready" }
+            assertEquals(listOf("relay", "lan", "lan", "relay"), modes)
+            assertEquals(id, repository.desktops.value.single().id)
+            assertEquals("Relay", repository.desktops.value.single().transport)
+            assertEquals("unsent draft", repository.drafts.value["$id:1:2"])
+            assertEquals(2, repository.relays.value.single().connectionRoutes().size)
+            assertTrue(links[2].closed)
+            assertTrue(links.flatMap { it.methods }.none { it == "pane.send_text" })
+
+            // A later explicit connection retries LAN first and stops on a trust failure.
+            repository.closeDesktop(id)
+            lanFailure = DesktopFailureKind.CERTIFICATE_CHANGED
+            assertEquals(id, repository.connectRelay(repository.relays.value.single()))
+            awaitState { repository.desktops.value.single().failure == DesktopFailureKind.CERTIFICATE_CHANGED }
+            advanceTimeBy(60_000); runCurrent()
+            assertEquals(listOf("relay", "lan", "lan", "relay", "lan"), modes)
+            assertEquals(2, repository.relays.value.single().connectionRoutes().size)
+        } finally { repository.foregroundChanged(false); repository.closeAll(); Dispatchers.resetMain() }
     }
 
     @Test fun foregroundRecoveryKeepsComputerPaneAndDraftAndDoesNotReplayInput() = runTest {
