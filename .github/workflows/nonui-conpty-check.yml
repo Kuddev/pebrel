@@ -15,11 +15,11 @@ jobs:
       PYTHONUTF8: "1"
       RUST_BACKTRACE: "1"
       RUST_TOOLCHAIN: "1.97.1"
-      REVIEWED_SOURCE: 8e5eef3839f1a8f5c45e62aa21a3673f1dbc6a91
+      REVIEWED_SOURCE: c0112ee26313e70e082f0234cfc514fd0f52bac3
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 8e5eef3839f1a8f5c45e62aa21a3673f1dbc6a91
+          ref: c0112ee26313e70e082f0234cfc514fd0f52bac3
           persist-credentials: false
           fetch-depth: 0
       - name: Verify reviewed source
@@ -51,12 +51,12 @@ jobs:
         run: |
           ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
           ./scripts/tests/windows-runtime.tests.ps1 -Architecture x64
-      - name: Repeat the ConPTY reader regression on the reviewed source
+      - name: Repeat ConPTY and backpressure regressions on the reviewed source
         shell: pwsh
         run: |
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Write-Output "ConPTY regression repetition $attempt of 3"
-            cargo nextest run --config .github/ci-profile.toml --cargo-profile ci --locked --workspace --features pebrel/gpui-test-support --no-fail-fast --retries 0 -E 'test(=platform::keyboard::tests::modified_enter_reaches_native_and_byte_readers_through_conpty)'
+            cargo nextest run --config .github/ci-profile.toml --cargo-profile ci --locked --workspace --features pebrel/gpui-test-support --no-fail-fast --retries 0 -E 'test(=platform::keyboard::tests::modified_enter_reaches_native_and_byte_readers_through_conpty) | test(=platform::keyboard::tests::conpty_fixture_write_preserves_partial_input_and_bounds_backpressure)'
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
