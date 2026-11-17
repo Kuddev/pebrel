@@ -12,7 +12,7 @@ Write a note for dependency direction, core ownership, persistent formats, proto
 
 ## Location and history
 
-- Mirror the owning code path, for example `architecture/notes/nebula_terminal/input/2026-09-19-example.md`.
+- Mirror the owning code path, for example `architecture/notes/pebrel_terminal/input/2026-09-19-example.md`.
 - Use `YYYY-MM-DD-kebab-case.md`. Keep one decision or incident per file.
 - Do not create a global `INDEX.md`. The nearest module `AGENTS.md` points agents to the relevant directory.
 - Once accepted, do not rewrite the old rationale into a new conclusion. Create a new note with `Supersedes`; the old note may receive only a short `Superseded by` pointer.

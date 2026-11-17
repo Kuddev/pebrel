@@ -1,39 +1,39 @@
 version = 1
 renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-assets", "winit", "glutin", "crossfont"]
 
-[crates.nebula_app]
+[crates.pebrel_app]
 layer = "application"
-dependencies = ["nebula_terminal", "nebula_config", "nebula_config_derive", "nebula_settings", "nebula_split", "nebula-completions", "mobile/link"]
-build-dependencies = ["nebula_settings"]
+dependencies = ["pebrel_terminal", "pebrel_config", "pebrel_config_derive", "pebrel_settings", "pebrel_split", "pebrel-completions", "mobile/link"]
+build-dependencies = ["pebrel_settings"]
 dev-dependencies = []
 
-[crates.nebula_terminal]
+[crates.pebrel_terminal]
 layer = "core"
 
-[crates.nebula_config]
+[crates.pebrel_config]
 layer = "core"
-dev-dependencies = ["nebula_config_derive"]
+dev-dependencies = ["pebrel_config_derive"]
 
-[crates.nebula_config_derive]
+[crates.pebrel_config_derive]
 layer = "core"
-dev-dependencies = ["nebula_config"]
+dev-dependencies = ["pebrel_config"]
 
-[crates.nebula-completions]
+[crates.pebrel-completions]
 layer = "core"
 
-[crates.nebula_settings]
-layer = "core"
-zero_production_dependencies = true
-
-[crates.nebula_split]
+[crates.pebrel_settings]
 layer = "core"
 zero_production_dependencies = true
 
-[crates.nebula_hook]
+[crates.pebrel_split]
+layer = "core"
+zero_production_dependencies = true
+
+[crates.pebrel_hook]
 layer = "hook"
 zero_production_dependencies = true
 
-[crates.nebula_gpui]
+[crates.pebrel_gpui]
 layer = "lab"
 
 [crates."mobile/link"]
