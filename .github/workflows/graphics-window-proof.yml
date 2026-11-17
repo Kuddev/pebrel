@@ -14,9 +14,9 @@ jobs:
       matrix:
         include:
           - case: transfer
-            source: a487ee7c574cd621c135cd2017232ec3fd337b5d
+            source: 58b1481dece136102ce3092124b3143b1ebdb7c6
           - case: controls
-            source: 558dfa910441b62b1d05123ace86be4f5e8d87fb
+            source: 5a9abe1fbbe69e2381944e96dc2156ebab2c8926
     env:
       SOURCE: ${{ matrix.source }}
       CASE: ${{ matrix.case }}
@@ -37,7 +37,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb xauth imagemagick python3-pil dbus-x11 mesa-vulkan-drivers libvulkan1 weston x11-utils \
+            xdotool xvfb xauth imagemagick python3-pil dbus-x11 mesa-vulkan-drivers libvulkan1 weston x11-utils \
             build-essential cmake pkg-config libasound2-dev libdbus-1-dev libudev-dev \
             libfontconfig1-dev libfreetype6-dev libegl1-mesa-dev libgl1-mesa-dev \
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \

@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import os
+import re
 from pathlib import Path
 import select
 import subprocess as sp
@@ -59,7 +60,30 @@ def child():
     (root / 'pty.json').write_text(json.dumps(report, indent=2))
     wait_for('remove', 90)
     apc('a=d,d=p,x=6,y=5' if controls else 'a=d,d=I,i=7')
-    (root / 'deleted').touch(); wait_for('finish', 90)
+    (root / 'deleted').touch()
+    if controls:
+        def get_size():
+            result = []
+            for request, response in [(18,8),(16,6),(14,4)]:
+                os.write(1, f'\x1b[{request}t'.encode()); data = b''
+                deadline = time.monotonic() + 8
+                while not data.endswith(b't'):
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0 and select.select([0],[],[],remaining)[0], (request, data)
+                    data += os.read(0,128)
+                m = re.fullmatch(fr'\x1b\[{response};(\d+);(\d+)t'.encode(),data)
+                assert m, data
+                result.append(list(map(int,m.groups())))
+            return result
+        before = get_size(); (root/'size-before.json').write_text(json.dumps(before)); wait_for('resized',30)
+        deadline = time.monotonic()+12
+        while time.monotonic()<deadline:
+            after=get_size(); cells,cell,pixels=after
+            if cells!=before[0] and pixels==[a*b for a,b in zip(cells,cell)]:break
+            time.sleep(.1)
+        else:raise AssertionError((before,after))
+        (root/'size-after.json').write_text(json.dumps(after))
+    wait_for('finish', 90)
 
 def capture():
     result = sp.run(['import','-window','root','png:-'],capture_output=True,check=True,timeout=10)
@@ -96,7 +120,19 @@ def parent():
                 if all(n<=b+30 for n,b in zip(removed,baseline)):break
                 time.sleep(0.2)
             else: raise AssertionError(f'page remained after delete: {counts} -> {removed}')
-            after.save(root/'removed.png'); (root/'result.json').write_text(json.dumps(dict(source=source,case=os.environ['CASE'],before=baseline,shown=counts,removed=removed,bounds=boxes,pty=json.loads((root/'pty.json').read_text())),indent=2)); (root/'finish').touch()
+            after.save(root/'removed.png')
+            report=dict(source=source,case=os.environ['CASE'],before=baseline,shown=counts,removed=removed,bounds=boxes,pty=json.loads((root/'pty.json').read_text()))
+            if controls:
+                wait_for('size-before.json',30)
+                wins=sp.check_output(['xdotool','search','--onlyvisible','--pid',str(proc.pid)],text=True).split()
+                def geom(win):
+                    data=sp.check_output(['xdotool','getwindowgeometry','--shell',win],text=True)
+                    v=dict(line.split('=',1) for line in data.splitlines());return int(v['WIDTH']),int(v['HEIGHT'])
+                win=max(wins,key=lambda w:geom(w)[0]*geom(w)[1]);width,height=geom(win)
+                sp.run(['xdotool','windowsize',win,str(max(600,width-210)),str(max(400,height-100))],check=True)
+                (root/'resized').touch();wait_for('size-after.json',30)
+                report['geometry']={k:json.loads((root/('size-'+k+'.json')).read_text()) for k in ['before','after']}
+            (root/'result.json').write_text(json.dumps(report,indent=2)); (root/'finish').touch()
         except BaseException:
             capture().save(root/'failure.png'); raise
         finally:
