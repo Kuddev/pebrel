@@ -230,3 +230,6 @@ pub(crate) fn create_fifo_for_test(path: &Path) -> Option<io::Result<()>> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;
