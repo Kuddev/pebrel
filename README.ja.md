@@ -60,17 +60,6 @@
       <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">AIAPI を見る</a></p>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="240">
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
-    </td>
-    <td>
-      <p><strong>世界をリードする AI モデルにアクセスし、管理するためのひとつの入り口</strong></p>
-      <p>このプロジェクトをスポンサーしてくださっている Sidrune AI に感謝します！Sidrune AI は、個人開発者、技術チーム、企業に向けて、世界をリードする AI モデルにアクセスし、管理するための統一された API を提供しています。動的なマルチルートのスケジューリングによって可用性が高まり、モデルの性能、応答時間、コストは透明に保たれます。モデルとルートによっては、API の呼び出しコストが公式価格やベンチマーク価格より 40%〜98% 安くなります。</p>
-      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">今すぐアクセスして登録</a>すると、$3 分の API クレジットを受け取れます。</p>
-    </td>
-  </tr>
 </table>
 
 ビジネス上の協力やスポンサーについてのお問い合わせ先：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
