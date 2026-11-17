@@ -45,14 +45,15 @@ class DockerAPI(http.server.BaseHTTPRequestHandler):
 def prepare(source, root):
     code = source / 'pebrel_app/src'
     (root / 'src/platform').mkdir(parents=True)
-    for name in ('platform/process.rs', 'platform/process_output.rs', 'resource_monitor.rs', 'resource_monitor'):
+    for name in ('platform/local_paths.rs', 'platform/process.rs', 'platform/process_output.rs', 'resource_monitor.rs', 'resource_monitor'):
         (root / 'src' / name).symlink_to(code / name)
     versions = {pkg['name']: pkg['version'] for pkg in tomllib.loads((source / 'Cargo.lock').read_text())['package']}
     (root / 'Cargo.toml').write_text('[package]\nname="sampler"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\n'
+        + 'pebrel-completions={path=' + json.dumps(str(source / 'pebrel-completions')) + ',default-features=false}\n'
         + 'serde={version="=' + versions['serde'] + '",features=["derive"]}\n'
         + ''.join(f'{name}="={versions[name]}"\n' for name in ('serde_json', 'tempfile', 'sysinfo', 'libc')))
     (root / 'src/main.rs').write_text('''#![allow(dead_code)]
-mod platform { pub(crate) mod process; pub(crate) mod process_output; }
+mod platform { pub(crate) mod local_paths; pub(crate) mod process; pub(crate) mod process_output; }
 mod resource_monitor;
 use resource_monitor::{Collector, Probe, Request};
 fn main() {
@@ -108,10 +109,17 @@ fi
 
 
 def verify_old_cpu(root, old_module):
-    # Keep the final tests, replacing only the collector implementation in this harness.
+    # Run the final tests against the earlier collector and its matching filesystem adapter.
     module = root / 'src/resource_monitor.rs'
     module.unlink()
     shutil.copyfile(old_module, module)
+    modules = root / 'src/resource_monitor'
+    final_modules = modules.resolve()
+    modules.unlink()
+    modules.mkdir()
+    for entry in final_modules.iterdir():
+        source = old_module.with_suffix('') / entry.name if entry.name == 'filesystems.rs' else entry
+        (modules / entry.name).symlink_to(source)
     for case in ('immediate_sample_omits_cpu_without_postponing_the_next_interval',
                  'new_process_needs_its_own_cpu_baseline'):
         name = 'resource_monitor::tests::' + case
