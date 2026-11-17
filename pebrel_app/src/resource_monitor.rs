@@ -254,6 +254,19 @@ impl Collector {
         request: Request,
         cancel: &Arc<AtomicBool>,
     ) -> Result<Snapshot, String> {
+        self.sample_with_devices(request, cancel, devices::capture_native)
+    }
+
+    fn sample_with_devices(
+        &mut self,
+        request: Request,
+        cancel: &Arc<AtomicBool>,
+        capture: impl FnOnce(Request, &Arc<AtomicBool>) -> devices::Tools,
+    ) -> Result<Snapshot, String> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let raw = capture(request, cancel);
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
@@ -288,13 +301,12 @@ impl Collector {
                 }
             })
             .collect::<Vec<_>>();
-        // Device commands have independent budgets and share cancellation with the owning view.
-        let raw = devices::capture_native(request, cancel);
         let (gpus, docker) = devices::decode(raw, &mut processes);
         // Ranking requires lightweight counters for all PIDs, but overview retains five rows only.
         if !request.processes {
             retain_top_processes(&mut processes);
         }
+        self.check_after_native_refresh(cancel)?;
         self.networks.refresh_list();
         self.networks.refresh();
         let mut interfaces =
@@ -313,8 +325,6 @@ impl Collector {
         if let (Some(old), Some(seconds)) = (&self.network_previous, network_seconds) {
             update_network_rates(&mut network, old, seconds);
         }
-        self.network_previous = Some(network.clone());
-        self.network_refreshed = Some(network_now);
         let summary = Summary {
             name: sysinfo::System::name().unwrap_or_default(),
             version: sysinfo::System::os_version().unwrap_or_default(),
@@ -331,10 +341,9 @@ impl Collector {
                 .collect(),
             network: (!network.interfaces.is_empty()).then_some(network),
         };
+        self.check_after_native_refresh(cancel)?;
         let disks = sysinfo::Disks::new_with_refreshed_list();
-        self.refreshed = Some(now);
-        self.refreshed_details = request.processes;
-        Ok(Snapshot {
+        let snapshot = Snapshot {
             sampled: Instant::now(),
             platform: format!(
                 "{} · {} CPU",
@@ -364,7 +373,24 @@ impl Collector {
             processes_complete: request.processes,
             gpus,
             docker,
-        })
+        };
+        self.check_after_native_refresh(cancel)?;
+        self.network_previous = snapshot.summary.network.clone();
+        self.network_refreshed = Some(network_now);
+        self.refreshed = Some(now);
+        self.refreshed_details = request.processes;
+        Ok(snapshot)
+    }
+
+    fn check_after_native_refresh(&mut self, cancel: &AtomicBool) -> Result<(), String> {
+        if cancel.load(Ordering::Relaxed) {
+            // sysinfo may already have advanced internal deltas. Start a fresh CPU/I/O interval.
+            self.native = sysinfo::System::new();
+            self.refreshed = None;
+            self.refreshed_details = false;
+            return Err("cancelled".into());
+        }
+        Ok(())
     }
 }
 

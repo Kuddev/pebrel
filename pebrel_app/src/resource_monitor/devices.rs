@@ -36,6 +36,9 @@ pub(super) struct Tools {
 pub(super) fn capture_native(request: Request, cancel: &Arc<AtomicBool>) -> Tools {
     let deadline = Instant::now() + Duration::from_secs(8);
     let read = |program: &str, args: &[&str]| {
+        if cancel.load(Ordering::Relaxed) {
+            return Output { stdout: None, error: Some("cancelled".into()) };
+        }
         let mut command = Command::new(program);
         command.args(args);
         match crate::platform::process_output::read_cancellable(

@@ -169,6 +169,50 @@ fn cancelled_sample_never_starts_collection() {
     );
 }
 
+/// Cancellation after a real child starts cannot publish a successful sample or a new baseline.
+#[test]
+fn cancellation_during_device_read_discards_the_sample() {
+    let mut collector = Collector::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("ready");
+    let result = collector.sample_with_devices(
+        Request { docker: true, processes: false },
+        &cancel,
+        |_, cancel| {
+            #[cfg(unix)]
+            let mut child = {
+                let mut cmd = std::process::Command::new("/bin/sh");
+                cmd.args(["-c", "echo ready > ready; exec sleep 30"]);
+                cmd
+            };
+            #[cfg(windows)]
+            let mut child = {
+                let mut cmd = std::process::Command::new("cmd.exe");
+                cmd.args(["/D", "/C", "echo ready>ready & ping -n 30 127.0.0.1 >nul"]);
+                cmd
+            };
+            child.current_dir(dir.path());
+            let interrupted = crate::platform::process_output::read_cancellable(
+                child,
+                Duration::from_secs(15),
+                1024,
+                &|| {
+                    if ready.is_file() {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                    cancel.load(Ordering::Relaxed)
+                },
+            );
+            assert_eq!(interrupted.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+            Tools::default()
+        },
+    );
+    assert_eq!(result.unwrap_err(), "cancelled");
+    assert!(ready.is_file());
+    assert!(collector.refreshed.is_none() && collector.network_refreshed.is_none());
+}
+
 /// Interface changes and counter resets cannot create negative or unrelated traffic rates.
 #[test]
 fn network_rates_require_matching_interfaces_and_monotonic_counters() {
