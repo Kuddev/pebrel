@@ -169,6 +169,18 @@ fn cancelled_sample_never_starts_collection() {
     );
 }
 
+const SAMPLER_CHILD_READY: &str = "PEBREL_TEST_RESOURCE_SAMPLER_CHILD_READY";
+
+// Re-enter the test binary so that the observed process owns the readiness marker on every OS.
+fn idle_child(ready: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "resource_monitor::tests::new_process_needs_its_own_cpu_baseline"])
+        .env(SAMPLER_CHILD_READY, ready)
+        .stdout(std::process::Stdio::null());
+    command
+}
+
 /// Cancellation after a real child starts cannot publish a successful sample or a new baseline.
 #[test]
 fn cancellation_during_device_read_discards_the_sample() {
@@ -180,21 +192,8 @@ fn cancellation_during_device_read_discards_the_sample() {
         Request { docker: true, processes: false },
         &cancel,
         |_, cancel| {
-            #[cfg(unix)]
-            let mut child = {
-                let mut cmd = std::process::Command::new("/bin/sh");
-                cmd.args(["-c", "echo ready > ready; exec sleep 30"]);
-                cmd
-            };
-            #[cfg(windows)]
-            let mut child = {
-                let mut cmd = std::process::Command::new("cmd.exe");
-                cmd.args(["/D", "/C", "echo ready>ready & ping -n 30 127.0.0.1 >nul"]);
-                cmd
-            };
-            child.current_dir(dir.path());
             let interrupted = crate::platform::process_output::read_cancellable(
-                child,
+                idle_child(&ready),
                 Duration::from_secs(15),
                 1024,
                 &|| {
@@ -232,9 +231,13 @@ fn immediate_sample_omits_cpu_without_postponing_the_next_interval() {
 }
 
 /// A newly observed PID has no first CPU delta; an idle process later has a measured zero.
-#[cfg(target_os = "linux")]
 #[test]
 fn new_process_needs_its_own_cpu_baseline() {
+    if let Some(ready) = std::env::var_os(SAMPLER_CHILD_READY) {
+        std::fs::write(ready, b"ready").unwrap();
+        std::thread::sleep(Duration::from_secs(30));
+        return;
+    }
     struct Sleeper(std::process::Child);
     impl Drop for Sleeper {
         fn drop(&mut self) {
@@ -254,7 +257,14 @@ fn new_process_needs_its_own_cpu_baseline() {
     };
     let interval = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + Duration::from_millis(30);
     sample();
-    let child = Sleeper(std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("ready");
+    let child = Sleeper(idle_child(&ready).spawn().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !ready.is_file() {
+        assert!(Instant::now() < deadline, "sampler child failed to start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let child_cpu = |s: &Snapshot| s.processes.iter().find(|p| p.pid == child.0.id()).unwrap().cpu;
     std::thread::sleep(interval);
     let first = sample();

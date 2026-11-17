@@ -381,7 +381,7 @@ impl Collector {
                         filesystem: Some(disk.file_system().to_string_lossy().into_owned()),
                         source: Some(disk.name().to_string_lossy().into_owned()),
                         root: None,
-                        system: filesystems::native_system_mount(disk.mount_point()),
+                        system: crate::platform::local_paths::is_system_mount(disk.mount_point()),
                     })
                     .collect(),
             ),

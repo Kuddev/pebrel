@@ -69,18 +69,6 @@ fn infrastructure(disk: &Disk) -> bool {
     .any(|base| beneath(base))
 }
 
-/// Determine the desktop host's system volume using its own OS environment.
-pub(super) fn native_system_mount(mount: &std::path::Path) -> bool {
-    if cfg!(target_os = "windows") {
-        let drive = std::env::var("SystemDrive").ok();
-        drive.is_some_and(|drive| {
-            mount.to_string_lossy().trim_end_matches(['\\', '/']).eq_ignore_ascii_case(&drive)
-        })
-    } else {
-        mount == std::path::Path::new("/")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
