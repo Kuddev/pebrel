@@ -56,9 +56,11 @@ Gate Antigravity envelopes in
   `O_NONBLOCK | O_NOFOLLOW`, and Windows segment `symlink_metadata` +
   `FILE_FLAG_OPEN_REPARSE_POINT` + `FILE_TYPE_DISK`).
 - Execute disk probes on a bounded worker (`sync_channel(8)`, `200 ms` listener wait cap).
-  Timeouts, full queues, unreadable/symlinked files, `read_dir` / metadata errors, or scans
-  exceeding `4096` entries / deadline yield `Unverified` and are dropped instead of being
-  treated as `Primary`.
+  Unknown conversations remain `Unverified` on timeouts or full queues. If no worker
+  result arrives for an already admitted foreground owner, recheck its live lease and
+  the subagent cache before accepting its own event. A cached child verdict wins over
+  the lease. Completed probe verdicts, including unreadable/symlinked files, metadata
+  errors and incomplete scans, retain their classification.
 - Cache positive `Subagent` verdicts permanently (64-entry ring); for non-`SYSTEM` step-`0`
   conversations, cache only the immutable step-`0` check while re-verifying parent subagent
   records on subsequent hooks so delayed or previously unreadable parent records still
@@ -72,6 +74,12 @@ Gate Antigravity envelopes in
   already-confirmed foreground conversation validates known parent records without re-scanning
   `read_dir(brain_root)`, allowing its subsequent `done` hooks to succeed even after `brain`
   grows past `4,096` directories while keeping unknown conversations bounded and fail-closed.
+
+The worker timeout previously discarded even the confirmed owner's single completion
+event: skipping the directory scan inside the queued job did not help a job that could
+not run. The listener now uses existing foreground ownership only when a result is
+unavailable; it does not grant ownership to a new conversation or discard a returned
+disk verdict. The lifecycle still checks the event against its pane/process owner.
 
 ## Rejected alternatives
 
@@ -97,6 +105,9 @@ un-forked and forked subagents (cold-start, parent cache eviction, delayed paren
 visibility), full `parse_envelope` + `AgentActivity` preservation under probe timeout, full
 worker queue and anomalous directory metadata, trusted-root and ancestor symlink rejection,
 FIFO non-blocking behavior, and remote envelope isolation.
+The busy-worker regression also finishes the confirmed foreground turn once while the
+worker is occupied and once while its queue is full, retaining the unknown-child and
+post-drain `/new` comparisons.
 
 ## Supersedes
 

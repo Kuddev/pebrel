@@ -271,19 +271,36 @@ fn classify_antigravity_envelope_with_worker(
     };
     let confirmed_foreground = is_confirmed_antigravity_foreground(&id);
     let deadline = Instant::now() + timeout;
+    let probe_dir = conversation_dir.clone();
+    let probe_id = id.clone();
     worker
         .run(timeout, move || {
             probe_antigravity_conversation_on_disk(
                 &brain_root,
-                conversation_dir,
-                &id,
+                probe_dir,
+                &probe_id,
                 step_zero_non_system,
                 &known_parent_ids,
                 confirmed_foreground,
                 deadline,
             )
         })
-        .unwrap_or(AntigravityVerdict::Unverified)
+        .unwrap_or_else(|| {
+            // A busy worker cannot revoke the current owner's identity. Recheck
+            // both owners: the lease may end or the probe may identify a child
+            // while the listener is waiting. Completed disk verdicts still win.
+            let cache =
+                ANTIGRAVITY_CONVERSATIONS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if cache.iter().any(|(dir, state)| {
+                dir == &conversation_dir && *state == CachedConversation::Subagent
+            }) {
+                AntigravityVerdict::Subagent
+            } else if is_confirmed_antigravity_foreground(&id) {
+                AntigravityVerdict::Primary
+            } else {
+                AntigravityVerdict::Unverified
+            }
+        })
 }
 
 fn probe_antigravity_conversation_on_disk(
