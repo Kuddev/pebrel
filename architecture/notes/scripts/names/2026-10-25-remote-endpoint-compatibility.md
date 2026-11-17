@@ -2,6 +2,8 @@
 
 ## Status
 
+Superseded in part (tmux name rules) by [allow the tmux name](../check_prohibited_names/2026-11-08-allow-terminal-multiplexer-name.md).
+
 Proposed for maintainer review with the remote session recovery change.
 
 ## Context
