@@ -17,7 +17,7 @@ rather than an undocumented parallel package.
 
 - `flake.nix` defines `packages.x86_64-linux.pebrel` (and `default`) plus
   `overlays.default`; no other output is responsible for a release asset.
-- The `version` binding in `flake.nix` is derived from `nebula_app/Cargo.toml`, and the
+- The `version` binding in `flake.nix` is derived from `pebrel_app/Cargo.toml`, and the
   flake builds the repository source (`src = self`) rather than a separately published
   artifact.
 - Toolchain selection: the flake follows the `nixos-unstable` input, locked to an exact
@@ -35,8 +35,8 @@ rather than an undocumented parallel package.
   `Icon=io.github.kuddev.pebrel` resolves by name, so the size directory must match the
   actual bitmap.
 - `cargoBuildFlags` in `flake.nix` builds both `--bin=pebrel` and `--bin=pebrel-hook`
-  from `nebula_hook`. The application resolves the helper from the executable's own
-  directory (`nebula_app/src/ai_hook/local.rs`, `helper_path_from_exe`), and
+  from the `pebrel` and `pebrel_hook` packages. The application resolves the helper from the executable's own
+  directory (`pebrel_app/src/ai_hook/local.rs`, `helper_path_from_exe`), and
   `scripts/package-linux.sh` requires and installs the same helper.
 - No workflow under `.github/workflows/` references the flake; the packaging jobs build
   AppImage, DEB and portable archives only.
@@ -62,7 +62,7 @@ AppImage/DEB bundling.
 
 **Package contents.** `$out` must contain, under one prefix:
 
-- `bin/pebrel` — the GPUI product binary (`--features nebula/gpui-shell`).
+- `bin/pebrel` — the GPUI product binary (`--features pebrel/gpui-shell`).
 - `bin/pebrel-hook` — the AI hook helper, beside the application binary, because the
   runtime lookup and `scripts/package-linux.sh` both require it there.
 - `share/applications/io.github.kuddev.pebrel.desktop`,
@@ -75,13 +75,13 @@ Omitting the helper silently disables local Agent hook installation; an absent
 `runtime/` subdirectory is acceptable because the same-directory lookup is the
 supported Linux location.
 
-**Version authority.** Keep one explicit version: `nebula_app/Cargo.toml`. The flake
+**Version authority.** Keep one explicit version: `pebrel_app/Cargo.toml`. The flake
 reads it instead of carrying a second literal, so a flake build cannot ship a source
 revision that differs from the checkout.
 
 **Release-update steps.**
 
-- On a version bump, update `nebula_app/Cargo.toml` (already part of the release
+- On a version bump, update `pebrel_app/Cargo.toml` (already part of the release
   process); the flake needs no version edit.
 - Platform scope is explicit: `system`/`meta.platforms` are `x86_64-linux`. Other
   architectures fail with a missing-attribute error rather than a silent stub.
