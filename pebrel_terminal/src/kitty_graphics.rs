@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 use crate::event::{Event, EventListener, WindowSize};
 use crate::grid::Dimensions;
 use crate::inline_image::{
-    ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement, MAX_IMAGE_CELLS,
+    ImageFormat, ImageIdentity, ImageLayout, ImagePlacement, KittyPlacement, MAX_IMAGE_CELLS,
 };
 use crate::term::{Term, TermMode};
 
@@ -17,17 +17,29 @@ mod control;
 use control::{Control, Reply, Result};
 
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
-const MAX_ENCODED_BYTES: usize = 24 * 1024 * 1024;
+/// Maximum decoded body of one direct graphics transfer. Consumers use the
+/// same bound for PNG containers; the wire representation is base64 below.
+pub const MAX_TRANSFER_BYTES: usize = 48 * 1024 * 1024;
+const MAX_ENCODED_BYTES: usize = MAX_TRANSFER_BYTES.div_ceil(3) * 4;
 const MAX_IMAGES: usize = 16;
 const MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const ALT_KEY: u64 = 1 << 63;
 const ANONYMOUS_KEY: u64 = 1 << 32;
+
+/// Accepts base64 with or without the canonical `=` padding; clients that split
+/// a stream by hand or strip the tail never round-trip through it exactly.
+const BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
 
 struct Bitmap {
     pixels: Arc<Vec<u8>>,
     width: u32,
     height: u32,
     channels: u8,
+    format: ImageFormat,
     cost: usize,
     delete_when_unplaced: bool,
 }
@@ -90,8 +102,10 @@ impl KittyGraphics {
             return false;
         }
         let reply = Reply::read(bytes);
-        let result =
-            Control::parse(bytes).and_then(|control| Self::decode(&control, data).map(|_| ()));
+        let result = Control::parse(bytes).and_then(|control| match control.format {
+            ImageFormat::Raw => Self::decode(&control, data).map(|_| ()),
+            ImageFormat::Png => Self::decode_png(data).map(|_| ()),
+        });
         Self::send(terminal, reply, result);
         true
     }
@@ -116,6 +130,7 @@ impl KittyGraphics {
             matches!(control.action, None | Some(b't' | b'T'))
                 && control.width.is_none()
                 && control.height.is_none()
+                && !control.format_specified
                 && control.reply.id.is_none_or(|id| transfer.control.reply.id == Some(id))
                 && transfer.key & ALT_KEY == screen
         });
@@ -133,9 +148,13 @@ impl KittyGraphics {
                 // 新头终止旧半包，但旧的完整图片保留到新数据校验成功，避免加载中闪白。
                 self.current = None;
                 let reply = control.reply;
-                if let Err(error) = control.dimensions() {
-                    Self::send(terminal, reply, Err(error));
-                    return;
+                // A container carries its own geometry; asking it for `s`/`v`
+                // would refuse every PNG a client sends.
+                if control.format != ImageFormat::Png {
+                    if let Err(error) = control.dimensions() {
+                        Self::send(terminal, reply, Err(error));
+                        return;
+                    }
                 }
                 let id = match reply.id {
                     Some(id) => u64::from(id),
@@ -173,12 +192,57 @@ impl KittyGraphics {
         if encoded.len() > maximum {
             return Err("E2BIG");
         }
-        let pixels =
-            base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "EINVAL")?;
+        let pixels = BASE64.decode(encoded).map_err(|_| "EINVAL")?;
         if pixels.len() != needed {
             return Err("EINVAL");
         }
         Ok(pixels)
+    }
+
+    /// Decodes a PNG transfer and reads its geometry from the mandatory `IHDR`
+    /// chunk, which is all the terminal needs in order to place it on the grid.
+    fn decode_png(encoded: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+        if encoded.len() > MAX_ENCODED_BYTES {
+            return Err("E2BIG");
+        }
+        let png = BASE64.decode(encoded).map_err(|_| "EINVAL")?;
+        let (width, height) = Self::png_size(&png)?;
+        Ok((png, width, height))
+    }
+
+    fn png_size(png: &[u8]) -> Result<(u32, u32)> {
+        const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        if png.len() < 33
+            || png[..8] != SIGNATURE
+            || png[8..12] != 13_u32.to_be_bytes()
+            || &png[12..16] != b"IHDR"
+            || png[26] != 0
+            || png[27] != 0
+            || png[28] > 1
+        {
+            return Err("EINVAL");
+        }
+        let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
+        let depth = png[24];
+        let channels = match (png[25], depth) {
+            (0, 1 | 2 | 4 | 8 | 16) => 1,
+            (2, 8 | 16) => 3,
+            (3, 1 | 2 | 4 | 8) => 4,
+            (4, 8 | 16) => 2,
+            (6, 8 | 16) => 4,
+            _ => return Err("EINVAL"),
+        };
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels == 0 {
+            return Err("EINVAL");
+        }
+        // The decoder may retain 16-bit source samples before RGBA8 conversion.
+        let bytes_per_pixel = (channels * u64::from(depth.div_ceil(8))).max(4);
+        if pixels > MAX_PIXELS as u64 || pixels * bytes_per_pixel > MAX_PIXELS as u64 * 4 {
+            return Err("E2BIG");
+        }
+        Ok((width, height))
     }
 
     fn receive<U: EventListener>(
@@ -188,11 +252,18 @@ impl KittyGraphics {
         data: &[u8],
     ) {
         let control = &transfer.control;
-        let (width, height, pixels) = control.dimensions().unwrap();
-        let maximum = (pixels * usize::from(control.channels))
-            .div_ceil(3)
-            .saturating_mul(4)
-            .min(MAX_ENCODED_BYTES);
+        let maximum = match control.format {
+            // A container is bounded by the staging budget alone; its pixel
+            // budget is checked once the header names a size.
+            ImageFormat::Png => MAX_ENCODED_BYTES,
+            ImageFormat::Raw => {
+                let (_, _, pixels) = control.dimensions().unwrap();
+                (pixels * usize::from(control.channels))
+                    .div_ceil(3)
+                    .saturating_mul(4)
+                    .min(MAX_ENCODED_BYTES)
+            },
+        };
         if data.len() > maximum.saturating_sub(transfer.encoded.len()) {
             Self::send(terminal, control.reply, Err("E2BIG"));
             return;
@@ -207,11 +278,23 @@ impl KittyGraphics {
             self.current = Some(transfer);
             return;
         }
-        let decoded = match Self::decode(control, &transfer.encoded) {
-            Ok(decoded) => decoded,
-            Err(error) => {
-                Self::send(terminal, control.reply, Err(error));
-                return;
+        let (decoded, width, height) = match control.format {
+            ImageFormat::Png => match Self::decode_png(&transfer.encoded) {
+                Ok((png, width, height)) => (png, width, height),
+                Err(error) => {
+                    Self::send(terminal, control.reply, Err(error));
+                    return;
+                },
+            },
+            ImageFormat::Raw => match Self::decode(control, &transfer.encoded) {
+                Ok(decoded) => {
+                    let (width, height, _) = control.dimensions().unwrap();
+                    (decoded, width, height)
+                },
+                Err(error) => {
+                    Self::send(terminal, control.reply, Err(error));
+                    return;
+                },
             },
         };
         if control.action == Some(b'q') {
@@ -219,8 +302,9 @@ impl KittyGraphics {
             return;
         }
         self.forget(transfer.key);
-        // 用最终 BGRA 成本约束原始仓库；RGB 不应在前端扩张后突破同一图片预算。
-        let cost = pixels * 4;
+        // Each retained resource must fit both its source bytes and its eventual
+        // BGRA bitmap. Compressed pages cannot hide their decoded cache cost.
+        let cost = decoded.len().max(width as usize * height as usize * 4);
         while self.images.len() >= MAX_IMAGES || self.image_bytes + cost > MAX_IMAGE_BYTES {
             let candidate = self
                 .image_order
@@ -240,6 +324,7 @@ impl KittyGraphics {
                 width,
                 height,
                 channels: control.channels,
+                format: control.format,
                 cost,
                 delete_when_unplaced: false,
             },
@@ -429,6 +514,7 @@ impl KittyGraphics {
                     id: identity.id,
                     lifetime: Arc::downgrade(&identity),
                     layout,
+                    format: bitmap.format,
                 },
             });
         }
@@ -576,5 +662,100 @@ mod tests {
         gfx.graphic(&mut term, b"m=0", b"BA==");
         assert_eq!(gfx.identities[&7].strong_count(), 1);
         assert!(gfx.current.is_none());
+    }
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        png.extend_from_slice(&13u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&width.to_be_bytes());
+        png.extend_from_slice(&height.to_be_bytes());
+        png.extend_from_slice(&[8, 2, 0, 0, 0, 0, 0, 0, 0]);
+        png.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
+        png
+    }
+
+    /// The wire carries the container base64-encoded, like every other payload.
+    fn encoded_png(width: u32, height: u32) -> Vec<u8> {
+        use base64::Engine as _;
+        BASE64.encode(png(width, height)).into_bytes()
+    }
+
+    #[test]
+    fn a_container_transfer_is_read_from_its_own_header() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        let payload = encoded_png(3, 2);
+        gfx.graphic(&mut term, b"a=T,f=100,i=5,c=1,r=1", &payload);
+        assert!(gfx.current.is_none());
+        let image = &gfx.images[&5];
+        assert_eq!((image.width, image.height), (3, 2));
+        assert_eq!(image.format, ImageFormat::Png);
+        assert_eq!(image.cost, png(3, 2).len());
+        assert!(gfx.has_placements(5));
+    }
+
+    #[test]
+    fn a_container_that_is_not_a_png_is_refused() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,f=100,i=5,c=1,r=1", b"not a png at all");
+        assert!(gfx.images.is_empty());
+        assert!(gfx.placements.is_empty());
+        assert_eq!(gfx.image_bytes, 0);
+    }
+
+    #[test]
+    fn png_geometry_reservations_include_the_decoded_bitmap_cost() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // Header-only fixture: reservation happens before the background PNG
+        // decoder validates IDAT and CRCs. Real PNG decoding is covered there.
+        let payload = encoded_png(4096, 4096);
+        for id in 1..=3 {
+            let control = format!("a=T,f=100,i={id},c=1,r=1");
+            gfx.graphic(&mut term, control.as_bytes(), &payload);
+            assert_eq!(gfx.images[&id].cost, 64 * 1024 * 1024);
+            assert!(gfx.image_bytes <= MAX_IMAGE_BYTES);
+        }
+        assert_eq!(gfx.images.len(), 2);
+        assert!(!gfx.images.contains_key(&1));
+    }
+
+    #[test]
+    fn a_payload_without_canonical_padding_is_still_decoded() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // 1x1 RGBA needs 4 bytes; "AQIDBA" is the unpadded spelling of them.
+        gfx.graphic(&mut term, b"a=T,i=3,s=1,v=1,f=32", b"AQIDBA");
+        assert_eq!(gfx.images[&3].pixels.len(), 4);
+    }
+
+    #[test]
+    fn a_png_payload_is_accepted_without_a_pixel_size_in_the_header() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,f=100,i=6,c=1,r=1", &encoded_png(4, 3));
+        assert_eq!(gfx.images[&6].width, 4);
+        assert_eq!(gfx.images[&6].height, 3);
+    }
+
+    #[test]
+    fn png_source_sample_cost_and_replacement_headers_are_checked() {
+        use base64::Engine as _;
+        let mut rgba16 = png(4096, 2160);
+        rgba16[24] = 16;
+        rgba16[25] = 6;
+        assert_eq!(
+            KittyGraphics::decode_png(&BASE64.encode(&rgba16).into_bytes()).unwrap_err(),
+            "E2BIG"
+        );
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        let incomplete = encoded_png(2, 2);
+        gfx.graphic(&mut term, b"a=t,f=100,i=5,m=1", &incomplete[..12]);
+        assert!(gfx.current.is_some());
+        gfx.graphic(&mut term, b"a=t,f=100,i=5", &encoded_png(3, 2));
+        assert!(gfx.current.is_none());
+        assert_eq!((gfx.images[&5].width, gfx.images[&5].height), (3, 2));
     }
 }

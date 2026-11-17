@@ -1,7 +1,7 @@
 //! Graphics controls, protocol replies and placement geometry; no I/O or retained pixels.
 
 use crate::event::WindowSize;
-use crate::inline_image::{ImageIdentity, KittyPlacement, MAX_IMAGE_CELLS};
+use crate::inline_image::{ImageFormat, ImageIdentity, KittyPlacement, MAX_IMAGE_CELLS};
 use std::sync::Arc;
 
 pub(super) type Result<T> = std::result::Result<T, &'static str>;
@@ -64,6 +64,8 @@ pub(super) struct Control {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub channels: u8,
+    pub format: ImageFormat,
+    pub format_specified: bool,
     pub selector: u8,
     pub columns: Option<u32>,
     pub rows: Option<u32>,
@@ -106,9 +108,10 @@ impl Control {
         {
             return Err("ENOTSUP");
         }
-        let channels = match number(bytes, b'f')?.unwrap_or(32) {
-            24 => 3,
-            32 => 4,
+        let (channels, format) = match number(bytes, b'f')?.unwrap_or(32) {
+            24 => (3, ImageFormat::Raw),
+            32 => (4, ImageFormat::Raw),
+            100 => (0, ImageFormat::Png),
             _ => return Err("ENOTSUP"),
         };
         let quiet = number(bytes, b'q')?;
@@ -138,6 +141,8 @@ impl Control {
             width: number(bytes, b's')?,
             height: number(bytes, b'v')?,
             channels,
+            format,
+            format_specified: value(bytes, b'f').is_some(),
             selector,
             columns: number(bytes, b'c')?.filter(|n| *n != 0),
             rows: number(bytes, b'r')?.filter(|n| *n != 0),
