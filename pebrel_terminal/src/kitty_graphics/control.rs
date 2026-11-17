@@ -12,6 +12,10 @@ fn value(control: &[u8], key: u8) -> Option<&[u8]> {
     })
 }
 
+pub(crate) fn is_feature_query(bytes: &[u8]) -> bool {
+    bytes.len() <= 1024 && value(bytes, b'a') == Some(b"q") && value(bytes, b'e').is_some()
+}
+
 pub(super) fn single_query(bytes: &[u8]) -> bool {
     value(bytes, b'a') == Some(b"q")
         && (value(bytes, b'e').is_some() || value(bytes, b'm') != Some(b"1"))
@@ -97,7 +101,7 @@ impl Control {
         if bytes.len() > 1024 {
             return Err("E2BIG");
         }
-        let probing = value(bytes, b'a') == Some(b"q") && value(bytes, b'e').is_some();
+        let probing = is_feature_query(bytes);
         let mut seen = [false; 128];
         for pair in bytes.split(|byte| *byte == b',').filter(|pair| !pair.is_empty()) {
             let key = *pair.first().ok_or("EINVAL")? as usize;

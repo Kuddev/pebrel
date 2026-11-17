@@ -455,6 +455,17 @@ fn matrix_feature_query_lists_only_supported_keys() {
 }
 
 #[test]
+fn matrix_feature_probe_ignores_payload_and_does_not_interrupt_a_chunked_transfer() {
+    let (mut terminal, mut stream, listener) = terminal();
+    feed(&mut stream, &mut terminal, &listener, &command("a=T,i=12,s=1,v=1,c=1,r=1,m=1", "AQID"));
+    feed(&mut stream, &mut terminal, &listener, &command("a=q,i=13,e=p,p=8,m=1,Z=1", "!ignored!"));
+    assert_eq!(listener.replies(), ["\x1b_Gi=13,e=p,p=8;OK\x1b\\"]);
+    feed(&mut stream, &mut terminal, &listener, &command("m=0", "BA=="));
+    assert_eq!(listener.images().len(), 1);
+    assert!(cell_image(&terminal, 0, 0));
+}
+
+#[test]
 fn matrix_feature_query_reports_container_support() {
     let (mut terminal, mut stream, listener) = terminal();
     feed(&mut stream, &mut terminal, &listener, &command("a=q,i=41,e=T,f=100", ""));

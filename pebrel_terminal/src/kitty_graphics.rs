@@ -14,6 +14,7 @@ use crate::inline_image::{
 use crate::term::{Term, TermMode};
 
 mod control;
+pub(crate) use control::is_feature_query;
 use control::{Control, Reply, Result};
 
 const MAX_PIXELS: usize = 16 * 1024 * 1024;

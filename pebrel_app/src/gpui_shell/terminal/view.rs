@@ -881,15 +881,6 @@ impl TerminalView {
                 view.drive_inline_image_decode(cx);
                 cx.notify();
             });
-            // A decode that finishes between frames can leave the freshly inserted
-            // texture unpresented until the next input event. Ask for one more frame
-            // shortly after, so a page that arrives while the user is idle still
-            // appears without a click.
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(std::time::Duration::from_millis(40)).await;
-                let _ = this.update(cx, |_, cx| cx.notify());
-            })
-            .detach();
         })
         .detach();
     }

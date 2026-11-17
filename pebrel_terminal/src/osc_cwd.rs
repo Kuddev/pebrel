@@ -379,6 +379,9 @@ impl CwdSniffer {
             Some(split) => (&body[..split], &body[split + 1..]),
             None => (body, &body[body.len()..]),
         };
+        if !payload.is_empty() && crate::kitty_graphics::is_feature_query(control) {
+            return Some(OscEvent::KittyGraphic { control: control.to_vec(), payload: Vec::new() });
+        }
         if !payload.is_empty()
             && !payload
                 .iter()
