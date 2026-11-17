@@ -1,0 +1,201 @@
+//! 本仓库自带的图标资源，叠在组件库资源之上。
+//!
+//! 补充项目专用图标，并固定已确认原型所需的 Lucide 路径与描边。
+//!
+//! 试过"统一圆角外壳 + 内部挖空骨架"的自绘方案，实机否掉了：外壳吃掉大半视觉
+//! 重量后内部只剩 12×10px，20px 显示下无论画什么都糊成"方框里几个点"，反而
+//! 比风格不统一更糟。所以导航图标回到 lucide 的线性无框语言，只在它确实没有
+//! 对应图标时补画一枚，且照它的路数画（无外框、round cap）。
+//!
+//! 图标留在本仓库而不是塞进 fork 的资源包：那是给所有下游项目共用的。这一层
+//! 做的就是"自己的先查，查不到再回落"。
+
+use std::borrow::Cow;
+
+use gpui::{AssetSource, Result, SharedString};
+
+/// SVG 编译期无损压缩嵌入，仍通过原有逻辑路径加载。
+macro_rules! icons {
+    ($($name:literal),* $(,)?) => {
+        &[$((
+            concat!("icons/nebula-", $name, ".svg"),
+            include_bytes!(concat!("../../assets/icons/nebula-", $name, ".svgz")).as_slice(),
+        )),*]
+    };
+}
+
+const NEBULA_ICONS: &[(&str, &[u8])] = icons![
+    "terminal",
+    "command-manager",
+    "keymap",
+    "layout-grid",
+    "mouse-pointer",
+    "sliders",
+    "backup-drive",
+    "backup-cloud",
+    "backup-globe",
+    "backup-database",
+    "backup-server",
+    "backup-folder",
+    "backup-lock",
+    "backup-check",
+    "pin",
+    "pencil",
+    "clipboard-paste",
+    "shield",
+    "trash-2",
+    "refresh",
+    "spinner-arc",
+    "spinner-track",
+    "waiting-hand",
+    "phone",
+    "puzzle",
+    "vcs-changes",
+    "vcs-history",
+    "vcs-conflict",
+    "brain",
+    "waypoints",
+    "wallet",
+    "credit-card",
+    "clock",
+    "download",
+];
+
+const COMPRESSED_ICONS: &[(&str, &[u8])] = icons![
+    "agent-cursor",
+    "agent-copilot",
+    "agent-openai",
+    "agent-opencode",
+    "agent-pi",
+    "agent-grok",
+    "agent-qoder",
+    "agent-qwen",
+    "agent-codebuddy",
+    "agent-antigravity",
+    "agent-hermes",
+    "provider-gemini",
+    "provider-anthropic",
+    "provider-ollama",
+    "provider-openrouter",
+    "provider-qwen",
+    "provider-deepseek",
+    "provider-zhipu",
+    "provider-doubao",
+    "provider-xiaomimimo",
+    "provider-azure",
+];
+
+const AGENT_ICONS: &[(&str, &[u8])] = &[
+    ("icons/agent-claude.svg", include_bytes!("../../../extra/logo/ai_claude.svgz")),
+    ("icons/agent-kimi.svg", include_bytes!("../../../extra/logo/ai_kimi.svgz")),
+    ("icons/agent-omp.svg", include_bytes!("../../../extra/logo/ai_omp.svgz")),
+];
+
+/// 先查本仓库，未命中再交给组件库。
+pub struct NebulaAssets;
+
+impl AssetSource for NebulaAssets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        let path = if path == "icons/square-terminal.svg" { nav::TERMINAL } else { path };
+        if let Some((_, bytes)) = NEBULA_ICONS
+            .iter()
+            .chain(AGENT_ICONS)
+            .chain(COMPRESSED_ICONS)
+            .find(|(name, _)| *name == path)
+        {
+            return if bytes.starts_with(&[0x1f, 0x8b]) {
+                Ok(Some(Cow::Owned(resvg::usvg::decompress_svgz(bytes)?)))
+            } else {
+                Ok(Some(Cow::Borrowed(bytes)))
+            };
+        }
+        gpui_component_assets::Assets.load(path)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut names = gpui_component_assets::Assets.list(path)?;
+        names.extend(
+            NEBULA_ICONS
+                .iter()
+                .chain(AGENT_ICONS)
+                .chain(COMPRESSED_ICONS)
+                .filter(|(name, _)| name.starts_with(path))
+                .map(|(name, _)| SharedString::from(*name)),
+        );
+        Ok(names)
+    }
+}
+
+/// 自带图标的路径。走路径而不是 `IconName`：扩展那个枚举等于改 fork。
+pub mod nav {
+    pub const TERMINAL: &str = "icons/nebula-terminal.svg";
+    pub const AGENT_CLAUDE: &str = "icons/agent-claude.svg";
+    pub const AGENT_KIMI: &str = "icons/agent-kimi.svg";
+    pub const AGENT_OMP: &str = "icons/agent-omp.svg";
+    pub const AGENT_OPENAI: &str = "icons/nebula-agent-openai.svg";
+    pub const AGENT_OPENCODE: &str = "icons/nebula-agent-opencode.svg";
+    pub const AGENT_PI: &str = "icons/nebula-agent-pi.svg";
+    pub const AGENT_GROK: &str = "icons/nebula-agent-grok.svg";
+    pub const AGENT_HERMES: &str = "icons/nebula-agent-hermes.svg";
+    pub const AGENT_CURSOR: &str = "icons/nebula-agent-cursor.svg";
+    pub const AGENT_COPILOT: &str = "icons/nebula-agent-copilot.svg";
+    pub const AGENT_QODER: &str = "icons/nebula-agent-qoder.svg";
+    pub const AGENT_QWEN: &str = "icons/nebula-agent-qwen.svg";
+    pub const AGENT_CODEBUDDY: &str = "icons/nebula-agent-codebuddy.svg";
+    pub const AGENT_ANTIGRAVITY: &str = "icons/nebula-agent-antigravity.svg";
+    pub const LAYOUT_GRID: &str = "icons/nebula-layout-grid.svg";
+    pub const MOUSE_POINTER: &str = "icons/nebula-mouse-pointer.svg";
+    pub const SLIDERS: &str = "icons/nebula-sliders.svg";
+    pub const PIN: &str = "icons/nebula-pin.svg";
+    /// 保存命令列表。闪电表达快捷执行，右侧三横线表达可管理的命令集合。
+    pub const COMMAND_MANAGER: &str = "icons/nebula-command-manager.svg";
+    /// 键盘。lucide 没有，而「按键映射」原来错挂在字号图标上。
+    pub const KEYMAP: &str = "icons/nebula-keymap.svg";
+    /// Lucide pencil；固定组件资产集未收录，命令行内编辑动作需要明确图形语义。
+    pub const PENCIL: &str = "icons/nebula-pencil.svg";
+    pub const CLIPBOARD_PASTE: &str = "icons/nebula-clipboard-paste.svg";
+    pub const SHIELD: &str = "icons/nebula-shield.svg";
+    /// Lucide trash-2；删除保存命令不能借用表示 Backspace 的 `IconName::Delete`。
+    pub const TRASH: &str = "icons/nebula-trash-2.svg";
+    pub const REFRESH: &str = "icons/nebula-refresh.svg";
+    pub const PHONE: &str = "icons/nebula-phone.svg";
+    /// Lucide puzzle：设置页的插件分区。
+    pub const PUZZLE: &str = "icons/nebula-puzzle.svg";
+    /// IDEA Commit 工具窗口同语义的“基线 + 提交节点”：工作区变更入口。
+    pub const VCS_CHANGES: &str = "icons/nebula-vcs-changes.svg";
+    /// 带分叉节点的提交线路：版本历史入口。
+    pub const VCS_HISTORY: &str = "icons/nebula-vcs-history.svg";
+    /// 两侧分支汇入结果并在交点标出冲突：三栏冲突解决入口。
+    pub const VCS_CONFLICT: &str = "icons/nebula-vcs-conflict.svg";
+}
+
+/// Backup icons share the approved settings prototype geometry.
+pub mod backup {
+    pub const DRIVE: &str = "icons/nebula-backup-drive.svg";
+    pub const CLOUD: &str = "icons/nebula-backup-cloud.svg";
+    pub const GLOBE: &str = "icons/nebula-backup-globe.svg";
+    pub const DATABASE: &str = "icons/nebula-backup-database.svg";
+    pub const SERVER: &str = "icons/nebula-backup-server.svg";
+    pub const FOLDER: &str = "icons/nebula-backup-folder.svg";
+    pub const LOCK: &str = "icons/nebula-backup-lock.svg";
+    pub const CHECK: &str = "icons/nebula-backup-check.svg";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_icons_load_the_exact_editable_svg_sources() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        for (path, _) in NEBULA_ICONS {
+            let source = std::fs::read(directory.join(path)).unwrap();
+            let loaded = NebulaAssets.load(path).unwrap().unwrap();
+            assert_eq!(loaded.as_ref(), source, "compressed icon is stale: {path}");
+        }
+        assert_eq!(
+            NebulaAssets.load("icons/square-terminal.svg").unwrap(),
+            NebulaAssets.load(nav::TERMINAL).unwrap()
+        );
+    }
+}
