@@ -51,22 +51,11 @@ pub(super) fn capture_native(request: Request, cancel: &Arc<AtomicBool>) -> Tool
             Err(error) => Output { stdout: None, error: Some(error.to_string()) },
         }
     };
-    let endpoint_override =
-        if !std::env::var("DOCKER_CONTEXT").is_ok_and(|context| !context.is_empty()) {
-            std::env::var("DOCKER_HOST").ok()
-        } else {
-            None
-        };
-    capture(request, endpoint_override, read)
+    capture(request, read)
 }
 
-/// Query one host's tools through a bounded native or authenticated guest executor.
-/// The endpoint override follows that host's Docker environment, not the desktop's.
-pub(super) fn capture(
-    request: Request,
-    endpoint_override: Option<String>,
-    mut read: impl FnMut(&str, &[&str]) -> Output,
-) -> Tools {
+/// Query the host's tools through one bounded executor.
+pub(super) fn capture(request: Request, mut read: impl FnMut(&str, &[&str]) -> Output) -> Tools {
     let gpu = read(
         "nvidia-smi",
         &[
@@ -87,15 +76,34 @@ pub(super) fn capture(
     if !request.docker {
         return tools;
     }
-    tools.endpoint =
-        read("docker", &["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"]);
-    if tools.endpoint.stdout.is_none() && tools.endpoint.error.is_none() {
+    let context = read(
+        "docker",
+        &["context", "inspect", "--format", "[{{json .Name}},{{json .Endpoints.docker.Host}}]"],
+    );
+    let Some(value) = context.stdout else {
+        tools.inspect.error = context.error;
+        return tools;
+    };
+    let Ok([name, host]) = serde_json::from_str::<[String; 2]>(&value) else {
+        tools.inspect.error = Some("Docker context did not identify an endpoint".into());
+        return tools;
+    };
+    if name.is_empty() || host.is_empty() {
+        tools.inspect.error = Some("Docker context or endpoint is empty".into());
         return tools;
     }
-    if let Some(host) = endpoint_override {
-        tools.endpoint.stdout = Some(host);
-    }
-    let ids = read("docker", &["container", "ls", "-aq", "--no-trunc"]);
+    // The default context gets its host and TLS settings from the environment;
+    // named contexts also own credentials, so select them by name.
+    let target =
+        if name == "default" { ["--host", host.as_str()] } else { ["--context", name.as_str()] };
+    tools.endpoint.stdout = Some(host.clone());
+    let mut docker = |args: &[&str]| {
+        let mut selected = Vec::with_capacity(target.len() + args.len());
+        selected.extend(target);
+        selected.extend_from_slice(args);
+        read("docker", &selected)
+    };
+    let ids = docker(&["container", "ls", "-aq", "--no-trunc"]);
     tools.inspect = match ids.stdout {
         Some(ids) => {
             let ids: Vec<_> = ids.split_whitespace().collect();
@@ -107,15 +115,14 @@ pub(super) fn capture(
             } else {
                 let mut args = vec!["container", "inspect"];
                 args.extend(ids);
-                read("docker", &args)
+                docker(&args)
             }
         },
         None => Output { stdout: None, error: ids.error },
     };
     if tools.inspect.stdout.is_some() {
-        tools.cores = read("docker", &["info", "--format", "{{.NCPU}}"]);
-        tools.stats =
-            read("docker", &["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"]);
+        tools.cores = docker(&["info", "--format", "{{.NCPU}}"]);
+        tools.stats = docker(&["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"]);
     }
     tools
 }

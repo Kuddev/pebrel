@@ -32,7 +32,7 @@ fn process_ordering_preserves_unavailable_values_and_pid_ties() {
 #[test]
 fn absent_docker_stops_device_queries() {
     let mut queries = 0;
-    let tools = devices::capture(Request { docker: true, processes: false }, None, |program, _| {
+    let tools = devices::capture(Request { docker: true, processes: false }, |program, _| {
         if program == "docker" {
             queries += 1;
         }
@@ -45,18 +45,17 @@ fn absent_docker_stops_device_queries() {
 /// Empty container inventory does not query CPU topology or live statistics.
 #[test]
 fn empty_docker_inventory_skips_statistics() {
-    let tools =
-        devices::capture(Request { docker: true, processes: false }, None, |program, args| {
-            if program != "docker" {
-                return Output::default();
-            }
-            let stdout = match args {
-                ["context", ..] => "unix:///var/run/docker.sock",
-                ["container", "ls", ..] => "",
-                _ => panic!("Empty inventory must not issue additional queries"),
-            };
-            Output { stdout: Some(stdout.into()), error: None }
-        });
+    let tools = devices::capture(Request { docker: true, processes: false }, |program, args| {
+        if program != "docker" {
+            return Output::default();
+        }
+        let stdout = match args {
+            ["context", ..] => r#"["default","unix:///var/run/docker.sock"]"#,
+            ["--host", "unix:///var/run/docker.sock", "container", "ls", ..] => "",
+            _ => panic!("Empty inventory must not issue additional queries"),
+        };
+        Output { stdout: Some(stdout.into()), error: None }
+    });
     let (_, Probe::Ready(docker)) = devices::decode(tools, &mut []) else {
         panic!("valid empty inventory")
     };
@@ -64,28 +63,43 @@ fn empty_docker_inventory_skips_statistics() {
     assert!(docker.stats_error.is_none());
 }
 
+/// An unidentified target must never be paired with inventory from the current default.
+#[test]
+fn unresolved_context_stops_before_container_queries() {
+    for response in ["not JSON", r#"["test",""]"#, r#"[null,"tcp://other"]"#] {
+        let tools =
+            devices::capture(Request { docker: true, processes: false }, |program, args| {
+                if program != "docker" {
+                    return Output::default();
+                }
+                assert_eq!(&args[..2], &["context", "inspect"]);
+                Output { stdout: Some(response.to_owned()), error: None }
+            });
+        assert!(matches!(devices::decode(tools, &mut []).1, Probe::Failed(_)));
+    }
+}
+
 /// Nontruncated statistics match exact IDs and cannot be attached to a similar container prefix.
 #[test]
 fn docker_statistics_use_exact_container_identity() {
     let inspect = r#"[{"Id":"abc123","Name":"/api","State":{"Status":"running","Running":true},"HostConfig":{"PortBindings":null},"Config":{"ExposedPorts":null}}]"#;
-    let tools =
-        devices::capture(Request { docker: true, processes: false }, None, |program, args| {
-            if program != "docker" {
-                return Output::default();
-            }
-            let stdout = match args {
-                ["context", ..] => "unix:///var/run/docker.sock",
-                ["container", "ls", ..] => "abc123",
-                ["container", "inspect", ..] => inspect,
-                ["info", ..] => "4",
-                ["stats", ..] => {
-                    assert!(args.contains(&"--no-trunc"));
-                    r#"{"ID":"abc","CPUPerc":"80%","MemUsage":"1MiB / 4MiB"}"#
-                },
-                _ => panic!("Unexpected device query"),
-            };
-            Output { stdout: Some(stdout.into()), error: None }
-        });
+    let tools = devices::capture(Request { docker: true, processes: false }, |program, args| {
+        if program != "docker" {
+            return Output::default();
+        }
+        let stdout = match args {
+            ["context", ..] => r#"["team","ssh://team"]"#,
+            ["--context", "team", "container", "ls", ..] => "abc123",
+            ["--context", "team", "container", "inspect", ..] => inspect,
+            ["--context", "team", "info", ..] => "4",
+            ["--context", "team", "stats", ..] => {
+                assert!(args.contains(&"--no-trunc"));
+                r#"{"ID":"abc","CPUPerc":"80%","MemUsage":"1MiB / 4MiB"}"#
+            },
+            _ => panic!("Unexpected device query"),
+        };
+        Output { stdout: Some(stdout.into()), error: None }
+    });
     let (_, Probe::Ready(docker)) = devices::decode(tools, &mut []) else {
         panic!("valid container response")
     };
