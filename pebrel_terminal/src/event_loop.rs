@@ -1,0 +1,1625 @@
+//! The main event loop which performs I/O on the pseudoterminal.
+
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::fmt::{self, Display, Formatter};
+use std::fs::File;
+use std::io::{self, ErrorKind, Read, Write};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use log::error;
+use polling::{Event as PollingEvent, Events, PollMode, Poller};
+
+use crate::event::{self, Event, EventListener, WindowSize};
+use crate::grid::Dimensions as _;
+use crate::index::{Column, Line};
+use crate::osc_cwd::OscEvent;
+use crate::sync::FairMutex;
+use crate::term::Term;
+use crate::{thread, tty};
+use vte::ansi;
+
+/// Max bytes to read from the PTY before forced terminal synchronization.
+pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
+
+/// Max bytes to read from the PTY while the terminal is locked.
+const MAX_LOCKED_READ: usize = u16::MAX as usize;
+
+/// Network-delivered synchronized frames can span several transport reads.
+/// This is a watchdog for a missing end marker, not a delay for complete frames.
+const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct SyncTimeout {
+    deadline: Option<Instant>,
+}
+
+impl ansi::Timeout for SyncTimeout {
+    fn set_timeout(&mut self, _duration: Duration) {
+        self.deadline = Some(Instant::now() + SYNC_UPDATE_TIMEOUT);
+    }
+
+    fn clear_timeout(&mut self) {
+        self.deadline = None;
+    }
+
+    fn pending_timeout(&self) -> bool {
+        self.deadline.is_some()
+    }
+}
+
+/// ConPTY 光标对账的静默期：最后一次 resize 提交后等这么久再探针，给
+/// conhost 的内部整理（缓冲区塌缩/重锚）和 shell 的 resize 反应留时间。
+const ALIGN_DELAY: Duration = Duration::from_millis(120);
+
+/// Resize diagnostics are opt-in because PTY reads are a hot path. The trace
+/// records the local grid state at the exact stream boundaries where bytes are
+/// parsed or a resize is committed, so it can be aligned with
+/// `PEBREL_PTY_RECORD=1` without changing terminal behavior.
+fn resize_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PEBREL_RESIZE_TRACE").is_some())
+}
+
+fn trace_terminal_state<U: EventListener>(stage: &str, terminal: &Term<U>) {
+    if !resize_trace_enabled() {
+        return;
+    }
+
+    // PowerShell's configured prompt uses U+276F. Recording every visible
+    // occurrence exposes stale prompt rows immediately after a reflow.
+    let mut prompt_rows = Vec::new();
+    for row in 0..terminal.screen_lines() {
+        if (0..terminal.columns())
+            .any(|column| terminal.grid()[Line(row as i32)][Column(column)].c == '❯')
+        {
+            prompt_rows.push(row);
+        }
+    }
+
+    let cursor = terminal.grid().cursor.point;
+    eprintln!(
+        "[nebula:resize-trace] {stage} grid={}x{} cursor={}:{} wrap={} history={} display_offset={} prompts={prompt_rows:?}",
+        terminal.columns(),
+        terminal.screen_lines(),
+        cursor.line.0,
+        cursor.column.0,
+        terminal.grid().cursor.input_needs_wrap,
+        terminal.history_size(),
+        terminal.grid().display_offset(),
+    );
+}
+
+/// One coalesced resize waiting at a stream boundary.
+///
+/// `notify_pty` records whether the child must see the resize: the geometry is
+/// the same either way, only the child's awareness of it differs.
+#[derive(Copy, Clone, Debug)]
+struct PendingResize {
+    window_size: WindowSize,
+    notify_pty: bool,
+}
+
+/// conhost 的一次光标真值读数。
+#[derive(Copy, Clone, Debug)]
+struct ConhostCursor {
+    /// 视口相对行（0 基）。
+    row: usize,
+    /// conhost 自己的视口高度，用来判断新尺寸有没有落地。
+    rows: u16,
+}
+
+/// 向 conhost 要光标真值：临时 `AttachConsole` 到 ConPTY 子进程的控制台，
+/// 读 `GetConsoleScreenBufferInfo`，换算成视口相对行（0 基）。
+///
+/// 进程同一时刻只能挂一个控制台，多 pane 并发对账用全局锁串行化；每次
+/// 探针都 attach→读→detach，窗口只有微秒级。Nebula 主进程是 GUI 子系统
+/// （自身无控制台），detach 后回到无控制台状态，不影响任何组件。失败
+/// （子进程已退出、权限等）一律返回 None，对账静默放弃。
+#[cfg(windows)]
+fn conpty_cursor_probe(pid: u32) -> Option<ConhostCursor> {
+    use std::sync::Mutex;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, CONSOLE_SCREEN_BUFFER_INFO, FreeConsole, GetConsoleScreenBufferInfo,
+    };
+
+    static ATTACH_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ATTACH_LOCK.lock().ok()?;
+
+    // SAFETY: 纯 Win32 控制台句柄操作；FreeConsole 对无控制台进程是无害
+    // no-op，收尾的 FreeConsole 恢复 GUI 进程的无控制台状态。
+    unsafe {
+        FreeConsole();
+        if AttachConsole(pid) == 0 {
+            return None;
+        }
+        let mut conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+        let handle = CreateFileW(
+            conout.as_mut_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE {
+            FreeConsole();
+            return None;
+        }
+        let mut info: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
+        let ok = GetConsoleScreenBufferInfo(handle, &mut info);
+        CloseHandle(handle);
+        FreeConsole();
+        if ok == 0 {
+            return None;
+        }
+        let row = i32::from(info.dwCursorPosition.Y) - i32::from(info.srWindow.Top);
+        let rows = i32::from(info.srWindow.Bottom) - i32::from(info.srWindow.Top) + 1;
+        Some(ConhostCursor {
+            row: usize::try_from(row).ok()?,
+            rows: u16::try_from(rows.max(0)).ok()?,
+        })
+    }
+}
+
+#[cfg(not(windows))]
+fn conpty_cursor_probe(_pid: u32) -> Option<ConhostCursor> {
+    None
+}
+
+/// 本地 PTY 与远端传输共用的有状态终端字节流处理器。
+/// OSC 提取必须紧贴 VT 解析，避免两类会话产生不同的目录、命令和图片状态。
+#[derive(Default)]
+pub struct StreamProcessor {
+    parser: ansi::Processor<SyncTimeout>,
+    cwd_sniffer: crate::osc_cwd::CwdSniffer,
+    zmodem: crate::zmodem::ZmodemSniffer,
+    window_size: Option<WindowSize>,
+    remote_hook_token: Option<String>,
+    // The stream owns unreplayed payloads: disconnecting drops them even if
+    // the pane retains its Term. The Term only holds weak replay entries.
+    pending_images: VecDeque<Arc<crate::term::PendingImage>>,
+    inline_content: crate::inline_content::Registry,
+    command_capture: crate::inline_content::CommandCapture,
+    gfx: Arc<parking_lot::Mutex<crate::kitty_graphics::KittyGraphics>>,
+}
+
+impl StreamProcessor {
+    pub fn resize(&mut self, window_size: WindowSize) {
+        self.window_size = Some(window_size);
+        self.gfx.lock().resize(window_size);
+    }
+
+    fn resize_and_answer<U: EventListener>(&mut self, window_size: WindowSize, listener: &U) {
+        self.resize(window_size);
+        self.gfx.lock().answer_cell_size_queries(Some(window_size), listener);
+    }
+
+    pub fn set_remote_hook_token(&mut self, token: String) {
+        self.remote_hook_token = Some(token);
+    }
+
+    pub fn next_sync_timeout(&self) -> Option<Instant> {
+        self.parser.sync_timeout().deadline
+    }
+
+    pub fn sync_bytes_count(&self) -> usize {
+        self.parser.sync_bytes_count()
+    }
+
+    pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
+        terminal.cancel_redraw_anchor();
+        terminal.with_program_status_preserved(|terminal| self.parser.stop_sync(terminal));
+        self.release_replayed_images();
+        terminal.nebula_flush_kitty(&mut self.gfx.lock(), self.window_size);
+    }
+
+    fn release_replayed_images(&mut self) {
+        while self.pending_images.front().is_some_and(|image| Arc::weak_count(image) == 0) {
+            self.pending_images.pop_front();
+        }
+    }
+
+    fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
+        // VTE 0.15 在约 2 MiB 时强制提交同步缓冲；提前取消兼容锚点，
+        // 但不强制结束/截断输出。分块保证单次大输入也不会绕过检查。
+        terminal.with_program_status_preserved(|terminal| {
+            for chunk in bytes.chunks(4096) {
+                if self.parser.sync_bytes_count() >= 1024 * 1024 {
+                    terminal.cancel_redraw_anchor();
+                }
+                self.parser.advance(terminal, chunk);
+                self.command_capture.observe(terminal);
+            }
+        });
+    }
+
+    /// Returns the input byte count passed to VTE, including ordered image
+    /// markers. Synchronization-buffer accounting uses this count; transport
+    /// byte counts remain unchanged.
+    pub fn feed<U: EventListener>(
+        &mut self,
+        terminal: &mut Term<U>,
+        event_proxy: &U,
+        bytes: &[u8],
+    ) -> usize {
+        let osc_events = self.cwd_sniffer.feed(bytes);
+        let zmodem = self.zmodem.feed(bytes);
+        let mut advanced = 0;
+        let mut parser_input_bytes = bytes.len();
+        for (offset, event) in osc_events {
+            // Titles and shell identity/cwd reports must retain wire order:
+            // coalescing a remote cwd past a parent prompt would attribute that
+            // directory to the parent shell's completion history.
+            self.advance(terminal, &bytes[advanced..offset]);
+            advanced = offset;
+            match event {
+                OscEvent::InlineContent(packet) => {
+                    self.command_capture.cancel();
+                    // 原生内容是显式布局边界；先提交同步缓冲，才可在真实光标处占位。
+                    if self.next_sync_timeout().is_some() {
+                        self.stop_sync(terminal);
+                    }
+                    if terminal.mode().intersects(
+                        crate::term::TermMode::ALT_SCREEN | crate::term::TermMode::MOUSE_MODE,
+                    ) {
+                        continue;
+                    }
+                    let row = match &packet {
+                        crate::inline_content::Packet::Place { row, .. } => *row,
+                        _ => 0,
+                    };
+                    if matches!(
+                        &packet,
+                        crate::inline_content::Packet::Begin { .. }
+                            | crate::inline_content::Packet::Place { .. }
+                    ) && terminal.grid().cursor.point.column.0 != 0
+                    {
+                        continue;
+                    }
+                    if let Some(surface) = self.inline_content.apply(packet) {
+                        // 换行由发送端写出，ConPTY 与前端必须共同看到占位，不能只推进本地网格。
+                        let grid = terminal.inline_content_grid_mut();
+                        let point = grid.cursor.point;
+                        if point.column.0 == 0 {
+                            grid[point.line].reset(&crate::term::cell::Cell::default());
+                            grid[point]
+                                .set_inline_marker(crate::inline_content::Marker { surface, row });
+                        }
+                    }
+                },
+                OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
+                OscEvent::CommandStart => {
+                    terminal.acknowledge_program_status_results();
+                    self.command_capture.start(terminal, self.parser.sync_bytes_count() == 0);
+                    terminal.reading_shell_marker(b'C', None, self.parser.sync_bytes_count() == 0);
+                    terminal.nebula_end_prompt();
+                    event_proxy.send_event(Event::CommandStart);
+                },
+                OscEvent::CommandDone { exit_code } => {
+                    self.command_capture.finish(
+                        terminal,
+                        &mut self.inline_content,
+                        exit_code,
+                        event_proxy,
+                    );
+                    self.inline_content.finish_pending();
+                    terminal.reading_shell_marker(
+                        b'D',
+                        exit_code,
+                        self.parser.sync_bytes_count() == 0,
+                    );
+                    terminal.nebula_end_prompt();
+                    event_proxy.send_event(Event::CommandDone { exit_code })
+                },
+                OscEvent::UserVar { name, value } => {
+                    self.command_capture.report(&name, &value, event_proxy);
+                    event_proxy.send_event(Event::UserVar { name, value })
+                },
+                OscEvent::Notify(text) => event_proxy.send_event(Event::Notify(text)),
+                OscEvent::Progress { state, value } => {
+                    if !terminal.program_statuses().seen() {
+                        event_proxy.send_event(Event::Progress { state, value });
+                    }
+                },
+                OscEvent::ProgramStatus(report) => terminal.report_program_status(report),
+                OscEvent::ProgramStatusReset => {
+                    terminal.reset_program_status();
+                    if let Some((marker, command)) =
+                        terminal.nebula_queue_kitty_reset(Arc::downgrade(&self.gfx))
+                    {
+                        self.pending_images.push_back(command);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
+                OscEvent::RemoteHook { token, envelope } => {
+                    if self.remote_hook_token.as_deref() == Some(token.as_str()) {
+                        event_proxy.send_event(Event::AiHookEnvelope(envelope));
+                    }
+                },
+                OscEvent::PromptMark => {
+                    self.command_capture.cancel();
+                    terminal.end_program_status_activity();
+                    terminal.reading_shell_marker(b'A', None, self.parser.sync_bytes_count() == 0);
+                    terminal.nebula_add_prompt_mark();
+                },
+                OscEvent::PromptInput => {
+                    terminal.reading_shell_marker(b'B', None, self.parser.sync_bytes_count() == 0);
+                    terminal.nebula_mark_prompt_input();
+                },
+                OscEvent::KittyGraphic { control, payload } => {
+                    if self.gfx.lock().try_query(terminal, &control, &payload) {
+                        continue;
+                    }
+                    if let Some((marker, command)) =
+                        terminal.nebula_queue_kitty(Arc::downgrade(&self.gfx), control, payload)
+                    {
+                        self.pending_images.push_back(command);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
+                OscEvent::GraphicsReply(reply) => event_proxy.send_event(Event::PtyWrite(reply)),
+                OscEvent::SixelImage(image) => {
+                    let (width, height) = image.dimensions();
+                    let viewport = self.window_size.unwrap_or(WindowSize {
+                        num_cols: terminal.columns() as u16,
+                        num_lines: terminal.screen_lines() as u16,
+                        cell_width: 9,
+                        cell_height: 20,
+                    });
+                    if let Some((marker, image)) = terminal.nebula_queue_inline_image(
+                        crate::inline_image::ImageData::Sixel(Arc::new(image)),
+                        width,
+                        height,
+                        Default::default(),
+                        viewport,
+                    ) {
+                        self.pending_images.push_back(image);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
+                OscEvent::CellSizeQuery => self.gfx.lock().request_cell_size(),
+                OscEvent::InlineImage { data, width, height, options } => {
+                    let viewport = self.window_size.unwrap_or(WindowSize {
+                        num_cols: terminal.columns() as u16,
+                        num_lines: terminal.screen_lines() as u16,
+                        cell_width: 9,
+                        cell_height: 20,
+                    });
+                    if let Some((marker, image)) = terminal.nebula_queue_inline_image(
+                        Arc::new(data).into(),
+                        width,
+                        height,
+                        options,
+                        viewport,
+                    ) {
+                        self.pending_images.push_back(image);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                    }
+                },
+            }
+        }
+        self.advance(terminal, &bytes[advanced..]);
+        if let Some(offer) = zmodem {
+            // Without a ZMODEM implementation the remote rz/sz would hold the
+            // TTY in raw mode indefinitely; cancel it so the shell returns.
+            log::info!("cancelling unsupported ZMODEM {offer:?} session");
+            event_proxy.send_event(Event::PtyWrite(crate::zmodem::ABORT_SEQUENCE.to_owned()));
+            event_proxy.send_event(Event::ZmodemCancelled(offer));
+        }
+        self.release_replayed_images();
+        // Publish placements only once their cells are in the grid, and at most
+        // once per image: a chunked transfer must not queue 700 decodes.
+        let mut gfx = self.gfx.lock();
+        gfx.flush(event_proxy, self.window_size);
+        gfx.answer_cell_size_queries(self.window_size, event_proxy);
+        parser_input_bytes
+    }
+}
+
+/// Messages that may be sent to the `EventLoop`.
+#[derive(Debug)]
+pub enum Msg {
+    /// Data that should be written to the PTY.
+    Input(Cow<'static, [u8]>),
+
+    /// Indicates that the `EventLoop` should shut down, as Nebula is shutting down.
+    Shutdown,
+
+    /// Instruction to resize the PTY.
+    Resize(WindowSize),
+
+    /// Reflow the local grid to a new geometry without telling the child.
+    ///
+    /// Keep local grid reflow separate from notifying the child. The legacy shell
+    /// has always done this (`window_context/split.rs`: grids every drag tick,
+    /// PTYs on settle). The
+    /// two halves have opposite cost profiles: a client-side reflow is cheap and
+    /// reversible, while every `ResizePseudoConsole` makes conhost rewrap its
+    /// own buffer, and those rewraps accumulate cursor-row drift that nothing
+    /// can undo. So the grid follows the pointer frame by frame — the viewport
+    /// on screen is always a real reflow of the real geometry — and only the
+    /// child is debounced.
+    ///
+    /// Goes through the same channel as `Resize` on purpose: the resize branch
+    /// drains everything readable against the old geometry first, so absolute
+    /// CUP sequences produced at the old width are never parsed into the new
+    /// grid. A UI thread reaching into `Term::resize` directly would skip that.
+    ResizeGrid(WindowSize),
+
+    /// Report the cell size in pixels without touching the console.
+    ///
+    /// A pane whose first layout already matches the grid it spawned with never
+    /// sends `Resize`, so the stream would never learn its cell size — and
+    /// `CSI 16 t` (`\x1b[6;height;widtht`) would go unanswered. Clients that ask
+    /// for it, yazi's older protocol driver among them, then fall back to scaling a
+    /// preview against the whole pane and stretching it. This message carries
+    /// only the metrics: no `ResizePseudoConsole`, no reflow, no debounce.
+    CellMetrics(WindowSize),
+}
+
+/// The main event loop.
+///
+/// Handles all the PTY I/O and runs the PTY parser which updates terminal
+/// state.
+pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
+    poll: Arc<Poller>,
+    pty: T,
+    rx: PeekableReceiver<Msg>,
+    tx: Sender<Msg>,
+    terminal: Arc<FairMutex<Term<U>>>,
+    event_proxy: U,
+    drain_on_exit: bool,
+    ref_test: bool,
+    remote_hook_token: Option<String>,
+}
+
+impl<T, U> EventLoop<T, U>
+where
+    T: tty::EventedPty + event::OnResize + Send + 'static,
+    U: EventListener + Send + 'static,
+{
+    /// Create a new event loop.
+    pub fn new(
+        terminal: Arc<FairMutex<Term<U>>>,
+        event_proxy: U,
+        pty: T,
+        drain_on_exit: bool,
+        ref_test: bool,
+    ) -> io::Result<EventLoop<T, U>> {
+        let (tx, rx) = mpsc::channel();
+        let poll = Poller::new()?.into();
+        Ok(EventLoop {
+            poll,
+            pty,
+            tx,
+            rx: PeekableReceiver::new(rx),
+            terminal,
+            event_proxy,
+            drain_on_exit,
+            ref_test,
+            remote_hook_token: None,
+        })
+    }
+
+    pub fn channel(&self) -> EventLoopSender {
+        EventLoopSender { sender: self.tx.clone(), poller: self.poll.clone() }
+    }
+
+    /// Bind in-band hook delivery to this PTY before its reader starts.
+    pub fn set_remote_hook_token(&mut self, token: String) {
+        self.remote_hook_token = Some(token);
+    }
+
+    /// Drain the channel.
+    ///
+    /// Returns `Err(())` when a shutdown message was received; otherwise the
+    /// last resize in this channel batch is returned for an ordered commit.
+    fn drain_recv_channel(&mut self, state: &mut State) -> Result<Option<PendingResize>, ()> {
+        // Resize storms (live window drags) queue faster than
+        // ResizePseudoConsole drains them — the console host performs a full
+        // viewport reflow per call. Within one drain only the newest size
+        // matters: intermediate sizes carry no information (the next message
+        // supersedes them), and the final size is never dropped because it is
+        // always the last one seen. The slower the host reflows, the more
+        // sizes pile up per drain and the harder the coalescing works.
+        //
+        // Grid-only and full resizes coalesce into the same slot, and a full
+        // resize never loses to a later grid-only one: the child must still be
+        // told about the geometry it is already producing output for. The
+        // reverse is fine — a full resize supersedes a pending grid-only one,
+        // because it reflows the grid too.
+        let mut resize: Option<PendingResize> = None;
+        while let Some(msg) = self.rx.recv() {
+            match msg {
+                Msg::Input(input) => state.write_list.push_back(input),
+                Msg::Resize(window_size) => {
+                    resize = Some(PendingResize { window_size, notify_pty: true })
+                },
+                Msg::ResizeGrid(window_size) => {
+                    let notify_pty = resize.is_some_and(|pending| pending.notify_pty);
+                    resize = Some(PendingResize { window_size, notify_pty });
+                },
+                Msg::CellMetrics(window_size) => {
+                    // Metrics only: the console keeps its geometry, but the
+                    // stream can now answer cell-size queries — including ones
+                    // that arrived before the first layout.
+                    state.stream.resize_and_answer(window_size, &self.event_proxy);
+                },
+                Msg::Shutdown => return Err(()),
+            }
+        }
+
+        Ok(resize)
+    }
+
+    /// 向 conhost 要光标真值并把本地网格滚到同一坐标系。
+    ///
+    /// `expect_rows` 非 None 时只采信视口高度已经等于该值的读数：
+    /// `ResizePseudoConsole` 之后 conhost 若还停在旧几何，它报的行号属于上一
+    /// 个坐标系，照它对账会把网格滚到更错的位置。宁可放弃这一次——死线上的
+    /// 兜底探针会再来一遍。
+    fn realign_to_conpty(&mut self, stage: &str, expect_rows: Option<u16>) {
+        let Some(probe) = self.pty.child_pid().and_then(conpty_cursor_probe) else {
+            return;
+        };
+        if resize_trace_enabled() {
+            eprintln!(
+                "[nebula:resize-trace] {stage} conhost row={} rows={} expect_rows={expect_rows:?}",
+                probe.row, probe.rows,
+            );
+        }
+        if expect_rows.is_some_and(|rows| rows != probe.rows) {
+            return;
+        }
+        let mut terminal = self.terminal.lock();
+        trace_terminal_state(&format!("before-{stage}"), &terminal);
+        terminal.conpty_realign(probe.row);
+        trace_terminal_state(&format!("after-{stage}"), &terminal);
+        drop(terminal);
+        self.event_proxy.send_event(Event::Wakeup);
+    }
+
+    #[inline]
+    fn pty_read<X>(
+        &mut self,
+        state: &mut State,
+        buf: &mut [u8],
+        mut writer: Option<&mut X>,
+    ) -> io::Result<usize>
+    where
+        X: Write,
+    {
+        let mut unprocessed = 0;
+        let mut processed = 0;
+        let mut parser_input_bytes = 0;
+
+        // Reserve the next terminal lock for PTY reading.
+        let _terminal_lease = Some(self.terminal.lease());
+        let mut terminal = None;
+
+        loop {
+            // Read from the PTY.
+            match self.pty.reader().read(&mut buf[unprocessed..]) {
+                // This is received on Windows/macOS when no more data is readable from the PTY.
+                Ok(0) if unprocessed == 0 => break,
+                Ok(got) => {
+                    // Startup profiling: the process-wide first PTY output ≈
+                    // the console host finished its bring-up handshake and
+                    // the shell started talking. The first chunks are dumped
+                    // escaped so a silent boot can be aligned with the host's
+                    // handshake byte for byte.
+                    {
+                        use std::sync::atomic::{AtomicUsize, Ordering};
+                        static CHUNKS: AtomicUsize = AtomicUsize::new(0);
+                        let index = CHUNKS.fetch_add(1, Ordering::Relaxed);
+                        if index == 0 {
+                            crate::pty_trace("first conout bytes");
+                        }
+                        if index < 12 {
+                            let shown = &buf[unprocessed..unprocessed + got.min(200)];
+                            crate::pty_trace(&format!(
+                                "conout chunk {index} ({got} bytes): {}",
+                                shown.escape_ascii()
+                            ));
+                        }
+                    }
+                    unprocessed += got;
+                },
+                Err(err) => match err.kind() {
+                    ErrorKind::Interrupted | ErrorKind::WouldBlock => {
+                        // Go back to mio if we're caught up on parsing and the PTY would block.
+                        if unprocessed == 0 {
+                            break;
+                        }
+                    },
+                    _ => return Err(err),
+                },
+            }
+
+            // Attempt to lock the terminal.
+            let terminal = match &mut terminal {
+                Some(terminal) => terminal,
+                None => terminal.insert(match self.terminal.try_lock_unfair() {
+                    // Force block if we are at the buffer size limit.
+                    None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
+                    None => continue,
+                    Some(terminal) => terminal,
+                }),
+            };
+
+            // Write a copy of the bytes to the ref test file.
+            if let Some(writer) = &mut writer {
+                writer.write_all(&buf[..unprocessed]).unwrap();
+            }
+
+            parser_input_bytes +=
+                state.stream.feed(&mut **terminal, &self.event_proxy, &buf[..unprocessed]);
+            trace_terminal_state("after-pty-read", &terminal);
+
+            processed += unprocessed;
+            unprocessed = 0;
+
+            // Assure we're not blocking the terminal too long unnecessarily.
+            if processed >= MAX_LOCKED_READ {
+                break;
+            }
+        }
+
+        // Compare parser input with its buffered tail, including injected
+        // markers on both sides. Wire bytes alone can hide a committed prefix.
+        if state.stream.sync_bytes_count() < parser_input_bytes && processed > 0 {
+            self.event_proxy.send_event(Event::Wakeup);
+        }
+
+        // Boot profiling: a readable wake that carried no bytes is the
+        // signature of a lost or spurious wakeup; report only the first few.
+        if processed == 0 {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static EMPTY_READS: AtomicUsize = AtomicUsize::new(0);
+            if EMPTY_READS.fetch_add(1, Ordering::Relaxed) < 8 {
+                crate::pty_trace("pty_read: readable wake with no bytes");
+            }
+        }
+
+        Ok(processed)
+    }
+
+    #[inline]
+    fn pty_write(&mut self, state: &mut State) -> io::Result<()> {
+        state.ensure_next();
+
+        'write_many: while let Some(mut current) = state.take_current() {
+            'write_one: loop {
+                match self.pty.writer().write(current.remaining_bytes()) {
+                    Ok(0) => {
+                        state.set_current(Some(current));
+                        break 'write_many;
+                    },
+                    Ok(n) => {
+                        {
+                            use std::sync::atomic::{AtomicUsize, Ordering};
+                            static WRITES: AtomicUsize = AtomicUsize::new(0);
+                            let index = WRITES.fetch_add(1, Ordering::Relaxed);
+                            if index < 12 {
+                                let shown = &current.remaining_bytes()[..n.min(200)];
+                                crate::pty_trace(&format!(
+                                    "conin write {index} ({n} bytes): {}",
+                                    shown.escape_ascii()
+                                ));
+                            }
+                        }
+                        current.advance(n);
+                        if current.finished() {
+                            state.goto_next();
+                            break 'write_one;
+                        }
+                    },
+                    Err(err) => {
+                        state.set_current(Some(current));
+                        match err.kind() {
+                            ErrorKind::Interrupted | ErrorKind::WouldBlock => break 'write_many,
+                            _ => return Err(err),
+                        }
+                    },
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn spawn(mut self) -> JoinHandle<(Self, State)> {
+        thread::spawn_named("PTY reader", move || {
+            let mut state = State::default();
+            if let Some(token) = self.remote_hook_token.take() {
+                state.stream.set_remote_hook_token(token);
+            }
+            let mut buf = [0u8; READ_BUFFER_SIZE];
+
+            let poll_opts = PollMode::Level;
+            let mut interest = PollingEvent::readable(0);
+
+            // Register TTY through EventedRW interface.
+            if let Err(err) = unsafe { self.pty.register(&self.poll, interest, poll_opts) } {
+                error!("Event loop registration error: {err}");
+                return (self, state);
+            }
+
+            let mut events = Events::with_capacity(NonZeroUsize::new(1024).unwrap());
+
+            let mut pipe = if self.ref_test {
+                Some(File::create("./nebula.recording").expect("create nebula recording"))
+            } else {
+                None
+            };
+
+            // Reason the transport died without a child exit, reported after
+            // the loop: without it the app never learns the session is gone
+            // and the tab turns into a zombie (unresponsive input, no notice).
+            let mut failure: Option<String> = None;
+
+            'event_loop: loop {
+                // Wakeup the event loop when a synchronized update timeout or
+                // the pending ConPTY align deadline was reached.
+                let deadline = match (state.stream.next_sync_timeout(), state.align_at) {
+                    (Some(sync), Some(align)) => Some(sync.min(align)),
+                    (sync, align) => sync.or(align),
+                };
+                let timeout = deadline.map(|at| at.saturating_duration_since(Instant::now()));
+
+                events.clear();
+                if let Err(err) = self.poll.wait(&mut events, timeout) {
+                    match err.kind() {
+                        ErrorKind::Interrupted => continue,
+                        _ => {
+                            error!("Event loop polling error: {err}");
+                            failure = Some(format!("event loop polling error: {err}"));
+                            break 'event_loop;
+                        },
+                    }
+                }
+
+                // ConPTY 光标对账到点：向 conhost 要真值并把本地网格滚到同
+                // 一坐标系（机理见 `Term::conpty_realign`）。这是兜底的一次
+                // ——resize 边界上已经同步对过一次账，这里只补 conhost 事后
+                // 才塌缩的情况，所以不校验视口高度。
+                if state.align_at.is_some_and(|at| Instant::now() >= at) {
+                    state.align_at = None;
+                    self.realign_to_conpty("align", None);
+                }
+
+                // Handle synchronized update timeout. The align deadline can
+                // wake the loop early with empty events — only a genuinely
+                // expired sync window may force-stop the synchronized update.
+                if events.is_empty() && self.rx.peek().is_none() {
+                    if state.stream.next_sync_timeout().is_some_and(|st| Instant::now() >= st) {
+                        state.stream.stop_sync(&mut *self.terminal.lock());
+                        self.event_proxy.send_event(Event::Wakeup);
+                    }
+                    continue;
+                }
+
+                // Handle channel events, if there are any.
+                let pending_resize = match self.drain_recv_channel(&mut state) {
+                    Ok(resize) => resize,
+                    Err(()) => break,
+                };
+
+                if let Some(PendingResize { window_size, notify_pty }) = pending_resize {
+                    // A resize is a stream boundary, not a UI-side property.
+                    // Drain everything already readable while the grid still
+                    // has the old geometry; otherwise old-width absolute CUP
+                    // output can be parsed into a new-width grid. This is the
+                    // Drain readable bytes against the old grid before the
+                    // size change lands, so CUP sequences keep their geometry.
+                    loop {
+                        match self.pty_read(&mut state, &mut buf, pipe.as_mut()) {
+                            Ok(processed) if processed >= MAX_LOCKED_READ => continue,
+                            Ok(_) => break,
+                            Err(err) => {
+                                error!("PTY read before resize failed: {err}");
+                                failure = Some(format!("PTY read before resize failed: {err}"));
+                                break 'event_loop;
+                            },
+                        }
+                    }
+
+                    // Match ConPTY's order: reflow the client model
+                    // first, then ask ConPTY to resize. ResizePseudoConsole is
+                    // synchronous; repaint bytes it produces are consumed by
+                    // the normal readable-event path below against this grid.
+                    {
+                        let mut terminal = self.terminal.lock();
+                        trace_terminal_state("before-resize", &terminal);
+                        terminal.resize(window_size);
+                        trace_terminal_state(
+                            if notify_pty { "after-resize" } else { "after-resize-grid" },
+                            &terminal,
+                        );
+                    }
+                    // Grid-only: the child keeps the geometry it is producing
+                    // output for, so conhost's buffer is untouched and there is
+                    // nothing to reconcile against — skip both the
+                    // ResizePseudoConsole and the align probe. The reflow above
+                    // is what keeps the viewport on screen honest while a drag
+                    // is still in flight.
+                    if !notify_pty {
+                        self.event_proxy.send_event(Event::Wakeup);
+                    } else {
+                        self.pty.on_resize(window_size);
+                        // A child waiting for its cell size may never write another byte.
+                        state.stream.resize_and_answer(window_size, &self.event_proxy);
+                        // 对账的唯一可信时点就是这里：`ResizePseudoConsole` 是同步
+                        // 的，返回时 conhost 已按新宽度 rewrap 完毕，而本地网格还是
+                        // 纯 reflow 的结果——两侧都没有被重绘字节动过，行号差就是
+                        // 两种折行语义的真实差值。等到下面 pty_read 把 PSReadLine
+                        // 的绝对 CUP 解析进来，光标已经被搬到 conhost 的坐标上，
+                        // 差值归零，判据就永久丢失了（字节取证：分屏后 after-resize
+                        // 是 cursor=15/prompts=[15]，120ms 后的 before-align 已经变成
+                        // cursor=19/prompts=[15]——错位既成事实却测不出来）。
+                        self.realign_to_conpty("align-sync", Some(window_size.num_lines));
+                        // conhost 事后才做的塌缩/重锚探不到，留一次死线兜底；新
+                        // resize 顺延死线，风暴天然合并成一次探针。
+                        state.align_at = Some(Instant::now() + ALIGN_DELAY);
+                        self.event_proxy.send_event(Event::Wakeup);
+                    }
+                }
+
+                for event in events.iter() {
+                    match event.key {
+                        tty::PTY_CHILD_EVENT_TOKEN => {
+                            if let Some(tty::ChildEvent::Exited(status)) =
+                                self.pty.next_child_event()
+                            {
+                                if let Some(status) = status {
+                                    self.event_proxy.send_event(Event::ChildExit(status));
+                                }
+                                if self.drain_on_exit {
+                                    let _ = self.pty_read(&mut state, &mut buf, pipe.as_mut());
+                                }
+                                self.terminal.lock().exit();
+                                self.event_proxy.send_event(Event::Wakeup);
+                                break 'event_loop;
+                            }
+                        },
+
+                        tty::PTY_READ_WRITE_TOKEN => {
+                            if event.is_interrupt() {
+                                // Don't try to do I/O on a dead PTY.
+                                continue;
+                            }
+
+                            if event.readable {
+                                if let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut())
+                                {
+                                    // On Linux, a `read` on the master side of a PTY can fail
+                                    // with `EIO` if the client side hangs up.  In that case,
+                                    // just loop back round for the inevitable `Exited` event.
+                                    // This sucks, but checking the process is either racy or
+                                    // blocking.
+                                    #[cfg(target_os = "linux")]
+                                    if err.raw_os_error() == Some(libc::EIO) {
+                                        continue;
+                                    }
+
+                                    error!("Error reading from PTY in event loop: {err}");
+                                    failure = Some(format!("PTY read failed: {err}"));
+                                    break 'event_loop;
+                                }
+                            }
+
+                            if event.writable {
+                                if let Err(err) = self.pty_write(&mut state) {
+                                    error!("Error writing to PTY in event loop: {err}");
+                                    failure = Some(format!("PTY write failed: {err}"));
+                                    break 'event_loop;
+                                }
+                            }
+                        },
+                        _ => (),
+                    }
+                }
+
+                // Register write interest if necessary.
+                let needs_write = state.needs_write();
+                if needs_write != interest.writable {
+                    interest.writable = needs_write;
+
+                    // Re-register with new interest.
+                    self.pty.reregister(&self.poll, interest, poll_opts).unwrap();
+                }
+            }
+
+            // Announce a transport death exactly like a child exit so the
+            // app's existing teardown runs (`exit()` triggers `Event::Exit`).
+            // The child-exit and shutdown paths leave `failure` unset.
+            if let Some(reason) = failure {
+                self.event_proxy.send_event(Event::PtyFailure(reason));
+                self.terminal.lock().exit();
+                self.event_proxy.send_event(Event::Wakeup);
+            }
+
+            // The evented instances are not dropped here so deregister them explicitly.
+            let _ = self.pty.deregister(&self.poll);
+
+            (self, state)
+        })
+    }
+}
+
+/// Helper type which tracks how much of a buffer has been written.
+struct Writing {
+    source: Cow<'static, [u8]>,
+    written: usize,
+}
+
+pub struct Notifier(pub EventLoopSender);
+
+impl event::Notify for Notifier {
+    fn notify<B>(&self, bytes: B)
+    where
+        B: Into<Cow<'static, [u8]>>,
+    {
+        let bytes = bytes.into();
+        // Terminal hangs if we send 0 bytes through.
+        if bytes.is_empty() {
+            return;
+        }
+
+        let _ = self.0.send(Msg::Input(bytes));
+    }
+}
+
+impl event::OnResize for Notifier {
+    fn on_resize(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::Resize(window_size));
+    }
+}
+
+impl Notifier {
+    /// Reflow the grid to `window_size` and leave the child on its old size.
+    /// See [`Msg::ResizeGrid`] for why the two halves are split.
+    pub fn on_resize_grid(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::ResizeGrid(window_size));
+    }
+
+    /// Tell the stream its cell size without resizing anything. See
+    /// [`Msg::CellMetrics`].
+    pub fn on_cell_metrics(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::CellMetrics(window_size));
+    }
+}
+
+#[derive(Debug)]
+pub enum EventLoopSendError {
+    /// Error polling the event loop.
+    Io(io::Error),
+
+    /// Error sending a message to the event loop.
+    Send(mpsc::SendError<Msg>),
+}
+
+impl Display for EventLoopSendError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            EventLoopSendError::Io(err) => err.fmt(f),
+            EventLoopSendError::Send(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for EventLoopSendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            EventLoopSendError::Io(err) => err.source(),
+            EventLoopSendError::Send(err) => err.source(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EventLoopSender {
+    sender: Sender<Msg>,
+    poller: Arc<Poller>,
+}
+
+impl EventLoopSender {
+    /// 为非 PTY 传输创建消息通道，继续复用应用既有的输入、缩放和关闭协议。
+    pub fn standalone() -> io::Result<(Self, Receiver<Msg>)> {
+        let (sender, receiver) = mpsc::channel();
+        Ok((Self { sender, poller: Arc::new(Poller::new()?) }, receiver))
+    }
+
+    pub fn send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        self.sender.send(msg).map_err(EventLoopSendError::Send)?;
+        self.poller.notify().map_err(EventLoopSendError::Io)
+    }
+
+    /// A sender wired to nothing: the receiving side is dropped on the spot,
+    /// so every `send` errors out and is discarded by the caller's `let _ =`.
+    /// For panes with no PTY behind them (e.g. document-viewer tabs), whose
+    /// input must be swallowed instead of reaching some other pane's shell.
+    pub fn sink() -> Self {
+        let (sender, _) = mpsc::channel();
+        Self { sender, poller: Arc::new(Poller::new().expect("create sink poller")) }
+    }
+}
+
+/// All of the mutable state needed to run the event loop.
+///
+/// Contains list of items to write, current write state, etc. Anything that
+/// would otherwise be mutated on the `EventLoop` goes here.
+#[derive(Default)]
+pub struct State {
+    write_list: VecDeque<Cow<'static, [u8]>>,
+    writing: Option<Writing>,
+    stream: StreamProcessor,
+    /// ConPTY 光标对账的死线：resize 提交后 `ALIGN_DELAY` 触发，见
+    /// `conpty_cursor_probe`。
+    align_at: Option<Instant>,
+}
+
+impl State {
+    #[inline]
+    fn ensure_next(&mut self) {
+        if self.writing.is_none() {
+            self.goto_next();
+        }
+    }
+
+    #[inline]
+    fn goto_next(&mut self) {
+        self.writing = self.write_list.pop_front().map(Writing::new);
+    }
+
+    #[inline]
+    fn take_current(&mut self) -> Option<Writing> {
+        self.writing.take()
+    }
+
+    #[inline]
+    fn needs_write(&self) -> bool {
+        self.writing.is_some() || !self.write_list.is_empty()
+    }
+
+    #[inline]
+    fn set_current(&mut self, new: Option<Writing>) {
+        self.writing = new;
+    }
+}
+
+impl Writing {
+    #[inline]
+    fn new(c: Cow<'static, [u8]>) -> Writing {
+        Writing { source: c, written: 0 }
+    }
+
+    #[inline]
+    fn advance(&mut self, n: usize) {
+        self.written += n;
+    }
+
+    #[inline]
+    fn remaining_bytes(&self) -> &[u8] {
+        &self.source[self.written..]
+    }
+
+    #[inline]
+    fn finished(&self) -> bool {
+        self.written >= self.source.len()
+    }
+}
+
+struct PeekableReceiver<T> {
+    rx: Receiver<T>,
+    peeked: Option<T>,
+}
+
+impl<T> PeekableReceiver<T> {
+    fn new(rx: Receiver<T>) -> Self {
+        Self { rx, peeked: None }
+    }
+
+    fn peek(&mut self) -> Option<&T> {
+        if self.peeked.is_none() {
+            self.peeked = self.rx.try_recv().ok();
+        }
+
+        self.peeked.as_ref()
+    }
+
+    fn recv(&mut self) -> Option<T> {
+        if self.peeked.is_some() {
+            self.peeked.take()
+        } else {
+            match self.rx.try_recv() {
+                Err(TryRecvError::Disconnected) => panic!("event loop channel closed"),
+                res => res.ok(),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::event::VoidListener;
+    use crate::term::Config;
+    use crate::term::test::TermSize;
+
+    #[test]
+    fn ordinary_command_view_preserves_grid_cursor_and_chunk_boundaries() {
+        use crate::inline_content::CommandView;
+        struct Lens;
+        impl EventListener for Lens {
+            fn command_view(&self, shell: &str, line: &str) -> Option<CommandView> {
+                (shell == "pwsh:1" && line == "cat long.md")
+                    .then(|| CommandView { mime: "text/markdown".into(), title: line.into() })
+            }
+        }
+        let start = b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmNhdCBsb25nLm1k\x07\x1b]133;C\x07";
+        let output = "# 中文\r\n\r\nThis line is deliberately longer than the terminal grid width.\r\n1234567890123456789012345界suffix\r\n";
+        // 同一字节流会同时承载状态报告与原文，合并协议入口后不能重复消费或丢失其一。
+        for (previous, working, done) in [
+            ("", "", ""),
+            (
+                "\x1b]7501;state=done:id=previous\x07",
+                "\x1b]7501;state=working:id=task\x1b\\",
+                "\x1b]7501;state=done:id=task\x07",
+            ),
+        ] {
+            let wire = [
+                previous.as_bytes(),
+                start.as_slice(),
+                working.as_bytes(),
+                output.as_bytes(),
+                done.as_bytes(),
+                b"\x1b]133;D;0\x07\x1b]133;A\x07prompt>",
+            ]
+            .concat();
+            for split in 0..=wire.len() {
+                let mut term = Term::new(
+                    Config { scrolling_history: 0, ..Config::default() },
+                    &TermSize::new(24, 24),
+                    Lens,
+                );
+                let mut plain = Term::new(Config::default(), &TermSize::new(24, 24), VoidListener);
+                let mut stream = StreamProcessor::default();
+                stream.feed(&mut term, &Lens, &wire[..split]);
+                stream.feed(&mut term, &Lens, &wire[split..]);
+                StreamProcessor::default().feed(&mut plain, &VoidListener, &wire);
+                assert_eq!(term.grid().cursor.point, plain.grid().cursor.point);
+                let surface = &term.grid()[crate::index::Line(0)][crate::index::Column(0)]
+                    .inline_marker()
+                    .unwrap()
+                    .surface;
+                assert!(surface.has_grid_source());
+                // Native text markers require cleanup, not per-cell image lookup.
+                assert!(!term.grid().may_have_images());
+                let text = &surface.update_since(0).chunks[0].text;
+                assert_eq!(text, &output.replace("\r\n", "\n"));
+                assert_eq!(
+                    term.bounds_to_string(
+                        crate::index::Point::new(crate::index::Line(0), crate::index::Column(0)),
+                        term.grid().cursor.point
+                    ),
+                    plain.bounds_to_string(
+                        crate::index::Point::new(crate::index::Line(0), crate::index::Column(0)),
+                        plain.grid().cursor.point
+                    )
+                );
+                let records = term.program_statuses().iter().collect::<Vec<_>>();
+                if previous.is_empty() {
+                    assert!(records.is_empty());
+                } else {
+                    assert_eq!(records.len(), 2);
+                    assert!(
+                        records
+                            .iter()
+                            .find(|record| record.id == "previous")
+                            .unwrap()
+                            .result_acknowledged
+                    );
+                    let task = records.iter().find(|record| record.id == "task").unwrap();
+                    assert_eq!(task.state, crate::program_status::State::Done);
+                    assert!(!task.result_acknowledged);
+                }
+                let lifetime = Arc::downgrade(surface);
+                stream.feed(&mut term, &Lens, &b"\r\n".repeat(24));
+                assert!(lifetime.upgrade().is_none());
+                stream.feed(&mut term, &Lens, b"\x1bc");
+                assert!(lifetime.upgrade().is_none());
+                assert!(!term.grid().may_have_images());
+            }
+        }
+    }
+
+    #[test]
+    fn disabling_automatic_command_views_preserves_ansi_and_skips_capture() {
+        use crate::index::{Column, Line};
+        use crate::inline_content::CommandView;
+        use crate::vte::ansi::{Color, NamedColor};
+        use std::cell::Cell;
+
+        struct Lens(Cell<bool>, Cell<usize>);
+        impl EventListener for Lens {
+            fn automatic_command_views_enabled(&self) -> bool {
+                self.0.get()
+            }
+            fn command_view(&self, _: &str, _: &str) -> Option<CommandView> {
+                self.1.set(self.1.get() + 1);
+                Some(CommandView { mime: "text/x-git-output".into(), title: "git status".into() })
+            }
+        }
+
+        for (start_enabled, end_enabled) in [(false, false), (false, true), (true, false)] {
+            let host = Lens(Cell::new(start_enabled), Cell::new(0));
+            let mut term = Term::new(
+                Config::default(),
+                &TermSize::new(80, 24),
+                Lens(Cell::new(true), Cell::new(0)),
+            );
+            let mut stream = StreamProcessor::default();
+            stream.feed(
+                &mut term,
+                &host,
+                b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmdpdCBzdGF0dXM=\x07\x1b]133;C\x07\x1b[32mstaged\x1b[0m\r\n\x1b[31mchanged\x1b[0m\r\n",
+            );
+            host.0.set(end_enabled);
+            stream.feed(&mut term, &host, b"\x1b]133;D;0\x07prompt>");
+
+            assert_eq!(host.1.get(), usize::from(start_enabled));
+            for (line, text, color) in
+                [(Line(0), "staged", NamedColor::Green), (Line(1), "changed", NamedColor::Red)]
+            {
+                assert_eq!(
+                    term.line_to_string(line, Column(0)..term.last_column(), false).trim(),
+                    text
+                );
+                let first = &term.grid()[line][Column(0)];
+                assert_eq!(first.fg, Color::Named(color));
+                assert!(first.inline_marker().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_command_view_leaves_failed_or_interactive_output_plain() {
+        struct Lens;
+        impl EventListener for Lens {
+            fn command_view(&self, _: &str, _: &str) -> Option<crate::inline_content::CommandView> {
+                Some(crate::inline_content::CommandView {
+                    mime: "text/markdown".into(),
+                    title: "cat".into(),
+                })
+            }
+        }
+        let start = b"\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmNhdCBsb25nLm1k\x07\x1b]133;C\x07";
+        for suffix in [
+            b"error\r\n\x1b]133;D;1\x07".as_slice(),
+            b"\x1b[?1049hfull screen\x1b[?1049l\r\n\x1b]133;D;0\x07",
+            b"partial\x1b]133;D;0\x07",
+        ] {
+            let mut term = Term::new(Config::default(), &TermSize::new(80, 24), Lens);
+            StreamProcessor::default().feed(&mut term, &Lens, &[start.as_slice(), suffix].concat());
+            assert!((term.topmost_line().0..=term.bottommost_line().0).all(|row| {
+                term.grid()[crate::index::Line(row)][crate::index::Column(0)]
+                    .inline_marker()
+                    .is_none()
+            }));
+        }
+    }
+
+    #[test]
+    fn native_content_grows_in_wire_order_and_rejects_non_column_zero() {
+        use crate::index::{Column, Line, Point};
+        use crate::inline_content::Packet;
+        let mut terminal = Term::new(Config::default(), &TermSize::new(80, 24), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let begin = Packet::Begin {
+            wire_id: 7,
+            rows: 8,
+            mime: "text/plain".into(),
+            title: "compact".into(),
+        };
+        stream.feed(&mut terminal, &VoidListener, begin.encode().as_bytes());
+        let surface = terminal.grid()[Point::new(Line(0), Column(0))]
+            .inline_marker()
+            .unwrap()
+            .surface
+            .clone();
+        assert_eq!(surface.rows(), 1);
+        stream.feed(&mut terminal, &VoidListener, b"\r\nx");
+        stream.feed(
+            &mut terminal,
+            &VoidListener,
+            Packet::Place { wire_id: 7, row: 1 }.encode().as_bytes(),
+        );
+        assert_eq!(surface.rows(), 1);
+        stream.feed(&mut terminal, &VoidListener, b"\r");
+        for row in 1..4 {
+            let wire = format!(
+                "{}\r\n{}",
+                Packet::Place { wire_id: 7, row }.encode(),
+                Packet::Append { wire_id: 7, text: "part".into() }.encode()
+            );
+            for byte in wire.as_bytes() {
+                stream.feed(&mut terminal, &VoidListener, &[*byte]);
+            }
+            assert_eq!(surface.rows(), row + 1);
+        }
+        stream.feed(
+            &mut terminal,
+            &VoidListener,
+            Packet::End { wire_id: 7, code: 0 }.encode().as_bytes(),
+        );
+        stream.feed(&mut terminal, &VoidListener, b"after");
+        for row in 0..4 {
+            assert_eq!(
+                terminal.grid()[Point::new(Line(row), Column(0))].inline_marker().unwrap().row,
+                row as u16
+            );
+        }
+        assert_eq!(terminal.grid()[Point::new(Line(4), Column(0))].c, 'a');
+    }
+
+    #[test]
+    fn native_content_survives_split_frames_and_reflow_without_cell_growth() {
+        use crate::index::{Column, Line, Point};
+        use crate::inline_content::{Packet, Status};
+        let packets = [
+            Packet::Begin {
+                wire_id: 55,
+                rows: 8,
+                mime: "text/markdown".into(),
+                title: "结果".into(),
+            },
+            Packet::Append { wire_id: 55, text: "# 中文\nhello".into() },
+            Packet::End { wire_id: 55, code: 0 },
+        ];
+        let mut wire = packets[0].encode();
+        for row in 1..8 {
+            wire.push_str("\r\n");
+            wire.push_str(&Packet::Place { wire_id: 55, row }.encode());
+        }
+        wire.push_str("\r\n");
+        wire.extend(packets[1..].iter().map(Packet::encode));
+        for (stride, synchronized) in [(1, false), (2, true), (7, true), (wire.len(), false)] {
+            let mut terminal = Term::new(Config::default(), &TermSize::new(80, 24), VoidListener);
+            let mut stream = StreamProcessor::default();
+            if synchronized {
+                stream.feed(&mut terminal, &VoidListener, b"\x1b[?2026h");
+            }
+            stream.feed(&mut terminal, &VoidListener, b"long prefix before content\r\n");
+            for chunk in wire.as_bytes().chunks(stride) {
+                stream.feed(&mut terminal, &VoidListener, chunk);
+            }
+            if synchronized {
+                stream.feed(&mut terminal, &VoidListener, b"\x1b[?2026l");
+            }
+            stream.feed(&mut terminal, &VoidListener, b"after");
+            let marker =
+                terminal.grid()[Point::new(Line(1), Column(0))].inline_marker().unwrap().clone();
+            assert_eq!(marker.surface.update_since(0).chunks[0].text, "# 中文\nhello");
+            assert_eq!(marker.surface.update_since(0).status, Status::Finished(0));
+            for width in [10, 120, 2, 80] {
+                terminal.resize(TermSize::new(width, 24));
+                let markers: Vec<_> = (terminal.topmost_line().0..=terminal.bottommost_line().0)
+                    .filter_map(|line| {
+                        terminal.grid()[Point::new(Line(line), Column(0))].inline_marker()
+                    })
+                    .collect();
+                assert_eq!(markers.len(), 8, "width {width}");
+                assert!(markers.iter().all(|m| m.surface.id == marker.surface.id));
+            }
+            stream.feed(&mut terminal, &VoidListener, b"\x1bc");
+            assert!((terminal.topmost_line().0..=terminal.bottommost_line().0).all(|line| {
+                terminal.grid()[Point::new(Line(line), Column(0))].inline_marker().is_none()
+            }));
+        }
+    }
+
+    #[test]
+    fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
+        use crate::render::{RenderSnapshot, SnapshotConfig};
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let cfg = SnapshotConfig { rows: 2, cols: 20 };
+        stream.feed(&mut term, &VoidListener, b"old");
+        let before = RenderSnapshot::capture(&term, &cfg);
+        for bytes in [b"\x1b[?20".as_slice(), b"26h\r", b"new", b"\x1b[10G", b"\x1b[?2026"] {
+            stream.feed(&mut term, &VoidListener, bytes);
+            // Animation frames read the grid even without a Wakeup.
+            let frame = RenderSnapshot::capture(&term, &cfg);
+            assert_eq!(frame.cursor.as_ref().unwrap().col, before.cursor.as_ref().unwrap().col);
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        }
+        stream.feed(&mut term, &VoidListener, b"l");
+        assert_eq!(RenderSnapshot::capture(&term, &cfg).cursor.unwrap().col, 9);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h\rtimeout");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.stop_sync(&mut term);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
+
+    #[test]
+    fn synchronized_output_has_a_network_tolerant_deadline_and_bounded_buffer() {
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let started = Instant::now();
+        stream.feed(&mut term, &VoidListener, b"old\x1b[?2026h");
+        let deadline = stream.next_sync_timeout().unwrap();
+        assert!(deadline >= started + Duration::from_secs(1));
+        assert!(deadline <= Instant::now() + Duration::from_secs(1));
+        stream.feed(&mut term, &VoidListener, b"\rnew");
+        assert_eq!(stream.next_sync_timeout(), Some(deadline));
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026l");
+        assert!(stream.next_sync_timeout().is_none());
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h");
+        // The existing parser cap still forces progress when a producer never
+        // ends a large update. A longer watchdog must not remove that cap.
+        stream.feed(&mut term, &VoidListener, &vec![b'x'; 2 * 1024 * 1024]);
+        assert!(stream.next_sync_timeout().is_none());
+        assert_eq!(stream.sync_bytes_count(), 0);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'x');
+    }
+
+    #[test]
+    fn authenticated_hook_frames_survive_every_chunk_boundary_and_reject_other_panes() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                if let Event::AiHookEnvelope(envelope) = event {
+                    self.0.lock().unwrap().push(envelope);
+                }
+            }
+        }
+        // Base64 for a small envelope; authentication is checked before delivery.
+        let frame = b"\x1b]777;nebula-hook;0123456789abcdef0123456789abcdef;bmVidWxhLWhvb2svMSBzb3VyY2U9Y29kZXgKe30=\x07";
+        for token in [
+            None,
+            Some("ffffffffffffffffffffffffffffffff"),
+            Some("0123456789abcdef0123456789abcdef"),
+        ] {
+            for split in 0..=frame.len() {
+                let listener = Listener::default();
+                let mut terminal =
+                    Term::new(Config::default(), &TermSize::new(80, 24), listener.clone());
+                let mut stream = StreamProcessor::default();
+                if let Some(token) = token {
+                    stream.set_remote_hook_token(token.into());
+                }
+                stream.feed(&mut terminal, &listener, &frame[..split]);
+                stream.feed(&mut terminal, &listener, &frame[split..]);
+                let events = listener.0.lock().unwrap();
+                if token == Some("0123456789abcdef0123456789abcdef") {
+                    assert_eq!(events.as_slice(), [b"nebula-hook/1 source=codex\n{}".to_vec()]);
+                } else {
+                    assert!(events.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                let label = match event {
+                    Event::UserVar { value, .. } => format!("shell:{value}"),
+                    Event::CwdReport(cwd) => format!("cwd:{cwd}"),
+                    Event::Title(title) => format!("title:{title}"),
+                    _ => return,
+                };
+                self.0.lock().unwrap().push(label);
+            }
+        }
+        let bytes = b"\x1b]1337;SetUserVar=pebrel_shell=cmVtb3Rl\x07\x1b]7;file://box/remote\x07\x1b]2;remote\x07\x1b]1337;SetUserVar=pebrel_shell=bG9jYWw=\x07\x1b]7;file://localhost/local\x07";
+        for split in 0..=bytes.len() {
+            let listener = Listener::default();
+            let size = TermSize::new(80, 24);
+            let mut terminal = Term::new(Config::default(), &size, listener.clone());
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &listener, &bytes[..split]);
+            stream.feed(&mut terminal, &listener, &bytes[split..]);
+            assert_eq!(
+                *listener.0.lock().unwrap(),
+                ["shell:remote", "cwd:/remote", "title:remote", "shell:local", "cwd:/local"],
+                "split at {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_input_boundary_survives_chunking_and_scrolling() {
+        use crate::index::{Column, Line, Point};
+
+        let bytes = b"\x1b]133;A\x07[first]\r\n>\x1b]133;B\x07pause";
+        for split in 0..=bytes.len() {
+            let mut terminal = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &VoidListener, &bytes[..split]);
+            stream.feed(&mut terminal, &VoidListener, &bytes[split..]);
+            assert_eq!(terminal.nebula_prompt_input_point(), Some(Point::new(Line(1), Column(1))));
+            stream.feed(&mut terminal, &VoidListener, b"\r\n");
+            assert_eq!(terminal.nebula_prompt_input_point(), Some(Point::new(Line(0), Column(1))));
+            stream.feed(&mut terminal, &VoidListener, b"\x1b]133;C\x07");
+            assert_eq!(terminal.nebula_prompt_input_point(), None);
+        }
+    }
+
+    #[test]
+    fn input_boundaries_require_a_prompt_and_do_not_survive_reflow_or_reset() {
+        let mut terminal = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut terminal, &VoidListener, b"\x1b]133;B\x07");
+        assert_eq!(terminal.nebula_prompt_input_point(), None);
+        for ending in [b"\x1bc".as_slice(), b"\x1b]133;D;0\x07", b"\x1b]133;A\x07"] {
+            stream.feed(&mut terminal, &VoidListener, b"\x1b]133;A\x07\x1b]133;B\x07");
+            assert!(terminal.nebula_prompt_input_point().is_some());
+            stream.feed(&mut terminal, &VoidListener, ending);
+            assert_eq!(terminal.nebula_prompt_input_point(), None);
+        }
+        stream.feed(&mut terminal, &VoidListener, b"\x1b]133;A\x07\x1b]133;B\x07");
+        terminal.resize(TermSize::new(10, 2));
+        assert_eq!(terminal.nebula_prompt_input_point(), None);
+    }
+
+    #[test]
+    fn shell_semantic_events_track_the_active_prompt() {
+        let size = TermSize::new(80, 24);
+        let mut terminal = Term::new(Config::default(), &size, VoidListener);
+        let listener = VoidListener;
+        let mut stream = StreamProcessor::default();
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;A\x07custom prompt :: ");
+        assert!(terminal.nebula_prompt_active());
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;C\x07");
+        assert!(!terminal.nebula_prompt_active());
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;A\x07next prompt :: ");
+        assert!(terminal.nebula_prompt_active());
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;D;0\x07");
+        assert!(!terminal.nebula_prompt_active());
+    }
+}
+
+#[cfg(all(test, unix))]
+#[path = "event_loop/sync_tests.rs"]
+mod sync_tests;
+
+#[cfg(test)]
+#[path = "event_loop/kitty_tests.rs"]
+mod kitty_tests;
+
+#[cfg(test)]
+#[path = "event_loop/zmodem_tests.rs"]
+mod zmodem_tests;

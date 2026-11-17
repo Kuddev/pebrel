@@ -151,7 +151,7 @@ internal fun ComposerVoiceButton(controller: VoiceInputController, state: VoiceS
         }
     }
     if (modelSheet) {
-        ModalBottomSheet(onDismissRequest = { modelSheet = false }) {
+        GlassSheet({ modelSheet = false }) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Whisper · Base", style = MaterialTheme.typography.titleLarge)

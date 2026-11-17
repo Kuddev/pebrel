@@ -1,0 +1,278 @@
+use std::fmt::{self, Display, Formatter};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub const CHINESE_TEMPLATE: &str = include_str!("templates/pebrel.zh-CN.luau");
+pub const ENGLISH_TEMPLATE: &str = include_str!("templates/pebrel.en-US.luau");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateLanguage {
+    ZhCn,
+    EnUs,
+}
+
+impl TemplateLanguage {
+    fn contents(self) -> &'static str {
+        match self {
+            Self::ZhCn => CHINESE_TEMPLATE,
+            Self::EnUs => ENGLISH_TEMPLATE,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum TemplateError {
+    AlreadyExists(PathBuf),
+    InvalidLanguage(String),
+    Io(std::io::Error),
+}
+
+impl Display for TemplateError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyExists(path) => write!(
+                formatter,
+                "configuration already exists at {}; use --force to back it up and replace it",
+                path.display()
+            ),
+            Self::InvalidLanguage(language) => write!(
+                formatter,
+                "unsupported language {language:?}; expected system or a supported UI locale"
+            ),
+            Self::Io(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl std::error::Error for TemplateError {}
+
+impl From<std::io::Error> for TemplateError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateWrite {
+    pub path: PathBuf,
+    pub backup: Option<PathBuf>,
+    pub created: bool,
+}
+
+pub fn resolve_template_language(
+    explicit: Option<&str>,
+    saved: Option<&str>,
+    locale: Option<&str>,
+) -> Result<TemplateLanguage, TemplateError> {
+    let requested = explicit.or(saved).unwrap_or("system");
+    let preference = crate::i18n::LanguagePreference::parse(requested)
+        .ok_or_else(|| TemplateError::InvalidLanguage(requested.to_owned()))?;
+    let language =
+        preference.explicit().unwrap_or_else(|| crate::i18n::UiLanguage::for_locale(locale));
+    Ok(match language {
+        crate::i18n::UiLanguage::ZhCn | crate::i18n::UiLanguage::ZhTw => TemplateLanguage::ZhCn,
+        _ => TemplateLanguage::EnUs,
+    })
+}
+
+pub use crate::i18n::system_locale;
+
+pub fn write_template(
+    path: &Path,
+    language: TemplateLanguage,
+    force: bool,
+) -> Result<TemplateWrite, TemplateError> {
+    let existed = path.exists();
+    if existed && !force {
+        return Err(TemplateError::AlreadyExists(path.to_owned()));
+    }
+
+    let parent =
+        path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+
+    // 必须先完成备份；备份失败时绝不能触碰用户当前可用的配置。
+    let backup = if existed { Some(create_backup(path)?) } else { None };
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(language.contents().as_bytes())?;
+    temporary.as_file_mut().sync_all()?;
+    if force {
+        temporary.persist(path).map_err(|error| TemplateError::Io(error.error))?;
+    } else {
+        temporary.persist_noclobber(path).map_err(|error| {
+            if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+                TemplateError::AlreadyExists(path.to_owned())
+            } else {
+                TemplateError::Io(error.error)
+            }
+        })?;
+    }
+
+    Ok(TemplateWrite { path: path.to_owned(), backup, created: !existed })
+}
+
+pub fn ensure_user_lua_config(
+    path: &Path,
+    language: TemplateLanguage,
+) -> Result<TemplateWrite, TemplateError> {
+    if path.exists() {
+        return Ok(TemplateWrite { path: path.to_owned(), backup: None, created: false });
+    }
+    match write_template(path, language, false) {
+        Err(TemplateError::AlreadyExists(_)) => {
+            Ok(TemplateWrite { path: path.to_owned(), backup: None, created: false })
+        },
+        result => result,
+    }
+}
+
+fn create_backup(path: &Path) -> Result<PathBuf, std::io::Error> {
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    for sequence in 0..1000_u16 {
+        let suffix = if sequence == 0 {
+            format!("bak-{timestamp}")
+        } else {
+            format!("bak-{timestamp}-{sequence}")
+        };
+        let backup = path.with_extension(format!(
+            "{}.{suffix}",
+            path.extension().and_then(|ext| ext.to_str()).unwrap_or("luau")
+        ));
+        let mut destination =
+            match fs::OpenOptions::new().write(true).create_new(true).open(&backup) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            };
+        let mut source = fs::File::open(path)?;
+        std::io::copy(&mut source, &mut destination)?;
+        destination.sync_all()?;
+        return Ok(backup);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "unable to allocate a unique configuration backup name",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::lua::runtime::ReloadSignal;
+
+    fn active_lines(template: &str) -> Vec<&str> {
+        template
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("--"))
+            .collect()
+    }
+
+    #[test]
+    fn localized_templates_have_equivalent_valid_lua() {
+        assert_eq!(active_lines(CHINESE_TEMPLATE), active_lines(ENGLISH_TEMPLATE));
+        let temp = tempfile::tempdir().unwrap();
+        for (name, contents) in [("zh.lua", CHINESE_TEMPLATE), ("en.lua", ENGLISH_TEMPLATE)] {
+            let path = temp.path().join(name);
+            fs::write(&path, contents).unwrap();
+            crate::config::lua::load_lua_file(&path, ReloadSignal::default()).unwrap();
+        }
+    }
+
+    #[test]
+    fn language_resolution_supports_all_public_values() {
+        assert_eq!(
+            resolve_template_language(Some("zh-CN"), None, None).unwrap(),
+            TemplateLanguage::ZhCn
+        );
+        assert_eq!(
+            resolve_template_language(Some("en-US"), None, Some("zh_CN")).unwrap(),
+            TemplateLanguage::EnUs
+        );
+        assert_eq!(
+            resolve_template_language(Some("system"), None, Some("zh-Hans-CN")).unwrap(),
+            TemplateLanguage::ZhCn
+        );
+    }
+
+    #[test]
+    fn additional_ui_languages_use_existing_templates_without_errors() {
+        assert_eq!(
+            resolve_template_language(None, Some("fr-FR"), None).unwrap(),
+            TemplateLanguage::EnUs
+        );
+        assert_eq!(
+            resolve_template_language(Some("zh-TW"), None, None).unwrap(),
+            TemplateLanguage::ZhCn
+        );
+        for preference in crate::i18n::LanguagePreference::ALL {
+            assert!(
+                resolve_template_language(Some(preference.as_str()), None, Some("de-DE")).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn existing_file_requires_force_and_force_creates_backup() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nebula.lua");
+        fs::write(&path, "return { existing = true }").unwrap();
+        assert!(matches!(
+            write_template(&path, TemplateLanguage::ZhCn, false),
+            Err(TemplateError::AlreadyExists(_))
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "return { existing = true }");
+
+        let result = write_template(&path, TemplateLanguage::EnUs, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(result.backup.unwrap()).unwrap(),
+            "return { existing = true }"
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), ENGLISH_TEMPLATE);
+    }
+
+    #[test]
+    fn ensure_never_rewrites_an_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nebula.lua");
+        let first = ensure_user_lua_config(&path, TemplateLanguage::EnUs).unwrap();
+        assert!(first.created);
+        let original = fs::read_to_string(&path).unwrap();
+        let second = ensure_user_lua_config(&path, TemplateLanguage::ZhCn).unwrap();
+        assert!(!second.created);
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
+    fn concurrent_first_run_only_publishes_one_complete_template() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pebrel.lua");
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..4)
+                .map(|index| {
+                    let path = &path;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        let language = if index % 2 == 0 {
+                            TemplateLanguage::EnUs
+                        } else {
+                            TemplateLanguage::ZhCn
+                        };
+                        ensure_user_lua_config(path, language).unwrap().created
+                    })
+                })
+                .collect();
+            let count = workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>();
+            assert_eq!(count, 1);
+        });
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents == ENGLISH_TEMPLATE || contents == CHINESE_TEMPLATE);
+    }
+}

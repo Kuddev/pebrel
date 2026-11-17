@@ -15,7 +15,7 @@ prevented independent history paging.
 
 ## Evidence
 
-- [History capture](../../../../../nebula_app/src/runtime_api/terminal_read.rs)
+- [History capture](../../../../../pebrel_app/src/runtime_api/terminal_read.rs)
   can read retained rows without mutating the terminal display offset.
 - [Android snapshot gestures](../../../../../mobile/android) in `TerminalSnapshotView.kt`
   retain a source-cell projection for phone reflow.
