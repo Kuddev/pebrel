@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -22,12 +23,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.kuddev.pebrel.mobile.R
 
+/** A whole card that answers a press, with the shared outline. Semantics stay a plain button. */
+@Composable
+internal fun Modifier.pressFeedbackFrame(onClick: () -> Unit): Modifier {
+    val interactions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    return pressFeedback(interactions).workspaceFrame()
+        .clickable(interactions, androidx.compose.material3.ripple(), role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+}
+
 /** One outlined surface treatment for hosts, devices and terminal workspaces. */
 @Composable
 fun Modifier.workspaceFrame(): Modifier {
     val shape = RoundedCornerShape(14.dp)
     val colors = MaterialTheme.colorScheme
-    return clip(shape).background(colors.surface).border(1.dp, colors.outlineVariant, shape)
+    return clip(shape).background(colors.surface).border(GlassHairline, glassPalette().hairline, shape)
 }
 
 @Composable
@@ -53,11 +62,11 @@ fun GlyphButton(@DrawableRes icon: Int, label: String, onClick: () -> Unit, enab
 
 @Composable
 fun PageHeader(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().height(67.dp).background(MaterialTheme.colorScheme.surface).padding(horizontal = 9.dp),
+    Row(Modifier.fillMaxWidth().glassBar().height(60.dp).padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically) {
         GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
-        Text(title, modifier = Modifier.weight(1f).padding(start = 4.dp), fontSize = 20.sp,
-            fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, modifier = Modifier.weight(1f).padding(start = 4.dp), style = MaterialTheme.typography.titleMedium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
         actions()
     }
 }
@@ -109,7 +118,7 @@ fun StatusCaption(status: String, prefix: String = "") {
 @Composable
 fun NavigationRow(@DrawableRes icon: Int, title: String, detail: String = "", onClick: () -> Unit) {
     val motion = rememberPebrelMotion()
-    Row(Modifier.fillMaxWidth().animateContentSize(motion.contentSizeSpec()).padding(vertical = 4.dp).workspaceFrame().clickable(onClick = onClick)
+    Row(Modifier.fillMaxWidth().animateContentSize(motion.contentSizeSpec()).padding(vertical = 4.dp).workspaceFrame().pressClickable(onClick = onClick)
         .heightIn(min = 64.dp).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Glyph(icon)

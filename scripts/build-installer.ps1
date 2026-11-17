@@ -28,7 +28,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$manifestPath = Join-Path $repo 'nebula_app\Cargo.toml'
+$manifestPath = Join-Path $repo 'pebrel_app\Cargo.toml'
 $installerScript = Join-Path $PSScriptRoot 'installer.iss'
 $translationPath = Join-Path $repo 'target\installer-tools\ChineseSimplified.isl'
 $translationUrl = 'https://raw.githubusercontent.com/jrsoftware/issrc/c495623a97376d524f298b1b160e8fd612375c62/Files/Languages/ChineseSimplified.isl'
@@ -108,15 +108,15 @@ if ($PackageBrand -eq 'Pebrel' -and (Get-Item -LiteralPath $packagedExe).Version
 # 变更目标不重链接，不能拿运行开始时刻当基准。
 if (-not $AllowStale) {
     $memberDirs = @(
-        'nebula_app', 'nebula_terminal', 'nebula_config', 'nebula_config_derive',
-        'nebula-completions', 'nebula_gpui', 'nebula_settings', 'nebula_split'
+        'pebrel_app', 'pebrel_terminal', 'pebrel_config', 'pebrel_config_derive',
+        'pebrel-completions', 'pebrel_gpui', 'pebrel_settings', 'pebrel_split'
     ) | ForEach-Object { Join-Path $repo $_ }
     $sourceScopes = @(
         @{ Binary = (Join-Path $targetRoot 'pebrel-cli.exe'); Roots = $memberDirs + @((Join-Path $repo 'Cargo.toml')) },
         @{ Binary = $packagedExe; Roots = $memberDirs + @(
             (Join-Path $repo 'Cargo.toml'), (Join-Path $repo '..\gpui-component-fork\crates')) },
         @{ Binary = (Join-Path $targetRoot 'pebrel-hook.exe'); Roots = @(
-            (Join-Path $repo 'nebula_hook'), (Join-Path $repo 'Cargo.toml')) }
+            (Join-Path $repo 'pebrel_hook'), (Join-Path $repo 'Cargo.toml')) }
     )
     foreach ($scope in $sourceScopes) {
         $newestSource = [datetime]::MinValue

@@ -140,7 +140,28 @@ def validate_assets(directory: Path, version: str) -> list[Path]:
     return assets
 
 
+def _validate_english_change_entries(english: str, categories: tuple[str, ...]) -> None:
+    found_category = False
+    for section in re.split(r"(?m)^### ", english)[1:]:
+        heading, _, body = section.partition("\n")
+        heading = heading.rstrip()
+        if heading not in categories:
+            continue
+        found_category = True
+        entries = re.findall(r"(?m)^[-+*][ \t]+(.*)$", body)
+        if not entries:
+            raise StableReleaseError(f"stable release notes need a top-level list under {heading}")
+        for number, entry in enumerate(entries, 1):
+            if not re.match(rf"{heading}[ \t]+\S", entry):
+                raise StableReleaseError(
+                    f"stable release notes entry {number} under {heading} must start with {heading}"
+                )
+    if not found_category:
+        raise StableReleaseError("stable release notes need an English change heading")
+
+
 def validate_notes(source: Path, version: str) -> str:
+    validate_version(version)
     notes = source.read_text(encoding="utf-8").strip()
     if not notes.startswith(f"# Pebrel {version}\n"):
         raise StableReleaseError("stable release notes have the wrong title")
@@ -167,6 +188,8 @@ def validate_notes(source: Path, version: str) -> str:
         f"### {en}" in english and f"### {zh}" in chinese for en, zh in pairs
     ):
         raise StableReleaseError("stable release notes need matching bilingual change categories")
+    if tuple(map(int, version.split("."))) >= (2, 5, 0):
+        _validate_english_change_entries(english, tuple(en for en, _ in pairs))
     contributors = notes[contributors_start:checksum_start]
     if contributor_count and not re.search(r"github\.com/[^)]+", contributors, flags=re.IGNORECASE):
         raise StableReleaseError("stable release notes must identify contributors with GitHub links")
