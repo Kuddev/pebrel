@@ -35,6 +35,7 @@ const BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::n
 );
 
 struct Bitmap {
+    number: Option<u32>,
     pixels: Arc<Vec<u8>>,
     width: u32,
     height: u32,
@@ -62,6 +63,7 @@ pub struct KittyGraphics {
     cell_size_queries: bool,
     viewport: Option<WindowSize>,
     anonymous: u64,
+    assigned_id: u32,
 }
 
 impl KittyGraphics {
@@ -82,7 +84,16 @@ impl KittyGraphics {
     }
 
     fn send<U: EventListener>(terminal: &Term<U>, reply: Reply, result: Result<()>) {
-        if let Some(message) = reply.message(result) {
+        Self::send_features(terminal, reply, None, result);
+    }
+
+    fn send_features<U: EventListener>(
+        terminal: &Term<U>,
+        reply: Reply,
+        features: Option<&str>,
+        result: Result<()>,
+    ) {
+        if let Some(message) = reply.message(features, result) {
             terminal.nebula_kitty_reply(message);
         }
     }
@@ -102,19 +113,43 @@ impl KittyGraphics {
             return false;
         }
         let reply = Reply::read(bytes);
-        let result = Control::parse(bytes).and_then(|control| match control.format {
+        let control = match Control::parse(bytes) {
+            Ok(control) => control,
+            Err(error) => {
+                Self::send(terminal, reply, Err(error));
+                return true;
+            },
+        };
+        if control.feature.is_some() {
+            self.answer_features(terminal, &control);
+            return true;
+        }
+        let result = match control.format {
             ImageFormat::Raw => Self::decode(&control, data).map(|_| ()),
             ImageFormat::Png => Self::decode_png(data).map(|_| ()),
-        });
+        };
         Self::send(terminal, reply, result);
         true
+    }
+
+    /// Replies to an `a=q,e=<action>` probe: a supported action echoes the query
+    /// keys it honours, an unsupported one reports `ENOTSUP` without naming `e`.
+    fn answer_features<U: EventListener>(&self, terminal: &Term<U>, control: &Control) {
+        let reply = Reply { placement: None, ..control.reply };
+        match control.queried_action() {
+            Some(action) => {
+                let features = control.features(action);
+                Self::send_features(terminal, reply, Some(&features), Ok(()));
+            },
+            None => Self::send(terminal, reply, Err("ENOTSUP")),
+        }
     }
 
     pub fn graphic<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8], data: &[u8]) {
         if self.try_query(terminal, bytes, data) {
             return;
         }
-        let control = match Control::parse(bytes) {
+        let mut control = match Control::parse(bytes) {
             Ok(control) => control,
             Err(error) => {
                 if control::is_delete(bytes) {
@@ -131,6 +166,10 @@ impl KittyGraphics {
                 && control.width.is_none()
                 && control.height.is_none()
                 && !control.format_specified
+                && control
+                    .reply
+                    .number
+                    .is_none_or(|number| transfer.control.reply.number == Some(number))
                 && control.reply.id.is_none_or(|id| transfer.control.reply.id == Some(id))
                 && transfer.key & ALT_KEY == screen
         });
@@ -158,6 +197,17 @@ impl KittyGraphics {
                 }
                 let id = match reply.id {
                     Some(id) => u64::from(id),
+                    None if reply.number.is_some() => {
+                        let id = match self.allocate_id() {
+                            Ok(id) => id,
+                            Err(error) => {
+                                Self::send(terminal, reply, Err(error));
+                                return;
+                            },
+                        };
+                        control.reply.id = Some(id);
+                        u64::from(id)
+                    },
                     None => {
                         self.anonymous = self.anonymous.wrapping_add(1) & (ANONYMOUS_KEY - 1);
                         ANONYMOUS_KEY | self.anonymous
@@ -170,11 +220,11 @@ impl KittyGraphics {
                 );
             },
             b'p' => {
-                let result = control
-                    .reply
-                    .id
-                    .ok_or("EINVAL")
-                    .and_then(|id| self.place(terminal, screen | u64::from(id), &control));
+                let key = self.reference_key(screen, control.reply);
+                if let Ok(key) = key {
+                    control.reply.id = Some(key as u32);
+                }
+                let result = key.and_then(|key| self.place(terminal, key, &control));
                 Self::send(terminal, control.reply, result);
             },
             b'd' => {
@@ -320,6 +370,7 @@ impl KittyGraphics {
         self.images.insert(
             transfer.key,
             Bitmap {
+                number: control.reply.number,
                 pixels: Arc::new(decoded),
                 width,
                 height,
@@ -393,39 +444,109 @@ impl KittyGraphics {
         })
     }
 
+    fn allocate_id(&mut self) -> Result<u32> {
+        for _ in 0..=MAX_IMAGES {
+            self.assigned_id = self.assigned_id.wrapping_add(1).max(1);
+            if !self.images.keys().any(|key| *key & !ALT_KEY == u64::from(self.assigned_id)) {
+                return Ok(self.assigned_id);
+            }
+        }
+        Err("ENOSPC")
+    }
+
+    fn reference_key(&self, screen: u64, reply: Reply) -> Result<u64> {
+        if let Some(id) = reply.id {
+            return Ok(screen | u64::from(id));
+        }
+        let number = reply.number.ok_or("EINVAL")?;
+        self.image_order
+            .iter()
+            .rev()
+            .copied()
+            .find(|key| {
+                *key & ALT_KEY == screen
+                    && self.images.get(key).is_some_and(|image| image.number == Some(number))
+            })
+            .ok_or("ENOENT")
+    }
+
     fn delete<U: EventListener>(&mut self, terminal: &mut Term<U>, control: &Control) {
         let screen = Self::screen(terminal);
-        let selected = match control.selector.to_ascii_lowercase() {
-            b'a' => None,
-            b'i' => match control.reply.id {
-                Some(id) => Some(screen | u64::from(id)),
-                None => return,
+        let selector = control.selector.to_ascii_lowercase();
+        let mut reply = control.reply;
+        let selected: Result<Option<HashSet<u64>>> = match selector {
+            b'i' if reply.id.is_some() => {
+                Ok(Some(HashSet::from([screen | u64::from(reply.id.unwrap())])))
             },
-            _ => {
-                Self::send(terminal, control.reply, Err("ENOTSUP"));
+            b'n' if reply.number.is_some() => self.reference_key(screen, reply).map(|key| {
+                reply.id = Some(key as u32);
+                Some(HashSet::from([key]))
+            }),
+            b'r' if control.x <= control.y => Ok(Some(
+                self.images
+                    .keys()
+                    .copied()
+                    .filter(|key| {
+                        *key & ALT_KEY == screen
+                            && *key >= screen | u64::from(control.x)
+                            && *key <= screen | u64::from(control.y)
+                    })
+                    .collect(),
+            )),
+            b'a' | b'c' | b'p' | b'x' | b'y' => Ok(None),
+            b'i' | b'n' | b'r' => Err("EINVAL"),
+            _ => Err("ENOTSUP"),
+        };
+        let selected = match selected {
+            Ok(keys) => keys,
+            Err(error) => {
+                Self::send(terminal, reply, Err(error));
                 return;
             },
         };
-        let visible = (selected.is_none()).then(|| terminal.nebula_visible_kitty_placements());
+        let coordinate = |value: u32| value.checked_sub(1).map(|n| n as usize).ok_or("EINVAL");
+        let cells: Result<Option<HashSet<u64>>> = match selector {
+            b'a' => Ok(Some(terminal.nebula_visible_kitty_placements())),
+            b'c' => {
+                let (column, row) = terminal.nebula_cursor_cell();
+                Ok(Some(terminal.nebula_kitty_placements_at(Some(column), Some(row))))
+            },
+            b'p' => coordinate(control.x).and_then(|column| {
+                coordinate(control.y)
+                    .map(|row| Some(terminal.nebula_kitty_placements_at(Some(column), Some(row))))
+            }),
+            b'x' => coordinate(control.x)
+                .map(|column| Some(terminal.nebula_kitty_placements_at(Some(column), None))),
+            b'y' => coordinate(control.y)
+                .map(|row| Some(terminal.nebula_kitty_placements_at(None, Some(row)))),
+            _ => Ok(None),
+        };
+        let cells = match cells {
+            Ok(cells) => cells,
+            Err(error) => {
+                Self::send(terminal, reply, Err(error));
+                return;
+            },
+        };
         let free = control.selector.is_ascii_uppercase();
-        let mut affected = HashSet::new();
+        let by_placement = matches!(selector, b'i' | b'n') && reply.placement.is_some();
+        let mut affected =
+            if by_placement { HashSet::new() } else { selected.clone().unwrap_or_default() };
         self.placements.retain(|(key, slot), weak| {
             let Some(placement) = weak.upgrade() else { return false };
             let matches = *key & ALT_KEY == screen
-                && selected.is_none_or(|selected| *key == selected)
-                && control.reply.placement.is_none_or(|id| *slot == u64::from(id))
-                && visible.as_ref().is_none_or(|visible| visible.contains(&placement.id));
+                && selected.as_ref().is_none_or(|keys| keys.contains(key))
+                && cells.as_ref().is_none_or(|ids| ids.contains(&placement.id))
+                && (!matches!(selector, b'i' | b'n')
+                    || reply.placement.is_none_or(|id| *slot == u64::from(id)));
             if matches {
                 placement.invalidate();
                 affected.insert(*key);
             }
             !matches && placement.is_alive()
         });
-        if let Some(key) = selected {
-            affected.insert(key);
-        }
-        for key in affected {
-            if free {
+        if free {
+            for key in affected {
                 if !self.has_placements(key) {
                     self.forget(key);
                 } else if let Some(bitmap) = self.images.get_mut(&key) {
@@ -434,6 +555,7 @@ impl KittyGraphics {
             }
         }
         terminal.nebula_images_changed();
+        Self::send(terminal, reply, Ok(()));
     }
 
     fn forget(&mut self, key: u64) {
@@ -655,6 +777,22 @@ mod tests {
     }
 
     #[test]
+    fn signed_placement_layer_does_not_select_compression() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // A page reader sends a signed placement layer together with its crop.
+        gfx.graphic(
+            &mut term,
+            b"a=T,t=d,f=24,s=2,v=1,i=1,p=1,C=1,q=1,x=0,y=0,w=2,h=1,z=-1",
+            b"AAAAAAAA",
+        );
+        assert!(gfx.current.is_none());
+        assert_eq!(gfx.images[&1].width, 2);
+        assert_eq!(gfx.images[&1].channels, 3);
+        assert!(gfx.has_placements(1));
+    }
+
+    #[test]
     fn chunked_transmit_and_place_preserves_the_first_headers_action() {
         let mut gfx = KittyGraphics::default();
         let mut term = terminal();
@@ -663,6 +801,7 @@ mod tests {
         assert_eq!(gfx.identities[&7].strong_count(), 1);
         assert!(gfx.current.is_none());
     }
+
     fn png(width: u32, height: u32) -> Vec<u8> {
         let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
         png.extend_from_slice(&13u32.to_be_bytes());
@@ -731,12 +870,138 @@ mod tests {
     }
 
     #[test]
+    fn a_feature_query_reports_only_the_keys_this_terminal_honours() {
+        let control = control::Control::parse(b"a=q,i=41,e=T,U=1,C=0,r=1").unwrap();
+        assert_eq!(control.feature, Some(b'T'));
+        assert_eq!(control.queried_action(), Some(b'T'));
+        assert_eq!(control.features(b'T'), "e=T,r=1");
+
+        // A field this terminal does not implement stays out of the answer.
+        let control = control::Control::parse(b"a=q,i=42,e=f,r=1").unwrap();
+        assert_eq!(control.features(b'f'), "e=f");
+
+        // Answers are single key/value pairs per comma, never a fake value.
+        let control = control::Control::parse(b"a=q,i=43,e=p,c=2,r=2,x=0,y=0").unwrap();
+        assert_eq!(control.features(b'p'), "e=p,c=2,r=2");
+    }
+
+    #[test]
+    fn a_feature_query_for_an_unimplemented_action_is_refused() {
+        let control = control::Control::parse(b"a=q,i=42,e=f,r=1").unwrap();
+        assert_eq!(control.queried_action(), None);
+    }
+
+    #[test]
+    fn a_feature_query_on_a_transfer_action_is_refused() {
+        // The marker is only defined for queries; `f=100` would otherwise be
+        // silently downgraded to RGBA by the lenient branch.
+        assert!(control::Control::parse(b"a=T,e=T,f=100").is_err());
+        assert!(control::Control::parse(b"a=T,e=T").is_err());
+        assert!(control::Control::parse(b"a=q,i=1,e=T").is_ok());
+        assert!(control::Control::parse(b"a=q,I=7,e=T").is_err());
+    }
+
+    #[test]
     fn a_png_payload_is_accepted_without_a_pixel_size_in_the_header() {
         let mut gfx = KittyGraphics::default();
         let mut term = terminal();
         gfx.graphic(&mut term, b"a=T,f=100,i=6,c=1,r=1", &encoded_png(4, 3));
         assert_eq!(gfx.images[&6].width, 4);
         assert_eq!(gfx.images[&6].height, 3);
+    }
+
+    #[test]
+    fn delete_by_placement_leaves_the_other_placements_alone() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,p=1", b"AQIDBA==");
+        gfx.graphic(&mut term, b"a=p,i=7,c=1,r=1,p=2", b"");
+        assert_eq!(gfx.placements.len(), 2);
+        gfx.graphic(&mut term, b"a=d,d=i,i=7,p=1", b"");
+        assert_eq!(gfx.placements.len(), 1);
+        assert!(gfx.placements.keys().all(|(image, placement)| *image == 7 && *placement == 2));
+    }
+
+    #[test]
+    fn delete_by_id_range_removes_the_placements_inside_it() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        for id in 8..=10 {
+            gfx.graphic(&mut term, format!("a=T,i={id},s=1,v=1,c=1,r=1").as_bytes(), b"AQIDBA==");
+        }
+        assert_eq!(gfx.placements.len(), 3);
+        gfx.graphic(&mut term, b"a=d,d=r,x=8,y=9", b"");
+        assert_eq!(gfx.placements.len(), 1);
+        assert!(gfx.placements.keys().any(|(image, _)| *image == 10));
+        assert_eq!(gfx.image_bytes, 4 * 3);
+    }
+
+    #[test]
+    fn delete_by_cursor_cell_removes_only_the_placement_under_it() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // `C=1` keeps the cursor on the image, which is the cell `d=c` names.
+        gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,C=1", b"AQIDBA==");
+        assert!(gfx.has_placements(7));
+        gfx.graphic(&mut term, b"a=d,d=c", b"");
+        assert!(!gfx.has_placements(7));
+        assert_eq!(gfx.image_bytes, 4);
+    }
+
+    #[test]
+    fn numbered_images_allocate_unique_ids_and_delete_only_the_newest_match() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=t,i=1,s=1,v=1", b"AQIDBA==");
+        let mut ids = Vec::new();
+        for number in [7, 9, 7] {
+            let command = format!("a=T,I={number},s=1,v=1,c=1,r=1");
+            gfx.graphic(&mut term, command.as_bytes(), b"AQIDBA==");
+            ids.push(*gfx.image_order.back().unwrap());
+        }
+        assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 3);
+        assert!(ids.iter().all(|id| *id != 1 && *id <= u64::from(u32::MAX)));
+        gfx.graphic(&mut term, b"a=d,d=n,I=7", b"");
+        assert!(!gfx.has_placements(ids[2]));
+        assert!(gfx.has_placements(ids[0]) && gfx.has_placements(ids[1]));
+        assert!(gfx.images.contains_key(&ids[2]), "lowercase deletion retains source data");
+        gfx.graphic(&mut term, b"a=d,d=N,I=7", b"");
+        assert!(!gfx.images.contains_key(&ids[2]));
+        gfx.graphic(&mut term, b"a=p,I=7,c=1,r=1", b"");
+        assert!(gfx.has_placements(ids[0]));
+        let before = gfx.images.len();
+        gfx.graphic(&mut term, b"a=t,i=1,I=7,s=1,v=1", b"AQIDBA==");
+        assert_eq!(gfx.images.len(), before);
+        assert_eq!(gfx.images[&1].pixels.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn absent_placement_id_does_not_release_or_schedule_its_image_for_deletion() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        gfx.graphic(&mut term, b"a=t,I=7,s=1,v=1", b"AQIDBA==");
+        let key = *gfx.image_order.back().unwrap();
+        gfx.graphic(&mut term, b"a=d,d=N,I=7,p=5", b"");
+        assert!(gfx.images.contains_key(&key));
+        gfx.graphic(&mut term, b"a=p,I=7,p=4,c=1,r=1", b"");
+        gfx.graphic(&mut term, b"a=d,d=N,I=7,p=5", b"");
+        gfx.graphic(&mut term, b"a=d,d=n,I=7,p=4", b"");
+        gfx.prune_dead();
+        assert!(!gfx.has_placements(key) && gfx.images.contains_key(&key));
+    }
+
+    #[test]
+    fn uppercase_range_deletion_also_releases_unplaced_resources() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        for id in 8..=10 {
+            gfx.graphic(&mut term, format!("a=t,i={id},s=1,v=1").as_bytes(), b"AQIDBA==");
+        }
+        gfx.graphic(&mut term, b"a=d,d=R,x=9,y=8", b"");
+        assert_eq!(gfx.images.len(), 3, "a reversed range must not delete another range");
+        gfx.graphic(&mut term, b"a=d,d=R,x=8,y=9", b"");
+        assert_eq!(gfx.images.keys().copied().collect::<Vec<_>>(), vec![10]);
+        assert_eq!(gfx.image_bytes, 4);
     }
 
     #[test]
@@ -757,5 +1022,36 @@ mod tests {
         gfx.graphic(&mut term, b"a=t,f=100,i=5", &encoded_png(3, 2));
         assert!(gfx.current.is_none());
         assert_eq!((gfx.images[&5].width, gfx.images[&5].height), (3, 2));
+    }
+
+    #[test]
+    fn feature_queries_omit_defaults_and_fields_unused_by_the_requested_action() {
+        for (query, expected) in [
+            ("a=q,i=1,e=T,C=0,U=0,t=d,f=32,x=0,y=0,X=0,Y=0", "e=T"),
+            ("a=q,i=1,e=t,C=1,c=20,r=10,f=100,d=i", "e=t,f=100"),
+            ("a=q,i=1,e=p,C=1,f=100,x=1,d=i", "e=p,C=1,x=1"),
+            ("a=q,i=1,e=d,C=1,f=100,d=p,x=2,y=3", "e=d,x=2,y=3,d=p"),
+            ("a=q,i=1,e=d,d=n,x=2,y=3", "e=d,d=n"),
+            ("a=q,i=1,e=p,p=9,Z=7,C=2", "e=p,p=9"),
+            ("a=q,i=1,e=t,p=9", "e=t"),
+        ] {
+            let control = Control::parse(query.as_bytes()).unwrap();
+            assert_eq!(control.features(control.queried_action().unwrap()), expected);
+        }
+        assert!(Control::parse(b"a=t,I=0,s=1,v=1").is_err());
+        assert!(Control::parse(b"a=t,i=1,I=1,s=1,v=1").is_err());
+    }
+
+    #[test]
+    fn delete_sources_never_reach_the_grid() {
+        // Image identities reach cells off screen; only the selectors that name
+        // visible cells may be filtered by them.
+        for selector in [b'c', b'p', b'x', b'y'] {
+            let mut gfx = KittyGraphics::default();
+            let mut term = terminal();
+            gfx.graphic(&mut term, b"a=T,i=7,s=1,v=1,c=1,r=1,C=1", b"AQIDBA==");
+            gfx.graphic(&mut term, format!("a=d,d={},x=1,y=1", selector as char).as_bytes(), b"");
+            assert!(!gfx.has_placements(7), "selector {:?}", selector as char);
+        }
     }
 }

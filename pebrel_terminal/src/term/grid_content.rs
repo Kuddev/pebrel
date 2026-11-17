@@ -70,6 +70,13 @@ impl<T: EventListener> Term<T> {
         }
     }
 
+    /// Cursor cell as `(column, screen line)`, clamped to the visible grid.
+    /// Graphics code needs it to anchor a placement and to answer `d=c`/`d=x`.
+    pub(crate) fn nebula_cursor_cell(&self) -> (usize, usize) {
+        let point = self.grid.cursor.point;
+        (point.column.0, usize::try_from(point.line.0).unwrap_or(0))
+    }
+
     /// Write one tile of an externally placed image at the cursor without
     /// moving it. The kitty protocol addresses cells directly (`C=1` means
     /// "leave the cursor alone"), so text cursor state must survive the write.
@@ -126,9 +133,22 @@ impl<T: EventListener> Term<T> {
 
     /// 删除所有可见 placement 时只扫描一次当前屏，不误删历史或另一屏的图。
     pub(crate) fn nebula_visible_kitty_placements(&self) -> std::collections::HashSet<u64> {
+        self.nebula_kitty_placements_at(None, None)
+    }
+
+    pub(crate) fn nebula_kitty_placements_at(
+        &self,
+        wanted_column: Option<usize>,
+        wanted_row: Option<usize>,
+    ) -> std::collections::HashSet<u64> {
         let mut visible = std::collections::HashSet::new();
-        for line in 0..self.screen_lines() {
-            for column in 0..self.columns() {
+        let range = |wanted: Option<usize>, limit| match wanted {
+            Some(n) => n.min(limit)..n.saturating_add(1).min(limit),
+            None => 0..limit,
+        };
+        let columns = range(wanted_column, self.columns());
+        for line in range(wanted_row, self.screen_lines()) {
+            for column in columns.clone() {
                 if let Some(placement) = self.grid[Line(line as i32)][Column(column)]
                     .image()
                     .and_then(|tile| tile.placement.as_ref())

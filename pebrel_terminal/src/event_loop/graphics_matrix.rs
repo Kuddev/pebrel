@@ -262,6 +262,124 @@ fn matrix_crop_keeps_the_requested_window() {
     assert_eq!((placement.source_width, placement.source_height), (30.0, 40.0));
 }
 
+// --- placement reuse -------------------------------------------------------
+
+#[test]
+fn matrix_one_transfer_can_be_placed_twice() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let payload = base64(&rgb(20, 10, [200, 200, 40]));
+    feed(&mut stream, &mut terminal, &listener, &command("a=t,f=24,s=20,v=10,i=16", &payload));
+    assert!(listener.images().is_empty(), "a bare transfer draws nothing");
+    feed(&mut stream, &mut terminal, &listener, &command("a=p,i=16,p=1,c=5,r=2,C=1", ""));
+    feed(&mut stream, &mut terminal, &listener, &command("a=p,i=16,p=2,c=5,r=2,C=1", ""));
+    let images = listener.images();
+    assert_eq!(images.len(), 2, "each placement republishes the image");
+}
+
+// --- delete selectors ------------------------------------------------------
+
+#[test]
+fn matrix_delete_all_clears_the_cells() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let payload = base64(&rgb(20, 10, [90, 90, 90]));
+    feed(
+        &mut stream,
+        &mut terminal,
+        &listener,
+        &command("a=T,f=24,s=20,v=10,i=20,c=5,r=2,C=1", &payload),
+    );
+    assert!(cell_image(&terminal, 0, 0));
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=a", ""));
+    assert!(!cell_image(&terminal, 0, 0), "d=a clears every visible placement");
+}
+
+#[test]
+fn matrix_delete_by_range_only_touches_the_ids_inside_it() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let payload = base64(&rgb(20, 10, [120, 30, 30]));
+    feed(
+        &mut stream,
+        &mut terminal,
+        &listener,
+        &command("a=T,f=24,s=20,v=10,i=100,c=5,r=2,C=1", &payload),
+    );
+    let owned = image_cells(&terminal);
+    assert_eq!(owned, 10, "a 5x2 placement owns ten cells");
+
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=r,i=100,x=150,y=250", ""));
+    assert_eq!(image_cells(&terminal), owned, "an id outside the range keeps its cells");
+
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=r,i=100,x=100,y=200", ""));
+    assert_eq!(image_cells(&terminal), 0, "the range removes every placement it names");
+}
+
+#[test]
+fn matrix_image_numbers_return_unique_ids_and_delete_the_newest_matching_resource() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let payload = base64(&rgb(20, 10, [10, 120, 120]));
+    for (line, number) in [(1, 7), (5, 9), (9, 7)] {
+        let mut wire = format!("\x1b[{line};1H").into_bytes();
+        wire.extend(command(&format!("a=T,f=24,s=20,v=10,I={number},c=5,r=2,C=1"), &payload));
+        feed(&mut stream, &mut terminal, &listener, &wire);
+    }
+    let replies = listener.replies();
+    assert_eq!(replies.len(), 3);
+    let ids: Vec<u32> = replies
+        .iter()
+        .zip([7, 9, 7])
+        .map(|(reply, number)| {
+            assert!(reply.contains(&format!(",I={number};OK")), "{reply}");
+            reply.strip_prefix("\x1b_Gi=").unwrap().split(',').next().unwrap().parse().unwrap()
+        })
+        .collect();
+    assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+    let first_resource = listener.images()[0].0.id;
+    assert_eq!(image_cells(&terminal), 30);
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=n,I=7", ""));
+    assert_eq!(image_cells(&terminal), 20);
+    assert!(cell_image(&terminal, 0, 0) && cell_image(&terminal, 4, 0));
+    assert!(!cell_image(&terminal, 8, 0));
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=N,I=7", ""));
+    feed(&mut stream, &mut terminal, &listener, &command("a=p,I=7,c=5,r=2,C=1", ""));
+    assert_eq!(listener.images().last().unwrap().0.id, first_resource);
+}
+
+#[test]
+fn matrix_cell_deletion_uses_one_based_current_grid_positions_after_scroll() {
+    let (mut terminal, mut stream, listener) = terminal();
+    let mut wire = b"\x1b[4;3H".to_vec();
+    wire.extend(command("a=T,i=7,s=1,v=1,c=1,r=1,C=1", "AQIDBA=="));
+    wire.extend_from_slice(b"\x1b[12;1H\n");
+    feed(&mut stream, &mut terminal, &listener, &wire);
+    assert!(cell_image(&terminal, 2, 2));
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=p,x=0,y=3", ""));
+    assert!(cell_image(&terminal, 2, 2), "invalid zero coordinate cannot erase a cell");
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=p,x=3,y=3", ""));
+    assert!(!cell_image(&terminal, 2, 2));
+}
+
+#[test]
+fn matrix_row_and_column_deletion_follow_reflowed_cells() {
+    for selector in ["x", "y"] {
+        let (mut terminal, mut stream, listener) = terminal();
+        let mut wire = b"\x1b[3;25H".to_vec();
+        wire.extend(command("a=T,i=7,s=1,v=1,c=1,r=1,C=1", "AQIDBA=="));
+        feed(&mut stream, &mut terminal, &listener, &wire);
+        terminal.resize(TermSize::new(20, 12));
+        let position = (0..terminal.screen_lines())
+            .find_map(|row| {
+                (0..terminal.columns())
+                    .find(|column| cell_image(&terminal, row as i32, *column))
+                    .map(|column| (column, row))
+            })
+            .expect("reflow preserves the image cell");
+        assert_ne!(position, (24, 2));
+        let control = format!("a=d,d={selector},x={},y={}", position.0 + 1, position.1 + 1);
+        feed(&mut stream, &mut terminal, &listener, &command(&control, ""));
+        assert_eq!(image_cells(&terminal), 0);
+    }
+}
+
 #[test]
 fn matrix_png_query_checks_the_container_without_retaining_an_image() {
     let (mut terminal, mut stream, listener) = terminal();
@@ -270,6 +388,16 @@ fn matrix_png_query_checks_the_container_without_retaining_an_image() {
     assert!(listener.replies().iter().any(|reply| reply == "\x1b_Gi=11;OK\x1b\\"));
     assert!(listener.images().is_empty());
     assert_eq!(image_cells(&terminal), 0);
+}
+
+#[test]
+fn matrix_unknown_delete_selector_is_refused() {
+    let (mut terminal, mut stream, listener) = terminal();
+    feed(&mut stream, &mut terminal, &listener, &command("a=d,d=z,i=1", ""));
+    assert!(
+        listener.replies().iter().any(|reply| reply.contains("ENOTSUP")),
+        "d=z must be reported, not silently ignored"
+    );
 }
 
 // --- payload tolerance -----------------------------------------------------
@@ -311,4 +439,63 @@ fn matrix_pixel_budget_is_enforced() {
     let (mut terminal, mut stream, listener) = terminal();
     feed(&mut stream, &mut terminal, &listener, &command("a=t,f=24,s=5000,v=5000,i=32", "AAAA"));
     assert!(listener.replies().iter().any(|reply| reply.contains("E2BIG")));
+}
+
+// --- capability queries ----------------------------------------------------
+
+#[test]
+fn matrix_feature_query_lists_only_supported_keys() {
+    let (mut terminal, mut stream, listener) = terminal();
+    feed(&mut stream, &mut terminal, &listener, &command("a=q,i=40,e=T,C=1,U=1", ""));
+    let replies = listener.replies();
+    let reply = replies.first().expect("a query must be answered");
+    assert!(reply.contains("e=T"), "{reply}");
+    assert!(reply.contains("C=1"), "{reply}");
+    assert!(!reply.contains("U=1"), "placeholders are not implemented: {reply}");
+}
+
+#[test]
+fn matrix_feature_query_reports_container_support() {
+    let (mut terminal, mut stream, listener) = terminal();
+    feed(&mut stream, &mut terminal, &listener, &command("a=q,i=41,e=T,f=100", ""));
+    let reply = listener.replies().first().cloned().unwrap_or_default();
+    assert!(reply.contains("f=100"), "{reply}");
+}
+
+#[test]
+fn matrix_feature_query_for_an_unknown_action_is_refused() {
+    let (mut terminal, mut stream, listener) = terminal();
+    feed(&mut stream, &mut terminal, &listener, &command("a=q,i=42,e=f", ""));
+    let reply = listener.replies().first().cloned().unwrap_or_default();
+    assert!(reply.contains("ENOTSUP"), "{reply}");
+    assert!(!reply.contains("e=f"), "an unsupported action is not advertised: {reply}");
+}
+
+// --- cursor ----------------------------------------------------------------
+
+#[test]
+fn matrix_keep_cursor_leaves_the_cursor_alone() {
+    let (mut listener_free, mut plain_stream, plain_listener) = terminal();
+    let payload = base64(&rgb(20, 10, [200, 200, 200]));
+    feed(&mut plain_stream, &mut listener_free, &plain_listener, b"\x1b[2;3H");
+    feed(&mut plain_stream, &mut listener_free, &plain_listener, b"\x1b[7G");
+    let before = listener_free.grid().cursor.point;
+    feed(
+        &mut plain_stream,
+        &mut listener_free,
+        &plain_listener,
+        &command("a=T,f=24,s=20,v=10,i=50,c=5,r=2,C=1", &payload),
+    );
+    assert_eq!(listener_free.grid().cursor.point, before, "C=1 keeps the cursor put");
+
+    let (mut moving, mut moving_stream, moving_listener) = terminal();
+    feed(&mut moving_stream, &mut moving, &moving_listener, b"\x1b[2;3H");
+    let start = moving.grid().cursor.point;
+    feed(
+        &mut moving_stream,
+        &mut moving,
+        &moving_listener,
+        &command("a=T,f=24,s=20,v=10,i=51,c=5,r=2", &payload),
+    );
+    assert_ne!(moving.grid().cursor.point, start, "without C=1 the cursor follows the image");
 }
