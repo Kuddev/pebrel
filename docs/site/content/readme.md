@@ -84,7 +84,7 @@ pebrel config check
 安装仓库固定的 Rust 工具链和平台依赖后，README 给出的正式产品构建命令为：
 
 ~~~sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ~~~
 
 准备参与开发时，请继续阅读[贡献与开发](contributing.md)，按照仓库规定运行相应检查。

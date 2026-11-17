@@ -19,7 +19,7 @@
 4. 构建实际的 GPUI 产品界面：
 
 ```sh
-cargo build --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 如果只是修文档，应优先运行文档自己的构建与测试，不需要为了文字改动制造无关的产品代码变化。
@@ -47,15 +47,15 @@ PR、Issue 及其评论不能用于广告、商业推广或引流，包括以功
 python3 scripts/check_architecture.py --base <PR-base-commit>
 python3 -m unittest scripts.tests.test_architecture_budgets scripts.tests.test_architecture_dependencies scripts.tests.test_architecture_governance
 cargo test --manifest-path tools/i18n-contract/Cargo.toml --locked
-cargo test -p nebula-settings
-cargo test -p nebula --test file_line_budget
+cargo test -p pebrel-settings
+cargo test -p pebrel --test file_line_budget
 cargo fmt --all -- --check
 ```
 
 涉及正式应用行为时，再运行：
 
 ```sh
-cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
+cargo check -p pebrel --bin pebrel --features gpui-shell --tests --locked
 ```
 
 还应运行与你修改区域直接相关的行为测试。无法在当前机器上验证的平台能力，需要在 PR 描述里明确写出，而不是把“能编译”描述成“UI 已验证”。

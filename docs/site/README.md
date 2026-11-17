@@ -36,8 +36,8 @@ Search loads a local JavaScript index rather than requiring a backend or CDN.
 ## Colour themes
 
 The site uses the desktop application's own palettes. `palettes.py` parses the 16
-built-in themes from `nebula_settings/src/themes.rs` (and their names from
-`nebula_app/src/display/ui/theme.rs`) at build time and writes `assets/palettes.css`
+built-in themes from `pebrel_settings/src/themes.rs` (and their names from
+`pebrel_app/src/display/ui/theme.rs`) at build time and writes `assets/palettes.css`
 plus the syntax colours in `assets/highlight.css`. Nothing is copied by hand, so a
 theme added or retuned in the application reaches the site on the next build, and the
 build fails if the source no longer has the expected shape.

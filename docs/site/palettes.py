@@ -1,7 +1,7 @@
 """Derive the documentation colour themes from the desktop application's built-in themes.
 
 The palettes are parsed from the application source rather than copied, so a theme added
-or retuned in `nebula_settings` reaches the site on the next build. The build fails when
+or retuned in `pebrel_settings` reaches the site on the next build. The build fails when
 the source no longer has the expected shape instead of silently dropping a theme.
 """
 import html
@@ -9,8 +9,8 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-THEMES_RS = REPO / "nebula_settings/src/themes.rs"
-LABELS_RS = REPO / "nebula_app/src/display/ui/theme.rs"
+THEMES_RS = REPO / "pebrel_settings/src/themes.rs"
+LABELS_RS = REPO / "pebrel_app/src/display/ui/theme.rs"
 
 # Mirrors the application's factory default (Nord) and its light pair when following the system.
 DEFAULT_LIGHT = "NordLight"
