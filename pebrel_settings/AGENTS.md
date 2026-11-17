@@ -1,0 +1,11 @@
+# Settings core rules
+
+- 本目录拥有设置模型、默认值、验证、兼容读取、语言注册和持久化合同，不拥有 UI 控件或应用编排。
+- 保持零生产依赖合同。新依赖、动态解析或后台服务需要单独设计依据，不能为了一个界面入口扩大核心职责。
+- 新设置必须定义默认值、合法范围、序列化/反序列化、旧配置兼容、重置和往返测试；开放会话是否即时生效必须明确。
+- 语言和消息注册保持单一权威；普通翻译查询的既有零分配合同不能被格式化或冷路径逻辑悄悄改变。
+- 持久化格式、兼容迁移或共享设置所有权的非平凡变化写入 `architecture/notes/pebrel_settings/<capability>/`。
+
+- 原生 UI 的 Luau 默认值与界面保存优先级见 [脚本默认值](../architecture/notes/pebrel_settings/config_defaults/2026-11-02-script-ui-defaults.md)；设置核心不执行脚本。
+
+- 旧应用数据的非覆盖补迁复用路径模块的文件发布实现，见 [补迁边界](../architecture/notes/pebrel_settings/paths/2026-11-11-late-data-adoption.md)。

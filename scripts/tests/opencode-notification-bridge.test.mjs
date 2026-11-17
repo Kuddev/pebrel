@@ -8,7 +8,7 @@ import { runInNewContext } from "node:vm";
 
 // Execute the installed source with a provider event bus and a fake helper.
 // The tests do not install plugins or contact a running Agent.
-const embedded = readFileSync(new URL("../../nebula_app/res/hooks/opencode.js", import.meta.url), "utf8");
+const embedded = readFileSync(new URL("../../pebrel_app/res/hooks/opencode.js", import.meta.url), "utf8");
 const code = embedded
   .replace('import { execFile } from "node:child_process"', "")
   .replace("export default", "const plugin =");
@@ -298,7 +298,7 @@ test("the installed module delivers literal arguments through a real helper proc
     } finally { await bridge.dispose(); }
   `);
   const stdout = execFileSync(process.execPath, [join(directory, "worker.mjs"),
-    new URL("../../nebula_app/res/hooks/opencode.js", import.meta.url).href], {
+    new URL("../../pebrel_app/res/hooks/opencode.js", import.meta.url).href], {
     cwd: directory,
     env: { ...process.env, PEBREL_HOOK_EXE: process.execPath },
     timeout: 15000,
