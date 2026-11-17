@@ -55,7 +55,6 @@ use pebrel_terminal::event::{Event as TermEvent, Notify as _, OnResize as _, Win
 use pebrel_terminal::event_loop::Msg;
 use pebrel_terminal::grid::{Dimensions as _, Scroll};
 use pebrel_terminal::index::{Column, Line, Point as TermPoint, Side};
-use pebrel_terminal::inline_image::ImageFormat;
 use pebrel_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
 use pebrel_terminal::selection::{Selection, SelectionType};
 use pebrel_terminal::term::TermMode;
@@ -805,13 +804,7 @@ impl TerminalView {
             // decoding is the only work left — and it happens off the UI thread.
             // A container (PNG) is inflated on that same thread.
             TermEvent::KittyImage { data, channels, placement } => {
-                let queued = match placement.format {
-                    ImageFormat::Png => self.inline_images.enqueue_container(data, placement),
-                    ImageFormat::Raw => {
-                        self.inline_images.enqueue_pixels(data, channels, placement)
-                    },
-                };
-                match queued {
+                match self.inline_images.enqueue_kitty(data, channels, placement) {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("APC image dropped: {error}"),
                 }

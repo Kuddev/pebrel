@@ -17,10 +17,10 @@ mod control;
 use control::{Control, Reply, Result};
 
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
-// A whole 4K page is 33 MiB of base64 while it streams in; the buffer is only a
-// staging area, so the cap follows the largest screen a reader may draw on
-// rather than the much smaller decoded-pixel budget above.
-const MAX_ENCODED_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum decoded body of one direct graphics transfer. Consumers use the
+/// same bound for PNG containers; the wire representation is base64 below.
+pub const MAX_TRANSFER_BYTES: usize = 48 * 1024 * 1024;
+const MAX_ENCODED_BYTES: usize = MAX_TRANSFER_BYTES.div_ceil(3) * 4;
 const MAX_IMAGES: usize = 16;
 const MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const ALT_KEY: u64 = 1 << 63;
@@ -307,16 +307,9 @@ impl KittyGraphics {
             return;
         }
         self.forget(transfer.key);
-        // 用最终 BGRA 成本约束原始仓库；RGB 不应在前端扩张后突破同一图片预算。
-        let cost = match control.format {
-            // A container is what stays resident; its decoded texture is budgeted
-            // by the frontend, which is the only side that inflates it.
-            ImageFormat::Png => decoded.len(),
-            ImageFormat::Raw => {
-                let (_, _, pixels) = control.dimensions().unwrap();
-                pixels * 4
-            },
-        };
+        // Each retained resource must fit both its source bytes and its eventual
+        // BGRA bitmap. Compressed pages cannot hide their decoded cache cost.
+        let cost = decoded.len().max(width as usize * height as usize * 4);
         while self.images.len() >= MAX_IMAGES || self.image_bytes + cost > MAX_IMAGE_BYTES {
             let candidate = self
                 .image_order
@@ -777,6 +770,23 @@ mod tests {
         assert!(gfx.images.is_empty());
         assert!(gfx.placements.is_empty());
         assert_eq!(gfx.image_bytes, 0);
+    }
+
+    #[test]
+    fn png_geometry_reservations_include_the_decoded_bitmap_cost() {
+        let mut gfx = KittyGraphics::default();
+        let mut term = terminal();
+        // Header-only fixture: reservation happens before the background PNG
+        // decoder validates IDAT and CRCs. Real PNG decoding is covered there.
+        let payload = encoded_png(4096, 4096);
+        for id in 1..=3 {
+            let control = format!("a=T,f=100,i={id},c=1,r=1");
+            gfx.graphic(&mut term, control.as_bytes(), &payload);
+            assert_eq!(gfx.images[&id].cost, 64 * 1024 * 1024);
+            assert!(gfx.image_bytes <= MAX_IMAGE_BYTES);
+        }
+        assert_eq!(gfx.images.len(), 2);
+        assert!(!gfx.images.contains_key(&1));
     }
 
     #[test]

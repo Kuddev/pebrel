@@ -127,10 +127,15 @@ impl Control {
         {
             return Err("ENOTSUP");
         }
-        // `z` only describes how the payload is packed when `o=z` is present, and
-        // readers commonly send `z=-1` to mean "nothing to undo" — a signed value
-        // the other numeric keys never are, so it is deliberately not parsed.
-        // The payload is checked against the declared size in `decode` anyway.
+        // `z` is the signed placement layer; `o=z` independently selects zlib
+        // compression. Accept the reader's z=-1 in the existing image overlay
+        // order. Independent layer sorting is not advertised by feature queries.
+        if let Some(layer) = value(bytes, b'z') {
+            std::str::from_utf8(layer)
+                .ok()
+                .and_then(|text| text.parse::<i32>().ok())
+                .ok_or("EINVAL")?;
+        }
         let (channels, format) = match number(bytes, b'f')?.unwrap_or(32) {
             24 => (3, ImageFormat::Raw),
             32 => (4, ImageFormat::Raw),
