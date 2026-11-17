@@ -13,7 +13,7 @@ personal choices, with graphite violet retained as palette 25.
 | `silver-violet` | `nebula-light.svg` | Optional silver-violet colorway; palette 12 |
 | `graphite-violet` | `nebula-dark.svg` | Optional graphite / gray-violet colorway; palette 25 |
 
-`nebula_settings/src/app_icon.rs` is the canonical catalog of stable setting
+`pebrel_settings/src/app_icon.rs` is the canonical catalog of stable setting
 keys, original palette numbers, bilingual names and colors. The renderer
 exports `icon-catalog.json` from it. Personal color options do not imply
 exclusive colors or completed trademark clearance.
@@ -71,8 +71,8 @@ Regenerate using Node.js 24+ with `@resvg/resvg-js` (verified with 2.6.2):
 node scripts/render-app-icons.mjs /path/to/renderer/package.json
 node scripts/render-app-icons.mjs /path/to/renderer/package.json --check
 python3 -m unittest scripts.tests.test_app_icons -v
-cargo test -p nebula-settings --offline --locked
-cargo test -p nebula --bin nebula --features gpui-shell app_icon::tests
+cargo test -p pebrel-settings --offline --locked
+cargo test -p pebrel --bin nebula --features gpui-shell app_icon::tests
 ```
 
 The renderer is development-only; it adds no application dependency. The
@@ -114,8 +114,8 @@ Regenerate each adjacent SVGZ with Python's standard library:
 import gzip
 from pathlib import Path
 sources = list(Path("extra/logo").glob("ai_*.svg"))
-sources += list(Path("nebula_app/assets/icons").glob("nebula-agent-*.svg"))
-sources += list(Path("nebula_app/assets/icons").glob("nebula-provider-*.svg"))
+sources += list(Path("pebrel_app/assets/icons").glob("nebula-agent-*.svg"))
+sources += list(Path("pebrel_app/assets/icons").glob("nebula-provider-*.svg"))
 for source in sources:
     source.with_suffix(".svgz").write_bytes(
         gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
@@ -127,7 +127,7 @@ for source in sources:
 The Agents settings page renders 24 logical pixel SVG marks rather than enlarging
 the sidebar PNG textures. Claude, Kimi and Oh My Pi reuse the SVG sources below;
 Cursor and Copilot reuse the existing settings icons. OpenAI, OpenCode, Pi and
-Grok use `nebula_app/assets/icons/nebula-agent-{openai,opencode,pi,grok}.svg`,
+Grok use `pebrel_app/assets/icons/nebula-agent-{openai,opencode,pi,grok}.svg`,
 retrieved from the fixed npm package `@lobehub/icons-static-svg` 1.95.0:
 `https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/{name}.svg`.
 These four sources are unchanged except for a final newline, under the collection's
@@ -137,8 +137,8 @@ purple for Oh My Pi; sidebar PNG presentation is independent.
 
 ### Cursor and GitHub Copilot settings icons
 
-`nebula_app/assets/icons/nebula-agent-cursor.svg` and
-`nebula_app/assets/icons/nebula-agent-copilot.svg` use the monochrome marks from
+`pebrel_app/assets/icons/nebula-agent-cursor.svg` and
+`pebrel_app/assets/icons/nebula-agent-copilot.svg` use the monochrome marks from
 `@lobehub/icons-static-svg` 1.95.0, retrieved on 2026-09-20:
 
 - Cursor: https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/cursor.svg
@@ -168,7 +168,7 @@ same package (`icons/{qoder,qwen}.svg`) on 2026-10-07.
 Droid uses `ai_droid.svg`, retrieved unchanged from Factory's official
 https://factory.ai/favicon.svg on 2026-10-31 (also served by
 https://docs.factory.ai/favicon.svg). The official mark is black and white.
-Hermes reuses `nebula_app/assets/icons/nebula-agent-hermes.svg`, including its
+Hermes reuses `pebrel_app/assets/icons/nebula-agent-hermes.svg`, including its
 white background and black illustration. Both retain their source artwork rather
 than rendering the opaque background as a single-color mask. These marks identify
 the installed products and do not imply endorsement; trademarks remain with their

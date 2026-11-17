@@ -1,0 +1,195 @@
+use super::*;
+
+/// 主题下拉（展示名 = 持久化名，与旧壳一致）。
+pub(super) const THEME_VALUES: [&str; ThemeName::BUILTIN.len()] = ThemeName::BUILTIN_NAMES;
+
+pub(super) const REPOSITORY_URL: &str = "https://github.com/Kuddev/pebrel";
+pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
+
+/// 稳定路由只追加；视觉顺序独立放在 NAV_GROUPS，避免旧入口指向另一页。
+pub(super) const MOBILE_SECTION: usize = 11;
+pub(super) const PLUGINS_SECTION: usize = 12;
+pub(super) const SECTION_IDS: [&str; 13] = [
+    "application",
+    "appearance",
+    "profiles",
+    "providers",
+    "ssh",
+    "network",
+    "interaction",
+    "keymap",
+    "advanced",
+    "backup",
+    "agents",
+    "mobile",
+    "plugins",
+];
+
+/// Catalog search aliases for each stable section route. English and Chinese
+/// remain searchable in every locale alongside the current language.
+pub(super) const SECTION_SEARCH_TERMS: [crate::i18n::Message; 13] = [
+    crate::i18n::Message::SettingsSearchTermsApplication,
+    crate::i18n::Message::SettingsSearchTermsAppearance,
+    crate::i18n::Message::SettingsSearchTermsProfiles,
+    crate::i18n::Message::SettingsSearchTermsProviders,
+    crate::i18n::Message::SettingsSearchTermsSsh,
+    crate::i18n::Message::SettingsSearchTermsNetwork,
+    crate::i18n::Message::SettingsSearchTermsInteraction,
+    crate::i18n::Message::SettingsSearchTermsKeymap,
+    crate::i18n::Message::SettingsSearchTermsAdvanced,
+    crate::i18n::Message::SettingsSearchTermsBackup,
+    crate::i18n::Message::SettingsSearchTermsAgents,
+    crate::i18n::Message::SettingsSearchTermsMobile,
+    crate::i18n::Message::SettingsSearchTermsPlugins,
+];
+
+/// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
+/// 下标，不复制设置状态或路由。
+pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] = [
+    ("workspace", &[0, 1, 2, 10, PLUGINS_SECTION, 6, 7]),
+    ("connections", &[3, 4, 5, MOBILE_SECTION]),
+    ("system", &[8, 9]),
+];
+
+pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) -> &'static str {
+    match SECTION_IDS.get(index).copied() {
+        Some("application") => language.tr("settings.sidebar.application"),
+        Some("appearance") => language.tr("settings.sidebar.appearance"),
+        Some("profiles") => language.tr("settings.sidebar.profiles"),
+        Some("providers") => language.tr("settings.sidebar.providers"),
+        Some("ssh") => language.tr("settings.sidebar.ssh"),
+        Some("network") => language.tr("settings.sidebar.network"),
+        Some("interaction") => language.tr("settings.sidebar.interaction"),
+        Some("keymap") => language.tr("settings.sidebar.keymap"),
+        Some("advanced") => language.tr("settings.sidebar.advanced"),
+        Some("backup") => language.tr("settings.sidebar.backup"),
+        Some("agents") => language.text(crate::i18n::Message::SettingsSidebarAgents),
+        Some("mobile") => language.text(crate::i18n::Message::MobileTitle),
+        Some("plugins") => language.text(crate::i18n::Message::SettingsSidebarPlugins),
+        _ => "",
+    }
+}
+
+pub(super) fn is_nav_section_visible(index: usize) -> bool {
+    index < SECTION_IDS.len() && index != 3
+}
+
+pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
+    NAV_GROUPS
+        .iter()
+        .flat_map(|(_, sections)| sections.iter().copied())
+        .filter(|index| is_nav_section_visible(*index))
+}
+
+// 导航使用组件的小字号，与搜索菜单一致；尺寸是逻辑像素，由窗口统一处理 DPI。
+pub(super) const SETTINGS_NAV_WIDTH: f32 = 248.0;
+pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 34.0;
+pub(super) const SETTINGS_NAV_ICON_SIZE: f32 = 16.0;
+
+// 正文分组与表单继续沿用现有几何节奏。
+pub(super) const SETTINGS_GROUP_GAP: f32 = 32.0;
+pub(super) const SETTINGS_GROUP_TITLE_HEIGHT: f32 = 26.0;
+pub(super) const SETTINGS_GROUP_TITLE_GAP: f32 = 16.0;
+pub(super) const SETTINGS_ROW_HEIGHT: f32 = 48.0;
+pub(super) const SETTINGS_ROW_GAP: f32 = 8.0;
+/// 标准设置选择器的实际宽度。字体输入与 Select 共用，避免同列控件漂移。
+pub(super) const SETTINGS_SELECT_WIDTH: f32 = 220.0;
+
+/// 列表/触发条上的展示名：族名偶尔带着导入文件后缀，界面上剥掉。
+pub(super) fn font_display_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    for ext in [".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2"] {
+        if let Some(stem) = lower.strip_suffix(ext) {
+            return trimmed[..stem.len()].to_owned();
+        }
+    }
+    trimmed.to_owned()
+}
+
+/// 导航图标。
+///
+/// 统一走路径字符串而不是 `IconName`：绝大多数取 lucide 的现成图标，但
+/// 「按键映射」在 lucide 里没有对应项（原来错挂成 `ALargeSmall`，那是字号
+/// 图标），只能自带一枚——两种来源用同一个类型表达，调用点就不必分叉。
+pub(super) fn section_icon(index: usize) -> SharedString {
+    use gpui_component::IconNamed as _;
+    match index {
+        0 => crate::gpui_shell::assets::nav::LAYOUT_GRID.into(),
+        1 => IconName::Palette.path(),
+        2 => IconName::SquareTerminal.path(),
+        3 => IconName::Bot.path(),
+        4 => IconName::Network.path(),
+        5 => IconName::Globe.path(),
+        6 => crate::gpui_shell::assets::nav::MOUSE_POINTER.into(),
+        7 => crate::gpui_shell::assets::nav::KEYMAP.into(),
+        8 => crate::gpui_shell::assets::nav::SLIDERS.into(),
+        9 => crate::gpui_shell::assets::backup::DRIVE.into(),
+        10 => IconName::Bot.path(),
+        MOBILE_SECTION => crate::gpui_shell::assets::nav::PHONE.into(),
+        PLUGINS_SECTION => crate::gpui_shell::assets::nav::PUZZLE.into(),
+        _ => IconName::Inbox.path(),
+    }
+}
+
+pub(super) fn chrome_theme(theme: ThemeName) -> crate::display::NebulaTheme {
+    crate::gpui_shell::theme::chrome_theme(theme)
+}
+
+pub(super) fn rgb_hsla(r: u8, g: u8, b: u8) -> Hsla {
+    GpuiRgba { r: f32::from(r) / 255.0, g: f32::from(g) / 255.0, b: f32::from(b) / 255.0, a: 1.0 }
+        .into()
+}
+
+pub(super) fn query_component(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
+}
+
+/// GitHub issue form 预填合同：模板、版本、平台、安装来源
+/// 和诊断摘要都来自当前运行实例，用户只需补充复现步骤与实际表现。
+pub(super) fn issue_url() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let platform = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        _ => "Other",
+    };
+    let install_source = if cfg!(debug_assertions) {
+        "Built from source (cargo build / cargo run)"
+    } else {
+        "GitHub Release (.msi / .exe / portable archive)"
+    };
+    let build = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let logs = format!(
+        "Reported from {} Settings ({} {version}).\n\nPlatform: {} {}\nBuild: {build}",
+        crate::brand::NAME,
+        crate::brand::NAME,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    let params = [
+        ("template", BUG_REPORT_TEMPLATE),
+        ("title", "[Bug] "),
+        ("version", version),
+        ("platform", platform),
+        ("install_source", install_source),
+        ("logs", logs.as_str()),
+    ]
+    .into_iter()
+    .map(|(key, value)| format!("{key}={}", query_component(value)))
+    .collect::<Vec<_>>()
+    .join("&");
+    format!("{REPOSITORY_URL}/issues/new?{params}")
+}

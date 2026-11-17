@@ -146,7 +146,7 @@ Server 2019 desktop or the intended Remote Desktop/graphics configuration.
 ```powershell
 git clone https://github.com/Kuddev/pebrel
 cd pebrel
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 Build and assemble the portable archive with:

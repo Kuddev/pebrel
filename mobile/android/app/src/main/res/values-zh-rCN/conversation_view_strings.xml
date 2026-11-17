@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_working">正在处理…</string>
+    <string name="chat_tool_running">运行中</string>
+    <string name="chat_tool_waiting">等待你处理</string>
+    <string name="chat_tool_done">已完成</string>
+    <string name="chat_tool_failed">失败</string>
+    <string name="chat_tool_input">输入</string>
+    <string name="chat_tool_output">结果</string>
+    <string name="chat_tool_result">工具结果</string>
+    <string name="chat_show_all">显示全部 %1$d 行</string>
+    <string name="chat_show_less">收起</string>
+    <string name="chat_question">问题</string>
+    <string name="chat_question_answered">已回答</string>
+    <string name="chat_question_terminal">在终端中回答</string>
+    <string name="chat_multiple_choice">可多选</string>
+    <string name="chat_interrupt">中断</string>
+    <string name="chat_elapsed_seconds">%1$d 秒</string>
+    <string name="chat_elapsed_minutes">%1$d:%2$02d</string>
+    <string name="chat_latest">回到最新消息</string>
+    <string name="chat_new_messages">新消息</string>
+    <string name="chat_rich_hint">公式和图表在此以源码显示。</string>
+    <string name="chat_rich_reader">在阅读器中查看</string>
+    <string name="chat_immersive">沉浸阅读</string>
+    <string name="chat_exit_immersive">退出沉浸阅读</string>
+    <string name="chat_python_missing">对话视图需要服务器上有 python3。</string>
+    <string name="chat_terminal_unknown">无法在服务器上确认这个连接的终端。</string>
+    <plurals name="chat_files_changed">
+        <item quantity="one">修改了 %1$d 个文件</item>
+        <item quantity="other">修改了 %1$d 个文件</item>
+    </plurals>
+</resources>

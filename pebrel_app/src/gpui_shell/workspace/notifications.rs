@@ -1,0 +1,279 @@
+use gpui::{Context, Window};
+
+use super::{NebulaWorkspace, WorkspaceTab};
+use crate::notify::Notification;
+
+static FAILURES: std::sync::Mutex<crate::notify::PaneFailureThrottle> =
+    std::sync::Mutex::new(crate::notify::PaneFailureThrottle::new());
+
+fn source_is_visible(window_active: bool, source_active: bool, overlay_open: bool) -> bool {
+    window_active && source_active && !overlay_open
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DeliveryChannels {
+    in_app: bool,
+    system: bool,
+}
+
+fn delivery_channels(
+    notification: &Notification,
+    visible: bool,
+    ai_toasts: bool,
+) -> DeliveryChannels {
+    DeliveryChannels {
+        in_app: (!visible
+            || notification.is_attention()
+            || matches!(notification, Notification::Runtime { .. }))
+            && (ai_toasts || !notification.is_ai()),
+        // Keep native notification routing independent of the in-app preference.
+        system: !visible || crate::platform::CAPABILITIES.foreground_system_notifications,
+    }
+}
+
+impl NebulaWorkspace {
+    pub(super) fn deliver_pane_notification(
+        &mut self,
+        pane_id: u64,
+        notification: Notification,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if notification.is_attention()
+            && let Some(source) = self.tabs.iter().find_map(|tab| match tab {
+                WorkspaceTab::Terminal { panes, .. } => {
+                    panes.iter().find(|pane| pane.id == pane_id).map(|pane| pane.view.clone())
+                },
+                _ => None,
+            })
+            && source.update(cx, |view, _| view.capture_confirmation()).is_none()
+        {
+            let generation = source.read(cx).confirmation_generation();
+            let source = source.downgrade();
+            let executor = cx.background_executor().clone();
+            cx.spawn_in(window, async move |this, cx| {
+                for attempt in 0..8 {
+                    executor.timer(std::time::Duration::from_millis(75)).await;
+                    let ready = source
+                        .update(cx, |view, _| {
+                            if view.confirmation_generation() != generation
+                                || !view.confirmation_waiting()
+                            {
+                                return None;
+                            }
+                            Some(view.capture_confirmation().is_some())
+                        })
+                        .ok()
+                        .flatten();
+                    let Some(ready) = ready else { return };
+                    if ready || attempt == 7 {
+                        let _ = this.update_in(cx, |workspace, window, cx| {
+                            workspace.deliver_ready_notification(pane_id, notification, window, cx);
+                        });
+                        return;
+                    }
+                }
+            })
+            .detach();
+            return;
+        }
+        self.deliver_ready_notification(pane_id, notification, window, cx);
+    }
+
+    fn deliver_ready_notification(
+        &mut self,
+        pane_id: u64,
+        notification: Notification,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_index) = self.tab_of_pane(pane_id) else { return };
+        let Some(WorkspaceTab::Terminal { panes, focused, .. }) = self.tabs.get(tab_index) else {
+            return;
+        };
+        let reader_open = panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .is_some_and(|pane| pane.view.read(cx).is_reading_answer());
+        let visible = source_is_visible(
+            window.is_window_active() && !self.window_hidden,
+            tab_index == self.active && *focused == pane_id,
+            self.settings_open || reader_open,
+        );
+        let delivery = delivery_channels(
+            &notification,
+            visible,
+            crate::gpui_shell::config::ai_toasts_enabled(cx),
+        );
+        let source_view =
+            panes.iter().find(|pane| pane.id == pane_id).map(|pane| pane.view.clone());
+        let runtime = matches!(notification, Notification::Runtime { .. });
+        if !runtime
+            && !visible
+            && let Some(meta) = self.tab_meta.get_mut(tab_index)
+        {
+            meta.has_bell = true;
+        }
+        // Apply once before either channel, so retry errors cannot sound via
+        // the native channel after their in-app duplicate was suppressed.
+        if !FAILURES.lock().unwrap_or_else(|error| error.into_inner()).accepts(
+            pane_id,
+            &notification,
+            delivery.in_app || delivery.system,
+            crate::notify::notification_now(),
+        ) {
+            cx.notify();
+            return;
+        }
+        let attention = notification.is_attention();
+        let confirmation = if attention {
+            source_view
+                .as_ref()
+                .and_then(|view| view.update(cx, |view, _| view.capture_confirmation()))
+        } else {
+            None
+        };
+        if delivery.in_app {
+            // Log the original message before the banner creates a bounded preview.
+            let (title, body) =
+                notification.raw_toast_text_in(crate::gpui_shell::config::ui_language(cx));
+            let kind = if attention || notification.is_failure() {
+                crate::display::ToastKind::Warning
+            } else {
+                crate::display::ToastKind::Info
+            };
+            let text = format!("{title} \u{b7} {body}");
+            if let Some(confirmation) = confirmation.clone() {
+                crate::gpui_shell::toast::confirmation_for_pane(
+                    window,
+                    cx,
+                    text,
+                    pane_id,
+                    confirmation,
+                );
+            } else {
+                let admitted = crate::gpui_shell::toast::banner_for_pane(
+                    window,
+                    cx,
+                    kind,
+                    text,
+                    pane_id,
+                    &notification,
+                );
+                if runtime && !admitted {
+                    return;
+                }
+            }
+        }
+        if runtime {
+            if let Some(source) = source_view {
+                source.update(cx, |view, cx| view.play_bell_cue(cx));
+            }
+            if !visible && let Some(meta) = self.tab_meta.get_mut(tab_index) {
+                meta.has_bell = true;
+            }
+        }
+        if delivery.system {
+            let choices = confirmation.map(|confirmation| {
+                let language = crate::gpui_shell::config::ui_language(cx);
+                let labels = if confirmation.choices.is_empty() {
+                    vec![
+                        language.text(crate::i18n::Message::CommonYes).to_owned(),
+                        language.text(crate::i18n::Message::CommonNo).to_owned(),
+                    ]
+                } else {
+                    confirmation.choices
+                };
+                (confirmation.id, labels)
+            });
+            crate::notify::deliver_gpui_with_choices(&notification, pane_id, choices);
+        }
+        cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabling_in_app_ai_toasts_keeps_background_system_notifications() {
+        let foreground_system = crate::platform::CAPABILITIES.foreground_system_notifications;
+        for attention in [false, true] {
+            let notification =
+                Notification::AiTurn { program: "codex".into(), message: None, attention };
+            assert_eq!(
+                delivery_channels(&notification, false, false),
+                DeliveryChannels { in_app: false, system: true }
+            );
+            assert_eq!(
+                delivery_channels(&notification, false, true),
+                DeliveryChannels { in_app: true, system: true }
+            );
+            assert_eq!(
+                delivery_channels(&notification, true, false),
+                DeliveryChannels { in_app: false, system: foreground_system }
+            );
+            assert_eq!(
+                delivery_channels(&notification, true, true),
+                DeliveryChannels { in_app: attention, system: foreground_system }
+            );
+        }
+    }
+
+    #[test]
+    fn ai_bells_and_osc_messages_obey_only_the_in_app_switch() {
+        for notification in [
+            Notification::Bell { program: Some("claude".into()) },
+            Notification::Text { program: Some("codex".into()), body: "done".into() },
+            Notification::CommandDone {
+                program: Some("gemini".into()),
+                duration: std::time::Duration::from_secs(12),
+            },
+        ] {
+            assert_eq!(
+                delivery_channels(&notification, false, false),
+                DeliveryChannels { in_app: false, system: true }
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_notifications_show_in_app_even_when_the_pane_is_visible() {
+        let notification = Notification::Runtime { title: None, message: "touch the key".into() };
+        assert_eq!(
+            delivery_channels(&notification, true, true),
+            DeliveryChannels {
+                in_app: true,
+                system: crate::platform::CAPABILITIES.foreground_system_notifications
+            }
+        );
+        assert_eq!(
+            delivery_channels(&notification, false, false),
+            DeliveryChannels { in_app: true, system: true }
+        );
+    }
+
+    #[test]
+    fn ordinary_terminal_notifications_ignore_the_ai_toast_preference() {
+        for notification in [
+            Notification::Bell { program: None },
+            Notification::Text { program: Some("cargo".into()), body: "build finished".into() },
+        ] {
+            for visible in [false, true] {
+                assert_eq!(
+                    delivery_channels(&notification, visible, false),
+                    delivery_channels(&notification, visible, true)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_visible_source_pane_suppresses_completion_notifications() {
+        assert!(source_is_visible(true, true, false));
+        assert!(!source_is_visible(false, true, false));
+        assert!(!source_is_visible(true, false, false));
+        assert!(!source_is_visible(true, true, true));
+    }
+}
