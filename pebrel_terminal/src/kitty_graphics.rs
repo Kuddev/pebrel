@@ -242,6 +242,22 @@ impl KittyGraphics {
         if pixels > MAX_PIXELS as u64 || pixels * bytes_per_pixel > MAX_PIXELS as u64 * 4 {
             return Err("E2BIG");
         }
+        // A truecolor tRNS chunk makes the decoder expand RGB16 to RGBA16.
+        // Only inspect chunk headers when that expansion could change admission.
+        if depth == 16 && png[25] == 2 && pixels * 8 > MAX_PIXELS as u64 * 4 {
+            let mut chunks = &png[33..];
+            while chunks.len() >= 12 {
+                let kind = &chunks[4..8];
+                if kind == b"tRNS" {
+                    return Err("E2BIG");
+                }
+                if kind == b"IDAT" || kind == b"IEND" {
+                    break;
+                }
+                let size = u32::from_be_bytes(chunks[..4].try_into().unwrap()) as usize;
+                chunks = chunks.get(12..).and_then(|rest| rest.get(size..)).ok_or("EINVAL")?;
+            }
+        }
         Ok((width, height))
     }
 
@@ -737,6 +753,20 @@ mod tests {
         gfx.graphic(&mut term, b"a=T,f=100,i=6,c=1,r=1", &encoded_png(4, 3));
         assert_eq!(gfx.images[&6].width, 4);
         assert_eq!(gfx.images[&6].height, 3);
+    }
+
+    #[test]
+    fn transparent_rgb16_accounts_for_the_expanded_alpha_channel() {
+        let mut header = png(4096, 2160);
+        header[24] = 16;
+        assert_eq!(KittyGraphics::png_size(&header), Ok((4096, 2160)));
+        // Header-only fixtures exercise admission before full decoding on the worker.
+        let chunks =
+            [b"\0\0\0\x01tEXtX\0\0\0\0".as_slice(), b"\0\0\0\x06tRNS\0\0\0\0\0\0\0\0\0\0"].concat();
+        header.splice(33..33, chunks);
+        assert_eq!(KittyGraphics::png_size(&header), Err("E2BIG"));
+        header[16..20].copy_from_slice(&2048_u32.to_be_bytes());
+        assert_eq!(KittyGraphics::png_size(&header), Ok((2048, 2160)));
     }
 
     #[test]
