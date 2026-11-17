@@ -4,6 +4,20 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## Unreleased
+
+### English
+
+#### Added
+
+- Add Niu (niubash's `niu.exe`) to the terminal directory importer. Imported Niu profiles appear in the default shell picker and launch with `--login -i`.
+
+### 简体中文
+
+#### 新增
+
+- 终端目录导入支持 Niu（niubash 的 `niu.exe`）。导入后的 Niu 配置会出现在默认 Shell 下拉中，以 `--login -i` 启动。
+
 ## 2.5.0 - 2026-11-09
 
 ```text
