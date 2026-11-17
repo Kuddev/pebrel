@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      CANDIDATE: d488a7ddf40cfdc23ac7a0e9fe3f00c3770d1c86
+      CANDIDATE: f630182e3315f3b6a731c2e1946da3ecb8936839
     steps:
       - uses: actions/checkout@v4
         with:
