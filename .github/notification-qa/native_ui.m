@@ -23,8 +23,11 @@ static NSString *label(AXUIElementRef element) {
 
 static NSDictionary *tree(AXUIElementRef element, NSString *path, int depth, int *budget) {
     if (--*budget < 0 || depth > 18) return @{@"truncated": @YES, @"path": path};
-    NSMutableDictionary *node = [NSMutableDictionary dictionaryWithDictionary:@{@"path": path}];
-    for (NSString *name in @[@"AXRole", @"AXSubrole", @"AXTitle", @"AXDescription", @"AXValue", @"AXIdentifier"]) {
+    AXUIElementSetMessagingTimeout(element, 0.25);
+    id role = attribute(element, kAXRoleAttribute);
+    if (![role isKindOfClass:NSString.class]) return @{@"unavailable": @YES, @"path": path};
+    NSMutableDictionary *node = [NSMutableDictionary dictionaryWithDictionary:@{@"path": path, @"AXRole": role}];
+    for (NSString *name in @[@"AXSubrole", @"AXTitle", @"AXDescription", @"AXValue", @"AXIdentifier"]) {
         id value = attribute(element, (__bridge CFStringRef)name);
         if ([value isKindOfClass:NSString.class] || [value isKindOfClass:NSNumber.class]) node[name] = value;
     }
@@ -65,12 +68,20 @@ int main(int argc, const char **argv) {
             for (NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications) {
                 NSString *name = app.localizedName ?: @"";
                 NSString *bundle = app.bundleIdentifier ?: @"";
-                if (![name containsString:@"Pebrel"] && ![name containsString:@"pebrel"]
-                    && ![name containsString:@"Notification"] && ![bundle containsString:@"notification"]
+                BOOL product = [bundle isEqual:@"io.github.kuddev.pebrel.preview"]
+                    || [bundle isEqual:@"io.github.kuddev.pebrel"];
+                if (product) {
+                    // Product focus is observed through NSWorkspace and its Runtime API.
+                    // Traversing its menu bar is unrelated to native notification delivery.
+                    [apps addObject:@{@"name":name, @"bundle":bundle, @"pid":@(app.processIdentifier),
+                                      @"active":@(app.active), @"tree":@{@"children":@[]}}];
+                    continue;
+                }
+                if ([name isEqual:@"SoftwareUpdateNotificationManager"]) continue;
+                if (![name containsString:@"Notification"] && ![bundle.lowercaseString containsString:@"notification"]
                     && ![name isEqual:@"Control Center"] && ![name isEqual:@"System Settings"]) continue;
                 AXUIElementRef element = AXUIElementCreateApplication(app.processIdentifier);
-                AXUIElementSetMessagingTimeout(element, 2);
-                int budget = 2500;
+                int budget = 600;
                 [apps addObject:@{@"name":name, @"bundle":bundle, @"pid":@(app.processIdentifier),
                                   @"active":@(app.active), @"tree":tree(element, @"", 0, &budget)}];
                 CFRelease(element);
