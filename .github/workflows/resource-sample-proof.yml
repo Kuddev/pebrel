@@ -14,10 +14,18 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: 0da436d58b1564b3ce9b8a861e2cb82b7647eeb8
+          ref: 2e10d8964cda8a08a9012de4c3b94939afd36b76
           path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 0da436d58b1564b3ce9b8a861e2cb82b7647eeb8
+          path: before-cpu
+          sparse-checkout: pebrel_app/src/resource_monitor.rs
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Test selected source in isolation
         run: |
+          test "$(git -C candidate rev-parse HEAD)" = 2e10d8964cda8a08a9012de4c3b94939afd36b76
           docker --version
-          python3 scripts/tests/verify_resource_559.py candidate
+          python3 scripts/tests/verify_resource_559.py candidate before-cpu/pebrel_app/src/resource_monitor.rs

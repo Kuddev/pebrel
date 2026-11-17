@@ -107,8 +107,25 @@ fi
             server.server_close()
 
 
+def verify_old_cpu(root, old_module):
+    # Keep the final tests, replacing only the collector implementation in this harness.
+    module = root / 'src/resource_monitor.rs'
+    module.unlink()
+    shutil.copyfile(old_module, module)
+    for case in ('immediate_sample_omits_cpu_without_postponing_the_next_interval',
+                 'new_process_needs_its_own_cpu_baseline'):
+        name = 'resource_monitor::tests::' + case
+        result = subprocess.run(['cargo', 'test', '--manifest-path', root / 'Cargo.toml',
+                                 '--bin', 'sampler', name, '--', '--exact'],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        print(result.stdout, flush=True)
+        assert result.returncode == 101 and ('test ' + name + ' ... FAILED') in result.stdout
+        assert '0 passed; 1 failed' in result.stdout and 'panicked at' in result.stdout
+
+
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='pr559-', dir='/tmp') as work:
         root = Path(work)
         prepare(Path(sys.argv[1]).resolve(), root)
         exercise(root)
+        verify_old_cpu(root, Path(sys.argv[2]).resolve())
