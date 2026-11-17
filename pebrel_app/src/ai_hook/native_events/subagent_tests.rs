@@ -9,6 +9,39 @@ use crate::ai_hook::{AiHookEvent, parse_envelope, parse_remote_envelope};
 
 static TEST_PROBE_MUTEX: Mutex<()> = Mutex::new(());
 
+struct PausedProbe(Arc<(Mutex<bool>, Condvar)>);
+
+impl PausedProbe {
+    fn new() -> Self {
+        let pause = Self(Arc::new((Mutex::new(false), Condvar::new())));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let gate = Arc::clone(&pause.0);
+        PROBE_WORKER
+            .tx
+            .as_ref()
+            .unwrap()
+            .send(Box::new(move || {
+                let _ = entered_tx.send(());
+                let (lock, cvar) = &*gate;
+                let mut released = lock.lock().unwrap_or_else(|error| error.into_inner());
+                while !*released {
+                    released = cvar.wait(released).unwrap_or_else(|error| error.into_inner());
+                }
+            }))
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        pause
+    }
+}
+
+impl Drop for PausedProbe {
+    fn drop(&mut self) {
+        let (lock, cvar) = &*self.0;
+        *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
+        cvar.notify_all();
+    }
+}
+
 fn temp_brain_root() -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let base = if is_dir_and_ancestors_no_symlink(temp.path()) {
@@ -223,13 +256,17 @@ fn antigravity_forked_subagents_are_rejected_on_cold_start_and_after_parent_evic
             Some(parent_id)
         );
 
-        // Evict parent from the bounded in-memory conversation cache, then verify another
-        // forked child registered on disk under that parent is still rejected.
+        // Fill the real cache without requiring 72 unrelated disk probes to
+        // finish before the listener deadline. A blocked worker proves that
+        // fixture setup only establishes the eviction precondition.
+        let paused = PausedProbe::new();
         for idx in 0..(MAX_TRACKED_ANTIGRAVITY_CONVERSATIONS + 8) {
             let filler_id = format!("filler-{idx:04}");
-            let filler_transcript =
-                write_antigravity_transcript(&brain, &filler_id, "USER_EXPLICIT", "USER_INPUT");
-            assert!(send("session-start", &filler_id, &filler_transcript).is_some());
+            write_antigravity_transcript(&brain, &filler_id, "USER_EXPLICIT", "USER_INPUT");
+            remember_antigravity_conversation(
+                brain.join(&filler_id),
+                CachedConversation::NonSystemStepZero,
+            );
         }
         {
             let cache =
@@ -238,7 +275,9 @@ fn antigravity_forked_subagents_are_rejected_on_cold_start_and_after_parent_evic
                 !cache.iter().any(|(dir, _)| dir.ends_with(parent_id)),
                 "parent must have been evicted from the bounded cache"
             );
+            assert_eq!(cache.len(), MAX_TRACKED_ANTIGRAVITY_CONVERSATIONS);
         }
+        drop(paused);
 
         for event in ["session-start", "tool-complete", "done"] {
             assert!(
@@ -495,32 +534,8 @@ fn antigravity_timeout_queue_full_and_incomplete_scan_never_replace_foreground_i
 
         // 1. Occupy `PROBE_WORKER` so `parse_envelope` hits the 200 ms listener timeout on
         // a forked child whose parent record is already on disk.
-        let gate = Arc::new((Mutex::new(false), Condvar::new()));
-        struct ReleaseGate(Arc<(Mutex<bool>, Condvar)>);
-        impl Drop for ReleaseGate {
-            fn drop(&mut self) {
-                let (lock, cvar) = &*self.0;
-                *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
-                cvar.notify_all();
-            }
-        }
-        let release = ReleaseGate(Arc::clone(&gate));
-        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
-        let gate_worker = Arc::clone(&gate);
-        PROBE_WORKER
-            .tx
-            .as_ref()
-            .unwrap()
-            .send(Box::new(move || {
-                let _ = entered_tx.send(());
-                let (lock, cvar) = &*gate_worker;
-                let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
-                while !*done {
-                    done = cvar.wait(done).unwrap_or_else(|e| e.into_inner());
-                }
-            }))
-            .unwrap();
-        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let release = PausedProbe::new();
+        let gate = Arc::clone(&release.0);
 
         let started = Instant::now();
         let timed_out = send("session-start", stalled_fork_id, &stalled_fork_transcript);
