@@ -108,6 +108,15 @@ int main(int argc, const char **argv) {
         int status = 0;
         if ([command isEqual:@"press"]) {
             status = AXUIElementPerformAction(element, kAXPressAction) == kAXErrorSuccess ? 0 : 5;
+        } else if ([command isEqual:@"action"] && argc == 6) {
+            CFArrayRef available = NULL;
+            NSString *requested = @(argv[5]);
+            if (AXUIElementCopyActionNames(element, &available) != kAXErrorSuccess) {
+                CFRelease(root); return 7;
+            }
+            NSArray *names = CFBridgingRelease(available);
+            if (![names containsObject:requested]) { CFRelease(root); return 8; }
+            status = AXUIElementPerformAction(element, (__bridge CFStringRef)requested) == kAXErrorSuccess ? 0 : 5;
         } else if ([command isEqual:@"click"]) {
             CGPoint point; CGSize size;
             id position = attribute(element, kAXPositionAttribute);

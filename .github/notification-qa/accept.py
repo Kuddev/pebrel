@@ -70,6 +70,18 @@ def run():
         for process in value["apps"]:
             if "notification" not in (process["name"] + process["bundle"]).lower():
                 continue
+            for node in nodes(process["tree"]):
+                if node.get("AXSubrole") != "AXNotificationCenterAlert" or "Pebrel Preview" not in text(node):
+                    continue
+                for action in node.get("actions", []):
+                    if action.splitlines()[0] != "Name:Allow":
+                        continue
+                    capture("permission-before-" + str(len(report["permission_actions"])))
+                    result = subprocess.run([str(args.ui), "action", str(process["pid"]), node["path"], "Pebrel Preview", action], timeout=10)
+                    report["permission_actions"].append({"label": "Allow", "pid": process["pid"],
+                                                         "action": action, "result": result.returncode})
+                    require(result.returncode == 0, "observed notification Allow action changed")
+                    return True
             for container in nodes(process["tree"]):
                 content = " ".join(text(node) for node in nodes(container))
                 prompt = (container.get("AXRole") in ("AXWindow", "AXDialog")

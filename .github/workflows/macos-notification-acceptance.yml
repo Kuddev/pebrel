@@ -37,30 +37,77 @@ jobs:
         run: clang -fobjc-arc "$RUNNER_TEMP/notification-qa/native_ui.m" -framework Cocoa -framework ApplicationServices -o "$RUNNER_TEMP/notification-qa/native-ui"
       - name: Prepare the native notification UI agent
         run: python3 "$RUNNER_TEMP/notification-qa/prepare_environment.py"
+      - name: Restore a candidate package for this exact source
+        id: candidate
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/notification-package
+          key: notification-candidate-v1-${{ matrix.os }}-${{ env.SOURCE }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.candidate.outputs.cache-hit != 'true'
         with:
           toolchain: "1.97.1"
       - uses: ./.github/actions/rust-cache
+        if: steps.candidate.outputs.cache-hit != 'true'
         id: rust-cache
         with:
           key: release
           target: target/release
           save-if: "false"
       - name: Compile current GPUI product
+        if: steps.candidate.outputs.cache-hit != 'true'
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE"
           cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
       - name: Retain compilation for this verification branch
-        if: steps.rust-cache.outputs.cache-hit != 'true'
+        if: steps.candidate.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: target/release
           key: ${{ steps.rust-cache.outputs.cache-key }}
-      - name: Package and install private candidate
+      - name: Package the compiled candidate and record its identity
+        if: steps.candidate.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("pebrel_app/Cargo.toml", "rb"))["package"]["version"])')"
           bash scripts/package-macos.sh --channel preview --preview-id notify1011 --binary target/release/pebrel --version "$version" --architecture "${{ matrix.architecture }}" --build-number "$GITHUB_RUN_NUMBER" --output-directory tmp/notification-package
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          root = Path('tmp/notification-package')
+          packages = list(root.glob('*.dmg'))
+          assert len(packages) == 1
+          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert source == os.environ['SOURCE']
+          p = packages[0]
+          with p.open('rb') as stream:
+              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          (root / 'identity.json').write_text(json.dumps({'source': source, 'file': p.name,
+              'sha256': digest, 'architecture': os.environ['RUNNER_ARCH'],
+              'build_run': os.environ['GITHUB_RUN_ID']}, indent=2) + '\n', encoding='utf-8')
+          PY
+      - name: Retain the candidate package
+        if: steps.candidate.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: tmp/notification-package
+          key: notification-candidate-v1-${{ matrix.os }}-${{ env.SOURCE }}
+      - name: Verify package identity and install the private candidate
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('tmp/notification-package')
+          record = json.loads((root / 'identity.json').read_text(encoding='utf-8'))
+          assert record['source'] == os.environ['SOURCE']
+          assert record['architecture'] == os.environ['RUNNER_ARCH']
+          assert Path(record['file']).name == record['file']
+          assert [p.name for p in root.glob('*.dmg')] == [record['file']]
+          with (root / record['file']).open('rb') as stream:
+              assert hashlib.file_digest(stream, 'sha256').hexdigest() == record['sha256']
+          Path('tmp/notification-evidence/package.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+          PY
           mount="$RUNNER_TEMP/notification-mount"
           mkdir -p "$mount" "$RUNNER_TEMP/notification-install"
           hdiutil attach tmp/notification-package/*.dmg -nobrowse -readonly -mountpoint "$mount"
