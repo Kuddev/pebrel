@@ -725,6 +725,19 @@ fn antigravity_confirmed_foreground_finishes_after_brain_exceeds_scan_limit() {
         };
 
         let mut activity = AgentActivity::default();
+        // Establish the already-confirmed foreground through its normal pathless start.
+        // Cold transcript admission may legitimately time out before the scan-limit case.
+        {
+            let _paused = PausedProbe::new();
+            let wire = format!(
+                "nebula-hook/1 source=antigravity pane=5 event=session-start\n{}",
+                json!({"conversationId": root_id})
+            );
+            let mut start = parse_envelope(wire.as_bytes()).expect("pathless foreground start");
+            start.agent_pid = Some(8899);
+            assert!(activity.apply_hook(&start));
+            assert!(is_confirmed_antigravity_foreground(root_id));
+        }
         assert!(
             activity
                 .apply_hook(&send("session-start", root_id, &root_transcript, json!({})).unwrap())
