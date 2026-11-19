@@ -2,6 +2,7 @@
 use crate::session::{self, Failure, Geometry, Open, Options, Result, runtime};
 use std::{
     ffi::{CStr, CString, c_char},
+    mem::MaybeUninit,
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
 };
@@ -38,12 +39,12 @@ fn text<'a>(value: *const c_char, limit: usize) -> Result<&'a str> {
     bytes.to_str().map_err(|_| INVALID)
 }
 
-fn output<'a, T>(value: *mut T) -> Result<&'a mut T> {
-    unsafe { value.as_mut().ok_or(INVALID) }
+fn output<'a, T>(value: *mut T) -> Result<&'a mut MaybeUninit<T>> {
+    unsafe { value.cast::<MaybeUninit<T>>().as_mut().ok_or(INVALID) }
 }
 
-fn string_out(target: &mut Status, value: String) -> Result<()> {
-    *target = CString::new(value).map_err(|_| Failure("INVALID_INPUT"))?.into_raw();
+fn string_out(target: &mut MaybeUninit<Status>, value: String) -> Result<()> {
+    target.write(CString::new(value).map_err(|_| INVALID)?.into_raw());
     Ok(())
 }
 
@@ -100,14 +101,14 @@ pub extern "C" fn pebrel_ssh_create(
         if port == 0 {
             return Err(INVALID);
         }
-        *out = session::start(Options {
+        out.write(session::start(Options {
             host: text(host, 1024)?.to_owned(),
             port,
             user: text(user, 1024)?.to_owned(),
             password: Zeroizing::new(password.get(4096)?.to_vec()),
             private_key: Zeroizing::new(key.get(65536)?.to_vec()),
             fingerprint: text(fingerprint, 256)?.to_owned(),
-        })?;
+        })?);
         Ok(())
     })
 }
@@ -167,7 +168,7 @@ pub extern "C" fn pebrel_ssh_read(
         unsafe {
             ptr::copy_nonoverlapping(received.as_ptr(), bytes, received.len());
         }
-        *count = received.len();
+        count.write(received.len());
         Ok(())
     })
 }
@@ -187,7 +188,7 @@ pub extern "C" fn pebrel_ssh_resize(id: i64, size: Size) -> Status {
 #[unsafe(no_mangle)]
 pub extern "C" fn pebrel_ssh_await_exit(id: i64, out: *mut i32) -> Status {
     status(|| {
-        *output(out)? = runtime().block_on(session::get(id)?.exit())?;
+        output(out)?.write(runtime().block_on(session::get(id)?.exit())?);
         Ok(())
     })
 }
