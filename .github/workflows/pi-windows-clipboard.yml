@@ -1,0 +1,54 @@
+name: Pi Windows clipboard acceptance
+on:
+  push:
+    branches: [qa/pi-windows-clipboard-1119]
+permissions:
+  contents: read
+
+jobs:
+  paste:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: "-release-check-v2"
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Build the candidate and its hook helper
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p pebrel -p pebrel_hook --features pebrel/gpui-test-support --bin pebrel --bin pebrel-hook
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install the pinned Pi binary
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP pi.zip
+          $bin = Join-Path $env:RUNNER_TEMP pi-bin
+          curl.exe --fail --location --retry 3 --output $zip https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-windows-x64.zip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne 'E6ADB8CB8C84ECA14391AD24B363DE9D2BE98A89CA3BA3FDEE1FA4DE32B7F2E8') {
+            throw 'Pi release digest does not match v1.5.2'
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $bin
+          $exe = @(Get-ChildItem $bin -Recurse -File -Filter pi.exe)
+          if ($exe.Count -ne 1) { throw 'Expected exactly one Pi executable' }
+          "PEBREL_FIXTURE_PI=$($exe[0].FullName)" >> $env:GITHUB_ENV
+      - name: Paste 33 native clipboard images into the same Pi editor
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/pi_image_paste_probe.py target/ci/pebrel.exe
