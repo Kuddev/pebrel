@@ -1,6 +1,7 @@
 //! Resume commands wait for the new shell prompt before publishing live identity.
 
 use super::*;
+use crate::display::side_panel::PathQuote;
 
 #[derive(Default)]
 pub(super) struct SessionRecovery {
@@ -68,6 +69,24 @@ impl SessionRecovery {
 
 pub(super) struct PendingShellCommand {
     text: String,
+}
+
+fn resolved_resume_command(
+    target: &crate::session::AgentSession,
+    shell: PathQuote,
+) -> Option<String> {
+    let Some(file) = &target.session_file else { return target.resume_command() };
+    let prefix = match target.source.as_str() {
+        "omp" => "omp --resume",
+        "pi" => "pi --session",
+        _ => return None,
+    };
+    let Some(quoted) =
+        crate::display::side_panel::drop_text_for_paths(std::slice::from_ref(file), shell)
+    else {
+        return (target.source == "omp").then(|| target.resume_command()).flatten();
+    };
+    Some(format!("{prefix} {}", quoted.trim_end()))
 }
 
 impl TerminalView {
@@ -211,7 +230,10 @@ impl TerminalView {
             awaiting_confirmation: true,
             ..SessionRecovery::default()
         };
-        if agent.source != "pi" || self.ssh_destination.is_some() {
+        let local_omp_file = agent.source == "omp"
+            && agent.session_file.is_some()
+            && self.suggest.suggest_env.is_this_machine();
+        if (agent.source != "pi" && !local_omp_file) || self.ssh_destination.is_some() {
             if let Some(command) = agent.resume_command() {
                 self.run_command(command, cx);
             } else {
@@ -248,13 +270,7 @@ impl TerminalView {
                 view.recovery.resolving = false;
                 match result {
                     Ok(target) => {
-                        let command = target.session_file.as_ref().and_then(|file| {
-                            crate::display::side_panel::drop_text_for_paths(
-                                std::slice::from_ref(file),
-                                view.path_quote(),
-                            )
-                            .map(|quoted| format!("pi --session {}", quoted.trim_end()))
-                        });
+                        let command = resolved_resume_command(&target, view.path_quote());
                         view.recovery.target = Some(target);
                         if let Some(command) = command {
                             view.run_command(command, cx);
@@ -263,7 +279,10 @@ impl TerminalView {
                         }
                     },
                     Err(error) => {
-                        log::warn!("Pi recovery target could not be resolved: {error:?}");
+                        log::warn!(
+                            "{} recovery target could not be resolved: {error:?}",
+                            agent.source
+                        );
                         view.recovery.failed = true;
                         let message =
                             if error == crate::platform::pi_session::ResolveError::Ambiguous {
@@ -274,7 +293,7 @@ impl TerminalView {
                         cx.emit(TerminalViewEvent::Notification(
                             crate::notify::Notification::Text {
                                 body: ui_language().text(message).to_owned(),
-                                program: Some("pi".into()),
+                                program: Some(agent.source.clone()),
                             },
                         ));
                     },
@@ -367,6 +386,52 @@ impl TerminalView {
         }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+#[gpui::test]
+fn local_omp_recovery_queues_only_a_matching_session_file(cx: &mut gpui::TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("project session.jsonl");
+    let id = "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c";
+    let mut slot = serde_json::json!({"type":"title","v":1,"title":"","updatedAt":"now","pad":""});
+    slot["pad"] = " ".repeat(255 - slot.to_string().len()).into();
+    assert_eq!(slot.to_string().len(), 255);
+    let (view, window, _) = super::startup_tests::open(cx);
+    for matches in [true, false] {
+        let header =
+            serde_json::json!({"type":"session","id": if matches { id } else { "another" }});
+        std::fs::write(&file, format!("{slot}\n{header}\n")).unwrap();
+        view.update(window, |view, cx| {
+            view.session = None;
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.exec_context =
+                Some(crate::runtime_exec::PaneExecContext::from_pty_options(&Default::default()));
+            view.restore_agent(
+                crate::session::AgentSession {
+                    source: "omp".into(),
+                    session_id: Some(id.into()),
+                    session_file: Some(file.to_str().unwrap().into()),
+                },
+                cx,
+            );
+        });
+        window.run_until_parked();
+        view.update(window, |view, _| {
+            let text = &view.pending_shell_command.as_ref().unwrap().text;
+            if matches {
+                let quoted = crate::display::side_panel::drop_text_for_paths(
+                    &[file.to_str().unwrap().into()],
+                    view.path_quote(),
+                )
+                .unwrap();
+                assert_eq!(text, &format!("omp --resume {}", quoted.trim_end()));
+            } else {
+                assert_eq!(text, &format!("omp --resume {id}"));
+                assert!(view.session_agent().unwrap().session_file.is_none());
+            }
+        });
     }
 }
 
