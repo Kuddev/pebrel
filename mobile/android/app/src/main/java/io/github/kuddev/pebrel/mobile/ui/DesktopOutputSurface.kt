@@ -54,6 +54,8 @@ internal fun DesktopOutputSurface(
     pasteTarget: TerminalInputTarget? = inputTarget,
     scrollTarget: TerminalInputTarget? = inputTarget,
     onHistoryPage: ((Long?) -> Unit)? = null,
+    zoomScale: Float = 1f,
+    onZoomScale: (Float) -> Unit = {},
 ) {
     val legacyText = frame == null && text.isNotEmpty()
     var lastKeyboardRequest by remember(identity) { mutableIntStateOf(keyboardRequest) }
@@ -68,6 +70,7 @@ internal fun DesktopOutputSurface(
                     view.pasteTarget = null
                     view.scrollTarget = null
                     view.onZoomChanged = null
+                    view.onZoomScaleChanged = null
                     view.onHistoryPage = null
                     if (inputView === view) inputView = null
                 }, update = { view ->
@@ -75,6 +78,8 @@ internal fun DesktopOutputSurface(
                 val app = view.context.applicationContext as PebrelApplication
                 view.setFont(app.terminalTypeface(app.sessions.display.state.value.fontFamily), fontSize)
                 view.pinchZoom = pinchZoom
+                view.setZoomScale(zoomScale)
+                view.onZoomScaleChanged = onZoomScale
                 view.wrapLines = wrapLines
                 view.onZoomChanged = zoomFeedback::update
                 view.frame = frame

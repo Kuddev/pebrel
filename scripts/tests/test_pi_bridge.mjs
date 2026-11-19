@@ -8,7 +8,7 @@ import { test, after } from 'node:test';
 import { spawnSync } from 'node:child_process';
 
 const root = new URL('../../', import.meta.url);
-const bridgeSource = new URL('nebula_app/src/ai_hook/bridges.rs', root);
+const bridgeSource = new URL('pebrel_app/src/ai_hook/bridges.rs', root);
 const bridgePath = readFileSync(bridgeSource, 'utf8').match(/PI_EXTENSION_TS: &str = include_str!\("([^"]+)"\)/)?.[1];
 assert.ok(bridgePath, 'test must execute the production PI_EXTENSION_TS asset');
 const embedded = readFileSync(new URL(bridgePath, bridgeSource), 'utf8');

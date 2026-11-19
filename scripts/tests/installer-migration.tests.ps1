@@ -42,7 +42,7 @@ try {
     $payload = Join-Path $root 'syntax-payload'
     $syntaxOutput = Join-Path $root 'syntax-only-do-not-install'
     New-Item -ItemType Directory -Path $payload, $syntaxOutput | Out-Null
-    foreach ($name in @('pebrel.exe', 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
+    foreach ($name in @('pebrel.exe', 'pebrel-cli.exe', 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
         [System.IO.File]::WriteAllText((Join-Path $payload $name), 'Syntax fixture, not a runtime executable.')
     }
     & $InnoCompiler '/Q' '/DAppVersion=0.0.0' '/DNumericVersion=0.0.0.0' `

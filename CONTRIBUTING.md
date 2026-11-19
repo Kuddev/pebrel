@@ -4,8 +4,8 @@ Pebrel 1.6 uses the `pebrel` command, Pebrel installation directories, and
 `PEBREL_*` environment variables. Legacy configuration and integration identifiers
 remain compatibility inputs; follow the [identity migration decision](docs/architecture-decisions.md#adr-0003---pebrel-16-identity-migration)
 when changing them. Internal Rust names migrate one module at a time. The completion package now uses
-`pebrel-completions`; its source directory remains `nebula-completions/` until the
-scan-root migration is validated. See the [package identity decision](architecture/notes/nebula-completions/2026-09-30-package-identity.md).
+`pebrel-completions`; its source directory remains `pebrel-completions/` until the
+scan-root migration is validated. See the [package identity decision](architecture/notes/pebrel-completions/2026-09-30-package-identity.md).
 
 ## Required reading
 
@@ -102,7 +102,7 @@ READMEs introduce the product and do not duplicate this policy. / 本节为规�
    product, not an accidentally substituted legacy executable:
 
    ```sh
-   cargo build --locked -p nebula --bin pebrel --features gpui-shell
+   cargo build --locked -p pebrel --bin pebrel --features gpui-shell
    ```
 
 3. Make the focused change, run the checks below, and open a PR against the agreed
@@ -115,8 +115,7 @@ unrelated generated files. Preserve third-party license/attribution notices and
 identify the source of any externally copied code or assets for license review.
 
 Keep one-off test scripts and probe outputs under `tmp/`; external project checkouts
-and investigation notes belong in the reserved `research/`, `reference-projects/`
-or `external-probes/` local directories. These are not vendored build dependencies:
+and investigation notes belong outside the checkout. These are not vendored build dependencies:
 do not blanket-ignore `third_party/` or maintained test/diagnostic sources. `docs/`
 is private by default; public documentation needs an exact reviewed allowlist entry
 in `.gitignore`. Do not publish competitor studies or HTML prototypes by opening a
@@ -129,10 +128,15 @@ raise any existing tracked private artifact for an explicit maintainer decision.
    cross-layer dependency, persisted format, core abstraction or threading model
    before implementing it. Record significant decisions under the owning path in
    `architecture/notes/`; ordinary fixes do not create a note.
-2. Keep one conceptual change per PR. A necessary extraction and its behavior
-   tests may accompany the feature; unrelated rewrites and formatting may not.
-   The `pr-size` check fails above 1500 changed source lines (docs, lockfiles
-   and assets excluded); split instead of asking for an exemption.
+2. Organize each PR around a complete, independently verifiable feature module.
+   A necessary extraction and its behavior tests may accompany the feature;
+   unrelated rewrites and formatting may not. Prefer cohesive boundaries to
+   mechanical splitting. The default `pr-size` limit is 1500 changed source lines
+   (additions plus deletions; docs, lockfiles and assets excluded). Maintainers may
+   approve individual exceptions with `size-exempt` and a brief rationale when
+   keeping the module together makes the change easier to review and verify.
+   **No PR may exceed 5000 counted source lines, even with `size-exempt`.**
+   The label does not waive code review, tests, dependency rules or per-file limits.
 3. Put shared rules in their existing authority. UI modules adapt those rules;
    they must not fork persistence, state transitions or domain behavior.
 4. Add regression tests that fail for the defect, and test error/cancellation
@@ -151,15 +155,15 @@ ratcheting. Run without `--base` for current-tree checks during development.
 python3 scripts/check_architecture.py --base <PR-base-commit>
 python3 -m unittest scripts.tests.test_architecture_budgets scripts.tests.test_architecture_dependencies scripts.tests.test_architecture_governance
 cargo test --manifest-path tools/i18n-contract/Cargo.toml --locked
-cargo test -p nebula-settings
-cargo test -p nebula --test file_line_budget
+cargo test -p pebrel-settings
+cargo test -p pebrel --test file_line_budget
 cargo fmt --all -- --check
 ```
 
 Run affected behavior tests and the appropriate real product checks as well:
 
 ```sh
-cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
+cargo check -p pebrel --bin pebrel --features gpui-shell --tests --locked
 ```
 
 `Full native tests` plans validation on every PR. Ordinary shared-code changes
@@ -238,7 +242,7 @@ feature work; there is no routine `--skip-architecture` option.
 ## 中文摘要
 
 - 先读架构图、工程合同和决策记录；按职责拆分，不按行号切片。
-- 一个 PR 只做一件事；改动超过 1500 行源码（不计文档、lockfile、资源）`pr-size` 会失败，请拆分。
+- PR 以完整、可独立验证的功能模块为主，按职责边界拆分，不机械切片。源码增删行默认门槛为 1500（不计文档、lockfile、资源）；维护者可说明理由并用 `size-exempt` 批准个别例外，但任何 PR 都不得超过 5000 行。豁免不替代 review、测试、依赖规则或单文件行数约束。
 - Draft 和 Ready PR 共用路径策略：文档不构建原生应用，普通共享代码跑完整 Linux 测试，平台路径及条件编译追加相应原生架构，依赖/CI/打包等改动跑全量。main、每日定时和手动验证保留五平台。十项必需检查名称不变，结果汇总明确注明未运行的平台，已选择的测试失败仍阻止合并；原生套件和 doctest 不删减。
 - 附加截图留在贡献者 fork 中生成；上游按需执行，不重复自动跑整套截图构建，也不上传 PR 专属的大型编译缓存。截图与原生回归测试不能互相替代。
 - 2000 行是现有仓库的防灾上限，800 行只提示审查，不是“大厂标准”。

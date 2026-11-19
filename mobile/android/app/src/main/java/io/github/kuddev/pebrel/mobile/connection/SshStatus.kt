@@ -24,7 +24,8 @@ fun classifySshFailure(error: Throwable?): SshFailureKind {
         causes.any { it is ConnectException } -> SshFailureKind.REFUSED
         causes.any { it is java.security.GeneralSecurityException } -> SshFailureKind.CRYPTO
         causes.any { it is NativeSshException } -> causes.filterIsInstance<NativeSshException>().first().let {
-            SshFailureKind.entries.firstOrNull { kind -> kind.name == it.code } ?: SshFailureKind.UNKNOWN
+            if (it.code == "CLOSED") SshFailureKind.NETWORK
+            else SshFailureKind.entries.firstOrNull { kind -> kind.name == it.code } ?: SshFailureKind.UNKNOWN
         }
         causes.any { it is NoRouteToHostException } -> SshFailureKind.NETWORK
         causes.any { it is IOException } -> SshFailureKind.NETWORK

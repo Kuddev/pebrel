@@ -1,0 +1,1139 @@
+//! 侧栏文件树渲染（从 workspace.rs 拆出以守行数预算）。
+//!
+//! 几何与密度以旧 OpenGL 壳的 `display::side_panel::panel_layout`
+//! （side_panel.rs:1695）和它的行水洗（同文件 2712-2800）为基准，不自创数字。
+
+use crate::display::side_panel::PanelNotice;
+use std::ops::Range;
+use std::path::PathBuf;
+
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    Anchor, AppContext as _, ClipboardItem, Context, DismissEvent, Entity, Focusable as _,
+    InteractiveElement as _, IntoElement as _, MouseButton, MouseDownEvent, ParentElement as _,
+    Pixels, Point, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Window, anchored, deferred, div, px, uniform_list,
+};
+use gpui_component::menu::PopupMenuItem;
+
+use crate::gpui_shell::prelude::*;
+use crate::i18n::Message;
+
+use super::NebulaWorkspace;
+
+mod path_bar;
+mod sticky;
+pub(super) use path_bar::PathEditor;
+
+/// 行距（旧壳 `PanelLayout::row_h`）。
+pub(super) const ROW_PITCH: f32 = 34.0;
+/// 行水洗高度（旧壳 `row_h - 4`）。行与行之间那条缝来自水洗比行距矮，
+/// **不是** flex gap——用 gap 会把每行推成一颗独立药丸，连续列表的读感就散了。
+pub(super) const ROW_WASH_H: f32 = 30.0;
+/// 水洗相对抽屉内缘的额外内缩：旧壳的水洗从面板边缘缩 10px，而抽屉自身的
+/// `p_2` 已经占掉 8px。
+pub(super) const ROW_WASH_INSET: f32 = 2.0;
+/// 抽屉内容左右留白（旧壳 `px + 12`：比水洗再多 2px）。
+pub(super) const DRAWER_TEXT_INSET: f32 = 4.0;
+
+fn hover_text_color(cx: &gpui::App) -> gpui::Hsla {
+    let mut color = cx.theme().primary;
+    // 悬停文字保持主题色相；暗底提亮、浅底加深，小面积强调不沿用按钮的暗压色。
+    if color.s > 0.05 {
+        color.s = color.s.max(0.65);
+    }
+    color.l = if cx.theme().is_dark() { color.l.max(0.78) } else { color.l.min(0.40) };
+    color.a = 1.0;
+    color
+}
+
+fn color_feedback_button(
+    id: impl Into<SharedString>,
+    content: impl gpui::IntoElement,
+    color: gpui::Hsla,
+    hover: gpui::Hsla,
+) -> Button {
+    let group = id.into();
+    // Button 内部已注册 hover；内容必须有稳定 ID，才能在排版前恢复 group 的悬停色。
+    Button::new(group.clone()).text().group(group.clone()).child(
+        div()
+            .id("color-feedback-content")
+            .min_w_0()
+            .overflow_hidden()
+            .text_color(color)
+            .group_hover(group, |style| style.text_color(hover))
+            .child(content),
+    )
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod hover_tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(gpui::IntoElement)]
+    struct ColorProbe {
+        color: Rc<Cell<gpui::Hsla>>,
+        icon: bool,
+    }
+
+    impl gpui::RenderOnce for ColorProbe {
+        fn render(self, window: &mut Window, _: &mut gpui::App) -> impl gpui::IntoElement {
+            // 文字 run 与 Icon 都在排版阶段读取继承色；不能只检查 paint 回调是否触发。
+            self.color.set(window.text_style().color);
+            if self.icon {
+                Icon::new(IconName::SquareTerminal).size(px(14.0)).into_any_element()
+            } else {
+                "Aa".into_any_element()
+            }
+        }
+    }
+
+    struct HoverProbe {
+        color: Rc<Cell<gpui::Hsla>>,
+        icon: bool,
+        normal: gpui::Hsla,
+        highlighted: gpui::Hsla,
+    }
+
+    impl gpui::Render for HoverProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+            div().size_full().p_5().child(
+                color_feedback_button(
+                    "color-feedback-probe",
+                    ColorProbe { color: self.color.clone(), icon: self.icon },
+                    self.normal,
+                    self.highlighted,
+                )
+                .debug_selector(|| "color-feedback-probe".into())
+                .size(px(32.0)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn text_and_icon_color_follow_the_whole_button_hover_and_restore(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let normal: gpui::Hsla = gpui::rgb(0x64748b).into();
+        let highlighted: gpui::Hsla = gpui::rgb(0x0066ff).into();
+        for icon in [false, true] {
+            let color = Rc::new(Cell::new(gpui::transparent_black()));
+            let recorded = color.clone();
+            let (_, mut visual) =
+                cx.add_window_view(|_, _| HoverProbe { color, icon, normal, highlighted });
+            visual.update(|window, _| window.activate_window());
+            visual.simulate_mouse_move(
+                gpui::point(px(0.0), px(0.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(recorded.get(), normal);
+            let bounds = visual.debug_bounds("color-feedback-probe").unwrap();
+            for position in [bounds.origin + gpui::point(px(2.0), px(2.0)), bounds.center()] {
+                visual.simulate_mouse_move(position, None, gpui::Modifiers::default());
+                visual.run_until_parked();
+                visual.update(|window, cx| window.draw(cx).clear(cx));
+                assert_eq!(
+                    recorded.get(),
+                    highlighted,
+                    "icon={icon}: hover must change the rendered color"
+                );
+            }
+            visual.simulate_mouse_move(
+                gpui::point(px(0.0), px(0.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            visual.run_until_parked();
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(recorded.get(), normal, "icon={icon}: leaving must restore the color");
+        }
+    }
+}
+
+/// 文件树右键菜单的宿主：必须挂在 workspace 根上，不能当抽屉行的 child。
+///
+/// `ContextMenuExt` 会把 `deferred(anchored(PopupMenu))` 挂回触发行；提升到
+/// workspace 后，菜单不受抽屉自身的裁剪与推出动画影响。
+pub(super) struct FileTreeContextMenu {
+    menu: Entity<PopupMenu>,
+    position: Point<Pixels>,
+    _subscription: Subscription,
+}
+
+/// `--cd` 只指定来宾工作目录，不指定要执行的程序；这样 WSL 仍会读取
+/// `/etc/passwd` 中由 `chsh` 配置的默认 shell。
+pub(super) fn wsl_terminal_launch_at(
+    name: String,
+    program: String,
+    distro: String,
+    guest_path: String,
+) -> crate::session::LaunchSession {
+    let distro_args = vec!["-d".to_owned(), distro];
+    // The same encoding as splits; a path `wsl.exe` cannot receive (one with `"`)
+    // only enters the distribution.
+    let args = crate::shell_detect::wsl_args_at(&program, &distro_args, &guest_path)
+        .unwrap_or(distro_args);
+    crate::session::LaunchSession::Shell { name, program, args }
+}
+
+impl NebulaWorkspace {
+    pub(super) fn on_file_tree_search_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if matches!(event, InputEvent::Change) {
+            self.file_tree_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+            self.side_panel.set_file_search_query(input.read(cx).value().to_string());
+            cx.notify();
+        }
+    }
+
+    /// 单行：34px 行距里画一张 30px 高的水洗（旧壳 side_panel.rs:2712-2800）。
+    fn render_file_tree_row(&self, visible_ix: usize, cx: &Context<Self>) -> gpui::AnyElement {
+        self.render_file_tree_row_at(visible_ix, false, cx)
+    }
+
+    fn render_file_tree_row_at(
+        &self,
+        visible_ix: usize,
+        sticky: bool,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(row) = self.side_panel.file_rows().get(visible_ix).cloned() else {
+            return div().h(px(ROW_PITCH)).into_any_element();
+        };
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let hover = theme.list_hover;
+        // 选中行穿「浮动药丸」那套语言（accent_soft），与左侧栏活动 tab、抽屉
+        // 页签同源——旧壳 side_panel.rs:2766 明确写了这一点。`list_active` 是
+        // 中性的 hover_strong，穿上去只像"悬停重了一点"，选中读不出来。
+        let selected_bg = theme.tab_active;
+        let selected_ring = theme.ring.opacity(0.16);
+        // 文件树字位是内置 Nerd Font 图标；固定 Maple，不能让终端主字体
+        // 改变折叠箭头和文件图标的 advance。
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
+        let selected = self.side_panel.selected.as_ref() == Some(&row.path);
+        let searching = !self.side_panel.search.trim().is_empty();
+        let path_hint = searching.then(|| {
+            if let Some(guest) = row.guest_path.as_deref() {
+                let root =
+                    self.side_panel.file_wsl_root().map(|root| root.guest.as_str()).unwrap_or("/");
+                guest
+                    .rsplit_once('/')
+                    .map(|(parent, _)| parent)
+                    .unwrap_or("")
+                    .strip_prefix(root)
+                    .unwrap_or(guest)
+                    .trim_matches('/')
+                    .to_owned()
+            } else {
+                row.path
+                    .parent()
+                    .and_then(|parent| {
+                        self.side_panel.root().and_then(|root| parent.strip_prefix(root).ok())
+                    })
+                    .map(|parent| parent.display().to_string())
+                    .unwrap_or_default()
+            }
+        });
+        let path = row.path.clone();
+        let open_path = path.clone();
+        let open_guest_path = row.guest_path.clone();
+        let menu_path = path.clone();
+        let guest_path = row.guest_path.clone();
+        let menu_guest_path = guest_path.clone();
+        let drag_guest_path = guest_path.clone();
+        let preview_path = path.clone();
+        let drag_path = path.clone();
+        let drag_name = row.name.clone();
+        let is_dir = row.is_dir;
+        let is_parent = row.is_parent;
+        let fg = if row.ignored { muted } else { theme.foreground };
+        let _chevron = if row.is_dir && !row.is_parent {
+            if row.expanded { "⌄" } else { "›" }
+        } else {
+            ""
+        };
+        let file_glyph =
+            (!row.is_dir).then(|| crate::display::side_panel::file_type_icon(&row.name));
+        let legacy_chevron = row
+            .is_dir
+            .then(|| {
+                (!row.is_parent).then(|| crate::display::side_panel::chevron_icon(row.expanded))
+            })
+            .flatten();
+
+        // 外层只占行距（34px），内层那张 30px 的水洗由它垂直居中——旧壳
+        // 就是这么分的：行距决定密度，水洗决定"被点中的那块"有多大。
+        h_flex()
+            .h(px(ROW_PITCH))
+            .w_full()
+            .px(px(ROW_WASH_INSET))
+            .child(
+                h_flex()
+                .id(SharedString::from(format!("file-tree-row-{visible_ix}-{sticky}")))
+                .debug_selector(move || format!("file-tree-row-{visible_ix}-{sticky}"))
+                .h(px(ROW_WASH_H))
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .pr_2()
+                .pl(px(8.0 + row.depth as f32 * 16.0))
+                .gap_1()
+                .rounded(px(crate::display::UI_CORNER_RADIUS_LOGICAL))
+                // 每行都带 1px 边（未选中时透明）：只在选中时加边会让行内文字
+                // 横跳 1px。
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .text_color(fg)
+                .when(selected, |item| item.bg(selected_bg).border_color(selected_ring))
+                .hover(|item| item.bg(hover))
+                .when(!is_dir && crate::platform::file_preview::supports(&preview_path), |item| {
+                    item.tooltip(move |_, cx| {
+                        cx.new(|cx| crate::gpui_shell::file_preview::FilePreview::new(preview_path.clone(), cx)).into()
+                    })
+                })
+                .child(
+                    div()
+                        .w(px(12.0))
+                        .flex_shrink_0()
+                        .font_family(symbol_family.clone())
+                        .text_sm()
+                        .text_color(muted)
+                        .child(legacy_chevron.unwrap_or("")),
+                )
+                .when(is_dir, |item| {
+                    item.child(
+                        div()
+                            .w(px(16.0))
+                            .flex_shrink_0()
+                            .font_family(symbol_family.clone())
+                            .text_sm()
+                            .text_color(if row.ignored { muted } else { theme.foreground })
+                            .child(crate::display::side_panel::folder_icon(row.expanded)),
+                    )
+                })
+                .when_some(file_glyph, |item, glyph| {
+                    item.child(
+                        div()
+                            .w(px(16.0))
+                            .flex_shrink_0()
+                            .font_family(symbol_family.clone())
+                            .text_sm()
+                            .child(glyph),
+                    )
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(theme.font_size)
+                        .font_weight(gpui::FontWeight::NORMAL)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .when(row.ignored, |label| label.italic())
+                        .child(row.name),
+                )
+                .when_some(path_hint.filter(|hint| !hint.is_empty()), |item, hint| {
+                    item.child(
+                        div()
+                            .max_w(px(108.0))
+                            .flex_shrink_0()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(theme.font_size - px(2.5))
+                            .text_color(muted)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(hint),
+                    )
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if is_dir {
+                        if this.side_panel.click_row(visible_ix) {
+                            cx.notify();
+                        } else {
+                            this.side_panel.selected = Some(path.clone());
+                            cx.notify();
+                        }
+                    } else {
+                        this.side_panel.selected = Some(path.clone());
+                        cx.notify();
+                    }
+                }))
+                .when(!is_parent, |item| {
+                    item.on_double_click(cx.listener(move |this, _, window, cx| {
+                        if is_dir {
+                            if this.side_panel.browse_search_directory(
+                                open_path.clone(),
+                                open_guest_path.clone(),
+                            ) {
+                                this.file_tree_search_input.update(cx, |input, cx| {
+                                    input.set_value("", window, cx);
+                                });
+                                this.file_tree_scroll
+                                    .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        // 与旧壳 chrome 同合同：应用内能读的（图片/可读文本）
+                        // 开查看 tab，其余交系统处理器。WSL 行先映射为官方 UNC
+                        // 形式，不能把 `/home/...` 直接交给 Windows 文件 API。
+                        if let Some(guest) = open_guest_path.clone() {
+                            this.open_wsl_document_path(guest, window, cx);
+                        } else {
+                            this.open_document_path(open_path.clone(), window, cx);
+                        }
+                    }))
+                })
+                .when(!is_parent, |item| {
+                    // 拖到终端 = 把路径粘进 shell（旧壳 `FileDrag` 同一合同）。
+                    // WSL 行拖的是**来宾**路径：宿主那份拼写只是展开用的键，
+                    // 在来宾的 shell 里不存在。
+                    let drag = crate::gpui_shell::file_drop::FileTreeDrag {
+                        local_path: drag_guest_path.as_ref()
+                            .zip(self.side_panel.file_wsl_root())
+                            .map(|(guest, root)| crate::shell_detect::wsl_unc_path(&root.distro, guest))
+                            .unwrap_or_else(|| drag_path.clone()),
+                        path_text: drag_guest_path
+                            .clone()
+                            .unwrap_or_else(|| drag_path.display().to_string()),
+                        name: drag_name.clone(),
+                    };
+                    item.on_drag(drag, |drag, _offset, _window, cx| {
+                        cx.new(|_| {
+                            crate::gpui_shell::file_drop::FileDragGhost::new(drag.name.clone())
+                        })
+                    })
+                })
+                .when(!is_parent, |item| {
+                    // 不在抽屉行上挂 `.context_menu()`：那会把 PopupMenu 挂回
+                    // 行的 child，菜单仍是带投影抽屉的子孙。右键只记锚点，
+                    // 菜单由 workspace 根上的 `deferred(anchored)` 画。
+                    item.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_file_tree_context_menu(
+                                menu_path.clone(),
+                                menu_guest_path.clone(),
+                                is_dir,
+                                event.position,
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// 抽屉。贴满右侧整条竖带，四边不留卡缝（用户 08-26 裁定"无缝"）；行几何
+    /// 仍以旧壳 `panel_layout`（side_panel.rs:1695-1729）为基准。
+    pub(super) fn render_file_tree(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use crate::display::ui::tokens::{control, radius};
+
+        // 滚动只由 uniform_list 承担。旧壳那套行粒度 `scroll` 不再参与，否则
+        // `click_row` 的 `scroll + index` 会把点击算到别的行上。
+        self.side_panel.scroll = 0;
+        let path_bar = self.render_file_tree_path(cx);
+        let editing_path = self.file_tree_path.is_some();
+        let theme = cx.theme();
+        let hover_ink = hover_text_color(cx);
+        let muted = theme.muted_foreground;
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let search_options = self.side_panel.file_search_options();
+        let search_active = !self.side_panel.search.trim().is_empty();
+        let search_pending = self.side_panel.file_search_pending();
+        let search_error = self.side_panel.file_search_error().is_some();
+        let search_status = if search_active {
+            use crate::i18n::Message;
+            Some(if search_error {
+                language.text(Message::FilesSearchFailed).to_owned()
+            } else if search_pending {
+                language.text(Message::FilesSearchRunning).to_owned()
+            } else if self.side_panel.file_index_truncated() {
+                language.format(
+                    Message::FilesSearchLimited,
+                    &[("count", &self.side_panel.file_rows().len().to_string())],
+                )
+            } else {
+                language.format(
+                    Message::FilesSearchCount,
+                    &[("count", &self.side_panel.file_search_total().to_string())],
+                )
+            })
+        } else {
+            None
+        };
+        let search_box = v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                h_flex()
+                    .id("file-tree-filter")
+                    .debug_selector(|| "file-tree-filter".into())
+                    .track_focus(&self.file_tree_search_input.focus_handle(cx))
+                    .w_full()
+                    .h(px(control::MIN_HIT_TARGET))
+                    .flex_shrink_0()
+                    .rounded(px(radius::CONTROL))
+                    .border_1()
+                    .border_color(if search_error {
+                        theme.danger
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .bg(theme.muted.opacity(theme.muted.a * 0.35))
+                    .focus(|field| field.border_color(theme.ring).bg(theme.sidebar))
+                    .overflow_hidden()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.file_tree_search_input)
+                                .w_full()
+                                .appearance(false)
+                                .focus_bordered(false)
+                                .cleanable(true)
+                                .prefix(Icon::new(IconName::Search).xsmall().text_color(muted))
+                                .text_size(px(13.0)),
+                        ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .pr_1()
+                            .gap(px(2.0))
+                            .child(
+                                color_feedback_button(
+                                    "file-search-match-case",
+                                    "Aa",
+                                    if search_options.match_case { theme.primary } else { muted },
+                                    hover_ink,
+                                )
+                                .debug_selector(|| "file-search-match-case".into())
+                                .xsmall()
+                                .h_5()
+                                .px_1()
+                                .selected(search_options.match_case)
+                                .toggled(search_options.match_case)
+                                .aria_label(language.text(Message::FilesMatchCase))
+                                .tooltip(language.text(Message::FilesMatchCase))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.side_panel.toggle_file_search_match_case();
+                                        this.file_tree_scroll
+                                            .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                color_feedback_button(
+                                    "file-search-whole-word",
+                                    "ab",
+                                    if search_options.whole_word { theme.primary } else { muted },
+                                    hover_ink,
+                                )
+                                .debug_selector(|| "file-search-whole-word".into())
+                                .xsmall()
+                                .h_5()
+                                .px_1()
+                                .selected(search_options.whole_word)
+                                .toggled(search_options.whole_word)
+                                .aria_label(language.text(Message::FilesMatchWholeWord))
+                                .tooltip(language.text(Message::FilesMatchWholeWord))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.side_panel.toggle_file_search_whole_word();
+                                        this.file_tree_scroll
+                                            .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                color_feedback_button(
+                                    "file-search-regex",
+                                    ".*",
+                                    if search_options.regex { theme.primary } else { muted },
+                                    hover_ink,
+                                )
+                                .debug_selector(|| "file-search-regex".into())
+                                .xsmall()
+                                .h_5()
+                                .px_1()
+                                .selected(search_options.regex)
+                                .toggled(search_options.regex)
+                                .aria_label(language.text(Message::FilesUseRegex))
+                                .tooltip(language.text(Message::FilesUseRegex))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.side_panel.toggle_file_search_regex();
+                                        this.file_tree_scroll
+                                            .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    ),
+            )
+            .when_some(search_status, |search, status| {
+                search.child(
+                    div()
+                        .h(px(18.0))
+                        .px(px(DRAWER_TEXT_INSET))
+                        .text_xs()
+                        .text_color(if search_error { theme.danger } else { muted })
+                        .child(status),
+                )
+            });
+        let root_dir = self.side_panel.root().map(std::path::Path::to_path_buf);
+        let row_count = self.side_panel.file_rows().len();
+        let empty = self.file_tree_empty_state(cx);
+        let scroll_handle = self.file_tree_scroll.clone();
+
+        v_flex()
+            .h_full()
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .p_2()
+            .gap_2()
+            .occlude()
+            .child(
+                h_flex()
+                    .h(px(30.0))
+                    .px(px(DRAWER_TEXT_INSET))
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div().flex_1().min_w_0().child(path_bar),
+                    )
+                    .when(!editing_path, |bar| bar.child(
+                        color_feedback_button(
+                            "file-tree-terminal-here",
+                            // 图标与 UI 字号同源，点击区独立保留，避免 xsmall 把图标缩成 12px。
+                            Icon::new(IconName::SquareTerminal).size(theme.font_size),
+                            muted,
+                            hover_ink,
+                        )
+                            .size(px(control::MIN_HIT_TARGET))
+                            .aria_label(language.text(Message::FilesOpenTerminalHere))
+                            .disabled(root_dir.is_none())
+                            .tooltip(language.text(Message::FilesOpenTerminalHere))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                // WSL 树根要开的是**来宾**终端：宿主那份拼写只是
+                                // 展开用的键，在来宾的 shell 里不存在。
+                                let wsl = this
+                                    .side_panel
+                                    .file_wsl_root()
+                                    .map(|root| (root.distro.clone(), root.guest.clone()));
+                                match wsl {
+                                    Some((distro, guest)) => {
+                                        this.add_wsl_terminal_at(distro, guest, window, cx)
+                                    },
+                                    None => {
+                                        let Some(dir) = this.side_panel.root().map(Into::into) else {
+                                            return;
+                                        };
+                                        this.add_terminal_at(Some(dir), None, window, cx);
+                                    },
+                                }
+                            })),
+                    )
+                    ),
+            )
+            .when_some(self.file_tree_path_error(), |panel, error| {
+                panel.child(div().text_xs().text_color(theme.danger).child(error.clone()))
+            })
+            .when_some(self.side_panel.localized_root_notice(crate::gpui_shell::config::ui_language(cx)), |panel, notice| {
+                panel.child(div().text_xs().text_color(theme.warning).child(notice.to_owned()))
+            })
+            .child(search_box)
+            .child(
+                // 一套滚动模型。此前是 `file_rows().skip(scroll)` 先砍掉上面的行、
+                // 再套 `overflow_y_scrollbar` 滚剩下的，两套模型打架：滚动条滑块
+                // 按剩余行算长度，滚轮又同时动两边。改成 uniform_list 虚拟化
+                // ——它自己就是滚动容器，滑块交给组件库 Scrollbar 读同一个 handle。
+                v_flex()
+                    .debug_selector(|| "file-tree-content".into())
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    // 必须裁：`uniform_list` 会把行画到自己的 bounds 之外，没有这层
+                    // 末行就压过抽屉的下内边距、一直画到抽屉底边，把 8px 留白和下两
+                    // 角的圆角都盖掉（用户报的"圆角没了"）。右键菜单走 deferred 顶层
+                    // 绘制，不受这里的裁剪影响。
+                    .overflow_hidden()
+                    .child(
+                        uniform_list(
+                            "file-tree-rows",
+                            row_count,
+                            cx.processor(|this, range: Range<usize>, _window, cx| {
+                                range.map(|ix| this.render_file_tree_row(ix, cx)).collect()
+                            }),
+                        )
+                        .w_full()
+                        .with_decoration(sticky::DirectoryHeader::new(cx.entity().downgrade()))
+                        // 返回上级仍保留一行；空态使用剩余高度居中，不挤到左上角。
+                        .when(empty.is_some(), |list| {
+                            list.h(px(row_count as f32 * ROW_PITCH))
+                                .flex_shrink_0()
+                                .with_sizing_behavior(gpui::ListSizingBehavior::Infer)
+                        })
+                        .when(empty.is_none(), |list| {
+                            list.size_full()
+                                .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+                        })
+                        .track_scroll(&scroll_handle),
+                    )
+                    // 滑块住在一个显式绝对定位的宿主里，和组件库自己的 Table 同构
+                    // （table/state.rs:2182）：直接当普通 child 塞进来它会参与常规
+                    // 布局、排在列表下面占掉一条高度，而不是浮在列表右缘。
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            // 组件库的 `Scrollbar::width()` 是 crate 私有的，值为
+                            // 轨道 8px + 两侧 4px 内缩（scroll/scrollbar.rs:17）。
+                            .w(px(16.0))
+                            .child(gpui_component::scroll::Scrollbar::vertical(&scroll_handle)),
+                    )
+                    .when_some(empty, |list, empty| {
+                        list.child(
+                            v_flex()
+                                .debug_selector(|| "file-tree-empty".into())
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .px_4()
+                                .py_3()
+                                .items_center()
+                                .justify_center()
+                                .text_center()
+                                .child(
+                                    v_flex()
+                                        .debug_selector(|| "file-tree-empty-message".into())
+                                        .w_full()
+                                        .max_w(px(240.0))
+                                        .gap_2()
+                                        .items_center()
+                                        .child(Icon::new(IconName::FolderOpen).size(px(24.0)).text_color(muted))
+                                        .child(div().w_full().text_sm().font_semibold().text_color(theme.foreground).child(empty.title))
+                                        .child(div().w_full().text_xs().text_color(muted).child(empty.reason))
+                                        .child(div().w_full().text_xs().text_color(muted).child(empty.action)),
+                                ),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// 空态三段（标题 + 原因 + 可执行动作），文案与旧壳
+    /// side_panel.rs:3112-3131 同源。判据也照旧壳：`..` 不算内容，只剩它时这个
+    /// 目录仍然是空的；"读不到"和"确实是空的"必须分开说，否则用户没法判断该
+    /// 重试还是该换目录。
+    fn file_tree_empty_state(&self, cx: &gpui::App) -> Option<crate::ux::EmptyState> {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        if self.side_panel.file_rows().iter().any(|row| !row.is_parent) {
+            return None;
+        }
+        if !self.side_panel.search.trim().is_empty() {
+            return Some(if let Some(error) = self.side_panel.file_search_error() {
+                crate::ux::EmptyState::new(
+                    language.text(Message::FilesSearchFailed),
+                    error.to_owned(),
+                    language.text(Message::FilesSearchRetry),
+                )
+            } else if self.side_panel.file_search_pending() {
+                crate::ux::EmptyState::new(
+                    language.text(Message::FilesSearchRunning),
+                    language.text(Message::FilesSearchProgress),
+                    language.text(Message::FilesSearchContinue),
+                )
+            } else if self.side_panel.file_index_truncated() {
+                crate::ux::EmptyState::new(
+                    language.text(Message::FilesSearchIncomplete),
+                    language.text(Message::FilesSearchLimitReason),
+                    language.text(Message::FilesSearchNarrow),
+                )
+            } else {
+                crate::ux::EmptyState::new(
+                    language.text(Message::FilesSearchEmpty),
+                    language.text(Message::FilesSearchEmptyReason),
+                    language.text(Message::FilesSearchRetry),
+                )
+            });
+        }
+
+        Some(if self.side_panel.snapshot_pending() {
+            crate::ux::EmptyState::new(
+                language.text(Message::FilesEmptyReadingTitle),
+                language.text(Message::FilesEmptyReadingBody),
+                language.text(Message::FilesEmptyReadingHint),
+            )
+        } else if self.side_panel.enumeration_failed() {
+            // 读不到 ≠ 目录是空的。WSL 冷启动可能耗尽预算，那时必须给可重试的提示。
+            crate::ux::EmptyState::new(
+                language.text(Message::FilesEmptyReadFailedTitle),
+                language.text(Message::FilesEmptyReadFailedBody),
+                language.text(Message::FilesEmptyReadFailedHint),
+            )
+        } else if self.side_panel.root().is_none() {
+            crate::ux::EmptyState::new(
+                language.text(Message::FilesEmptyNoDirectoryTitle),
+                language.text(Message::FilesEmptyNoDirectoryBody),
+                language.text(Message::FilesEmptyNoDirectoryHint),
+            )
+        } else {
+            crate::ux::EmptyState::new(
+                language.text(Message::FilesEmptyDirectoryEmptyTitle),
+                language.text(Message::FilesEmptyDirectoryEmptyBody),
+                language.text(Message::FilesEmptyDirectoryEmptyHint),
+            )
+        })
+    }
+
+    fn open_file_tree_context_menu(
+        &mut self,
+        path: PathBuf,
+        guest_path: Option<String>,
+        is_dir: bool,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.side_panel.selected = Some(path.clone());
+        let wsl_distro = guest_path
+            .as_ref()
+            .and_then(|_| self.side_panel.file_wsl_root().map(|root| root.distro.clone()));
+        let workspace = cx.entity().downgrade();
+        let ignored = self.side_panel.file_rows().iter().any(|row| row.path == path && row.ignored);
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let menu = PopupMenu::build(window, cx, move |menu, _window, _cx| {
+            file_tree_popup_menu(
+                menu.external_link_icon(false),
+                workspace,
+                path,
+                guest_path,
+                wsl_distro,
+                is_dir,
+                ignored,
+                language,
+            )
+        });
+        menu.focus_handle(cx).focus(window, cx);
+        let subscription = cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, _, cx| {
+            this.file_tree_menu = None;
+            cx.notify();
+        });
+        self.file_tree_menu =
+            Some(FileTreeContextMenu { menu, position, _subscription: subscription });
+        cx.notify();
+    }
+
+    pub(super) fn render_file_tree_context_menu(&self) -> Option<gpui::AnyElement> {
+        let state = self.file_tree_menu.as_ref()?;
+        Some(
+            deferred(
+                anchored()
+                    .position(state.position)
+                    .snap_to_window_with_margin(px(8.0))
+                    .anchor(Anchor::TopLeft)
+                    .child(state.menu.clone()),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
+    /// WSL 文件树行只携带来宾路径；发行版身份来自当前树根。通过
+    /// `\\wsl.localhost` 交给现有文档/系统打开路由，保持文件类型行为一致。
+    fn open_wsl_document_path(
+        &mut self,
+        guest_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.side_panel.file_wsl_root() else { return };
+        let path = crate::shell_detect::wsl_unc_path(&root.distro, &guest_path);
+        self.open_document_path(path, window, cx);
+    }
+
+    /// `wsl.exe --cd` 不执行指定命令，因此仍由来宾 `/etc/passwd` 选择 zsh/fish；
+    /// 这与普通 WSL 新标签相同，并避免重引入 v1.1.0 的 `--exec bash` 回归。
+    fn add_wsl_terminal_at(
+        &mut self,
+        distro: String,
+        guest_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detected = crate::shell_detect::detect_shells().into_iter().find(|shell| {
+            crate::shell_detect::wsl_launch_distro(&shell.program, &shell.args)
+                .is_some_and(|name| name.eq_ignore_ascii_case(&distro))
+        });
+        let (name, program) = detected
+            .map(|shell| (shell.name, shell.program))
+            .or_else(|| match self.meta(self.active).launch {
+                Some(crate::session::LaunchSession::Shell { name, program, args })
+                    if crate::shell_detect::wsl_launch_distro(&program, &args)
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&distro)) =>
+                {
+                    Some((name, program))
+                },
+                _ => None,
+            })
+            .unwrap_or_else(|| (format!("WSL · {distro}"), "wsl.exe".to_owned()));
+        let launch = wsl_terminal_launch_at(name, program, distro, guest_path);
+        self.add_terminal_with(launch, None, None, window, cx);
+    }
+
+    fn request_delete_file_tree_path(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !path.exists() {
+            self.side_panel.set_notice(PanelNotice::PathUnavailable);
+            cx.notify();
+            return;
+        }
+        let is_dir = path.is_dir();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let title: SharedString = language
+            .format(
+                Message::FilesDeleteTitle,
+                &[("name", &crate::display::truncate_tab_label(&name, 28))],
+            )
+            .into();
+        let body: SharedString = if is_dir {
+            language.text(Message::FilesDeleteFolderBody).into()
+        } else {
+            language.text(Message::FilesDeleteFileBody).into()
+        };
+        let workspace = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, window, _cx| {
+            let workspace = workspace.clone();
+            let path = path.clone();
+            confirm_dialog(
+                dialog,
+                window,
+                title.clone(),
+                body.clone(),
+                language.text(Message::CommonDelete),
+                language.text(Message::CommonCancel),
+                ButtonVariant::Danger,
+            )
+            .on_ok(move |_, _, cx| {
+                let path = path.clone();
+                let workspace = workspace.clone();
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { crate::display::send_to_recycle_bin(&path) });
+                cx.spawn(async move |cx| {
+                    let result = task.await;
+                    let _ = workspace.update(cx, |this, cx| {
+                        match result {
+                            Ok(()) => {
+                                this.side_panel.request_refresh();
+                                this.sync_side_panel_to_active(false, cx);
+                            },
+                            Err(error) => {
+                                this.side_panel.set_notice(PanelNotice::DeleteFailed(error))
+                            },
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+                true
+            })
+        });
+    }
+    fn ignore_file_tree_path(
+        &mut self,
+        path: PathBuf,
+        is_dir: bool,
+        ignored: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let task = cx.background_executor().spawn(async move {
+            if ignored {
+                crate::display::side_panel::remove_from_gitignore(&path, is_dir)
+            } else {
+                crate::display::side_panel::append_to_gitignore(&path, is_dir)
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                use crate::display::side_panel::IgnoreOutcome;
+                let notice = match result {
+                    Ok(IgnoreOutcome::Added { entry, .. }) => PanelNotice::IgnoreAdded(entry),
+                    Ok(IgnoreOutcome::Removed { entry, .. }) => PanelNotice::IgnoreRemoved(entry),
+                    Ok(IgnoreOutcome::AlreadyPresent { entry }) => {
+                        PanelNotice::IgnorePresent(entry)
+                    },
+                    Ok(IgnoreOutcome::AlreadyVisible { entry }) => {
+                        PanelNotice::IgnoreVisible(entry)
+                    },
+                    Err(error) => PanelNotice::IgnoreFailed(error),
+                };
+                this.side_panel.set_notice(notice);
+                this.side_panel.request_refresh();
+                this.sync_side_panel_to_active(false, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+fn file_tree_popup_menu(
+    menu: PopupMenu,
+    workspace: gpui::WeakEntity<NebulaWorkspace>,
+    path: PathBuf,
+    guest_path: Option<String>,
+    wsl_distro: Option<String>,
+    is_dir: bool,
+    ignored: bool,
+    language: crate::i18n::UiLanguage,
+) -> PopupMenu {
+    if let Some(guest_path) = guest_path {
+        let copy_guest = guest_path.clone();
+        let copy = PopupMenuItem::new(language.text(Message::FilesCopyLinuxPath))
+            .icon(IconName::Copy)
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(copy_guest.clone()));
+            });
+        let Some(distro) = wsl_distro else { return menu.item(copy) };
+        let first = if is_dir {
+            let open_here = workspace.clone();
+            let open_distro = distro.clone();
+            let open_guest = guest_path.clone();
+            PopupMenuItem::new(language.text(Message::FilesOpenTerminalHere))
+                .icon(IconName::SquareTerminal)
+                .on_click(move |_, window, cx| {
+                    if let Some(workspace) = open_here.upgrade() {
+                        workspace.update(cx, |this, cx| {
+                            this.add_wsl_terminal_at(
+                                open_distro.clone(),
+                                open_guest.clone(),
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                })
+        } else {
+            let open = workspace.clone();
+            let open_guest = guest_path.clone();
+            PopupMenuItem::new(language.text(Message::CommonOpen)).icon(IconName::File).on_click(
+                move |_, window, cx| {
+                    if let Some(workspace) = open.upgrade() {
+                        workspace.update(cx, |this, cx| {
+                            this.open_wsl_document_path(open_guest.clone(), window, cx);
+                        });
+                    }
+                },
+            )
+        };
+        let reveal_path = crate::shell_detect::wsl_unc_path(&distro, &guest_path);
+        return menu
+            .item(first)
+            .item(
+                PopupMenuItem::new(language.text(Message::FilesRevealInExplorer))
+                    .icon(IconName::FolderOpen)
+                    .on_click(move |_, _, _| {
+                        super::reveal_in_file_manager(&reveal_path);
+                    }),
+            )
+            .item(copy);
+    }
+    let first = if is_dir {
+        let open_here = workspace.clone();
+        let dir = path.clone();
+        PopupMenuItem::new(language.text(Message::FilesOpenTerminalHere))
+            .icon(IconName::SquareTerminal)
+            .on_click(move |_, window, cx| {
+                if let Some(workspace) = open_here.upgrade() {
+                    workspace.update(cx, |this, cx| {
+                        this.add_terminal_at(Some(dir.clone()), None, window, cx);
+                    });
+                }
+            })
+    } else {
+        let open = workspace.clone();
+        let file = path.clone();
+        PopupMenuItem::new(language.text(Message::CommonOpen)).icon(IconName::File).on_click(
+            move |_, window, cx| {
+                if let Some(workspace) = open.upgrade() {
+                    workspace.update(cx, |this, cx| {
+                        this.open_document_path(file.clone(), window, cx);
+                    });
+                }
+            },
+        )
+    };
+    let reveal_path = path.clone();
+    let copy_path = path.clone();
+    // 只有真在 Git 仓库里才给这一项。判据不花钱（沿祖先看 `.git` 在不在，见
+    // `git_repository_root` 里为什么不 spawn git），而在 SVN 工作副本或普通
+    // 目录上摆一个"加入 .gitignore"是纯误导——SVN 的忽略入口在 VCS 面板的
+    // 行内菜单里。
+    let ignore_item = crate::display::side_panel::git_repository_root(&path).map(|_| {
+        let ignore = workspace.clone();
+        let ignore_path = path.clone();
+        let label = language.text(if ignored {
+            crate::i18n::Message::FilesIgnoreRemove
+        } else {
+            crate::i18n::Message::FilesIgnoreAdd
+        });
+        PopupMenuItem::new(label)
+            .icon(if ignored { IconName::Eye } else { IconName::EyeOff })
+            .on_click(move |_, _, cx| {
+                if let Some(workspace) = ignore.upgrade() {
+                    workspace.update(cx, |this, cx| {
+                        this.ignore_file_tree_path(ignore_path.clone(), is_dir, ignored, cx);
+                    });
+                }
+            })
+    });
+    let delete = workspace;
+    menu.item(first)
+        .item(PopupMenuItem::new(language.text(Message::FilesRevealInExplorer)).icon(IconName::FolderOpen).on_click(
+            move |_, _, _| {
+                super::reveal_in_file_manager(&reveal_path);
+            },
+        ))
+        .item(PopupMenuItem::new(language.text(Message::FilesCopyPath)).icon(IconName::Copy).on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(copy_path.display().to_string()));
+        }))
+        .separator()
+        // 忽略在删除上面：两者都改工作区，但删除不可逆，危险的排最后。
+        .when_some(ignore_item, |menu, item| menu.item(item))
+        .item(PopupMenuItem::new(language.text(Message::CommonDelete)).icon(IconName::Delete).on_click(move |_, window, cx| {
+            if let Some(workspace) = delete.upgrade() {
+                workspace.update(cx, |this, cx| {
+                    this.request_delete_file_tree_path(path.clone(), window, cx);
+                });
+            }
+        }))
+}

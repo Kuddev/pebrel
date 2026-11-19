@@ -18,7 +18,7 @@ class UpdateProcess {
         if (Environment.GetEnvironmentVariable("PEBREL_HANDOFF_FAIL_INSTALL") == "1") return 17;
         if (Environment.GetEnvironmentVariable("PEBREL_HANDOFF_NOOP_INSTALL") == "1") return 0;
         try {
-            File.Copy(Path.Combine(directory, "candidate.exe"), Path.Combine(target, "pebrel.exe"), true);
+            File.Copy(Path.Combine(directory, "candidate.exe"), Path.Combine(target, "pebrel-handoff-fixture.exe"), true);
             Directory.CreateDirectory(Path.Combine(target, "runtime"));
             File.WriteAllText(Path.Combine(target, "runtime", "pebrel-hook.exe"), "repaired helper fixture");
         } catch (IOException) { return 5; }

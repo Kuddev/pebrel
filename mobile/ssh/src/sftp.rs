@@ -5,7 +5,10 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,7 +24,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::session::{Failure, Result};
 
+#[cfg(test)]
+mod tests;
+mod transfer;
+
 pub(crate) const CHUNK: usize = 32 * 1024;
+pub(crate) const BATCH: usize = CHUNK * 64;
 const DIRECTORY_PAGE: usize = 256;
 const MAX_HANDLES: usize = 4;
 
@@ -42,30 +50,87 @@ pub(crate) struct Call {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
-    List { path: String, cursor: Option<u64> },
-    CloseList { cursor: u64 },
-    Stat { path: String },
-    OpenRead { path: String },
-    Read { transfer: u64, offset: u64 },
-    BeginUpload { path: String },
-    Write { transfer: u64, offset: u64, data: String },
-    Commit { transfer: u64 },
-    Close { transfer: u64 },
-    Mkdir { path: String },
-    Rename { path: String, destination: String, revision: String },
-    Remove { path: String, revision: String },
+    List {
+        path: String,
+        cursor: Option<u64>,
+    },
+    CloseList {
+        cursor: u64,
+    },
+    Stat {
+        path: String,
+    },
+    OpenRead {
+        path: String,
+        #[serde(default)]
+        offset: u64,
+        revision: Option<String>,
+    },
+    Read {
+        transfer: u64,
+        offset: u64,
+        length: Option<usize>,
+    },
+    BeginUpload {
+        path: String,
+        token: Option<String>,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default)]
+        resume: bool,
+    },
+    Write {
+        transfer: u64,
+        offset: u64,
+        data: String,
+    },
+    WriteBatch {
+        transfer: u64,
+        offset: u64,
+        data: String,
+    },
+    ResolveUpload {
+        path: String,
+        token: String,
+        size: u64,
+        digest: String,
+    },
+    AbortUpload {
+        path: String,
+        token: String,
+    },
+    Commit {
+        transfer: u64,
+    },
+    Close {
+        transfer: u64,
+    },
+    Mkdir {
+        path: String,
+    },
+    Rename {
+        path: String,
+        destination: String,
+        revision: String,
+    },
+    Remove {
+        path: String,
+        revision: String,
+    },
 }
 
 pub(crate) fn parse(text: &str) -> Result<Request> {
-    if text.len() > 64 * 1024 {
+    if text.len() > BATCH.div_ceil(3) * 4 + 8192 {
         return Err(Failure("INVALID_INPUT"));
     }
     let request: Request = serde_json::from_str(text).map_err(|_| Failure("INVALID_INPUT"))?;
     let path = match &request {
         Request::List { path, .. }
         | Request::Stat { path }
-        | Request::OpenRead { path }
-        | Request::BeginUpload { path }
+        | Request::OpenRead { path, .. }
+        | Request::BeginUpload { path, .. }
+        | Request::ResolveUpload { path, .. }
+        | Request::AbortUpload { path, .. }
         | Request::Mkdir { path }
         | Request::Remove { path, .. } => Some(path),
         Request::Rename { path, destination, .. } => {
@@ -73,6 +138,12 @@ pub(crate) fn parse(text: &str) -> Result<Request> {
             Some(path)
         },
         Request::Write { data, .. } if data.len() > CHUNK.div_ceil(3) * 4 => {
+            return Err(Failure("INVALID_INPUT"));
+        },
+        Request::WriteBatch { data, .. } if data.len() > BATCH.div_ceil(3) * 4 => {
+            return Err(Failure("INVALID_INPUT"));
+        },
+        Request::Read { length: Some(length), .. } if *length == 0 || *length > BATCH => {
             return Err(Failure("INVALID_INPUT"));
         },
         _ => None,
@@ -119,11 +190,17 @@ pub(crate) async fn serve<H: client::Handler>(
             call = calls.recv() => {
                 let Call { request, reply } = call.ok_or(Failure("CLOSED"))?;
                 if reply.is_closed() { continue; }
-                let result = tokio::time::timeout(Duration::from_secs(20), async {
+                let verifying = matches!(request, Request::ResolveUpload { .. });
+                let operation = async {
                     if files.is_none() { files = Some(Files::open(client).await?); }
                     files.as_mut().expect("SFTP initialized").execute(request).await
-                }).await.unwrap_or(Err(Failure("SFTP_TIMEOUT")));
-                // 协议超时只回收文件通道，不破坏仍可用的 shell；未确认写入不自动重放。
+                };
+                // A lost RENAME reply may require hashing a large final file. Each
+                // request still times out, but total verification is not a transfer size limit.
+                let result = if verifying { operation.await } else {
+                    tokio::time::timeout(Duration::from_secs(60), operation).await.unwrap_or(Err(Failure("SFTP_TIMEOUT")))
+                };
+                // Reopen only the file subsystem; resumable transactions reconcile ambiguous writes by offset.
                 if matches!(result, Err(Failure("SFTP_TIMEOUT" | "SFTP_CLOSED"))) { files = None; }
                 let _ = reply.send(result);
             },
@@ -152,7 +229,7 @@ struct Transfer {
 }
 
 struct Files {
-    raw: RawSftpSession,
+    raw: Arc<RawSftpSession>,
     directory: Option<Directory>,
     transfers: HashMap<u64, Transfer>,
     nonce: u128,
@@ -172,8 +249,8 @@ impl Files {
         let raw = RawSftpSession::new_with_config(
             channel.into_stream(),
             russh_sftp::client::Config {
-                request_timeout_secs: 10,
-                max_concurrent_writes: 1,
+                request_timeout_secs: 30,
+                max_concurrent_writes: 64,
                 ..Default::default()
             },
         );
@@ -181,7 +258,7 @@ impl Files {
             return Err(Failure("SFTP_UNSUPPORTED"));
         }
         Ok(Self {
-            raw,
+            raw: Arc::new(raw),
             directory: None,
             transfers: HashMap::new(),
             nonce: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos(),
@@ -216,10 +293,33 @@ impl Files {
                 let attrs = self.raw.stat(&resolved).await?.attrs;
                 Ok(entry(&resolved, resolved.rsplit('/').next().unwrap_or(&resolved), &attrs))
             },
-            Request::OpenRead { path } => self.open_read(path).await,
-            Request::Read { transfer, offset } => self.read(transfer, offset).await,
-            Request::BeginUpload { path } => self.begin_upload(path).await,
-            Request::Write { transfer, offset, data } => self.write(transfer, offset, data).await,
+            Request::OpenRead { path, offset, revision } => {
+                self.open_read(path, offset, revision).await
+            },
+            Request::Read { transfer, offset, length } => {
+                self.read(transfer, offset, length.unwrap_or(CHUNK)).await
+            },
+            Request::BeginUpload { path, token, offset, resume } => {
+                self.begin_upload(path, token, offset, resume).await
+            },
+            Request::Write { transfer, offset, data } => {
+                self.write(transfer, offset, data, CHUNK).await
+            },
+            Request::WriteBatch { transfer, offset, data } => {
+                self.write(transfer, offset, data, BATCH).await
+            },
+            Request::ResolveUpload { path, token, size, digest } => {
+                self.resolve_upload(path, token, size, digest).await
+            },
+            Request::AbortUpload { path, token } => {
+                let (_, temp) = self.upload_paths(&path, &token).await?;
+                match self.raw.remove(temp).await {
+                    Ok(_) => {},
+                    Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {},
+                    Err(error) => return Err(error.into()),
+                }
+                Ok(json!({"ok":true}))
+            },
             Request::Commit { transfer } => self.commit(transfer).await,
             Request::Close { transfer } => {
                 self.close_transfer(transfer).await?;
@@ -322,7 +422,12 @@ impl Files {
         Ok(result)
     }
 
-    async fn open_read(&mut self, path: String) -> Result<Value> {
+    async fn open_read(
+        &mut self,
+        path: String,
+        offset: u64,
+        expected: Option<String>,
+    ) -> Result<Value> {
         if self.transfers.len() >= MAX_HANDLES {
             return Err(Failure("SFTP_LIMIT"));
         }
@@ -330,6 +435,9 @@ impl Files {
         let attrs = self.raw.stat(&path).await?.attrs;
         if !attrs.file_type().is_file() || attrs.size.is_none() {
             return Err(Failure("SFTP_FILE_TYPE"));
+        }
+        if offset > attrs.len() || expected.is_some_and(|expected| expected != revision(&attrs)) {
+            return Err(Failure("SFTP_CHANGED"));
         }
         let handle = self.raw.open(&path, OpenFlags::READ, FileAttributes::empty()).await?.handle;
         let actual = self.raw.fstat(&handle).await;
@@ -341,7 +449,7 @@ impl Files {
                     handle: Some(handle),
                     path: path.clone(),
                     temp: None,
-                    offset: 0,
+                    offset,
                     attrs: attrs.clone(),
                     touched: Instant::now(),
                 },
@@ -355,24 +463,19 @@ impl Files {
         }
     }
 
-    async fn read(&mut self, id: u64, offset: u64) -> Result<Value> {
+    async fn read(&mut self, id: u64, offset: u64, length: usize) -> Result<Value> {
         let transfer = self.transfers.get_mut(&id).ok_or(Failure("SFTP_STALE"))?;
-        if transfer.temp.is_some() || transfer.offset != offset {
+        if transfer.temp.is_some() || transfer.offset != offset || length == 0 || length > BATCH {
             return Err(Failure("INVALID_INPUT"));
         }
         transfer.touched = Instant::now();
         let handle = transfer.handle.as_ref().ok_or(Failure("SFTP_STALE"))?;
-        let data = match self.raw.read(handle, offset, CHUNK as u32).await {
-            Ok(data) => data.data,
-            Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => Vec::new(),
-            Err(error) => return Err(error.into()),
-        };
-        let current = self.raw.fstat(handle).await?.attrs;
+        let length = (transfer.attrs.len() - offset).min(length as u64) as usize;
+        let data = transfer::read(&self.raw, handle, offset, length).await?;
         let next = offset + data.len() as u64;
-        if revision(&current) != revision(&transfer.attrs)
-            || next > transfer.attrs.len()
-            || (data.is_empty() && next != transfer.attrs.len())
-        {
+        // Check at batch boundaries, not after every 32 KiB round trip.
+        let current = self.raw.fstat(handle).await?.attrs;
+        if revision(&current) != revision(&transfer.attrs) {
             return Err(Failure("SFTP_CHANGED"));
         }
         transfer.offset = next;
@@ -380,42 +483,121 @@ impl Files {
             "data":base64::engine::general_purpose::STANDARD.encode(data)}))
     }
 
-    async fn begin_upload(&mut self, path: String) -> Result<Value> {
-        if self.transfers.len() >= MAX_HANDLES {
-            return Err(Failure("SFTP_LIMIT"));
+    async fn upload_paths(&self, path: &str, token: &str) -> Result<(String, String)> {
+        if token.len() != 32 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(Failure("INVALID_INPUT"));
         }
         let (parent, name) = path.rsplit_once('/').ok_or(Failure("INVALID_INPUT"))?;
         validate_name(name)?;
         let parent = self.canonical(if parent.is_empty() { "/" } else { parent }).await?;
-        let path = join(&parent, name);
-        self.ensure_absent(&path).await?;
+        Ok((join(&parent, name), join(&parent, &format!(".pebrel-upload-{token}"))))
+    }
+
+    async fn begin_upload(
+        &mut self,
+        path: String,
+        token: Option<String>,
+        offset: u64,
+        resume: bool,
+    ) -> Result<Value> {
+        if self.transfers.len() >= MAX_HANDLES {
+            return Err(Failure("SFTP_LIMIT"));
+        }
+        if !resume && offset != 0 {
+            return Err(Failure("INVALID_INPUT"));
+        }
         let id = next_handle_id()?;
-        let temp = join(&parent, &format!(".pebrel-upload-{:x}-{id}", self.nonce));
+        let token = token.unwrap_or_else(|| format!("{:032x}", self.nonce ^ u128::from(id)));
+        let (path, temp) = self.upload_paths(&path, &token).await?;
+        self.ensure_absent(&path).await?;
         let attrs = FileAttributes { permissions: Some(0o600), ..FileAttributes::empty() };
-        let handle = self
-            .raw
-            .open(&temp, OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE, attrs.clone())
-            .await?
-            .handle;
+        let mut flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
+        if resume {
+            match self.raw.lstat(&temp).await {
+                Ok(current) => {
+                    if !current.attrs.is_regular()
+                        || current.attrs.size.is_none_or(|size| size < offset)
+                    {
+                        return Err(Failure("SFTP_CHANGED"));
+                    }
+                    flags = OpenFlags::WRITE;
+                },
+                Err(SftpError::Status(s))
+                    if s.status_code == StatusCode::NoSuchFile && offset == 0 => {},
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let handle = self.raw.open(&temp, flags, attrs.clone()).await?.handle;
+        if resume {
+            let reconciled = async {
+                let current = self.raw.fstat(&handle).await?.attrs;
+                if !current.is_regular() || current.size.is_none_or(|size| size < offset) {
+                    return Err(Failure("SFTP_CHANGED"));
+                }
+                // Rewind unacknowledged, possibly out-of-order writes before replaying the retained batch.
+                self.raw
+                    .fsetstat(
+                        &handle,
+                        FileAttributes { size: Some(offset), ..FileAttributes::empty() },
+                    )
+                    .await?;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = reconciled {
+                let _ = self.raw.close(handle).await;
+                return Err(error);
+            }
+        }
         self.transfers.insert(
             id,
             Transfer {
                 handle: Some(handle),
                 path,
                 temp: Some(temp),
-                offset: 0,
+                offset,
                 attrs,
                 touched: Instant::now(),
             },
         );
-        Ok(json!({"transfer":id}))
+        Ok(json!({"transfer":id,"token":token}))
     }
 
-    async fn write(&mut self, id: u64, offset: u64, data: String) -> Result<Value> {
+    async fn resolve_upload(
+        &self,
+        path: String,
+        token: String,
+        size: u64,
+        digest: String,
+    ) -> Result<Value> {
+        let (path, temp) = self.upload_paths(&path, &token).await?;
+        if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(Failure("INVALID_INPUT"));
+        }
+        match self.raw.lstat(temp).await {
+            Ok(_) => return Ok(json!({"committed":false})),
+            Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {},
+            Err(error) => return Err(error.into()),
+        }
+        let attrs = self.raw.lstat(&path).await?.attrs;
+        if !attrs.is_regular() || attrs.size != Some(size) {
+            return Err(Failure("SFTP_CHANGED"));
+        }
+        let handle = self.raw.open(&path, OpenFlags::READ, FileAttributes::empty()).await?.handle;
+        let result = transfer::verify(&self.raw, &handle, size, &digest).await;
+        let _ = self.raw.close(handle).await;
+        result?;
+        if revision(&self.raw.lstat(&path).await?.attrs) != revision(&attrs) {
+            return Err(Failure("SFTP_CHANGED"));
+        }
+        Ok(json!({"committed":true,"path":path}))
+    }
+
+    async fn write(&mut self, id: u64, offset: u64, data: String, maximum: usize) -> Result<Value> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data)
             .map_err(|_| Failure("INVALID_INPUT"))?;
-        if bytes.is_empty() || bytes.len() > CHUNK {
+        if bytes.is_empty() || bytes.len() > maximum {
             return Err(Failure("INVALID_INPUT"));
         }
         let transfer = self.transfers.get_mut(&id).ok_or(Failure("SFTP_STALE"))?;
@@ -425,7 +607,7 @@ impl Files {
         transfer.touched = Instant::now();
         let handle = transfer.handle.as_ref().ok_or(Failure("SFTP_STALE"))?;
         let next = offset.checked_add(bytes.len() as u64).ok_or(Failure("INVALID_INPUT"))?;
-        self.raw.write(handle, offset, bytes).await?;
+        transfer::write(&self.raw, handle, offset, bytes).await?;
         transfer.offset = next;
         Ok(json!({"next_offset":next}))
     }

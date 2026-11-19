@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="custom_shortcuts">Custom keys</string>
+    <string name="custom_shortcuts_hint">One key per line, in toolbar order. Examples: Ctrl+Shift+X, Alt+Enter, F5. Supports Ctrl, Alt, Shift, Meta with A–Z, 0–9, F1–F12, Tab, Esc, Enter, Space, arrows, Home, End, PageUp, PageDown, Insert, Delete and Backspace. Remove a line to delete it. Your terminal application determines how a combination behaves.</string>
+    <string name="custom_shortcuts_invalid">Check the key combination on line %1$d.</string>
+    <string name="custom_shortcuts_duplicate">Each combination can appear only once.</string>
+    <string name="custom_shortcuts_limit">You can define up to %1$d custom keys.</string>
+</resources>

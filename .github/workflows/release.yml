@@ -64,6 +64,7 @@ jobs:
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       asset_version: ${{ steps.metadata.outputs.asset_version }}
+      include_android: ${{ steps.metadata.outputs.include_android }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,7 +77,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          version="$(python3 scripts/preview_release.py --print-package-version nebula_app/Cargo.toml)"
+          version="$(python3 scripts/preview_release.py --print-package-version pebrel_app/Cargo.toml)"
           if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$version" ]]; then
             echo "requested version $REQUESTED_VERSION does not match Cargo package version $version" >&2
             exit 1
@@ -94,14 +95,18 @@ jobs:
           PY
           python3 - <<'PY'
           from pathlib import Path
-          from scripts.stable_release import validate_changelog, validate_notes
+          from scripts.stable_release import expected_asset_names, validate_changelog, validate_notes
+          import os
           import subprocess
           version = subprocess.check_output(
-              ["python3", "scripts/preview_release.py", "--print-package-version", "nebula_app/Cargo.toml"],
+              ["python3", "scripts/preview_release.py", "--print-package-version", "pebrel_app/Cargo.toml"],
               text=True,
           ).strip()
           validate_notes(Path(f"docs/release-notes/v{version}.md"), version)
           validate_changelog(Path("CHANGELOG.md"), version)
+          include_android = any(name.endswith(".apk") for name in expected_asset_names(version))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"include_android={str(include_android).lower()}\n")
           PY
           {
             echo "version=$version"
@@ -164,7 +169,7 @@ jobs:
           target: target/release
           legacy-key: linux
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell --timings
       - name: Save compiled workload
         if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -194,7 +199,7 @@ jobs:
             --force
       - name: Run AppImage conformance under X11
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           xvfb-run -a -s "-screen 0 1600x1000x24" \
             python3 scripts/conformance/run.py \
@@ -203,7 +208,7 @@ jobs:
               --output dist/conformance/linux-appimage-report.json
       - name: Run AppImage conformance under Wayland
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           xvfb-run -a -s "-screen 0 1600x1000x24" bash -euo pipefail <<'WAYLAND_SESSION'
           runtime_directory="$RUNNER_TEMP/pebrel-wayland-runtime"
@@ -228,7 +233,7 @@ jobs:
           WAYLAND_SESSION
       - name: Install and run Debian conformance
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           sudo apt-get install -y "./dist/Pebrel-v$PACKAGE_VERSION-linux-x64.deb"
           test "$(dpkg-query -W -f='${Status}' pebrel)" = "install ok installed"
@@ -301,7 +306,7 @@ jobs:
           target: target/release
           legacy-key: macos
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
+        run: cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell --timings
       - name: Save compiled workload
         if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -363,7 +368,7 @@ jobs:
             --output-directory dist --force "${signing_args[@]}"
       - name: Mount DMG and run conformance
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
         run: |
           dmg="dist/Pebrel-v$PACKAGE_VERSION-macos-${{ matrix.asset_architecture }}.dmg"
           mount_point="$RUNNER_TEMP/pebrel-stable-${{ matrix.architecture }}"
@@ -478,6 +483,7 @@ jobs:
           if (Test-Path scripts/build-windows-product.ps1) {
             ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
           } else {
+            # 只有不含构建脚本的旧源码走这里；那些版本的包名仍是 nebula / nebula_hook。
             cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
             if ($LASTEXITCODE -ne 0) { throw 'Windows product build failed' }
           }
@@ -513,7 +519,7 @@ jobs:
       - name: Run Windows conformance
         shell: pwsh
         env:
-          NEBULA_RESIZE_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
           SELECTED_COMMIT: ${{ inputs.source_commit || github.sha }}
         run: |
           $actual = git rev-parse HEAD
@@ -599,8 +605,8 @@ jobs:
       - name: Run ARM64 Windows conformance
         shell: pwsh
         env:
-          NEBULA_RESIZE_TRACE: "1"
-          NEBULA_BOOT_TRACE: "1"
+          PEBREL_RESIZE_TRACE: "1"
+          PEBREL_BOOT_TRACE: "1"
         run: |
           python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app target/release/pebrel.exe --platform windows-aarch64 --output dist/conformance/windows-arm64-report.json
           exit $LASTEXITCODE
@@ -627,7 +633,7 @@ jobs:
 
   android:
     name: Android Preview
-    if: ${{ !inputs.windows_only }}
+    if: ${{ !inputs.windows_only && needs.prepare.outputs.include_android == 'true' }}
     needs: prepare
     uses: ./.github/workflows/android-release.yml
     with:
@@ -635,11 +641,19 @@ jobs:
 
   aggregate:
     name: Verify stable assets and upload complete set
-    if: ${{ !inputs.windows_only }}
+    # Optional Android skips must not propagate past verified desktop jobs.
+    if: >-
+      ${{ !cancelled() && !inputs.windows_only &&
+          needs.prepare.result == 'success' && needs.linux.result == 'success' &&
+          needs.macos.result == 'success' && needs.windows.result == 'success' &&
+          needs.windows-arm64.result == 'success' &&
+          ((needs.prepare.outputs.include_android == 'true' && needs.android.result == 'success') ||
+           (needs.prepare.outputs.include_android == 'false' && needs.android.result == 'skipped')) }}
     needs: [prepare, linux, macos, windows, windows-arm64, android]
     runs-on: ubuntu-22.04
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      INCLUDE_ANDROID: ${{ needs.prepare.outputs.include_android }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -665,8 +679,10 @@ jobs:
           from scripts.preview_release import validate_evidence
           validate_evidence(Path("stable-evidence"), os.environ["SOURCE_COMMIT"], windows_arm64=True)
           PY
-          python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$SOURCE_COMMIT" \
-            --output release-dist --report stable-evidence/android-report.json --verify-evidence
+          if [[ "$INCLUDE_ANDROID" == true ]]; then
+            python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$SOURCE_COMMIT" \
+              --output release-dist --report stable-evidence/android-report.json --verify-evidence
+          fi
           python3 scripts/stable_release.py release-dist \
             --version "$PACKAGE_VERSION" \
             --mark-platform-previews \
@@ -685,13 +701,18 @@ jobs:
 
   publish:
     name: Publish verified GitHub Release
-    if: ${{ !inputs.windows_only && (github.event_name == 'push' || inputs.publish == true) }}
+    if: >-
+      ${{ !cancelled() && !inputs.windows_only &&
+          needs.prepare.result == 'success' && needs.native-tests.result == 'success' &&
+          needs.aggregate.result == 'success' &&
+          (github.event_name == 'push' || inputs.publish == true) }}
     needs: [prepare, native-tests, aggregate]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      INCLUDE_ANDROID: ${{ needs.prepare.outputs.include_android }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -732,10 +753,14 @@ jobs:
             echo "tag $tag already points to $existing_tag_commit, expected $GITHUB_SHA" >&2
             exit 1
           fi
+          android_assets=()
+          if [[ "$INCLUDE_ANDROID" == true ]]; then
+            android_assets=(release-dist/*.apk)
+          fi
           gh release create "$tag" \
             release-dist/*.AppImage release-dist/*.deb release-dist/*.dmg \
             release-dist/*.tar.gz release-dist/*.zip release-dist/*-setup.exe \
-            release-dist/*.apk release-dist/SHA256SUMS \
+            "${android_assets[@]}" release-dist/SHA256SUMS \
             --target "$GITHUB_SHA" --title "Pebrel $PACKAGE_VERSION" \
             --notes-file release-dist/RELEASE_NOTES.md
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$RUNNER_TEMP/stable-release.json"

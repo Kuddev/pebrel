@@ -3,11 +3,12 @@ function Assert-WindowsPackageArchitecture {
     param(
         [Parameter(Mandatory = $true)][string] $Root,
         [ValidateSet('x64', 'arm64')][string] $Architecture = 'x64',
-        [string] $RuntimeDirectory = $Root
+        [string] $RuntimeDirectory = $Root,
+        [ValidateSet('pebrel-cli.exe', 'pebrel.com')][string] $CliExecutable = 'pebrel-cli.exe'
     )
     $machine = if ($Architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
-    foreach ($name in @('pebrel.exe', 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
-        $directory = if ($name -eq 'pebrel.exe') { $Root } else { $RuntimeDirectory }
+    foreach ($name in @('pebrel.exe', $CliExecutable, 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
+        $directory = if ($name -in @('pebrel.exe', $CliExecutable)) { $Root } else { $RuntimeDirectory }
         $path = Join-Path $directory $name
         $stream = [IO.File]::OpenRead($path)
         $reader = [IO.BinaryReader]::new($stream)

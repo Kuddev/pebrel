@@ -50,10 +50,12 @@ def expected_asset_names(version: str) -> tuple[str, ...]:
     # 1.9.0 和 1.9.1 已公开发布且仅含 ARM64 ZIP，不能追溯要求不存在的安装器。
     if version_parts >= (1, 9, 2):
         names += (f"Pebrel-v{version}-windows-arm64-setup.exe",)
-    if version_parts >= (2, 0, 0):
+    # 2.2.2 仅发布桌面改动；保留已发布版本的移动包合同和后续移动发布能力。
+    include_android = version_parts >= (2, 0, 0) and version_parts != (2, 2, 2)
+    if include_android:
         names += (f"Pebrel-v{version}-android-universal-preview.apk",)
-    # 已发布的 2.1.1 及更早资产集合保持不变；后续发布必须带上配套离线中转包。
-    if version_parts >= (2, 1, 2):
+    # 已发布的 2.1.1 及更早资产集合保持不变；后续移动发布带上配套离线中转包。
+    if include_android and version_parts >= (2, 1, 2):
         names += (f"Pebrel-v{version}-relay-manual.tar.gz",)
     # The old-name installer was retired from 1.7.0; retain historical manifests.
     if version_parts < (1, 7, 0):
@@ -138,7 +140,28 @@ def validate_assets(directory: Path, version: str) -> list[Path]:
     return assets
 
 
+def _validate_english_change_entries(english: str, categories: tuple[str, ...]) -> None:
+    found_category = False
+    for section in re.split(r"(?m)^### ", english)[1:]:
+        heading, _, body = section.partition("\n")
+        heading = heading.rstrip()
+        if heading not in categories:
+            continue
+        found_category = True
+        entries = re.findall(r"(?m)^[-+*][ \t]+(.*)$", body)
+        if not entries:
+            raise StableReleaseError(f"stable release notes need a top-level list under {heading}")
+        for number, entry in enumerate(entries, 1):
+            if not re.match(rf"{heading}[ \t]+\S", entry):
+                raise StableReleaseError(
+                    f"stable release notes entry {number} under {heading} must start with {heading}"
+                )
+    if not found_category:
+        raise StableReleaseError("stable release notes need an English change heading")
+
+
 def validate_notes(source: Path, version: str) -> str:
+    validate_version(version)
     notes = source.read_text(encoding="utf-8").strip()
     if not notes.startswith(f"# Pebrel {version}\n"):
         raise StableReleaseError("stable release notes have the wrong title")
@@ -165,6 +188,8 @@ def validate_notes(source: Path, version: str) -> str:
         f"### {en}" in english and f"### {zh}" in chinese for en, zh in pairs
     ):
         raise StableReleaseError("stable release notes need matching bilingual change categories")
+    if tuple(map(int, version.split("."))) >= (2, 5, 0):
+        _validate_english_change_entries(english, tuple(en for en, _ in pairs))
     contributors = notes[contributors_start:checksum_start]
     if contributor_count and not re.search(r"github\.com/[^)]+", contributors, flags=re.IGNORECASE):
         raise StableReleaseError("stable release notes must identify contributors with GitHub links")

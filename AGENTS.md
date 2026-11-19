@@ -14,9 +14,9 @@
 
 ## 分层入口
 
-- 应用、窗口和 UI：遵循 [`nebula_app/AGENTS.md`](nebula_app/AGENTS.md)。
-- 终端核心、PTY、VT 和输入：遵循 [`nebula_terminal/AGENTS.md`](nebula_terminal/AGENTS.md)。
-- 设置、持久化和语言注册：遵循 [`nebula_settings/AGENTS.md`](nebula_settings/AGENTS.md)。
+- 应用、窗口和 UI：遵循 [`pebrel_app/AGENTS.md`](pebrel_app/AGENTS.md)。
+- 终端核心、PTY、VT 和输入：遵循 [`pebrel_terminal/AGENTS.md`](pebrel_terminal/AGENTS.md)。
+- 设置、持久化和语言注册：遵循 [`pebrel_settings/AGENTS.md`](pebrel_settings/AGENTS.md)。
 - 检查器、门禁和治理脚本：遵循 [`scripts/AGENTS.md`](scripts/AGENTS.md)。
 - 文档事实与操作手册：遵循 [`docs/AGENTS.md`](docs/AGENTS.md)。
 - 版本号、构建、打包、自动更新、GitHub Release、Changelog 或 Release Note：先完整阅读 [`packaging/AGENTS.md`](packaging/AGENTS.md)、[`docs/release-notes/AGENTS.md`](docs/release-notes/AGENTS.md) 和本地 `.agents/memory.md` 的发布章节。

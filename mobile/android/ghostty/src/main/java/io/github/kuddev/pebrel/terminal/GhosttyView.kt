@@ -162,7 +162,7 @@ class GhosttyView(context: Context) : View(context) {
         return cursorBlinkEnabled && selection.frame == null && isAttachedToWindow && isShown &&
             visibility == VISIBLE && windowVisibility == VISIBLE && hasWindowFocus() &&
             (!directInput || hasFocus()) &&
-            session?.frame?.cursorVisible == true
+            session?.readingHistory != true && session?.frame?.cursorVisible == true
     }
 
     private fun scheduleCursorBlink() {
@@ -185,10 +185,10 @@ class GhosttyView(context: Context) : View(context) {
     }
 
     private fun updateMetrics() {
-        cellWidth = max(1f, paint.measureText("M"))
-        val metrics = paint.fontMetrics
-        cellHeight = ceil(metrics.descent - metrics.ascent + metrics.leading)
-        baseline = -metrics.ascent
+        val metrics = TerminalGridMetrics.measure(paint)
+        cellWidth = metrics.width
+        cellHeight = metrics.height
+        baseline = metrics.baseline
     }
     private fun updateGeometry() {
         if (width > 0 && height > 0) session?.updateSize(
@@ -199,6 +199,15 @@ class GhosttyView(context: Context) : View(context) {
         selection.clear()
         updateGeometry()
     }
+    fun showKeyboard() {
+        if (!directInput || !isAttachedToWindow) return
+        stopScrolling()
+        selection.clear()
+        session?.prepareForInput()
+        requestFocus()
+        context.getSystemService(InputMethodManager::class.java).showSoftInput(this, 0)
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         session?.setVisible(isShown)
@@ -258,8 +267,10 @@ class GhosttyView(context: Context) : View(context) {
         paint.color = frame.background
         paint.alpha = 255
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        frame.rows.forEachIndexed { y, row -> if (row != null)
+            TerminalCellPainter.backgrounds(canvas, paint, frame, row, y, cellWidth, cellHeight) }
         frame.rows.forEachIndexed { y, row -> if (row != null) drawRow(canvas, frame, row, y) }
-        if (frame.cursorVisible && selection.frame == null && cursorOn) drawCursor(canvas, frame)
+        if (frame.cursorVisible && session?.readingHistory != true && selection.frame == null && cursorOn) drawCursor(canvas, frame)
         canvas.restoreToCount(checkpoint)
         selection.geometry(cellWidth, cellHeight)
         selection.draw(canvas)
@@ -300,10 +311,12 @@ class GhosttyView(context: Context) : View(context) {
         override fun onDown(event: MotionEvent) = true
         override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
             performClick()
-            if (directInput) { requestFocus(); context.getSystemService(InputMethodManager::class.java).showSoftInput(this@GhosttyView, 0) }
+            if (directInput) showKeyboard()
             return true
         }
         override fun onScroll(first: MotionEvent?, current: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+            wheelColumn = (current.x / cellWidth).toInt().coerceAtLeast(0)
+            wheelRow = (current.y / cellHeight).toInt().coerceAtLeast(0)
             scrollPixels(distanceY)
             return true
         }
@@ -355,12 +368,14 @@ class GhosttyView(context: Context) : View(context) {
         }
     })
     private var scrollRemainder = 0f
+    private var wheelColumn = 0
+    private var wheelRow = 0
 
     private fun scrollPixels(distance: Float) {
-        scrollRemainder += distance
+        scrollRemainder = (scrollRemainder + distance).coerceIn(-32 * cellHeight, 32 * cellHeight)
         val lines = (scrollRemainder / cellHeight).toInt()
         if (lines != 0) {
-            session?.scroll(lines)
+            session?.wheel(lines, wheelColumn, wheelRow)
             scrollRemainder -= lines * cellHeight
         }
     }
@@ -386,6 +401,8 @@ class GhosttyView(context: Context) : View(context) {
             event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
             if (selection.frame != null) selection.clear()
             stopScrolling()
+            wheelColumn = (event.x / cellWidth).toInt().coerceAtLeast(0)
+            wheelRow = (event.y / cellHeight).toInt().coerceAtLeast(0)
             scrollPixels(-event.getAxisValue(MotionEvent.AXIS_VSCROLL) * cellHeight * 3)
             return true
         }
@@ -488,6 +505,7 @@ class GhosttyView(context: Context) : View(context) {
         info.initialSelStart = 0
         info.initialSelEnd = 0
         val owner = session ?: return null
+        owner.prepareForInput()
         val generation = inputGeneration
         val target = object : TerminalInputTarget {
             override fun text(text: String) = owner.sendText(text).also(::accept)
@@ -496,7 +514,16 @@ class GhosttyView(context: Context) : View(context) {
             override fun paste(text: String) = owner.paste(text).also(::accept)
         }
         return TerminalInputConnection(this, target,
-            { directInput && session === owner && inputGeneration == generation }, { composingText = it })
+            { directInput && session === owner && inputGeneration == generation }, {
+                composingText = it
+                if (it.isNotEmpty()) {
+                    // An already-open IME can begin preedit after a history gesture.
+                    stopScrolling()
+                    selection.clear()
+                    owner.prepareForInput()
+                    resetCursorBlink()
+                }
+            })
     }
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean = handleKey(code, event, if (event.repeatCount > 0) 2 else 1) || super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean = handleKey(code, event, 0) || super.onKeyUp(code, event)

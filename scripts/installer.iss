@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "2.1.2"
+  #define AppVersion "2.5.0"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "2.1.2.0"
+  #define NumericVersion "2.5.0.0"
 #endif
 
 #ifndef Configuration
@@ -61,7 +61,7 @@ ArchitecturesAllowed=x64compatible
 #endif
 MinVersion=10.0.17763
 LicenseFile={#RepoRoot}\LICENSE
-SetupIconFile={#RepoRoot}\nebula_app\windows\nebula.ico
+SetupIconFile={#RepoRoot}\pebrel_app\windows\nebula.ico
 UninstallDisplayIcon={app}\pebrel.exe
 OutputDir={#RepoRoot}\dist
 OutputBaseFilename={#PackageBrand}-v{#AppVersion}-windows-{#Architecture}-setup
@@ -120,6 +120,7 @@ Name: "autostart"; Description: "{cm:AutoStart}"; GroupDescription: "{cm:Additio
 #endif
 
 [Files]
+Source: "{#BuildRoot}\pebrel-cli.exe"; DestDir: "{app}"; DestName: "pebrel.com"; Flags: ignoreversion
 Source: "{#BuildRoot}\pebrel.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\README.zh-CN.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -147,7 +148,7 @@ Source: "{#RepoRoot}\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; Flags: ign
 Name: "{group}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"
 Name: "{group}\{cm:UninstallProgram}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"; Tasks: desktopicon
-Name: "{userstartup}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"; Tasks: autostart
+Name: "{userstartup}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui --launched-at-login"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"; Tasks: autostart
 #endif
 
 [Registry]

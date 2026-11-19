@@ -1,7 +1,10 @@
 #include "bridge.h"
 #include <memory>
+#include <cstdlib>
 
 Terminal::~Terminal() {
+    ghostty_mouse_event_free(mouse_event);
+    ghostty_mouse_encoder_free(mouse_encoder);
     ghostty_key_event_free(event);
     ghostty_key_encoder_free(encoder);
     ghostty_render_state_row_cells_free(cells);
@@ -59,6 +62,8 @@ extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(create)(JNIEnv* env, jobject, jint
         return 0;
     }
     auto state = std::make_unique<Terminal>();
+    state->columns = cols;
+    state->height = rows;
     state->history_rows = scrollback;
     // 固定版本的 C 头文件误写为行，Screen 实际使用字节；不能把 1000 行传成 1000 字节。
     // 按支持的最大列宽和已核实的 64 位 Cell/Row 留出页开销，另用行窗口限制可回滚范围。
@@ -70,7 +75,9 @@ extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(create)(JNIEnv* env, jobject, jint
         !checked(env, ghostty_render_state_row_iterator_new(nullptr, &state->rows)) ||
         !checked(env, ghostty_render_state_row_cells_new(nullptr, &state->cells)) ||
         !checked(env, ghostty_key_encoder_new(nullptr, &state->encoder)) ||
-        !checked(env, ghostty_key_event_new(nullptr, &state->event))) return 0;
+        !checked(env, ghostty_key_event_new(nullptr, &state->event)) ||
+        !checked(env, ghostty_mouse_encoder_new(nullptr, &state->mouse_encoder)) ||
+        !checked(env, ghostty_mouse_event_new(nullptr, &state->mouse_event))) return 0;
     ghostty_terminal_set(state->vt, GHOSTTY_TERMINAL_OPT_USERDATA, state.get());
     ghostty_terminal_set(state->vt, GHOSTTY_TERMINAL_OPT_WRITE_PTY, reinterpret_cast<const void*>(write_reply));
     ghostty_terminal_set(state->vt, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, reinterpret_cast<const void*>(title_changed));
@@ -106,9 +113,23 @@ extern "C" JNIEXPORT jbyteArray JNICALL JNI_METHOD(title)(JNIEnv* env, jobject, 
     return bytes(env, title.ptr, std::min(title.len, size_t{512}));
 }
 
+extern "C" JNIEXPORT jboolean JNICALL JNI_METHOD(synchronizedOutput)(JNIEnv* env, jobject, jlong handle) {
+    bool enabled = false;
+    checked(env, ghostty_terminal_mode_get(terminal(handle)->vt, GHOSTTY_MODE_SYNC_OUTPUT, &enabled));
+    return enabled;
+}
+
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(endSynchronizedOutput)(JNIEnv* env, jobject, jlong handle) {
+    checked(env, ghostty_terminal_mode_set(terminal(handle)->vt, GHOSTTY_MODE_SYNC_OUTPUT, false));
+}
+
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(resize)(JNIEnv* env, jobject, jlong handle, jint cols, jint rows, jint cw, jint ch) {
     auto* state = terminal(handle);
     checked(env, ghostty_terminal_resize(state->vt, cols, rows, cw, ch));
+    state->columns = cols;
+    state->height = rows;
+    state->cell_width = cw;
+    state->cell_height = ch;
     state->force = true;
 }
 
@@ -125,6 +146,71 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(scroll)(JNIEnv*, jobject, jlong han
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(scrollTo)(JNIEnv*, jobject, jlong handle, jint offset) {
     auto* state = terminal(handle);
     state->seek_history(static_cast<uint64_t>(std::max(offset, 0)));
+}
+
+extern "C" JNIEXPORT jint JNICALL JNI_METHOD(applicationScrollMode)(JNIEnv* env, jobject, jlong handle) {
+    auto* state = terminal(handle);
+    GhosttyTerminalScreen screen{};
+    if (!checked(env, ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen))) return 0;
+    if (screen == GHOSTTY_TERMINAL_SCREEN_PRIMARY) return 0;
+    bool tracking = false;
+    if (!checked(env, ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking))) return 0;
+    return tracking ? 2 : 1;
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL JNI_METHOD(wheel)(JNIEnv* env, jobject object,
+        jlong handle, jint lines, jint column, jint row, jboolean application_only) {
+    auto* state = terminal(handle);
+    GhosttyTerminalScreen screen{};
+    if (!checked(env, ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen))) return nullptr;
+    if (screen == GHOSTTY_TERMINAL_SCREEN_PRIMARY) {
+        // 主屏手势只改变手机自己的回滚位置，鼠标报告开关不能夺走历史阅读。
+        if (!application_only) JNI_METHOD(scroll)(env, object, handle, lines);
+        return bytes(env, nullptr, 0);
+    }
+    lines = std::clamp(lines, -32, 32);
+    bool tracking = false;
+    ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking);
+    char encoded[128];
+    size_t count = 0;
+    if (tracking) {
+        auto encoder = state->mouse_encoder;
+        ghostty_mouse_encoder_setopt_from_terminal(encoder, state->vt);
+        GhosttyMouseEncoderSize size{};
+        size.size = sizeof(size);
+        size.cell_width = state->cell_width;
+        size.cell_height = state->cell_height;
+        size.screen_width = state->columns * size.cell_width;
+        size.screen_height = state->height * size.cell_height;
+        ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+        ghostty_mouse_event_set_action(state->mouse_event, GHOSTTY_MOUSE_ACTION_PRESS);
+        ghostty_mouse_event_set_button(state->mouse_event,
+            lines < 0 ? GHOSTTY_MOUSE_BUTTON_FOUR : GHOSTTY_MOUSE_BUTTON_FIVE);
+        ghostty_mouse_event_set_mods(state->mouse_event, 0);
+        ghostty_mouse_event_set_position(state->mouse_event, {
+            (std::clamp(column, 0, static_cast<int>(state->columns) - 1) + 0.5f) * size.cell_width,
+            (std::clamp(row, 0, static_cast<int>(state->height) - 1) + 0.5f) * size.cell_height});
+        if (!checked(env, ghostty_mouse_encoder_encode(encoder, state->mouse_event,
+                encoded, sizeof(encoded), &count))) return nullptr;
+    } else {
+        bool alternate_scroll = false;
+        ghostty_terminal_mode_get(state->vt, GHOSTTY_MODE_ALT_SCROLL, &alternate_scroll);
+        if (!alternate_scroll) return bytes(env, nullptr, 0);
+        // 使用引擎现有按键编码器，保留 APP_CURSOR、Kitty keyboard protocol 等协商状态。
+        ghostty_key_encoder_setopt_from_terminal(state->encoder, state->vt);
+        ghostty_key_event_set_key(state->event, lines < 0 ? GHOSTTY_KEY_ARROW_UP : GHOSTTY_KEY_ARROW_DOWN);
+        ghostty_key_event_set_action(state->event, GHOSTTY_KEY_ACTION_PRESS);
+        ghostty_key_event_set_mods(state->event, 0);
+        ghostty_key_event_set_consumed_mods(state->event, 0);
+        ghostty_key_event_set_utf8(state->event, "", 0);
+        ghostty_key_event_set_unshifted_codepoint(state->event, 0);
+        if (!checked(env, ghostty_key_encoder_encode(state->encoder, state->event,
+                encoded, sizeof(encoded), &count))) return nullptr;
+    }
+    std::vector<uint8_t> output;
+    output.reserve(count * std::abs(lines));
+    for (int i = 0; i < std::abs(lines); ++i) output.insert(output.end(), encoded, encoded + count);
+    return bytes(env, output.data(), output.size());
 }
 
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(colors)(JNIEnv* env, jobject, jlong handle, jintArray input) {

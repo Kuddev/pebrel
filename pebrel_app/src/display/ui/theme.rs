@@ -1,0 +1,981 @@
+//! Nebula theme system — the single source of truth for every chrome color.
+//!
+//! Everything visual that is NOT terminal-grid content reads from here:
+//! the built-in themes (the original seven low-saturation Nebula looks plus
+//! Nord, Nord Light and Warm Sand), each theme's
+//! chrome palette ([`NebulaPalette`]) and its full overlay ink set
+//! ([`Skin`]). The settings modal, confirm dialogs, the command palette,
+//! resize HUD, scrollbar and the tab/window chrome all pull their colors
+//! from these two structs — no component keeps a private color constant, so
+//! a theme switch (including light ↔ dark) restyles every surface at once.
+//!
+//! Design language (from the sheet): low-saturation surfaces, hierarchy by
+//! brightness not borders, ONE accent per theme, semantic red reserved for
+//! destructive actions. Light themes flip the whole ink set to dark-on-light
+//! rather than dimming the dark inks.
+//!
+//! Adding a theme = one enum variant + one `palette()` arm + one `accent()`
+//! arm (+ a card slot in the settings grid and a palette action). The
+//! [`Skin`] derives from those automatically via `is_light`.
+
+use crate::display::color::{List, Rgb};
+use crate::renderer::ui::Rgba;
+use pebrel_terminal::vte::ansi::NamedColor;
+
+/// Built-in chrome themes exposed from the settings panel. The original seven
+/// theme identities bridge to the settings-owned palette catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NebulaTheme {
+    Nebula,
+    SilverLight,
+    SteelDark,
+    LimestoneLight,
+    CoalDark,
+    LinenLight,
+    MossDark,
+    Nord,
+    NordLight,
+    Paper,
+    BreezeLight,
+    BreezeDark,
+    MintLight,
+    MintDark,
+    CatppuccinMocha,
+    CatppuccinLatte,
+    CatppuccinFrappe,
+    CatppuccinMacchiato,
+    GlassLight,
+    GlassDark,
+}
+
+impl Default for NebulaTheme {
+    /// 出厂默认主题的唯一真源是 [`pebrel_settings::ThemeName::default`]。
+    ///
+    /// 这里通过稳定的 prompt 名桥接而不是再写一份枚举映射：`ThemeName` 和
+    /// `NebulaTheme` 是两个 crate 里的两个枚举，各存一份字面量默认值就会在
+    /// 「改了出厂主题但只改了一处」时让两壳分家 —— 圆角默认值当初正是这样漏出
+    /// 一圈白边的。名字对不上时回落到 Nord，与真源当前的默认一致。
+    fn default() -> Self {
+        Self::from_prompt_name(pebrel_settings::ThemeName::default().prompt_name())
+            .unwrap_or(Self::Nord)
+    }
+}
+
+impl NebulaTheme {
+    /// Resolve the light/dark member of the user's chosen theme family.
+    ///
+    /// Nebula is an intentionally standalone dark theme. When automatic mode
+    /// needs a light counterpart, Silver is the closest neutral match; the
+    /// original Nebula preference is kept separately so switching back to a
+    /// dark system appearance restores it instead of silently changing the
+    /// user's choice to Steel.
+    pub(crate) fn for_system_appearance(self, is_light: bool) -> Self {
+        match (self, is_light) {
+            (Self::Nebula, true) => Self::SilverLight,
+            (Self::Nebula, false) => Self::Nebula,
+            (Self::SilverLight | Self::SteelDark, true) => Self::SilverLight,
+            (Self::SilverLight | Self::SteelDark, false) => Self::SteelDark,
+            (Self::LimestoneLight | Self::CoalDark, true) => Self::LimestoneLight,
+            (Self::LimestoneLight | Self::CoalDark, false) => Self::CoalDark,
+            (Self::LinenLight | Self::MossDark, true) => Self::LinenLight,
+            (Self::LinenLight | Self::MossDark, false) => Self::MossDark,
+            (Self::NordLight | Self::Nord, true) => Self::NordLight,
+            (Self::NordLight | Self::Nord | Self::Paper, false) => Self::Nord,
+            (Self::Paper, true) => Self::Paper,
+            (Self::BreezeLight | Self::BreezeDark, true) => Self::BreezeLight,
+            (Self::BreezeLight | Self::BreezeDark, false) => Self::BreezeDark,
+            (Self::MintLight | Self::MintDark, true) => Self::MintLight,
+            (Self::MintLight | Self::MintDark, false) => Self::MintDark,
+            (Self::CatppuccinMocha | Self::CatppuccinLatte, true) => Self::CatppuccinLatte,
+            (Self::CatppuccinMocha | Self::CatppuccinLatte, false) => Self::CatppuccinMocha,
+            (Self::CatppuccinFrappe | Self::CatppuccinMacchiato, true) => Self::CatppuccinLatte,
+            (Self::CatppuccinFrappe | Self::CatppuccinMacchiato, false) => self,
+            (Self::GlassLight | Self::GlassDark, true) => Self::GlassLight,
+            (Self::GlassLight | Self::GlassDark, false) => Self::GlassDark,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Nebula => "Pebrel",
+            Self::SilverLight => "Silver Light",
+            Self::SteelDark => "Steel Dark",
+            Self::LimestoneLight => "Limestone",
+            Self::CoalDark => "Coal Dark",
+            Self::LinenLight => "Linen Light",
+            Self::MossDark => "Moss Dark",
+            Self::Nord => "Nord",
+            Self::Paper => "Warm Sand",
+            Self::NordLight => "Nord Light",
+            Self::BreezeLight => "Breeze Light",
+            Self::BreezeDark => "Breeze Dark",
+            Self::MintLight => "Mint Light",
+            Self::MintDark => "Mint Dark",
+            Self::CatppuccinMocha => "Catppuccin Mocha",
+            Self::CatppuccinLatte => "Catppuccin Latte",
+            Self::CatppuccinFrappe => "Catppuccin Frappé",
+            Self::CatppuccinMacchiato => "Catppuccin Macchiato",
+            Self::GlassLight => "Slate Light",
+            Self::GlassDark => "Glass Dark",
+        }
+    }
+
+    /// Static command-palette labels share theme metadata rather than a second exhaustive UI match.
+    pub(crate) const fn command_label(self) -> &'static str {
+        match self {
+            Self::Nebula => "Theme: Pebrel",
+            Self::SilverLight => "Theme: Silver Light",
+            Self::SteelDark => "Theme: Steel Dark",
+            Self::LimestoneLight => "Theme: Limestone",
+            Self::CoalDark => "Theme: Coal Dark",
+            Self::LinenLight => "Theme: Linen Light",
+            Self::MossDark => "Theme: Moss Dark",
+            Self::Nord => "Theme: Nord",
+            Self::Paper => "Theme: Warm Sand",
+            Self::NordLight => "Theme: Nord Light",
+            Self::BreezeLight => "Theme: Breeze Light",
+            Self::BreezeDark => "Theme: Breeze Dark",
+            Self::MintLight => "Theme: Mint Light",
+            Self::MintDark => "Theme: Mint Dark",
+            Self::CatppuccinMocha => "Theme: Catppuccin Mocha",
+            Self::CatppuccinLatte => "Theme: Catppuccin Latte",
+            Self::CatppuccinFrappe => "Theme: Catppuccin Frappé",
+            Self::CatppuccinMacchiato => "Theme: Catppuccin Macchiato",
+            Self::GlassLight => "Theme: Slate Light",
+            Self::GlassDark => "Theme: Glass Dark",
+        }
+    }
+
+    pub(crate) fn prompt_name(self) -> &'static str {
+        match self {
+            Self::Nebula => "Pebrel",
+            Self::SilverLight => "SilverLight",
+            Self::SteelDark => "SteelDark",
+            Self::LimestoneLight => "LimestoneLight",
+            Self::CoalDark => "CoalDark",
+            Self::LinenLight => "LinenLight",
+            Self::MossDark => "MossDark",
+            Self::Nord => "Nord",
+            Self::Paper => "WarmSand",
+            Self::NordLight => "NordLight",
+            Self::BreezeLight => "BreezeLight",
+            Self::BreezeDark => "BreezeDark",
+            Self::MintLight => "MintLight",
+            Self::MintDark => "MintDark",
+            Self::CatppuccinMocha => "CatppuccinMocha",
+            Self::CatppuccinLatte => "CatppuccinLatte",
+            Self::CatppuccinFrappe => "CatppuccinFrappe",
+            Self::CatppuccinMacchiato => "CatppuccinMacchiato",
+            Self::GlassLight => "SlateLight",
+            Self::GlassDark => "GlassDark",
+        }
+    }
+
+    /// Inverse of [`prompt_name`](Self::prompt_name); used to restore the
+    /// persisted theme from `nebula_settings.txt`.
+    pub(crate) fn from_prompt_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Pebrel" | "Nebula" => Self::Nebula,
+            "SilverLight" => Self::SilverLight,
+            "SteelDark" => Self::SteelDark,
+            "LimestoneLight" => Self::LimestoneLight,
+            "CoalDark" => Self::CoalDark,
+            "LinenLight" => Self::LinenLight,
+            "MossDark" => Self::MossDark,
+            "Nord" => Self::Nord,
+            "Paper" | "WarmSand" => Self::Paper,
+            "NordLight" => Self::NordLight,
+            "BreezeLight" => Self::BreezeLight,
+            "BreezeDark" => Self::BreezeDark,
+            "MintLight" => Self::MintLight,
+            "MintDark" => Self::MintDark,
+            "CatppuccinMocha" => Self::CatppuccinMocha,
+            "CatppuccinLatte" => Self::CatppuccinLatte,
+            "CatppuccinFrappe" => Self::CatppuccinFrappe,
+            "CatppuccinMacchiato" => Self::CatppuccinMacchiato,
+            "GlassLight" | "SlateLight" => Self::GlassLight,
+            "GlassDark" => Self::GlassDark,
+
+            _ => return None,
+        })
+    }
+
+    /// Shorter label for theme cards so long names fit within a single card.
+    pub(crate) fn short_label(self) -> &'static str {
+        match self {
+            Self::SilverLight => "Silver",
+            Self::LimestoneLight => "Limestone",
+            Self::LinenLight => "Linen",
+            Self::SteelDark => "Steel",
+            Self::CoalDark => "Coal",
+            Self::MossDark => "Moss",
+            Self::Nord => "Nord",
+            Self::Paper => "Warm Sand",
+            Self::NordLight => "Nord Light",
+            _ => self.label(),
+        }
+    }
+
+    /// The theme's single accent color — selection rings, toggles-on, slider
+    /// fill and the prompt caret. Kept in lock-step with the powerline `$accent`
+    /// bridge (see `tty::windows`) so chrome, settings panel and shell prompt
+    /// all shift together when the theme changes. Each value is chosen to
+    /// contrast its own theme surface (light themes get a dark accent, dark
+    /// themes a light one).
+    pub(crate) fn accent(self) -> Rgb {
+        match self {
+            Self::NordLight
+            | Self::Paper
+            | Self::BreezeLight
+            | Self::BreezeDark
+            | Self::MintLight
+            | Self::MintDark
+            | Self::CatppuccinMocha
+            | Self::CatppuccinLatte
+            | Self::CatppuccinFrappe
+            | Self::CatppuccinMacchiato
+            | Self::GlassLight
+            | Self::GlassDark => rgb8(self.fresh_palette().unwrap().accent),
+            Self::Nebula => Rgb::new(82, 168, 255),
+            Self::SilverLight => Rgb::new(73, 80, 87),
+            Self::SteelDark => Rgb::new(148, 163, 184),
+            Self::LimestoneLight => Rgb::new(88, 85, 76),
+            Self::CoalDark => Rgb::new(212, 212, 212),
+            Self::LinenLight => Rgb::new(95, 99, 95),
+            Self::MossDark => Rgb::new(163, 179, 163),
+            Self::Nord => Rgb::new(0x88, 0xc0, 0xd0),
+        }
+    }
+
+    /// Ink set for the settings page's miniature theme cards: each card is a
+    /// tiny terminal window painted in ITS OWN theme's colors, so the picker
+    /// answers "how do background, text and highlights sit together" instead
+    /// of just "what color is the panel".
+    ///
+    /// Light themes reuse the exact inks [`Self::apply_term_colors`] installs.
+    /// Dark themes take their real foreground/ANSI set from the user's scheme
+    /// at runtime — the cards use one fixed neutral stand-in so all dark cards
+    /// preview alike regardless of the configured scheme.
+    pub(crate) fn card_ink(self) -> CardInk {
+        if let Some(palette) = self.fresh_palette() {
+            return CardInk { fg: rgb8(palette.foreground) };
+        }
+        match self {
+            Self::Nord => return CardInk { fg: Rgb::new(0xe5, 0xe9, 0xf0) },
+            _ => {},
+        }
+        if self.palette().is_light {
+            CardInk {
+                fg: Rgb::new(36, 41, 47), // = light Foreground (#24292f)
+            }
+        } else {
+            CardInk { fg: Rgb::new(214, 219, 227) }
+        }
+    }
+
+    /// Nord and Paper carry a complete terminal palette. Keeping the
+    /// data in `pebrel_settings` gives GPUI and the legacy renderer one source.
+    pub(crate) fn exact_term_colors(self) -> Option<pebrel_settings::ExactTermColors> {
+        pebrel_settings::ThemeName::from_prompt_name(self.prompt_name())
+            .and_then(|name| name.term_theme().exact)
+    }
+
+    /// Rebuild the terminal color table for this theme on top of the user's
+    /// configured scheme (`defaults`).
+    ///
+    /// Every theme moves the default background — that is what OSC 11 reports,
+    /// and TUIs like Claude Code / lazygit key their light/dark mode off it.
+    /// Light themes additionally replace the foreground and the ANSI-16 set
+    /// with a low-saturation light scheme: the configured (dark-ground) colors
+    /// are pale by design and unreadable on a pale background.
+    pub(crate) fn apply_term_colors(self, colors: &mut List, defaults: &List) {
+        *colors = *defaults;
+        let p = self.palette();
+        colors[NamedColor::Background] = p.term_bg;
+        if let Some(exact) = self.exact_term_colors() {
+            let foreground = rgb8(exact.foreground);
+            colors[NamedColor::Foreground] = foreground;
+            colors[NamedColor::BrightForeground] = foreground;
+            colors[NamedColor::DimForeground] = dim_rgb(foreground);
+
+            const ANSI_NAMES: [NamedColor; 16] = [
+                NamedColor::Black,
+                NamedColor::Red,
+                NamedColor::Green,
+                NamedColor::Yellow,
+                NamedColor::Blue,
+                NamedColor::Magenta,
+                NamedColor::Cyan,
+                NamedColor::White,
+                NamedColor::BrightBlack,
+                NamedColor::BrightRed,
+                NamedColor::BrightGreen,
+                NamedColor::BrightYellow,
+                NamedColor::BrightBlue,
+                NamedColor::BrightMagenta,
+                NamedColor::BrightCyan,
+                NamedColor::BrightWhite,
+            ];
+            const DIM_NAMES: [NamedColor; 8] = [
+                NamedColor::DimBlack,
+                NamedColor::DimRed,
+                NamedColor::DimGreen,
+                NamedColor::DimYellow,
+                NamedColor::DimBlue,
+                NamedColor::DimMagenta,
+                NamedColor::DimCyan,
+                NamedColor::DimWhite,
+            ];
+            for (name, color) in ANSI_NAMES.into_iter().zip(exact.ansi) {
+                colors[name] = rgb8(color);
+            }
+            for (name, color) in DIM_NAMES.into_iter().zip(exact.ansi[..8].iter().copied()) {
+                colors[name] = dim_rgb(rgb8(color));
+            }
+            if let Some(cursor) = exact.cursor {
+                colors[NamedColor::Cursor] = rgb8(cursor);
+            }
+            return;
+        }
+        if !p.is_light {
+            return;
+        }
+
+        colors[NamedColor::Foreground] = Rgb::new(36, 41, 47); // #24292f
+        // GitHub Primer Light ANSI-16 (from the premium-light design sheet):
+        // deep ink hues tuned for a pure-white ground. BrightWhite is a
+        // gray on purpose — true white would vanish on the white terminal.
+        const LIGHT_ANSI: [(NamedColor, Rgb); 16] = [
+            (NamedColor::Black, Rgb::new(36, 41, 47)),        // #24292f
+            (NamedColor::Red, Rgb::new(207, 34, 46)),         // #cf222e
+            (NamedColor::Green, Rgb::new(26, 127, 55)),       // #1a7f37
+            (NamedColor::Yellow, Rgb::new(154, 103, 0)),      // #9a6700
+            (NamedColor::Blue, Rgb::new(9, 105, 218)),        // #0969da
+            (NamedColor::Magenta, Rgb::new(130, 80, 223)),    // #8250df
+            (NamedColor::Cyan, Rgb::new(27, 124, 131)),       // #1b7c83
+            (NamedColor::White, Rgb::new(110, 119, 129)),     // #6e7781
+            (NamedColor::BrightBlack, Rgb::new(87, 96, 106)), // #57606a
+            (NamedColor::BrightRed, Rgb::new(164, 14, 38)),   // #a40e26
+            (NamedColor::BrightGreen, Rgb::new(45, 164, 78)), // #2da44e
+            (NamedColor::BrightYellow, Rgb::new(191, 135, 0)), // #bf8700
+            (NamedColor::BrightBlue, Rgb::new(33, 139, 255)), // #218bff
+            (NamedColor::BrightMagenta, Rgb::new(164, 117, 249)), // #a475f9
+            (NamedColor::BrightCyan, Rgb::new(49, 146, 170)), // #3192aa
+            (NamedColor::BrightWhite, Rgb::new(140, 149, 159)), // #8c959f
+        ];
+        for (name, rgb) in LIGHT_ANSI {
+            colors[name] = rgb;
+        }
+    }
+
+    /// 旧提示符段色参考；不发布到终端扩展色表，避免覆盖应用的索引色。
+    /// Order: icon bg/fg, path bg/fg, branch bg/fg, time bg/fg — one flat color
+    /// per chip (the old per-character truecolor gradient could never follow a
+    /// theme switch retroactively, which users read as "the prompt is stuck").
+    pub(crate) fn powerline_colors(self) -> [Rgb; 8] {
+        match self {
+            Self::NordLight
+            | Self::Paper
+            | Self::BreezeLight
+            | Self::BreezeDark
+            | Self::MintLight
+            | Self::MintDark
+            | Self::CatppuccinMocha
+            | Self::CatppuccinLatte
+            | Self::CatppuccinFrappe
+            | Self::CatppuccinMacchiato
+            | Self::GlassLight
+            | Self::GlassDark => pebrel_settings::ThemeName::from_prompt_name(self.prompt_name())
+                .unwrap()
+                .term_theme()
+                .powerline
+                .map(rgb8),
+            Self::Nebula => [
+                Rgb::new(57, 75, 112),
+                Rgb::new(192, 202, 245),
+                Rgb::new(41, 52, 82),
+                Rgb::new(169, 177, 214),
+                Rgb::new(47, 79, 79),
+                Rgb::new(139, 213, 202),
+                Rgb::new(29, 33, 46),
+                Rgb::new(100, 116, 139),
+            ],
+            Self::SilverLight => [
+                Rgb::new(229, 231, 235),
+                Rgb::new(55, 65, 81),
+                Rgb::new(243, 244, 246),
+                Rgb::new(55, 65, 81),
+                Rgb::new(224, 242, 254),
+                Rgb::new(3, 105, 161),
+                Rgb::new(249, 250, 251),
+                Rgb::new(107, 114, 128),
+            ],
+            Self::SteelDark => [
+                Rgb::new(71, 85, 105),
+                Rgb::new(241, 245, 249),
+                Rgb::new(51, 65, 85),
+                Rgb::new(203, 213, 225),
+                Rgb::new(59, 82, 73),
+                Rgb::new(163, 184, 153),
+                Rgb::new(40, 44, 56),
+                Rgb::new(148, 163, 184),
+            ],
+            Self::LimestoneLight => [
+                Rgb::new(214, 211, 209),
+                Rgb::new(250, 250, 249),
+                Rgb::new(231, 229, 228),
+                Rgb::new(68, 64, 60),
+                Rgb::new(200, 198, 167),
+                Rgb::new(41, 37, 36),
+                Rgb::new(235, 233, 230),
+                Rgb::new(163, 160, 151),
+            ],
+            Self::CoalDark => [
+                Rgb::new(82, 82, 82),
+                Rgb::new(245, 245, 245),
+                Rgb::new(64, 64, 64),
+                Rgb::new(212, 212, 212),
+                Rgb::new(74, 79, 65),
+                Rgb::new(181, 181, 166),
+                Rgb::new(48, 48, 48),
+                Rgb::new(115, 115, 115),
+            ],
+            Self::LinenLight => [
+                Rgb::new(212, 212, 208),
+                Rgb::new(255, 255, 255),
+                Rgb::new(229, 229, 223),
+                Rgb::new(63, 63, 63),
+                Rgb::new(181, 196, 177),
+                Rgb::new(45, 45, 45),
+                Rgb::new(236, 236, 230),
+                Rgb::new(176, 179, 176),
+            ],
+            Self::MossDark => [
+                Rgb::new(75, 85, 72),
+                Rgb::new(240, 253, 244),
+                Rgb::new(59, 66, 56),
+                Rgb::new(220, 252, 231),
+                Rgb::new(60, 79, 60),
+                Rgb::new(187, 247, 208),
+                Rgb::new(42, 47, 42),
+                Rgb::new(107, 114, 107),
+            ],
+            Self::Nord => [
+                Rgb::new(0x3b, 0x42, 0x52),
+                Rgb::new(0xec, 0xef, 0xf4),
+                Rgb::new(0x4c, 0x56, 0x6a),
+                Rgb::new(0xe5, 0xe9, 0xf0),
+                Rgb::new(0x43, 0x4c, 0x5e),
+                Rgb::new(0x88, 0xc0, 0xd0),
+                Rgb::new(0x2e, 0x34, 0x40),
+                Rgb::new(0x7b, 0x82, 0x94),
+            ],
+        }
+    }
+
+    fn fresh_palette(self) -> Option<pebrel_settings::FreshPalette> {
+        pebrel_settings::ThemeName::from_prompt_name(self.prompt_name())
+            .and_then(|name| name.fresh_palette())
+    }
+
+    pub(crate) fn palette(self) -> NebulaPalette {
+        let p = self.fresh_palette().expect("reviewed theme palette");
+        let rgba = |rgb: [u8; 3], alpha| Rgba::new(rgb[0], rgb[1], rgb[2], alpha);
+        let reviewed = pebrel_settings::ThemeName::from_prompt_name(self.prompt_name())
+            .expect("shared theme identity")
+            .reviewed_palette();
+        NebulaPalette {
+            panel: rgba(p.shell, 255),
+            pill: rgba(p.surface, 255),
+            tab_stroke_l: Rgba::new(
+                reviewed.line[0],
+                reviewed.line[1],
+                reviewed.line[2],
+                reviewed.line[3],
+            ),
+            tab_bg_l: Rgba::new(
+                reviewed.selected[0],
+                reviewed.selected[1],
+                reviewed.selected[2],
+                reviewed.selected[3],
+            ),
+            tab_bg_r: Rgba::new(
+                reviewed.selected[0],
+                reviewed.selected[1],
+                reviewed.selected[2],
+                reviewed.selected[3],
+            ),
+            edge_l: rgba(p.accent, 255),
+            edge_r: rgba(p.accent, 255),
+            edge_glow_l: rgba(p.accent, 0),
+            glow_l: rgba(p.accent, 0),
+            glow_r: rgba(p.accent, 0),
+            is_light: p.is_light,
+            term_bg: rgb8(p.surface),
+            shell_bg: rgb8(p.shell),
+        }
+    }
+
+    /// Theme-derived ink/surface tokens for every floating chrome layer.
+    /// See [`Skin`] for what each token means.
+    pub(crate) fn skin(self) -> Skin {
+        let mut skin = self.skin_defaults();
+        let p = pebrel_settings::ThemeName::from_prompt_name(self.prompt_name())
+            .expect("shared theme identity")
+            .reviewed_palette();
+        let rgba = |rgb: [u8; 3]| Rgba::new(rgb[0], rgb[1], rgb[2], 255);
+        let wash = |rgb: [u8; 4]| Rgba::new(rgb[0], rgb[1], rgb[2], rgb[3]);
+        skin.panel = rgba(p.background);
+        skin.input = rgba(p.background);
+        skin.ink = rgb8(p.foreground);
+        skin.ink_strong = skin.ink;
+        skin.ink_dim = rgb8(p.muted);
+        skin.ink_faint = skin.ink_dim;
+        skin.icon = skin.ink_dim;
+        skin.icon_hover = skin.ink;
+        skin.accent = rgb8(p.accent);
+        skin.accent_soft = wash(p.selected);
+        skin.hover = skin.accent_soft;
+        skin.hover_strong = skin.accent_soft;
+        skin.surface = skin.accent_soft;
+        skin.card = skin.accent_soft;
+        skin.hairline = wash(p.line);
+        skin.danger = rgba(p.red);
+        skin.ok = rgba(p.green);
+        skin.warn = rgba(p.yellow);
+        skin.ink_on_accent =
+            if skin.is_light { Rgb::new(255, 255, 255) } else { rgb8(p.background) };
+        skin
+    }
+
+    fn skin_defaults(self) -> Skin {
+        match self {
+            Self::Nord => return nord_skin(),
+            _ => {},
+        }
+        let p = self.palette();
+        let a = self.accent();
+        let t = p.term_bg;
+        // 浮层底从**窗口外壳** `shell_bg` 提亮 14 级，不是从终端底色
+        // （2026-07-31 修正）。
+        //
+        // 之前用的是 `term_bg`，理由写的是"浮层要比内容层亮"。方向没错，
+        // 起点错了：Nebula 的外壳 (34,38,48) 比终端 (15,17,26) 亮 20，于是
+        // 从终端起跳的浮层落在 (29,31,40)，比它实际漂浮的那张外壳还暗 5 级
+        // ——弹窗陷进背景里，正是它想避免的那件事。原型的 (48,53,65) 就是
+        // 外壳 +14。
+        //
+        // 当初避开 `p.panel` 是对的（那是 chrome 面板色，Steel 下比终端暗），
+        // 但 `shell_bg` 是另一个字段，四个深色主题下都能让浮层高出终端 9–33
+        // 级，方向对得上。
+        // 提亮按**比例**而不是加常数。旧版 `c + 14` 在 Nebula 外壳
+        // (34,38,48) 上给出 (48,52,62)，而原型 panel 是 (48,53,65)——差的
+        // 全在蓝：外壳的冷调来自蓝比红高 14 级，每个通道同加一个常数后，
+        // 蓝的**相对**占比被摊薄，色温朝中性灰漂，深色底上读出来就是"发
+        // 绿"。乘法把三个通道按同一比例抬，蓝仍然领先同样的比例，冷调
+        // 保得住；对 Coal 那种三通道相等的外壳，两种算法给出同一个数。
+        // 系数取「均值 +14」换算：亮度阶梯跟旧版持平，变的只是色温。
+        let shell = p.shell_bg;
+        let shell_avg = ((shell.r as f32 + shell.g as f32 + shell.b as f32) / 3.0).max(1.0);
+        let lift_factor = (shell_avg + 14.0) / shell_avg;
+        let lift = |c: u8| ((c as f32 * lift_factor).round().min(255.0)) as u8;
+        let mut skin = if p.is_light {
+            Skin {
+                // 浅色的三层不是单调递增的明度阶梯，而是**凹槽**（2026-07-31
+                // 裁定，推翻 07-29 的"浮层比内容更暗"）：浮层底与输入面同为
+                // 纯白，中间的分组卡片压暗一档挖出凹槽，输入框从凹槽里浮回
+                // 表面。
+                //
+                // 07-29 那版把方向做反了——panel 241 / card 254 / input 240，
+                // 卡片成了最亮的一层，输入框反而陷进卡片里。视觉上读成"白盒
+                // 子套白盒子"，输入框只能靠一条淡描边撑出来，而描边一多画面
+                // 就碎。阶梯本身没错，错在浅色下**最亮的那层应该是可输入的
+                // 表面**，不是承载它的容器。
+                //
+                // 压暗用 slate 叠加而不是降低白的明度：纯黑叠白底得到零色相
+                // 的死灰，掺蓝的冷调灰才不显脏（同 hairline/surface 的理由）。
+                // alpha 取 255：原型的 panel 是不透明的，而且 `push_stroke`
+                // 靠上层填充盖住中心才形成描边环——底板只要留一丝透明，那圈
+                // 描边就会从整块面板里渗出来。
+                panel: Rgba::new(255, 255, 255, 255),
+                input: Rgba::new(255, 255, 255, 255),
+                card: Rgba::new(100, 116, 139, 11), // slate-500 @ 4.5%
+                // modal 专用（popover 不画遮罩，见设计文档裁定三）。冷调压暗
+                // 而不是白雾：白雾 75% 把背景提亮到和白弹窗同明度，弹窗反而
+                // 浮不起来，且糊掉全部上下文。20% 压暗下背景仍然可读。
+                veil: Rgba::new(15, 23, 42, 56),    // slate-900 @ 22%
+                ink: Rgb::new(51, 65, 85),          // slate-700
+                ink_dim: Rgb::new(100, 116, 139),   // slate-500
+                ink_strong: Rgb::new(15, 23, 42),   // slate-900
+                ink_faint: Rgb::new(148, 163, 184), // slate-400
+                ink_ignored: Rgb::new(180, 180, 187),
+                // Light accents are dark grays — pale ink on top.
+                ink_on_accent: Rgb::new(248, 250, 252),
+                icon: Rgb::new(71, 85, 105),      // slate-600
+                icon_hover: Rgb::new(15, 23, 42), // slate-900
+                // 浅色下的强调色是**中性深灰**，不跟主题走（2026-07-31 用户裁定，
+                // 对齐原型）。浅色底本身亮度就高，饱和的主题色压上去会抢过内容
+                // ——焦点框、主按钮、勾选框同时用一个艳色，画面立刻吵起来。原型
+                // 里这三处全是同一个深灰，"柔和"就是从这来的。
+                //
+                // 深色主题不受影响：那边底暗，主题 accent 是唯一的亮点，反而
+                // 是画面的锚。
+                accent: Rgb::new(73, 80, 87),
+                // 选中水洗不能复用上面那个中性灰：14% 的零色相灰叠白底，得到
+                // 的正是 2026-07-29 裁定里说的死灰——「中性灰在屏幕上永远显
+                // 脏」的物理来源。把主题 accent 自己的色相推足再叠 19%：淡到
+                // 不抢内容（07-31 裁定的顾虑针对的是焦点环、主按钮那类实心强
+                // 对比用途，实心 accent 上面保持不动），但足够让选中态读起来
+                // 是干净的浅色。三个浅色主题各自的色温也因此保住：Silver 冷、
+                // Limestone 暖、Linen 绿。
+                accent_soft: {
+                    let tinted = steer_hue(a, 5.5);
+                    Rgba::new(tinted.r, tinted.g, tinted.b, 48)
+                },
+                // 浅色的红要比深色那份更沉：同一个红压在白底上，明度对比大得多，
+                // 直接复用深色值会艳到从整张卡片里跳出来。
+                danger: Rgba::new(178, 58, 72, 255),
+                // 成功 / 等待与 danger 同构：语义色各备深浅两套，浅底上一律
+                // 更沉——同一个饱和色压在高明度背景上明度对比大得多，复用深色
+                // 那份会艳到从界面里跳出来。
+                //
+                // 它们不跟主题 accent 走：accent 是品牌位（Nebula 蓝、Moss
+                // 绿），而"失败/完成/等你"是**语义**，在绿主题下把警示色也调
+                // 成绿的，等于把警告说成一切正常。
+                ok: Rgba::new(84, 140, 158, 255), // 青，与原型 --ok 同值
+                warn: Rgba::new(217, 119, 6, 255), // amber-600
+                // 2026-07-29 用户裁定：中性灰在屏幕上永远显脏。此前这几个
+                // 叠加色是纯黑 rgba(0,0,0,.05~.19)，而纯黑叠在白底上只能得
+                // 到**零色相**的死灰——这就是"不干净"的物理来源。现在改叠
+                // Slate（掺 3–6% 蓝的冷调灰）：浅色主题叠深 slate，深色主题
+                // 叠浅 slate，两边用不同基色，叠加后色相才不会被纯黑/纯白冲
+                // 淡。alpha 按 (255-底)/(基色-底) 换算过，明度与旧值持平，
+                // 变的只是色温。
+                hairline: Rgba::new(51, 65, 85, 30), // slate-700 @ 12%
+                surface: Rgba::new(100, 116, 139, 20), // slate-500 @ 8%
+                hover: Rgba::new(100, 116, 139, 33),
+                hover_strong: Rgba::new(100, 116, 139, 52),
+                track_off: Rgba::new(100, 116, 139, 78),
+                toggle_track_off: Rgba::new(226, 232, 240, 255),
+                toggle_track_on: Rgba::new(100, 116, 139, 255),
+                toggle_border_off: Rgba::new(203, 213, 225, 255),
+                toggle_border_on: Rgba::new(71, 85, 105, 255),
+                knob_off: Rgba::new(148, 163, 184, 255),
+                knob_on: Rgba::new(245, 247, 250, 255), // neutral near-white
+                scrollbar_thumb: Rgba::new(71, 85, 105, 0), // slate-600
+                is_light: true,
+            }
+        } else {
+            Skin {
+                // 深色下浮层的方向与浅色**相反**：比内容层更亮。
+                // 统一表述是「越靠前，与内容层的对比越强」，方向由主题决定
+                // （深色命令面板比背景亮，浅色命令面板比纯白终端暗）。
+                //
+                // 阶梯：终端 26 → panel 40 → card 54，每层差 14。
+                //
+                // alpha 取 255 而不是 250：原型的 panel 是不透明的，而且
+                // `push_stroke` 靠上层填充盖住中心才形成描边环——底板只要
+                // 留一丝透明，那圈描边就会从整块面板里渗出来。
+                panel: Rgba::new(lift(shell.r), lift(shell.g), lift(shell.b), 255),
+                // Derive the inset/input surface from the terminal background
+                // so it stays in-family on every dark theme (blue-black on
+                // Nebula, pure gray on Coal) instead of one fixed navy.
+                input: Rgba::new(t.r, t.g, t.b, 219), // 86%
+                card: Rgba::new(255, 255, 255, 11),   // 4.5%
+                // modal 专用（popover 不画遮罩）。原值 alpha 150（59%）在本就
+                // 很暗的底上接近全黑，把上下文糊没了；36% 足够传达"被阻断"，
+                // 背景仍可读。冷调 slate-950 而不是纯黑，与整套灰同色温。
+                veil: Rgba::new(2, 6, 23, 92),
+                ink: Rgb::new(226, 232, 240),        // slate-200
+                ink_dim: Rgb::new(148, 163, 184),    // slate-400
+                ink_strong: Rgb::new(248, 250, 252), // slate-50
+                ink_faint: Rgb::new(100, 116, 139),  // slate-500
+                ink_ignored: Rgb::new(92, 92, 92),
+                // Dark accents are light — near-black ink on top.
+                ink_on_accent: Rgb::new(15, 23, 42), // slate-900
+                icon: Rgb::new(203, 213, 225),       // slate-300
+                icon_hover: Rgb::new(248, 250, 252), // slate-50
+                accent: a,
+                accent_soft: Rgba::new(a.r, a.g, a.b, 46),
+                danger: Rgba::new(196, 74, 88, 255),
+                ok: Rgba::new(125, 178, 194, 255), // 青，与原型 --ok 同值
+                warn: Rgba::new(245, 158, 11, 255), // amber-500
+                // 深色主题叠 slate-300 而不是纯白：白是中性色，叠上去会把
+                // 底色的色相**冲淡**，一叠就回到死灰。浅色主题叠深 slate、
+                // 深色主题叠浅 slate——这就是"深浅两套灰不一样"的技术原因。
+                hairline: Rgba::new(203, 213, 225, 30),
+                surface: Rgba::new(203, 213, 225, 15),
+                hover: Rgba::new(203, 213, 225, 35),
+                hover_strong: Rgba::new(203, 213, 225, 53),
+                track_off: Rgba::new(203, 213, 225, 45),
+                // Dark switches intentionally follow the supplied HTML colors
+                // instead of inheriting the theme accent. A boolean state must
+                // not turn into another saturated blue control.
+                toggle_track_off: Rgba::new(40, 44, 52, 255), // #282c34
+                toggle_track_on: Rgba::new(30, 34, 43, 255),  // #1e222b
+                toggle_border_off: Rgba::new(63, 68, 79, 255), // #3f444f
+                toggle_border_on: Rgba::new(92, 99, 112, 255), // #5c6370
+                knob_off: Rgba::new(171, 178, 191, 255),      // #abb2bf
+                knob_on: Rgba::new(245, 247, 250, 255),       // low-saturation white
+                scrollbar_thumb: Rgba::new(148, 163, 184, 0), // slate-400
+                is_light: false,
+            }
+        };
+        if let Some(palette) = self.fresh_palette() {
+            let rgba = |rgb: [u8; 3], alpha| Rgba::new(rgb[0], rgb[1], rgb[2], alpha);
+            skin.panel = rgba(palette.surface, 255);
+            skin.input = skin.panel;
+            skin.card = rgba(palette.shell, 255);
+            skin.ink = rgb8(palette.foreground);
+            skin.ink_strong = skin.ink;
+            skin.ink_dim = rgb8(palette.muted);
+            skin.icon = skin.ink_dim;
+            skin.icon_hover = skin.ink;
+            skin.accent = rgb8(palette.accent);
+            skin.accent_soft = rgba(palette.accent, if palette.is_light { 28 } else { 38 });
+            skin.hairline = rgba(palette.muted, 36);
+        }
+        skin
+    }
+}
+
+fn rgb8([r, g, b]: pebrel_settings::Rgb8) -> Rgb {
+    Rgb::new(r, g, b)
+}
+
+fn dim_rgb(color: Rgb) -> Rgb {
+    let dim = |channel: u8| (f32::from(channel) * 0.66).round() as u8;
+    Rgb::new(dim(color.r), dim(color.g), dim(color.b))
+}
+
+/// 把一个近中性色往它自身的色相推，亮度保持不动。
+///
+/// 浅色主题的 accent 是刻意选的中性深灰（2026-07-31 裁定：浅底亮度高，饱和
+/// 色压上去会抢过内容）。但那个值直接拿去做**水洗底**就会撞上另一条裁定：
+/// 中性灰在屏幕上永远显脏（2026-07-29）。两条都要守，就得分用途——实心的
+/// 焦点环、主按钮继续用中性灰，只有选中水洗从这里取回色温。
+///
+/// `gain` 是通道相对亮度的放大倍数：1.0 原样，>1 提饱和。亮度不变意味着水洗
+/// 的明度阶梯不会因为加色温而漂。
+fn steer_hue(c: Rgb, gain: f32) -> Rgb {
+    let luma = 0.299 * f32::from(c.r) + 0.587 * f32::from(c.g) + 0.114 * f32::from(c.b);
+    let push =
+        |channel: u8| (luma + (f32::from(channel) - luma) * gain).round().clamp(0.0, 255.0) as u8;
+    Rgb::new(push(c.r), push(c.g), push(c.b))
+}
+
+/// Per-theme chrome palette: the translucent panels, tab pills, edge accents
+/// and glows painted by `draw_chrome`, plus the terminal background the theme
+/// applies on selection.
+#[derive(Debug, Clone, Copy)]
+/// The text ink a miniature theme card draws its fake terminal lines with;
+/// the highlight bars use the theme's own `edge_l`/`edge_r` brand pair.
+/// See [`NebulaTheme::card_ink`].
+pub(crate) struct CardInk {
+    pub(crate) fg: Rgb,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NebulaPalette {
+    pub(crate) panel: Rgba,
+    /// Standalone fill for inactive tab rows / the "+" pill. Currently unpainted
+    /// (inactive rows sit flush on the sidebar; state is the white active pill),
+    /// kept for reintroducing a per-row background without re-plumbing the palette.
+    #[allow(dead_code)]
+    pub(crate) pill: Rgba,
+    pub(crate) tab_stroke_l: Rgba,
+    pub(crate) tab_bg_l: Rgba,
+    pub(crate) tab_bg_r: Rgba,
+    pub(crate) edge_l: Rgba,
+    pub(crate) edge_r: Rgba,
+    pub(crate) edge_glow_l: Rgba,
+    pub(crate) glow_l: Rgba,
+    pub(crate) glow_r: Rgba,
+    /// Light chrome theme: flips the chrome ink set (labels/icons) to dark
+    /// text so it stays readable on the pale surfaces.
+    pub(crate) is_light: bool,
+    /// The theme's default terminal background, applied on selection.
+    pub(crate) term_bg: Rgb,
+    /// Opaque window shell base color. The whole window clears to this; the
+    /// terminal renders as a rounded [`term_bg`] card floating on top, and the
+    /// chrome (top bar / sidebar) melts into it. Slightly offset from `panel`'s
+    /// RGB so the translucent panels still read on top of it.
+    pub(crate) shell_bg: Rgb,
+}
+
+/// Theme-derived skin for every floating chrome layer: the settings modal,
+/// confirm dialogs, the command palette, the resize HUD, scrollbar and the
+/// chrome ink set. One struct so light themes flip EVERY overlay at once —
+/// components must not keep private color constants.
+///
+/// Naming: `ink*` are text colors (strong > ink > dim > faint), `panel` /
+/// `input` / `surface` are fills from back to front, `hover*` are transient
+/// washes stacked on top, and `accent` / `danger` are the only saturated
+/// voices (selection/primary vs destructive).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Skin {
+    /// Near-opaque panel surface (kills the see-through bleed where the
+    /// shell's own powerline used to collide with overlay labels).
+    pub(crate) panel: Rgba,
+    /// Inset/input surface (command palette query box and friends).
+    pub(crate) input: Rgba,
+    /// Elevated card fill for picker rows: a soft lift on the gray panel
+    /// (white cards on light themes, a faint white wash on dark).
+    pub(crate) card: Rgba,
+    /// Full-window wash behind modals. 2026-07-29 用户裁定：浅色主题的弹窗
+    /// 遮罩用白雾压淡而不是黑幕压暗；深色主题保持黑色调暗。
+    pub(crate) veil: Rgba,
+    /// Primary label ink.
+    pub(crate) ink: Rgb,
+    /// Secondary / sub-label ink.
+    pub(crate) ink_dim: Rgb,
+    /// Titles, active nav row, selected list rows.
+    pub(crate) ink_strong: Rgb,
+    /// Placeholder / hint text (weakest voice).
+    pub(crate) ink_faint: Rgb,
+    /// File-tree entries matched by git ignore rules. This is a visibility
+    /// tier, not a filter or sort key.
+    pub(crate) ink_ignored: Rgb,
+    /// Ink on top of an `accent`-filled control (primary buttons).
+    pub(crate) ink_on_accent: Rgb,
+    /// Chrome glyph icons (sidebar toggle, settings gear, tab ×, …).
+    pub(crate) icon: Rgb,
+    pub(crate) icon_hover: Rgb,
+    /// The theme's single accent (selection ring, toggle-on, slider fill).
+    pub(crate) accent: Rgb,
+    /// Soft accent wash for the active nav pill and selected card fill.
+    pub(crate) accent_soft: Rgba,
+    /// Destructive primary actions (close-busy-pane confirm). Same on both
+    /// light and dark — semantic red doesn't flip.
+    pub(crate) danger: Rgba,
+    /// 成功完成。与 [`Skin::danger`] / [`Skin::warn`] 一组，是仅有的三个
+    /// **语义**色——它们表达状态，不表达品牌，所以不随主题 accent 变。
+    pub(crate) ok: Rgba,
+    /// 停下来等用户（授权、确认、密码）。
+    pub(crate) warn: Rgba,
+    /// Edges, separators and quiet control borders.
+    pub(crate) hairline: Rgba,
+    /// Faint lift for interactive rows and cards.
+    pub(crate) surface: Rgba,
+    /// Hover wash on rows and cards.
+    pub(crate) hover: Rgba,
+    /// Stronger hover wash for small icon targets.
+    pub(crate) hover_strong: Rgba,
+    /// Toggle-off track / slider rail.
+    pub(crate) track_off: Rgba,
+    /// Complete toggle palette. These are separate from the generic slider
+    /// rail because the selected capsule owns an opaque background state.
+    pub(crate) toggle_track_off: Rgba,
+    pub(crate) toggle_track_on: Rgba,
+    pub(crate) toggle_border_off: Rgba,
+    pub(crate) toggle_border_on: Rgba,
+    /// Toggle knob when off / on (chosen to contrast the track).
+    pub(crate) knob_off: Rgba,
+    pub(crate) knob_on: Rgba,
+    /// Scrollbar thumb base color; alpha applied at the call site (drag
+    /// feedback brightens it).
+    pub(crate) scrollbar_thumb: Rgba,
+    /// True on the pale themes — lets renderers pick a brighter bevel and the
+    /// right slider-thumb ink without re-deriving it from the palette.
+    pub(crate) is_light: bool,
+}
+
+fn nord_skin() -> Skin {
+    Skin {
+        panel: Rgba::new(0x2e, 0x34, 0x40, 255),
+        input: Rgba::new(0x3b, 0x42, 0x52, 255),
+        card: Rgba::new(0x3b, 0x42, 0x52, 255),
+        veil: Rgba::new(0x02, 0x06, 0x17, 92),
+        ink: Rgb::new(0xe5, 0xe9, 0xf0),
+        ink_dim: Rgb::new(0xc0, 0xc7, 0xd3),
+        ink_strong: Rgb::new(0xec, 0xef, 0xf4),
+        ink_faint: Rgb::new(0x7b, 0x82, 0x94),
+        ink_ignored: Rgb::new(0x7b, 0x82, 0x94),
+        ink_on_accent: Rgb::new(0x2e, 0x34, 0x40),
+        icon: Rgb::new(0xc0, 0xc7, 0xd3),
+        icon_hover: Rgb::new(0xec, 0xef, 0xf4),
+        accent: Rgb::new(0x88, 0xc0, 0xd0),
+        accent_soft: Rgba::new(0x88, 0xc0, 0xd0, 46),
+        danger: Rgba::new(0xbf, 0x61, 0x6a, 255),
+        ok: Rgba::new(0xa3, 0xbe, 0x8c, 255),
+        warn: Rgba::new(0xeb, 0xcb, 0x8b, 255),
+        hairline: Rgba::new(255, 255, 255, 15),
+        surface: Rgba::new(0x3b, 0x42, 0x52, 255),
+        hover: Rgba::new(255, 255, 255, 15),
+        hover_strong: Rgba::new(0x88, 0xc0, 0xd0, 46),
+        // Nord declares no dedicated switch/scrollbar keys. These
+        // Nebula-only controls stay inside Nord's surface/border/text ramp.
+        track_off: Rgba::new(0x7b, 0x82, 0x94, 90),
+        toggle_track_off: Rgba::new(0x3b, 0x42, 0x52, 255),
+        toggle_track_on: Rgba::new(0x88, 0xc0, 0xd0, 255),
+        toggle_border_off: Rgba::new(0x43, 0x4c, 0x5e, 255),
+        toggle_border_on: Rgba::new(0x88, 0xc0, 0xd0, 255),
+        knob_off: Rgba::new(0xc0, 0xc7, 0xd3, 255),
+        knob_on: Rgba::new(0xec, 0xef, 0xf4, 255),
+        scrollbar_thumb: Rgba::new(0x7b, 0x82, 0x94, 0),
+        is_light: false,
+    }
+}
+
+/// Publish the active theme for the shell prompt bridge: the powerline script
+/// polls `%TEMP%\nebula_theme.txt` and recolors its segments to match. Written
+/// atomically (tmp + rename) so readers never see a torn value.
+pub(crate) fn write_nebula_prompt_theme(theme: NebulaTheme) {
+    let dir = std::env::temp_dir();
+    let path = dir.join("pebrel_theme.txt");
+    let tmp = dir.join(format!("nebula_theme.{}.tmp", std::process::id()));
+
+    if std::fs::write(&tmp, theme.prompt_name()).is_ok() {
+        // Windows cannot always rename over an existing file with `std::fs::rename`.
+        // The prompt script treats a missing/invalid theme as Nebula, so even the
+        // fallback path stays safe; the temporary file prevents readers from seeing
+        // partially-written contents.
+        let _ = std::fs::rename(&tmp, &path).or_else(|_| {
+            let _ = std::fs::remove_file(&path);
+            std::fs::rename(&tmp, &path)
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NebulaTheme;
+
+    #[test]
+    fn system_appearance_keeps_the_selected_theme_family() {
+        assert_eq!(NebulaTheme::Nebula.label(), "Pebrel");
+        assert_eq!(NebulaTheme::Nebula.short_label(), "Pebrel");
+        assert_eq!(NebulaTheme::Nebula.prompt_name(), "Pebrel");
+        assert_eq!(NebulaTheme::from_prompt_name("Pebrel"), Some(NebulaTheme::Nebula));
+        assert_eq!(NebulaTheme::from_prompt_name("Nebula"), Some(NebulaTheme::Nebula));
+        assert_eq!(NebulaTheme::Nebula.for_system_appearance(true), NebulaTheme::SilverLight);
+        assert_eq!(NebulaTheme::Nebula.for_system_appearance(false), NebulaTheme::Nebula);
+        assert_eq!(NebulaTheme::SilverLight.for_system_appearance(false), NebulaTheme::SteelDark);
+        assert_eq!(NebulaTheme::SteelDark.for_system_appearance(true), NebulaTheme::SilverLight);
+        assert_eq!(NebulaTheme::LimestoneLight.for_system_appearance(false), NebulaTheme::CoalDark);
+        assert_eq!(NebulaTheme::CoalDark.for_system_appearance(true), NebulaTheme::LimestoneLight);
+        assert_eq!(NebulaTheme::LinenLight.for_system_appearance(false), NebulaTheme::MossDark);
+        assert_eq!(NebulaTheme::MossDark.for_system_appearance(true), NebulaTheme::LinenLight);
+        assert_eq!(NebulaTheme::Nord.for_system_appearance(true), NebulaTheme::NordLight);
+        assert_eq!(NebulaTheme::Paper.for_system_appearance(false), NebulaTheme::Nord);
+    }
+
+    #[test]
+    fn nord_and_warm_sand_chrome_use_their_declared_tokens() {
+        let nord = NebulaTheme::Nord.skin();
+        assert_eq!(nord.panel, crate::renderer::ui::Rgba::new(0x2e, 0x34, 0x40, 255));
+        assert_eq!(nord.card, crate::renderer::ui::Rgba::new(0x3b, 0x42, 0x52, 255));
+        assert_eq!(nord.accent, crate::display::color::Rgb::new(0x88, 0xc0, 0xd0));
+
+        let paper = NebulaTheme::Paper.skin();
+        // Floating panels use the reviewed content background; the outer shell
+        // keeps its separate warm-gray token.
+        assert_eq!(paper.panel, crate::renderer::ui::Rgba::new(0xfd, 0xfd, 0xfc, 255));
+        assert_eq!(paper.card, crate::renderer::ui::Rgba::new(0xd9, 0x77, 0x06, 26));
+        assert_eq!(
+            NebulaTheme::Paper.palette().panel,
+            crate::renderer::ui::Rgba::new(0xf5, 0xf4, 0xf2, 255)
+        );
+        assert_eq!(paper.accent, crate::display::color::Rgb::new(0xd9, 0x77, 0x06));
+    }
+}

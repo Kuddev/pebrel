@@ -149,12 +149,13 @@ internal fun SftpTabRow(tab: SftpTab, host: String, selected: Boolean, onOpen: (
 }
 
 @Composable
-internal fun SftpTransferProgress(count: Long, total: Long?, cancelling: Boolean = false, onCancel: () -> Unit) {
+internal fun SftpTransferProgress(count: Long, total: Long?, cancelling: Boolean = false, waiting: Boolean = false, onCancel: () -> Unit) {
     val context = LocalContext.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val amount = Formatter.formatShortFileSize(context, count)
             HelperText(if (cancelling) stringResource(R.string.sftp_cancelling)
+                else if (waiting) stringResource(R.string.sftp_resuming, amount)
                 else if (total != null) "$amount / ${Formatter.formatShortFileSize(context, total)}" else amount, Modifier.weight(1f))
             TextButton(onCancel, enabled = !cancelling) { Text(stringResource(R.string.cancel)) }
         }

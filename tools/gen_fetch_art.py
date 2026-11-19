@@ -17,7 +17,7 @@ ANSI preview; D:\\SHARE\\nebula_fetch_preview.html the same in a browser).
 
 import math
 
-OUT_RS = r"D:\temp_build\nebula\nebula_app\src\window_context\nebula_fetch_art.rs"
+OUT_RS = r"D:\temp_build\nebula\pebrel_app\src\window_context\nebula_fetch_art.rs"
 OUT_HTML = r"D:\SHARE\nebula_fetch_preview.html"
 
 W, H = 62, 19
@@ -140,7 +140,7 @@ header = (
     "//! Latitude-banded ball (o/0 indigo, * cyan, ~ magenta), golden tilted\n"
     "//! `=` ring with front/back occlusion, sparse starfield.\n"
     "//! Regenerate with `python tools/gen_fetch_art.py`.\n\n"
-    "#[cfg(windows)]\n"
+    "#[cfg(any(windows, test))]\n"
     "pub const NEBULA_STAR_ART: &[&str] = &[\n"
 )
 body = "".join(f'    "{l}",\n' for l in rs_lines)

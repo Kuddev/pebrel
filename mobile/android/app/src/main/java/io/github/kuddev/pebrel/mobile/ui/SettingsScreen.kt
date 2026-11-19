@@ -30,6 +30,8 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
                    onBackground: (Boolean) -> Unit, initial: String = "") {
     var page by rememberSaveable { mutableStateOf(initial) }
     var direction by remember { mutableStateOf(PebrelNavigationDirection.Forward) }
+    var editShortcuts by remember { mutableStateOf(false) }
+    if (editShortcuts) ShortcutEditor(repository.shortcuts) { editShortcuts = false }
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     val theme by repository.theme.collectAsStateWithLifecycle()
     val background by repository.backgroundActive.collectAsStateWithLifecycle()
@@ -58,10 +60,9 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
             "about" -> R.string.about
             else -> R.string.settings
         }
-        Column(Modifier.fillMaxSize()) {
-            PageHeader(stringResource(title), ::back)
-            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp, vertical = 8.dp)) {
+        GlassPage(topBar = { PageHeader(stringResource(title), ::back) }) { padding, source ->
+            Column(Modifier.fillMaxSize().then(source).verticalScroll(rememberScrollState())
+                .padding(top = padding.calculateTopPadding()).padding(horizontal = 22.dp, vertical = 8.dp)) {
                 when (route) {
                     "" -> {
                         SettingsGroup(stringResource(R.string.raw_terminal)) {
@@ -168,6 +169,7 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
                                 }
                             }
                         }
+                        SettingsRow(R.drawable.ic_command, stringResource(R.string.custom_shortcuts)) { editShortcuts = true }
                         HelperText(stringResource(R.string.input_settings_hint))
                     }
                     "completion" -> {

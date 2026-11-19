@@ -20,6 +20,7 @@ class TerminalFrame(val rows: Array<TerminalRow?>, val meta: IntArray, val wrapp
     val cursorStyle get() = meta[7]
     val scrollTotal get() = meta.getOrElse(8) { rows.size }
     val scrollOffset get() = meta.getOrElse(9) { 0 }
+    val alternateScreen get() = meta.getOrElse(10) { 0 } != 0
     fun text() = rows.joinToString("\n") { it?.text?.trimEnd().orEmpty() }.trimEnd()
 }
 
@@ -40,19 +41,27 @@ class GhosttyCore(columns: Int = 80, rows: Int = 24, scrollbackLines: Int = 1000
         return NativeBridge.feed(pointer(), bytes, count)
     }
     @Synchronized fun takeTitle(): String? = NativeBridge.title(pointer())?.toString(Charsets.UTF_8)
+    @Synchronized fun synchronizedOutput(): Boolean = NativeBridge.synchronizedOutput(pointer())
+    @Synchronized fun endSynchronizedOutput() = NativeBridge.endSynchronizedOutput(pointer())
     @Synchronized fun resize(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) {
         require(columns in 2..400 && rows in 2..200 && cellWidth in 1..256 && cellHeight in 1..256)
         NativeBridge.resize(pointer(), columns, rows, cellWidth, cellHeight)
         if (rowCache.size != rows) rowCache = arrayOfNulls(rows)
     }
     @Synchronized fun snapshot(): TerminalFrame {
-        val meta = IntArray(10)
+        val meta = IntArray(11)
         NativeBridge.render(pointer(), rowCache, meta)
         // Unchanged immutable rows are shared across frames; changed rows are replaced by JNI.
         return TerminalFrame(rowCache.copyOf(), meta)
     }
     @Synchronized fun scroll(lines: Int) = NativeBridge.scroll(pointer(), lines)
     @Synchronized fun scrollTo(offset: Int) = NativeBridge.scrollTo(pointer(), offset.coerceAtLeast(0))
+    /** Read at dispatch time: 0 = primary screen, 1 = alternate keys, 2 = mouse reporting. */
+    @Synchronized fun applicationScrollMode(): Int = NativeBridge.applicationScrollMode(pointer())
+    @Synchronized fun wheel(lines: Int, column: Int, row: Int, applicationOnly: Boolean = false): ByteArray {
+        require(lines != 0 && lines in -32..32 && column >= 0 && row >= 0)
+        return NativeBridge.wheel(pointer(), lines, column, row, applicationOnly)
+    }
     @Synchronized fun colors(colors: IntArray) {
         require(colors.size == 19)
         NativeBridge.colors(pointer(), colors)
@@ -75,10 +84,14 @@ internal object NativeBridge {
     external fun destroy(handle: Long)
     external fun feed(handle: Long, input: ByteArray, count: Int): ByteArray
     external fun title(handle: Long): ByteArray?
+    external fun synchronizedOutput(handle: Long): Boolean
+    external fun endSynchronizedOutput(handle: Long)
     external fun resize(handle: Long, columns: Int, rows: Int, cellWidth: Int, cellHeight: Int)
     external fun render(handle: Long, rows: Array<TerminalRow?>, metadata: IntArray)
     external fun scroll(handle: Long, lines: Int)
     external fun scrollTo(handle: Long, offset: Int)
+    external fun applicationScrollMode(handle: Long): Int
+    external fun wheel(handle: Long, lines: Int, column: Int, row: Int, applicationOnly: Boolean): ByteArray
     external fun colors(handle: Long, colors: IntArray)
     external fun key(handle: Long, keyCode: Int, mods: Int, action: Int, text: ByteArray, unshifted: Int): ByteArray
     external fun bracketedPaste(handle: Long): Boolean

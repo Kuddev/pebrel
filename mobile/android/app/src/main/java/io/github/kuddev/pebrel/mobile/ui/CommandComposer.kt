@@ -1,7 +1,8 @@
 package io.github.kuddev.pebrel.mobile.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -16,9 +17,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -28,12 +29,14 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.session.SessionRepository
+import io.github.kuddev.pebrel.terminal.TerminalShortcut
 import io.github.kuddev.pebrel.mobile.voice.appendVoiceDraft
 import kotlinx.coroutines.launch
 
@@ -52,10 +55,14 @@ fun CommandComposer(
     attachmentBusy: Boolean = false,
     shortcutsEnabled: Boolean = enabled,
     extraShortcuts: List<String> = emptyList(),
+    customKeys: Boolean = onDirect != null,
+    conversation: Boolean = false,
     send: suspend (String) -> Boolean,
 ) {
     val drafts by repository.drafts.collectAsStateWithLifecycle()
     val preferences by repository.display.state.collectAsStateWithLifecycle()
+    val customShortcuts by repository.shortcuts.state.collectAsStateWithLifecycle()
+    var editShortcuts by remember(id) { mutableStateOf(false) }
     val historyBySession by repository.commandHistory.collectAsStateWithLifecycle()
     val draft = drafts[id].orEmpty()
     val history = historyBySession[id].orEmpty()
@@ -135,7 +142,8 @@ fun CommandComposer(
         }
     }
     val showHistory = historyItems.isNotEmpty() && draft.isNotBlank() && editorFocused && !historyDismissed && historyRoom >= 52.dp
-    val shortcuts = (extraShortcuts + listOf("Ctrl+C", "Esc", "Tab", "Shift+Tab", "←", "→", "↑", "↓")).distinct()
+    val shortcuts = (extraShortcuts + (if (customKeys) customShortcuts else emptyList()) + TerminalShortcut.defaults).distinct()
+    if (editShortcuts) ShortcutEditor(repository.shortcuts) { editShortcuts = false }
     // One mutually exclusive slot. Animating two independently visible surfaces
     // left an empty toolbar under the editor and retained two input targets.
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)
@@ -143,6 +151,7 @@ fun CommandComposer(
         if (direct) {
             ComposerToolbar(
                 onEdit = onDirect?.let { toggle -> { toggle(false) } },
+                onEditShortcuts = if (customKeys) ({ editShortcuts = true }) else null,
                 keyboardVisible = keyboardVisible,
                 keyboardEnabled = onKeyboard != null,
                 enabled = enabled,
@@ -160,16 +169,20 @@ fun CommandComposer(
                         (coordinates.positionInWindow().y.toInt() - topInset).coerceAtLeast(0).toDp()
                     } - 8.dp
                 }) {
+                    val editorShape = if (conversation) MaterialTheme.shapes.large else RoundedCornerShape(26.dp)
+                    // The accent outline confirms where typing goes; it fades rather than snapping.
+                    val outline by animateColorAsState(if (editorFocused && enabled) colors.primary else Color.Transparent,
+                        motion.tweenOrSnap(140), label = "composer-focus")
                     Column(
                         Modifier.fillMaxWidth().testTag("composer-editor")
                             .animateContentSize(motion.contentSizeSpec())
-                            .clip(RoundedCornerShape(26.dp))
-                            .background(colors.surfaceVariant.copy(alpha = .42f))
+                            .glass(editorShape, GlassTier.Heavy, if (conversation) GlassLift.Floating else GlassLift.Raised)
+                            .border(2.dp, outline, editorShape)
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
                         Box(
                             Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp, max = if (editorExpanded) 208.dp else 96.dp),
+                                .heightIn(min = 56.dp, max = if (editorExpanded) 208.dp else 96.dp),
                         ) {
                             BasicTextField(
                                 value = draft,
@@ -184,15 +197,16 @@ fun CommandComposer(
                                     color = colors.onSurface,
                                     fontSize = 15.sp,
                                     lineHeight = 21.sp,
-                                    fontFamily = LocalTerminalFont.current,
+                                    fontFamily = if (conversation) FontFamily.Default else LocalTerminalFont.current,
                                 ),
                                 cursorBrush = SolidColor(colors.primary),
                                 keyboardOptions = KeyboardOptions(
-                                    capitalization = KeyboardCapitalization.None,
+                                    capitalization = if (conversation) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
                                     autoCorrectEnabled = false,
                                 ),
                                 decorationBox = { inner ->
-                                    if (draft.isEmpty()) HelperText(stringResource(R.string.composer_placeholder))
+                                    if (draft.isEmpty()) Text(stringResource(if (conversation) R.string.chat_compose else R.string.composer_placeholder),
+                                        style = MaterialTheme.typography.bodyLarge, color = glassPalette().textTertiary)
                                     inner()
                                 },
                             )
@@ -222,6 +236,10 @@ fun CommandComposer(
                                             onClick = { toolsOpen = false; attach() },
                                         )
                                     }
+                                    if (customKeys && onKey != null) DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.custom_shortcuts)) },
+                                        onClick = { toolsOpen = false; editShortcuts = true },
+                                    )
                                     if (onKey != null) DropdownMenuItem(
                                         text = { Text(stringResource(if (keys) R.string.composer_hide_aux_keys else R.string.composer_aux_keys)) },
                                         onClick = { toolsOpen = false; keys = !keys },

@@ -13,8 +13,8 @@ DOCUMENTS = (
     "docs/internationalization.md", "architecture/notes/AGENTS.md",
 )
 AGENT_GUIDES = (
-    "AGENTS.md", "nebula_app/AGENTS.md", "nebula_terminal/AGENTS.md",
-    "nebula_settings/AGENTS.md", "scripts/AGENTS.md", "packaging/AGENTS.md",
+    "AGENTS.md", "pebrel_app/AGENTS.md", "pebrel_terminal/AGENTS.md",
+    "pebrel_settings/AGENTS.md", "scripts/AGENTS.md", "packaging/AGENTS.md",
     "docs/AGENTS.md", "docs/release-notes/AGENTS.md",
 )
 PUBLIC_GUIDES = DOCUMENTS + AGENT_GUIDES
@@ -89,10 +89,27 @@ class GovernanceTests(unittest.TestCase):
             "docs/screenshots/research/raw-capture.json",
             "docs/release-notes/reference-projects/vendor/src/main.rs",
             "docs/screenshots/external-probes/inspect.ps1",
+        )
+        self.assertEqual(self.ignored_paths(paths), set(paths))
+
+    def test_external_material_stays_outside_the_checkout_without_public_ignore_rules(self):
+        paths = (
             "research/vendor/README.md", "reference-projects/vendor/src/main.rs",
             "external-probes/inspect-vendor.py", "impeccable/research.md",
         )
-        self.assertEqual(self.ignored_paths(paths), set(paths))
+        # 公开规则不隐藏误放回源码树的外部材料；本机路径隔离不属于仓库合同。
+        ignore = (ROOT / ".gitignore").read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            (repository / ".gitignore").write_bytes(ignore)
+            result = subprocess.run(["git", "check-ignore", "--no-index", "--stdin", "-z"],
+                cwd=repository, input=b"\0".join(path.encode("utf-8") for path in paths) + b"\0", capture_output=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(result.stdout, b"")
+        tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).split(b"\0")
+        prefixes = tuple(path.split("/", 1)[0].encode("utf-8") + b"/" for path in paths)
+        self.assertFalse([path for path in tracked if path.startswith(prefixes)])
 
     def test_html_prototypes_do_not_escape_through_public_doc_directories(self):
         paths = (
@@ -125,12 +142,12 @@ class GovernanceTests(unittest.TestCase):
             "scripts/conformance/tests/test_harness.py", "scripts/launch_probe_instance.ps1",
             "scripts/probe_ssh_connect.ps1", "tools/probe_ime.rs",
             "tools/i18n-contract/Cargo.toml", "tools/i18n-contract/Cargo.lock",
-            "nebula_app/tests/i18n_contract.rs", "nebula_app/tests/fixtures/page.html",
-            "nebula_app/i18n/fr-FR.json", "third_party/winit-0.30.13/Cargo.toml",
+            "pebrel_app/tests/i18n_contract.rs", "pebrel_app/tests/fixtures/page.html",
+            "pebrel_app/i18n/fr-FR.json", "third_party/winit-0.30.13/Cargo.toml",
             "third_party/winit-0.30.13/src/lib.rs", "docs/screenshots/SHOTLIST.md",
             "docs/screenshots/hero.png", "docs/release-notes/v1.5.0.md",
             "docs/skills/pebrel-runtime/SKILL.md",
-            "architecture/notes/nebula_terminal/input/2026-09-19-example.md",
+            "architecture/notes/pebrel_terminal/input/2026-09-19-example.md",
         )
         self.assertEqual(self.ignored_paths(paths), set())
 

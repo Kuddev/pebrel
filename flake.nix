@@ -9,7 +9,7 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      version = (fromTOML (builtins.readFile ./nebula_app/Cargo.toml)).package.version;
+      version = (builtins.fromTOML (builtins.readFile ./pebrel_app/Cargo.toml)).package.version;
 
       # 构建期依赖库，同时也是写进 rpath 的运行期库：GPUI/winit 会在运行时
       # dlopen 掉其中一部分（X11/Wayland/Vulkan），NixOS 上不写 rpath 会找不到。
@@ -18,6 +18,7 @@
         with p;
         [
           alsa-lib
+          dbus
           fontconfig
           freetype
           libGL
@@ -30,6 +31,7 @@
           libxkbcommon
           libxrandr
           openssl
+          udev
           sqlite
           vulkan-loader
           wayland
@@ -50,21 +52,17 @@
 
           # 依赖变化（Cargo.lock 变更）后重算：把 cargoHash 设为 p.lib.fakeHash，
           # 运行 `nix build .#pebrel`，用报错里的 got 值更新这里。
-          cargoHash = "sha256-bE++uF9kpMI66kKAIRlgd3t1E7FcqXECaYOh7Dnr/e4=";
+          cargoHash = "sha256-sWxONMlesMlyMyI3lN5ebM4m5CZ3Z+eJxQF2cL3zkpQ=";
 
-          # 上游 README：cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
-          # 同时构建 AI Hook 辅助程序 pebrel-hook（nebula_hook）：应用在自身可执行
-          # 文件同目录查找它（nebula_app/src/ai_hook/local.rs），scripts/package-linux.sh
-          # 也要求它随应用安装；缺失会导致本地 Agent 集成无法安装。
-          # 特性用 `nebula/gpui-shell` 限定，避免把 gpui-shell 施加到 nebula_hook。
+          # 主程序在自身所在目录查找 pebrel-hook。
           cargoBuildFlags = [
             "--locked"
-            "--package=nebula"
+            "--package=pebrel"
             "--bin=pebrel"
-            "--package=nebula_hook"
+            "--package=pebrel_hook"
             "--bin=pebrel-hook"
           ];
-          buildFeatures = [ "nebula/gpui-shell" ];
+          buildFeatures = [ "pebrel/gpui-shell" ];
 
           nativeBuildInputs = with p; [
             cmake

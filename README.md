@@ -14,17 +14,14 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-2024_edition-CE412B?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
-  <img src="https://img.shields.io/badge/OpenGL-ES_2.0%2B-5586A4?style=for-the-badge&logo=opengl&logoColor=white" alt="OpenGL ES 2.0+" />
-  <img src="https://img.shields.io/badge/Windows-10_%2F_11-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 10 and 11" />
-  <img src="https://img.shields.io/badge/macOS-14%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS 14+" />
-  <img src="https://img.shields.io/badge/Linux-glibc_2.35%2B-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux glibc 2.35+" />
-  <img src="https://img.shields.io/badge/PowerShell-Pebrel_prompt-5391FE?style=for-the-badge&logo=powershell&logoColor=white" alt="PowerShell" />
-  <img src="https://img.shields.io/badge/License-GPL--3.0-1f6feb?style=for-the-badge" alt="GPL-3.0 license" />
+  <a href="https://trendshift.io/repositories/127463?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-127463" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/127463/daily?language=Rust" alt="Kuddev/pebrel | Trendshift" width="250" height="55" /></a>
 </p>
 
 <p align="center">
+  <a href="https://pebrel.com"><img src="https://img.shields.io/badge/Website-pebrel.com-2f81f7?style=flat-square&logo=googlechrome&logoColor=white" alt="Website: pebrel.com" /></a>
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
+  <a href="https://atomgit.com/kettys/pebrel"><img src="https://atomgit.com/kettys/pebrel/star/badge.svg" alt="AtomGitStars" /></a>
+  <a href="https://hub.xerj.org/contributors/Kuddev"><img src="https://hub.xerj.org/contributors/Kuddev/badge.svg" alt="XERJ Corpus Hub contributor" /></a>
   <img src="https://img.shields.io/github/forks/Kuddev/pebrel?style=flat-square&color=8957e5&logo=github" alt="Forks" />
   <img src="https://img.shields.io/github/last-commit/Kuddev/pebrel?style=flat-square&color=3fb950" alt="Last commit" />
   <a href="https://discord.gg/VFn4rcxmhn"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
@@ -32,7 +29,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
 </p>
 
 ---
@@ -54,18 +51,30 @@
 <table>
   <tr>
     <td align="center" width="240">
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><img src="extra/logo/sponsor_aiapi.png" alt="AIAPI" width="200" /></a><br />
+      <a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR"><strong>AIAPI</strong></a>
     </td>
     <td>
-      <p><strong>One entry point for accessing and managing the world's leading AI models</strong></p>
-      <p>Thanks to Sidrune AI for sponsoring this project! Sidrune AI serves individual developers, technical teams and enterprises with a unified API for accessing and managing the world's leading AI models. Dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices.</p>
-      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">Visit and sign up now</a> to receive $3 in API credit.</p>
+      <p><strong>Special thanks to AIAPI for sponsoring this project!</strong></p>
+      <p>AIAPI is dedicated to building the most stable AI model relay on the web, providing a unified API for solo developers, tech teams, and enterprises. We deliver full-power, unthrottled Claude and GPT models—zero lobotomization, zero dilution, and 100% pure native performance. Backed by dynamic multi-route scheduling for high availability, complete transparency in latency and billing, and top-tier after-sales support that always has your back, AIAPI cuts API costs by 40%–98% compared to official rates.</p>
+      <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">Visit AIAPI</a></p>
     </td>
   </tr>
 </table>
 
 For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+
+<p align="center">
+  <strong>Pebrel WeChat Community</strong>
+</p>
+
+<p align="center">
+  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="QR code for the Pebrel WeChat group, valid before November 24, 2026" width="300" /></a>
+</p>
+
+<p align="center">
+  Scan with WeChat to join. Valid before November 24, 2026. Click the image to view full size.
+</p>
 
 ## One Workspace
 
@@ -78,6 +87,9 @@ each agent's activity, and read its output without leaving the application.
 - Sidebar or top tabs, draggable split panes, and per-pane working directories.
 - Saved workspace layouts and optional AI conversation restoration. On WSL and
   Linux, Codex session metadata can supply an ID when its hook has not reported one.
+- Native Windows Codex identity refreshes share a background helper with startup
+  cursor feedback disabled. Each refresh reads current metadata and remains bounded;
+  a stalled helper is stopped before a later refresh creates its replacement.
 - On Windows, optional background residency keeps running sessions alive when you
   close the window. Restoring a conversation after the process exits is a separate
   feature and requires a supported CLI and a usable session identity.
@@ -98,7 +110,13 @@ each agent's activity, and read its output without leaving the application.
   Restoring defaults updates existing windows without restarting. Runtime overrides
   replace their previous rules, avoiding the stale disabled bindings from the append-only
   path; the saved configuration format is unchanged. See the
-  [shortcut ownership decision](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
+  [shortcut ownership decision](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
+- Local Windows PowerShell prompts can keep multiline clipboard paste in
+  PSReadLine for review: Enter submits it, and one Undo removes the whole paste.
+  This requires active shell integration and no user binding on its managed paste shortcut.
+  PSReadLine normalizes CRLF and expands tabs to four spaces; other editors retain
+  their negotiated paste or existing confirmation behavior. See the
+  [clipboard paste contract](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md).
 
 ### Intelligent Completion
 
@@ -118,6 +136,12 @@ character at a time with the built-in Powerline prompt.
 Choose **Inline** (Tab accepts the suggestion), **List** (Tab accepts the selected
 candidate), or **Hybrid** (→ accepts the inline suggestion; Tab opens the list)
 in Settings.
+
+When Pebrel can query the pane's filesystem, file arguments to `nvim`, `code`, and
+`cat` use its current directory; history only ranks the discovered candidates.
+To choose among several files, select **Hybrid**: Tab opens the
+list, subsequent Tab presses cycle candidates, and Enter inserts the selection
+without running the command. Right arrow accepts the inline suggestion directly.
 
 <details>
 <summary>How history completion differs</summary>
@@ -153,10 +177,13 @@ discover candidates from the current environment without matching prior commands
   states. Supported hook events provide more precise progress and attention signals.
 - Notifications follow their source pane; clicking one returns you to that terminal.
 - Captured Claude Code and Codex answers open in a reader with Markdown, formulas,
-  source text, and local image previews.
+  source text, and local image previews. Reader controls and notices follow the
+  selected language; Copy source preserves the complete original answer. See
+  [reader language behavior](docs/answer-reader-language.md).
 - Clipboard images are saved as PNG files and their paths inserted into local,
-  WSL, or SSH sessions. Inline terminal images require the CLI to emit the supported
-  OSC 1337 protocol; image attachment previews depend on the CLI itself.
+  WSL, or SSH sessions. Inline terminal images require CLI output using OSC 1337,
+  Kitty protocol (direct RGB/RGBA), or Sixel (7-bit DCS); image attachment previews
+  depend on the CLI itself.
 
 <p align="center">
   <img src="docs/screenshots/ai-sidebar.png" alt="AI activity sidebar" width="300" />
@@ -167,6 +194,9 @@ discover candidates from the current environment without matching prior commands
 - GPU-accelerated GPUI interface, light and dark themes, backgrounds, and opacity controls.
 - Application icon palettes and eleven UI language choices with English fallback
   for untranslated text.
+- Workspace dialogs, command feedback, Git/SVN controls and default notifications
+  follow the selected language. Switching languages preserves command search text
+  and selection. See [internationalization](docs/internationalization.md).
 - Searchable settings, a command palette, and Lua configuration with validation and
   live reload. Existing TOML configuration remains supported.
 - Markdown document tabs and native mathematical typesetting without a WebView.
@@ -255,7 +285,7 @@ See the [notification duration menu](docs/screenshots/notification-duration.png)
 With the pinned Rust toolchain and the platform dependencies installed:
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 The internal Cargo package is still named `nebula`; the application and command
@@ -271,6 +301,11 @@ Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 Pebrel includes third-party terminal, interface and font components. Their
 provenance, copyright and license notices are preserved in
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
+
+<p>Thanks to <a href="https://molchuan.com/"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="extra/logo/acknowledgement_1molchuan_dark.png">
+  <img alt="1molchuan" src="extra/logo/acknowledgement_1molchuan_light.png" width="120">
+</picture></a> for providing extra support for Pebrel's development.</p>
 
 ## Community
 

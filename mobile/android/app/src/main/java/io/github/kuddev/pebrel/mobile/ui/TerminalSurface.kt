@@ -1,6 +1,5 @@
 package io.github.kuddev.pebrel.mobile.ui
 
-import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableIntStateOf
@@ -67,12 +66,7 @@ fun TerminalSurface(
         if (keyboardRequest != lastKeyboardRequest.intValue) {
             lastKeyboardRequest.intValue = keyboardRequest
             if (preferences.directInput) {
-                view.requestFocus()
-                view.post {
-                    if (view.isAttachedToWindow && view.directInput) {
-                        view.context.getSystemService(InputMethodManager::class.java).showSoftInput(view, 0)
-                    }
-                }
+                view.post { if (view.isAttachedToWindow && view.directInput) view.showKeyboard() }
             }
         }
     })

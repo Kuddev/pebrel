@@ -3,6 +3,7 @@ package io.github.kuddev.pebrel.mobile.connection
 import io.github.kuddev.pebrel.ssh.NativeSshException
 import io.github.kuddev.pebrel.ssh.RusshSession
 import io.github.kuddev.pebrel.terminal.SessionTransport
+import io.github.kuddev.pebrel.terminal.TerminalHistoryTransport
 import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
@@ -86,13 +87,18 @@ class SshConnection(
 }
 
 /** The terminal engine owns VT, IME and selection; the independent russh module supplies bytes. */
-class SshTerminalTransport(private val connection: SshConnection, private val command: String? = null) : SessionTransport {
+internal class SshTerminalTransport(private val connection: SshConnection, private val command: String? = null,
+                                    private val historyControl: TmuxSessionControl? = null) : SessionTransport, TerminalHistoryTransport {
+    private var stream: InputStream? = null
     override fun open(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) {
         connection.connect()
         if (command == null) connection.openShell(columns, rows, cellWidth, cellHeight)
-        else connection.openPtyExec(command, columns, rows, cellWidth, cellHeight)
+        else connection.openPtyExec(historyControl?.command(command) ?: command, columns, rows, cellWidth, cellHeight)
     }
-    override fun input(): InputStream = connection.input()
+    override fun input(): InputStream = stream ?: (historyControl?.input(connection.input()) ?: connection.input()).also { stream = it }
+    override fun scrollHistory(lines: Int): Boolean = historyControl?.scroll(lines) ?: false
+    override fun applicationScrolled() { historyControl?.applicationScrolled() }
+    override fun returnToLiveInput() { historyControl?.returnToInput() }
     override fun output(): OutputStream = connection.output()
     override fun resize(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) = connection.resize(columns, rows, cellWidth, cellHeight)
     override fun awaitExit(): Int = connection.awaitExit()

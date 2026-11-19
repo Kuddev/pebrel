@@ -87,6 +87,80 @@ class SshIntegrationTest {
         persistentSession(SshSessionMode.TMUX)
     }
 
+    @Test fun tmuxHistoryImeCompositionReturnsToInputBeforeCommit() = tmuxHistoryImeComposition(false)
+
+    @Test fun manuallyEnteredTmuxRestoresInputAtImeComposition() = tmuxHistoryImeComposition(true)
+
+    private fun tmuxHistoryImeComposition(manualShell: Boolean) = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val target = instrumentation.targetContext
+        val name = "pebrel-ime-${System.nanoTime()}"
+        val command = "env LC_ALL=C.UTF-8 tmux -u new-session -e LC_ALL=C.UTF-8 -s '$name'"
+        val ready = CountDownLatch(1)
+        val connection = SshConnection(host.copy(fingerprint = expectedFingerprint),
+            "pebrel-test-only".toCharArray(), { _, _ -> error("Already trusted") })
+        val control = TmuxSessionControl(connection::query, {}, detectShell = manualShell)
+        val terminal = TerminalSession(SshTerminalTransport(connection,
+            if (manualShell) null else command, control), object : TerminalCallbacks() {
+            override fun onTransportReady(session: TerminalSession) { ready.countDown() }
+        })
+        val activity = instrumentation.startActivitySync(android.content.Intent(target, MainActivity::class.java)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK))
+        suspend fun awaitState(stage: String, check: () -> Boolean) {
+            try {
+                withTimeout(8_000) {
+                    while (!check()) {
+                        terminal.failureCause?.let { throw AssertionError("SSH failed", it) }
+                        delay(25)
+                    }
+                }
+            } catch (error: TimeoutCancellationException) {
+                throw AssertionError("$stage: readingHistory=${terminal.readingHistory}, frame=${terminal.frame?.text()}", error)
+            }
+        }
+        fun paneMode(): String = connection.query("tmux display-message -p -t '$name' '#{pane_mode}'")
+            .getString("stdout").trim()
+        try {
+            terminal.setVisible(true)
+            terminal.start()
+            assertTrue(ready.await(8, TimeUnit.SECONDS))
+            if (manualShell) {
+                control.identifyShellTerminal()
+                assertTrue(terminal.sendText("$command\r"))
+            }
+            awaitState("tmux initial frame") { terminal.frame?.alternateScreen == true }
+            lateinit var view: GhosttyView
+            lateinit var input: android.view.inputmethod.InputConnection
+            instrumentation.runOnMainSync {
+                view = GhosttyView(activity).apply { session = terminal; directInput = true }
+                activity.setContentView(view)
+            }
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                input = requireNotNull(view.onCreateInputConnection(android.view.inputmethod.EditorInfo()))
+            }
+            assertTrue(terminal.sendText("seq 1 200\r"))
+            awaitState("generated history") { terminal.frame?.text()?.lineSequence()?.any { it.trim() == "200" } == true }
+            terminal.wheel(-8, 2, 2)
+            awaitState("entered copy mode") { paneMode() == "copy-mode" }
+            assertTrue(terminal.readingHistory)
+            // Reuse the already-open IME: no keyboard-focus event may rescue this path.
+            instrumentation.runOnMainSync { assertTrue(input.setComposingText("zhong", 1)) }
+            awaitState("preedit restores live input") { !terminal.readingHistory && paneMode().isEmpty() }
+            val beforeCommit = connection.query("tmux capture-pane -p -t '$name'").getString("stdout")
+            assertFalse("Preedit must stay local", beforeCommit.contains("zhong"))
+            instrumentation.runOnMainSync {
+                assertTrue(input.commitText("echo 中文", 1))
+                assertTrue(input.commitText("\n", 1))
+            }
+            awaitState("committed Chinese command") { terminal.frame?.text()?.lineSequence()?.any { it.trim() == "中文" } == true }
+        } finally {
+            runCatching { connection.query("tmux kill-session -t '$name'") }
+            instrumentation.runOnMainSync { activity.finish() }
+            terminal.finishIfRunning()
+        }
+    }
+
     @Test fun herdrReattachesTheSameRemoteShellAndKeepsSftpAvailable() = runBlocking {
         persistentSession(SshSessionMode.HERDR)
     }
@@ -96,10 +170,10 @@ class SshIntegrationTest {
         val target = host.copy(fingerprint = expectedFingerprint, sessionMode = mode, sessionName = name)
         fun connection(profile: HostProfile = target) = SshConnection(profile, "pebrel-test-only".toCharArray(),
             { _, _ -> error("The fixture fingerprint must already match") })
-        suspend fun opened(): Pair<TerminalSession, SshConnection> {
+        suspend fun opened(command: String? = null): Pair<TerminalSession, SshConnection> {
             val ready = CompletableDeferred<Unit>()
             val channel = connection()
-            val terminal = TerminalSession(SshTerminalTransport(channel), object : TerminalCallbacks() {
+            val terminal = TerminalSession(SshTerminalTransport(channel, command), object : TerminalCallbacks() {
                 override fun onTransportReady(session: TerminalSession) { ready.complete(Unit) }
                 override fun onSessionFinished(session: TerminalSession) { ready.complete(Unit) }
             })
@@ -127,6 +201,19 @@ class SshIntegrationTest {
             }
             @Suppress("UNREACHABLE_CODE") ""
         }
+        suspend fun fixtureCommand(command: String) = withContext(Dispatchers.IO) {
+            connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
+                cleanup.connect()
+                // A fresh connection is waiting for its first channel. Queries
+                // only run alongside an open terminal or exec channel.
+                cleanup.openExec("timeout 8s $command")
+                val output = cleanup.input().readBytes().toString(Charsets.UTF_8)
+                cleanup.awaitExit() to output
+            }
+        }
+        val stop = if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'"
+        val retry = checkNotNull(target.reconnectCommand())
+        var completed = false
         try {
             val (first, ssh) = opened()
             val pid = try {
@@ -136,19 +223,34 @@ class SshIntegrationTest {
                 assertTrue(SftpClient(ssh::sftp).list(".").path.startsWith('/'))
                 marker.substringAfterLast(':')
             } finally { first.finishIfRunning() }
-            val (second, _) = opened()
+            val (second, _) = opened(retry)
             try {
                 assertTrue(second.sendText("printf '\\115UX_SECOND:%s:%s\\n' \"\$PEBREL_QA_TOKEN\" \"\$\$\"\r"))
                 assertEquals("MUX_SECOND:$name:$pid", output(second, Regex("MUX_SECOND:$name:[0-9]+")))
             } finally { second.finishIfRunning() }
+            assertEquals("The remote fixture stop command must succeed", 0, fixtureCommand(stop).first)
+            if (mode == SshSessionMode.HERDR) {
+                val ended = CompletableDeferred<Unit>()
+                val missing = TerminalSession(SshTerminalTransport(connection(), retry), object : TerminalCallbacks() {
+                    override fun onSessionFinished(session: TerminalSession) { ended.complete(Unit) }
+                })
+                missing.start()
+                try {
+                    withTimeout(15_000) { ended.await() }
+                    assertNull(missing.failureCause)
+                } finally { missing.finishIfRunning() }
+                val (status, inventory) = fixtureCommand("herdr session list --json")
+                assertEquals(0, status)
+                val sessions = org.json.JSONObject(inventory).getJSONArray("sessions")
+                assertFalse((0 until sessions.length()).any {
+                    val session = sessions.getJSONObject(it)
+                    session.getString("name") == name && session.optBoolean("running")
+                })
+            }
+            completed = true
         } finally {
-            withContext(Dispatchers.IO + NonCancellable) {
-                connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
-                    cleanup.connect()
-                    cleanup.openExec(if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'")
-                    cleanup.input().readBytes()
-                    cleanup.awaitExit()
-                }
+            if (!completed) withContext(NonCancellable) {
+                runCatching { fixtureCommand(stop) }
             }
         }
     }
@@ -256,6 +358,16 @@ class SshIntegrationTest {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
             while (terminal.frame?.rows?.any { it?.text?.contains("SSH_GHOSTTY_OK") == true } != true && System.nanoTime() < deadline) Thread.sleep(50)
             assertTrue(terminal.frame?.rows?.any { it?.text?.contains("SSH_GHOSTTY_OK") == true } == true)
+            // 真实 SSH PTY 消费手机滚轮字节，验证完整 transport 队列而非只测编码器。
+            assertTrue(terminal.sendText("stty -echo -icanon min 1 time 0; printf '\\033[?1049h\\033[?1000h\\033[?1006hSSH_WHEEL_READY'; reply=\$(dd bs=1 count=10 2>/dev/null | od -An -tx1 | tr -d ' \\n'); printf '\\033[?1000l\\033[?1006l\\033[?1049l'; stty sane; printf 'SSH_WHEEL_%s\\n' \"\$reply\"\r"))
+            val wheelReadyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (terminal.frame?.alternateScreen != true && System.nanoTime() < wheelReadyDeadline) Thread.sleep(25)
+            assertTrue("SSH fixture did not enter alternate screen", terminal.frame?.alternateScreen == true)
+            terminal.wheel(-1, 3, 2)
+            val wheelDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (terminal.frame?.text()?.contains("SSH_WHEEL_1b5b3c36343b343b334d") != true && System.nanoTime() < wheelDeadline) Thread.sleep(25)
+            assertTrue("wheel must reach the real SSH PTY", terminal.frame?.text()?.contains("SSH_WHEEL_1b5b3c36343b343b334d") == true)
+            assertFalse(terminal.frame?.alternateScreen == true)
             assertTrue(terminal.sendText("exit\r"))
             assertTrue(finished.await(10, TimeUnit.SECONDS))
             assertFalse(terminal.sendText("must-not-send"))

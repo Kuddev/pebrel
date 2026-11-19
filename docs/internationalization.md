@@ -34,9 +34,9 @@ translation of every screen, configuration template, or installer language.
 
 ## Runtime contract / 运行时合同
 
-- `nebula_settings/src/language.rs` owns the supported-language registry,
+- `pebrel_settings/src/language.rs` owns the supported-language registry,
   native names, saved values, and locale negotiation. Both shells use it.
-- `nebula_app/build/i18n.rs` validates JSON and generates static Rust data at
+- `pebrel_app/build/i18n.rs` validates JSON and generates static Rust data at
   compile time. Runtime lookup never parses a JSON file, constructs a map,
   reads a file, takes a lock, or allocates a string.
 - `UiLanguage::text(Message::...)` uses a typed identifier and direct table
@@ -58,11 +58,24 @@ translation of every screen, configuration template, or installer language.
 才创建字符串。旧 `tr` 和 `pick` 是渐进迁移入口，不应作为继续堆积双语硬编码的理由。
 组件库的语言覆盖与自有文案分开记录，不支持的组件语言明确使用英文，避免假装全量覆盖。
 
+Workspace dialogs, saved-command search and feedback, recovery/export notices,
+merge/SVN controls, and default notification messages follow the selected language.
+Updating the command search placeholder keeps its input entity, query, cursor and
+selection. Merge and image-load errors retain message ids and arguments until display,
+so an existing view can resolve them in a new language. Legacy-renderer confirmations
+use the same catalog. File names, process names, search aliases and original notification
+content are preserved.
+
+工作区对话框、已保存命令的搜索与反馈、恢复/导出提示、合并/SVN 控件以及默认通知
+随所选语言显示。搜索提示更新时保留输入实体、查询内容、光标与选区。合并及图片加载
+错误保留消息 ID 与参数，在显示时选择语言，因此已有视图也能更新。旧渲染入口的确认框
+使用同一词典；文件名、进程名、搜索别名与原始通知内容保持原文。
+
 ## Add a language / 新增语言
 
-1. Add one row to the `languages!` registry in `nebula_settings/src/language.rs`.
+1. Add one row to the `languages!` registry in `pebrel_settings/src/language.rs`.
    Saved values are canonical locale tags; do not change existing tags or order.
-2. Add `nebula_app/i18n/<locale>.json`. Keep the same message ids and named
+2. Add `pebrel_app/i18n/<locale>.json`. Keep the same message ids and named
    placeholders as English. A partial catalog is allowed and falls back to English.
    Do not copy English entries just to inflate the translation coverage count.
 3. Set the component locale to one actually supplied by the pinned component
@@ -92,13 +105,13 @@ translation of every screen, configuration template, or installer language.
 ## Checks / 验证
 
 ```text
-cargo test -p nebula-settings
+cargo test -p pebrel-settings
 cargo test --manifest-path tools/i18n-contract/Cargo.toml --locked
-cargo test -p nebula --test i18n_contract
-cargo test -p nebula --bin pebrel --features gpui-shell i18n::
-cargo test -p nebula --bin pebrel --features gpui-shell gpui_shell::settings_pane::tests::
-cargo test -p nebula --test file_line_budget
-cargo test -p nebula --test i18n_contract --release -- --ignored --nocapture
+cargo test -p pebrel --test i18n_contract
+cargo test -p pebrel --bin pebrel --features gpui-shell i18n::
+cargo test -p pebrel --bin pebrel --features gpui-shell gpui_shell::settings_pane::tests::
+cargo test -p pebrel --test file_line_budget
+cargo test -p pebrel --test i18n_contract --release -- --ignored --nocapture
 ```
 
 The allocation contract checks both the first and repeated lookup across every
@@ -113,3 +126,16 @@ The independent contract workspace compiles the production generator and lookup
 files without renderer dependencies. The `architecture-contracts` PR job executes
 it, while real GPUI/platform checks and native-language layout review remain separate.
 Language or ownership changes also follow the [engineering contracts](project-constraints.md).
+
+The opt-in `native_merge_localization` test opens the production merge view. Run the
+built test executable from a fresh QA directory with a real unmerged
+`demo-project/conflict.rs`. Set `PEBREL_I18N_QA_DIR` to that directory and
+`PEBREL_CONFIG_DIR` to its `config` subdirectory; the settings file selects the language.
+The test publishes its process id in `ready`. Verify the controls and editor contents,
+inspect the rendered image, then create `verified` and `capture-complete` to finish.
+The regular test suite leaves this desktop fixture ignored.
+
+Native Windows captures at 192 DPI are available for [English](screenshots/english-merge-editor.png)
+and [Simplified Chinese](screenshots/chinese-merge-editor.png). Static headings and disabled
+styling were inspected visually; the desktop accessibility API verified the action label
+and all three editor buffers. Other desktop environments need their own visual acceptance.

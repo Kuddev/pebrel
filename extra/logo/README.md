@@ -13,7 +13,7 @@ personal choices, with graphite violet retained as palette 25.
 | `silver-violet` | `nebula-light.svg` | Optional silver-violet colorway; palette 12 |
 | `graphite-violet` | `nebula-dark.svg` | Optional graphite / gray-violet colorway; palette 25 |
 
-`nebula_settings/src/app_icon.rs` is the canonical catalog of stable setting
+`pebrel_settings/src/app_icon.rs` is the canonical catalog of stable setting
 keys, original palette numbers, bilingual names and colors. The renderer
 exports `icon-catalog.json` from it. Personal color options do not imply
 exclusive colors or completed trademark clearance.
@@ -71,8 +71,8 @@ Regenerate using Node.js 24+ with `@resvg/resvg-js` (verified with 2.6.2):
 node scripts/render-app-icons.mjs /path/to/renderer/package.json
 node scripts/render-app-icons.mjs /path/to/renderer/package.json --check
 python3 -m unittest scripts.tests.test_app_icons -v
-cargo test -p nebula-settings --offline --locked
-cargo test -p nebula --bin nebula --features gpui-shell app_icon::tests
+cargo test -p pebrel-settings --offline --locked
+cargo test -p pebrel --bin nebula --features gpui-shell app_icon::tests
 ```
 
 The renderer is development-only; it adds no application dependency. The
@@ -92,12 +92,42 @@ by Git and are not required by the asset tests.
 
 ## Third-Party Logo Assets
 
+### Runtime vectors and lossless compression (2026-10-19)
+
+AI logos now embed SVGZ instead of large PNG originals. The SVGZ payload is
+byte-for-byte gzip compression of its adjacent SVG source (`compresslevel=9`,
+`mtime=0`); geometry, colors and numeric precision are unchanged. Runtime SVG
+rasterization uses the existing resvg 0.46.0 dependency at the requested physical
+size, followed by the shared optical centering and theme tint policy. Rasterized
+textures retain the existing per-size/theme cache ownership. PNG originals below
+are retained only as historical test references, not product binary resources.
+
+New provider marks reuse CC Switch revision
+`adc223af322adaeca878e82bf78323865b0db768`, `src/icons/extracted/` (MIT;
+`licenses/cc-switch-MIT.txt`). Existing OpenAI, Claude, Kimi and Agent vectors
+keep their original sources. Antigravity now uses the official full-color SVG:
+https://antigravity.google/assets/image/brand/antigravity-icon__full-color.svg
+
+Regenerate each adjacent SVGZ with Python's standard library:
+
+```python
+import gzip
+from pathlib import Path
+sources = list(Path("extra/logo").glob("ai_*.svg"))
+sources += list(Path("pebrel_app/assets/icons").glob("nebula-agent-*.svg"))
+sources += list(Path("pebrel_app/assets/icons").glob("nebula-provider-*.svg"))
+for source in sources:
+    source.with_suffix(".svgz").write_bytes(
+        gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
+    )
+```
+
 ### Agents settings vectors
 
 The Agents settings page renders 24 logical pixel SVG marks rather than enlarging
 the sidebar PNG textures. Claude, Kimi and Oh My Pi reuse the SVG sources below;
 Cursor and Copilot reuse the existing settings icons. OpenAI, OpenCode, Pi and
-Grok use `nebula_app/assets/icons/nebula-agent-{openai,opencode,pi,grok}.svg`,
+Grok use `pebrel_app/assets/icons/nebula-agent-{openai,opencode,pi,grok}.svg`,
 retrieved from the fixed npm package `@lobehub/icons-static-svg` 1.95.0:
 `https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/{name}.svg`.
 These four sources are unchanged except for a final newline, under the collection's
@@ -107,8 +137,8 @@ purple for Oh My Pi; sidebar PNG presentation is independent.
 
 ### Cursor and GitHub Copilot settings icons
 
-`nebula_app/assets/icons/nebula-agent-cursor.svg` and
-`nebula_app/assets/icons/nebula-agent-copilot.svg` use the monochrome marks from
+`pebrel_app/assets/icons/nebula-agent-cursor.svg` and
+`pebrel_app/assets/icons/nebula-agent-copilot.svg` use the monochrome marks from
 `@lobehub/icons-static-svg` 1.95.0, retrieved on 2026-09-20:
 
 - Cursor: https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/cursor.svg
@@ -119,6 +149,30 @@ Only the unused title, CSS sizing attributes and explicit closing path tags were
 removed. The viewBox and path geometry are unchanged. The two embedded SVGs total
 2,393 bytes; the other settings icons reuse the sidebar's existing small textures.
 These marks identify the installed tools and do not imply endorsement.
+
+### Qoder, Qwen Code, CodeBuddy, Antigravity, Droid and Hermes settings icons
+
+The Agents settings page preserves the source colors through the shared background
+texture cache. Qoder and Qwen Code use `ai_qoder.svg` and `ai_qwen.svg`, retrieved
+unchanged on 2026-10-31 from `@lobehub/icons-static-svg` 1.95.0:
+
+- https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/qoder-color.svg
+- https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/qwen-color.svg
+- License: [MIT](LICENSE-lobe-icons), copyright LobeHub.
+
+CodeBuddy and Antigravity reuse `ai_codebuddy.svg` and `ai_antigravity.svg`, with
+sources and notices below. Their monochrome `nebula-agent-*.svg` assets remain
+available for mask-based controls. The Qoder/Qwen monochrome assets came from the
+same package (`icons/{qoder,qwen}.svg`) on 2026-10-07.
+
+Droid uses `ai_droid.svg`, retrieved unchanged from Factory's official
+https://factory.ai/favicon.svg on 2026-10-31 (also served by
+https://docs.factory.ai/favicon.svg). The official mark is black and white.
+Hermes reuses `pebrel_app/assets/icons/nebula-agent-hermes.svg`, including its
+white background and black illustration. Both retain their source artwork rather
+than rendering the opaque background as a single-color mask. These marks identify
+the installed products and do not imply endorsement; trademarks remain with their
+owners. The matching `.svgz` files are lossless gzip copies with timestamp zero.
 
 ### Claude Code and Trae CLI
 
@@ -236,6 +290,14 @@ Both UI shells keep its original colors on light and dark themes and resize it
 only for rendering. No LobeHub asset is embedded for Antigravity.
 
 ## Sponsor Logos
+
+### AIAPI
+
+`sponsor_aiapi.png` is the unmodified 2400 x 893 PNG supplied and selected by the
+maintainer for AIAPI sponsorship. Its off-white background, dark brown wordmark,
+letterforms and aspect ratio are preserved. The asset appears first in both
+README sponsor sections and in the application's Sponsors page, linking to
+https://cn.aiapi.bot/invite?code=MCYLZ5H6FR. It is resized only when displayed.
 
 ### Sidrune AI
 

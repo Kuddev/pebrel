@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -36,6 +37,21 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class HomeSessionsTest {
+    @Test fun pairedComputerShowsBothSavedRoutesAndOneClickableRow() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        fun profile(mode: String) = RelayProfile("wss://$mode.example.com", mode, "a".repeat(43), "Paired computer",
+            "sha256/${"a".repeat(43)}=", mode, SecureRelayProfile("b".repeat(43), "grant-$mode", "c".repeat(43), false))
+        val saved = RelayProfile.latestByComputer(listOf(profile("lan"), profile("relay"))).single()
+        var selected: RelayProfile? = null
+        compose.setContent { MaterialTheme {
+            ComputerRows(emptyList(), listOf(saved), {}, { selected = it }, {})
+        } }
+        compose.onNodeWithText(context.getString(R.string.computer_lan_relay), substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText("Paired computer").assertCountEquals(1)
+        compose.onNodeWithText("Paired computer").performClick()
+        assertSame(saved, selected)
+    }
+
     @Test fun terminalHeaderActionsStayCompactAndKeepSeparateTouchTargets() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val opened = mutableListOf<String>()
@@ -491,7 +507,7 @@ class HomeSessionsTest {
         compose.runOnIdle { assertEquals(listOf("computer", "ssh", "local"), opened) }
     }
 
-    @Test fun desktopCardReservesHeightForLargeMetadataWithoutOverlappingItsTitle() {
+    @Test fun sessionPreviewKeepsItsTitleAndMetadataVisibleAtLargeTextSizes() {
         val cwd = "/workspace/project/src"
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 2f)) {
@@ -503,7 +519,7 @@ class HomeSessionsTest {
                 }
             }
         } }
-        compose.onNodeWithText(pane.title).assertHeightIsAtLeast(360.dp)
+        compose.onNodeWithText(pane.title).assertHeightIsAtLeast(360.dp).assertWidthIsAtLeast(133.dp)
         val path = compose.onNodeWithText(cwd, useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
         val title = compose.onNodeWithText(pane.title, useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue(path.bottom <= title.top)

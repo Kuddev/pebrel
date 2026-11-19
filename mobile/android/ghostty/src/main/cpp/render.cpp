@@ -35,11 +35,14 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(render)(JNIEnv* env, jobject, jlong
         env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Incorrect viewport row count");
         return;
     }
+    GhosttyTerminalScreen screen{};
+    ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen);
     jint meta[] = {columns, rows, cx, cy, visible && in_viewport, argb(colors.background),
         argb(colors.cursor_has_value ? colors.cursor : colors.foreground), static_cast<jint>(cursor_style),
         static_cast<jint>(std::min(scrollbar.total, uint64_t{INT32_MAX})),
-        static_cast<jint>(std::min(scrollbar.offset, uint64_t{INT32_MAX}))};
-    env->SetIntArrayRegion(metadata, 0, 10, meta);
+        static_cast<jint>(std::min(scrollbar.offset, uint64_t{INT32_MAX})),
+        screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE};
+    env->SetIntArrayRegion(metadata, 0, 11, meta);
     auto row_class = env->FindClass("io/github/kuddev/pebrel/terminal/TerminalRow");
     if (!row_class) return;
     auto constructor = env->GetMethodID(row_class, "<init>", "(Ljava/lang/String;[I)V");

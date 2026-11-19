@@ -29,13 +29,17 @@ input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
 .hljs-title,.hljs-function,.hljs-section { color: var(--accent); }
 .hljs-string,.hljs-attr,.hljs-number,.hljs-symbol { color: var(--foreground); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
-.conversation article { padding: 14px 0 18px; border-bottom: 1px solid var(--border); }
-.conversation article:last-child { border-bottom: 0; }
+.conversation article { padding: 16px 0; }
+.conversation article + article { margin-top: 8px; }
 .message-author { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
-.conversation .user-message { background: var(--surface); padding: 12px 14px; border-radius: 6px; }
+.conversation .message-user { margin-left: 24px; }
+.message-user .message-author { text-align: right; }
+.conversation .user-message { background: var(--code-surface); padding: 12px 16px; border-radius: 14px 14px 4px 14px; }
+.conversation article > p:first-of-type { margin-top: 0; }
+.conversation article > :last-child { margin-bottom: 0; }
 .user-message > :first-child { margin-top: 0; } .user-message > :last-child { margin-bottom: 0; }
-.tool-message { margin: 6px 0; }
-.tool-message summary { cursor: pointer; min-height: 48px; padding: 12px 0; color: var(--muted); font-size: 14px; }
+.tool-message { margin: 4px 0; border-bottom: 1px solid var(--border); }
+.tool-message summary { cursor: pointer; min-height: 48px; padding: 12px 4px; color: var(--muted); font-size: 14px; }
 .tool-message summary:focus-visible { outline: 2px solid var(--accent); }
 .message-notice { color: var(--muted); font-size: 12px; margin: 8px 0; }
 .formula { position: relative; }
