@@ -1,6 +1,7 @@
 //! Resume commands wait for the new shell prompt before publishing live identity.
 
 use super::*;
+use crate::display::side_panel::PathQuote;
 
 #[derive(Default)]
 pub(super) struct SessionRecovery {
