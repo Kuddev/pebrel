@@ -9,11 +9,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      CANDIDATE: d18f4bf48183c81a2ed5a0de753e5855edf9d3af
+      CANDIDATE: 75c5d2462723a56100ae9990136ebdd0ad62a6c4
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.CANDIDATE }}
+          ref: refs/pull/424/head
           persist-credentials: false
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
         with:
