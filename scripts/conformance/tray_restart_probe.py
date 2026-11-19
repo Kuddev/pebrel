@@ -4,11 +4,13 @@ import ctypes
 from ctypes import wintypes as wt
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 
 class NotifyIconId(ctypes.Structure):
@@ -152,6 +154,7 @@ class Desktop:
 
 
 def worker(executable, root, candidate):
+    root.mkdir()
     desktop = Desktop()
     app = ResolvedApp(executable)
     ctx = ConformanceContext(app, "windows-x86_64", root / "config", root / "project",
@@ -187,30 +190,33 @@ def worker(executable, root, candidate):
 
 def supervise(executable, variant):
     desktop = Desktop()
-    with tempfile.TemporaryDirectory(prefix="tray-980-", ignore_cleanup_errors=True) as temp:
-        root = Path(temp)
-        os.environ["PEBREL_QA_TRAY_TRACE"] = str(root / "tray-events")
-        args = [sys.executable, str(Path(__file__).with_name("windows_standard_user.py")),
-                __file__, "--worker", executable, temp, variant]
-        worker_proc = subprocess.Popen(args)
-        try:
-            def ready():
-                if worker_proc.poll() is not None:
-                    raise RuntimeError(f"Ordinary-user fixture exited early: {worker_proc.returncode}")
-                return (root / "ready").is_file()
-            wait_for("the ordinary user's initial icon", ready, 140)
-            old, new = desktop.restart_explorer()
-            print("Replaced Explorer taskbar owner:", old, new, "elevated:", is_elevated(new), flush=True)
-            (root / "restarted").touch()
-            if worker_proc.wait(timeout=90):
-                raise RuntimeError("Tray recovery verification failed")
-        finally:
-            path = root / "tray-events"
-            if path.is_file():
-                print("Registration events:", path.read_text(errors="replace")[:3000])
-            if worker_proc.poll() is None:
-                worker_proc.terminate()
-                worker_proc.wait(timeout=10)
+    # The ordinary token creates its own directory and inherits its own ACL.
+    root = Path(tempfile.gettempdir()) / ("tray-980-" + uuid.uuid4().hex)
+    os.environ["PEBREL_QA_TRAY_TRACE"] = str(root / "tray-events")
+    args = [sys.executable, str(Path(__file__).with_name("windows_standard_user.py")),
+            __file__, "--worker", executable, temp, variant]
+    worker_proc = subprocess.Popen(args)
+    try:
+        def ready():
+            if worker_proc.poll() is not None:
+                raise RuntimeError(f"Ordinary-user fixture exited early: {worker_proc.returncode}")
+            return (root / "ready").is_file()
+        wait_for("the ordinary user's initial icon", ready, 140)
+        old, new = desktop.restart_explorer()
+        print("Replaced Explorer taskbar owner:", old, new, "elevated:", is_elevated(new), flush=True)
+        (root / "restarted").touch()
+        if worker_proc.wait(timeout=90):
+            raise RuntimeError("Tray recovery verification failed")
+    finally:
+        path = root / "tray-events"
+        if path.is_file():
+            print("Registration events:", path.read_text(errors="replace")[:3000])
+        if worker_proc.poll() is None:
+            worker_proc.terminate()
+            worker_proc.wait(timeout=10)
+        if root.is_dir():
+            shutil.rmtree(root, ignore_errors=True)
+
 
 
 if __name__ == "__main__":
