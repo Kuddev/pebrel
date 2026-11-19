@@ -74,17 +74,30 @@ jobs:
       - name: Identify Apple toolchain
         id: apple
         run: echo "build=$(xcodebuild -version | tail -1 | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: apple-vt
         with:
           path: |
-            tmp/ios-vt/GhosttyVT.xcframework
-            tmp/ios-vt/device/include
+            tmp/ios-vt/apple/lib/ghostty-vt.xcframework
+            tmp/ios-vt/apple/include
             tmp/ios-vt/licenses
-          key: ios-vt-products-${{ steps.apple.outputs.build }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/ios/tools/build_vt.py', 'mobile/tools/build_ghostty.py') }}
+          key: ios-vt-xcode26.3-${{ steps.apple.outputs.build }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/ios/tools/build_vt.py', 'mobile/tools/build_ghostty.py') }}
       - name: Build device and simulator VT slices
         if: steps.apple-vt.outputs.cache-hit != 'true'
-        run: python3 mobile/ios/tools/build_vt.py --output tmp/ios-vt
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          python3 mobile/ios/tools/build_vt.py --output tmp/ios-vt
+      - uses: actions/cache/save@v4
+        if: steps.apple-vt.outputs.cache-hit != 'true'
+        with:
+          path: |
+            tmp/ios-vt/apple/lib/ghostty-vt.xcframework
+            tmp/ios-vt/apple/include
+            tmp/ios-vt/licenses
+          key: ${{ steps.apple-vt.outputs.cache-primary-key }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'

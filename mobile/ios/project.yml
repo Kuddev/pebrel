@@ -16,7 +16,7 @@ settings:
       - $(inherited)
       - $(SRCROOT)/../ssh/include
       - $(SRCROOT)/../terminal-bridge/include
-      - $(SRCROOT)/../../tmp/ios-vt/device/include
+      - $(SRCROOT)/../../tmp/ios-vt/apple/include
 targets:
   Pebrel:
     type: application
@@ -33,7 +33,7 @@ targets:
         type: folder
     dependencies:
       - package: PebrelCore
-      - framework: ../../tmp/ios-vt/GhosttyVT.xcframework
+      - framework: ../../tmp/ios-vt/apple/lib/ghostty-vt.xcframework
         embed: false
       - framework: ../../tmp/PebrelSSH.xcframework
         embed: false
