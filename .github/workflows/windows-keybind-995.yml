@@ -43,6 +43,15 @@ jobs:
           ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
           cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-shell --bin pebrel
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify the shortcut through the workspace keymap
+        if: matrix.variant == 'candidate'
+        shell: pwsh
+        run: |
+          $case = 'gpui_shell::workspace::keyboard_bindings::tests::dispatch::file_escape_alias_registers_the_native_minimize_key'
+          $output = @(cargo test --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-test-support --bin pebrel -- $case --exact 2>&1)
+          $code = $LASTEXITCODE
+          $output | Select-Object -Last 18 | Write-Output
+          if ($code -ne 0 -or ($output -join "\n") -notmatch '1 passed; 0 failed') { throw 'Missing or failed keymap regression' }
       - name: Extract the released comparison package
         if: matrix.variant == 'baseline'
         shell: pwsh
