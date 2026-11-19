@@ -1,0 +1,65 @@
+name: Verify Windows tray behavior through a real Explorer restart
+on:
+  push:
+    branches: [qa/tray-native-980-1119]
+permissions:
+  contents: read
+
+jobs:
+  tray:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, candidate]
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - if: matrix.variant == 'candidate'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - if: matrix.variant == 'candidate'
+        uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: "-release-check-v2"
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Build the trace-enabled candidate
+        if: matrix.variant == 'candidate'
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-shell --bin pebrel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Extract the released comparison package
+        if: matrix.variant == 'baseline'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP pebrel-259.zip
+          curl.exe --fail --location --retry 3 --output $zip https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-x64.zip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $zip).Hash -ne '140514042062641FEB09484CF00F5E9FCC6344B84D949CA2E67FBB8025926CD5') { throw 'Digest mismatch' }
+          $dest = Join-Path $env:RUNNER_TEMP released
+          Expand-Archive -LiteralPath $zip -DestinationPath $dest
+          $exe = @(Get-ChildItem $dest -Recurse -File -Filter pebrel.exe)
+          if ($exe.Count -ne 1) { throw 'Expected one released executable' }
+          "TRAY_BASELINE=$($exe[0].FullName)" >> $env:GITHUB_ENV
+      - name: Observe the ordinary user's icon before and after replacing Explorer
+        shell: pwsh
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          $exe = if ($env:VARIANT -eq 'baseline') { $env:TRAY_BASELINE } else { 'target/ci/pebrel.exe' }
+          python scripts/conformance/tray_restart_probe.py $exe $env:VARIANT

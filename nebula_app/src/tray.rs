@@ -192,6 +192,15 @@ mod win {
         static ICONS: RefCell<Option<Icons>> = const { RefCell::new(None) };
     }
 
+    fn trace_registration(event: &str) {
+        use std::io::Write as _;
+        if let Some(path) = std::env::var_os("PEBREL_QA_TRAY_TRACE")
+            && let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(path)
+        {
+            let _ = writeln!(log, "{event}");
+        }
+    }
+
     fn tray_thread() {
         use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -276,6 +285,7 @@ mod win {
             DefWindowProcW, PostQuitMessage, WM_LBUTTONUP, WM_RBUTTONUP,
         };
         if TASKBAR_CREATED.get() == Some(&msg) {
+            trace_registration("TaskbarCreated");
             // The same broadcast can follow a DPI change. Delete any surviving
             // registration before re-adding so this is safe to run repeatedly.
             remove_icon(hwnd);
@@ -494,6 +504,9 @@ mod win {
                 // 下一次 WM_APP_SET 重试。
                 if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } != 0 {
                     icons.added = true;
+                    trace_registration("NIM_ADD succeeded");
+                } else {
+                    trace_registration("NIM_ADD failed");
                 }
             } else if !enabled && icons.added {
                 let data = notify_data(hwnd);
