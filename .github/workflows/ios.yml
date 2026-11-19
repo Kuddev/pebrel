@@ -11,6 +11,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/tmp/host-rust
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check architecture and package contracts
+        run: |
+          python3 scripts/check_architecture.py --base 4cac5843
+          python3 -m unittest discover -s mobile/ios/tools
+          python3 -m unittest discover -s mobile/tools -p test_build_ghostty.py
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+      - name: Test mobile SSH and Noise
+        run: |
+          cargo test --manifest-path mobile/ssh/Cargo.toml --locked
+          cargo build --manifest-path mobile/ssh/Cargo.toml --locked
+          cc -std=c11 -Wall -Werror -Imobile/ssh/include mobile/ssh/tests/c_session.c \
+            -L"$CARGO_TARGET_DIR/debug" -Wl,-rpath,"$CARGO_TARGET_DIR/debug" -lpebrel_ssh -o tmp/test-ssh
+          if ! test -x /usr/sbin/sshd; then
+            sudo apt-get update
+            sudo apt-get install -y openssh-server
+          fi
+          sudo install -d -m755 /run/sshd
+          python3 mobile/ios/tools/sshd_fixture.py sh -c \
+            'tmp/test-ssh "$PEBREL_TEST_PORT" "$PEBREL_TEST_USER" "$PEBREL_TEST_KEY_PATH" "$PEBREL_TEST_FINGERPRINT"'
+      - uses: actions/cache@v4
+        id: host-vt
+        with:
+          path: tmp/ios-vt/host
+          key: linux-vt-${{ runner.arch }}-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/ios/tools/build_vt.py', 'mobile/tools/build_ghostty.py') }}
+      - name: Build host VT
+        if: steps.host-vt.outputs.cache-hit != 'true'
+        run: python3 mobile/ios/tools/build_vt.py --output tmp/ios-vt
+      - name: Test terminal bridge
+        run: |
+          cc -std=c11 -Wall -Werror -Imobile/terminal-bridge/include -Itmp/ios-vt/host/include \
+            mobile/terminal-bridge/src/*.c mobile/terminal-bridge/tests/grid.c \
+            tmp/ios-vt/host/lib/libghostty-vt.a -lm -lpthread -o tmp/test-grid
+          tmp/test-grid
+
   simulator:
     runs-on: macos-26
     timeout-minutes: 90
@@ -22,11 +71,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Identify Apple toolchain
+        id: apple
+        run: echo "build=$(xcodebuild -version | tail -1 | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
+        id: apple-vt
         with:
-          path: tmp/ios-vt
-          key: ios-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/ios/tools/build_vt.py', 'mobile/tools/build_ghostty.py') }}
+          path: |
+            tmp/ios-vt/GhosttyVT.xcframework
+            tmp/ios-vt/device/include
+            tmp/ios-vt/licenses
+          key: ios-vt-products-${{ steps.apple.outputs.build }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/ios/tools/build_vt.py', 'mobile/tools/build_ghostty.py') }}
       - name: Build device and simulator VT slices
+        if: steps.apple-vt.outputs.cache-hit != 'true'
         run: python3 mobile/ios/tools/build_vt.py --output tmp/ios-vt
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,7 +94,7 @@ jobs:
           path: |
             ~/.cargo/registry
             tmp/ios-rust
-          key: ios-rust-${{ runner.arch }}-${{ hashFiles('mobile/ssh/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ios-rust-${{ steps.apple.outputs.build }}-${{ runner.arch }}-${{ hashFiles('mobile/ssh/Cargo.lock', 'rust-toolchain.toml') }}
       - name: Build device and simulator SSH slices
         run: |
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
