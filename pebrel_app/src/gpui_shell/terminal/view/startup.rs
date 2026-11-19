@@ -44,7 +44,6 @@ impl TerminalView {
             palette,
             term_config,
             copy_on_select,
-            shell,
         ) = match cx.try_global::<Settings>() {
             Some(settings) => (
                 [
@@ -61,14 +60,6 @@ impl TerminalView {
                 Arc::new(settings.palette.clone()),
                 settings.term_config(),
                 settings.copy_on_select,
-                // 设置选定的默认 shell（旧壳 default_shell_launch 同径：
-                // resolve 失败或 PTY 集成 id 落回引擎默认）。WSL id 在
-                // 这里换上 bash 集成注入，cwd/git 分支经 NEBULA| 标题回流。
-                settings
-                    .shell_id
-                    .as_deref()
-                    .and_then(crate::shell_detect::resolve_id)
-                    .map(|detected| detected.shell()),
             ),
             None => (
                 std::array::from_fn(|_| REQUIRED_FONT_FAMILY.to_owned()),
@@ -81,7 +72,6 @@ impl TerminalView {
                 pebrel_terminal::term::Config::default(),
                 // 旧壳的出厂默认即开。
                 true,
-                None,
             ),
         };
         let ligatures =
@@ -96,9 +86,40 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
+        let (launch, saved_launch, profile_env, literal_argv) = match launch {
+            TerminalLaunch::Profile { profile, cwd } => {
+                let shell = crate::profile_launch::shell(&profile);
+                let shell_name = profile.shell_id.clone().or_else(|| Some(profile.name.clone()));
+                let env = profile.env.clone();
+                let identity = crate::profile_launch::snapshot(profile);
+                (
+                    TerminalLaunch::Local { cwd, shell: Some(shell), shell_name },
+                    Some(identity),
+                    env,
+                    false,
+                )
+            },
+            TerminalLaunch::Command { name, shell, cwd } => {
+                let identity = crate::session::LaunchSession::Command {
+                    name: name.clone(),
+                    program: shell.program().to_owned(),
+                    args: shell.args().to_vec(),
+                };
+                (
+                    TerminalLaunch::Local { cwd, shell: Some(shell), shell_name: Some(name) },
+                    Some(identity),
+                    Default::default(),
+                    true,
+                )
+            },
+            launch => (launch, None, Default::default(), false),
+        };
         let mut initial_cwd = match &launch {
             TerminalLaunch::Local { cwd, .. } => {
                 cwd.as_ref().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
+            },
+            TerminalLaunch::Profile { .. } | TerminalLaunch::Command { .. } => {
+                unreachable!("local launch normalized above")
             },
             TerminalLaunch::Ssh { destination, cwd, .. } => {
                 cwd.clone().unwrap_or_else(|| destination.clone())
@@ -123,14 +144,27 @@ impl TerminalView {
             TerminalLaunch::Local { cwd, shell: launch_shell, shell_name } => {
                 // 显式 launch（会话恢复/创建时冻结）优先；只有旧会话没有
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
-                let effective = launch_shell.or(shell);
-                startup_intro = accepts_startup_intro(effective.as_ref());
+                // 设置里的 shell 只在这一刻解析：SSH/串口和已冻结的 launch
+                // 用不到它，提前解析只会白做一次注册表/PATH 探测。
+                let effective = launch_shell.or_else(|| {
+                    cx.try_global::<Settings>()
+                        .and_then(|settings| settings.shell_id.as_deref())
+                        .and_then(crate::shell_detect::resolve_id)
+                        .map(|detected| detected.shell())
+                });
+                startup_intro = !literal_argv && accepts_startup_intro(effective.as_ref());
                 let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
                 // The WSL distribution is resolved once, at spawn, and pinned into
                 // the spawn while `session_launch` stays as configured.
-                let wsl_distro = snapshot_shell.as_ref().and_then(|shell| {
-                    crate::shell_detect::wsl_spawn_distro(shell.program(), shell.args())
-                });
+                let wsl_distro = snapshot_shell
+                    .as_ref()
+                    .filter(|shell| {
+                        !literal_argv
+                            || crate::platform::launch_directory::is_wsl_program(shell.program())
+                    })
+                    .and_then(|shell| {
+                        crate::shell_detect::wsl_spawn_distro(shell.program(), shell.args())
+                    });
                 let spawn_shell = crate::shell_detect::spawn_shell(
                     effective,
                     snapshot_shell.as_ref(),
@@ -142,7 +176,17 @@ impl TerminalView {
                 let suggest_env = spawn_shell
                     .as_ref()
                     .map(|shell| {
-                        crate::completion_context::launch_environment(shell.program(), shell.args())
+                        if literal_argv {
+                            crate::completion_context::literal_launch_environment(
+                                shell.program(),
+                                shell.args(),
+                            )
+                        } else {
+                            crate::completion_context::launch_environment(
+                                shell.program(),
+                                shell.args(),
+                            )
+                        }
                     })
                     .unwrap_or_default();
                 let session_launch = snapshot_shell.as_ref().map_or(
@@ -153,7 +197,27 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(spawn_shell, pane_id, cwd);
+                let global_env = cx.try_global::<Settings>().map(|settings| &settings.env);
+                let options = session::local_options(
+                    spawn_shell,
+                    pane_id,
+                    cwd,
+                    global_env,
+                    &profile_env,
+                    literal_argv,
+                );
+                let session_launch = match saved_launch {
+                    Some(crate::session::LaunchSession::Command { name, .. }) => {
+                        let shell =
+                            options.shell.as_ref().expect("explicit command retains its program");
+                        crate::session::LaunchSession::Command {
+                            name,
+                            program: shell.program().to_owned(),
+                            args: shell.args().to_vec(),
+                        }
+                    },
+                    identity => identity.unwrap_or(session_launch),
+                };
                 if let Some(cwd) = &options.working_directory {
                     initial_cwd = cwd.to_string_lossy().into_owned();
                 }
@@ -162,7 +226,11 @@ impl TerminalView {
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
+                let exec_context = if literal_argv {
+                    crate::runtime_exec::PaneExecContext::from_literal_pty_options(&options)
+                } else {
+                    crate::runtime_exec::PaneExecContext::from_pty_options(&options)
+                };
                 let spawned =
                     session::spawn(initial, term_config, options, automatic_command_views);
                 if spawned.is_ok()
@@ -186,6 +254,9 @@ impl TerminalView {
                     session_launch,
                     spawned,
                 )
+            },
+            TerminalLaunch::Profile { .. } | TerminalLaunch::Command { .. } => {
+                unreachable!("local launch normalized above")
             },
             TerminalLaunch::Ssh { destination, cwd, resume_target } => (
                 Some(destination.clone()),

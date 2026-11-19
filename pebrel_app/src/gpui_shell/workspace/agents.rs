@@ -345,7 +345,8 @@ impl NebulaWorkspace {
             Some(
                 crate::session::LaunchSession::Profile { .. }
                 | crate::session::LaunchSession::Ssh { .. }
-                | crate::session::LaunchSession::Serial { .. },
+                | crate::session::LaunchSession::Serial { .. }
+                | crate::session::LaunchSession::Command { .. },
             ) => return,
         };
         // A WSL session continues in the same guest and directory, as a duplicate does.

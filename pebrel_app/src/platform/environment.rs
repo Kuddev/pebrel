@@ -1,12 +1,33 @@
 //! Startup aliases and platform compatibility for local terminal environments.
 
+/// Windows child environments identify names without ASCII case distinctions.
+/// Unix launch adapters retain distinct names such as `PATH` and `Path`.
+pub(crate) const fn names_case_insensitive() -> bool {
+    cfg!(windows)
+}
+
+/// Preserve a direct program's argument vector at the native PTY boundary.
+pub(crate) fn prepare_literal_command(options: &mut pebrel_terminal::tty::Options) {
+    prepare_local_pty_mode(options, true);
+}
+
 /// Refresh local pane environments before adding identity and other pane overrides.
 pub(crate) fn prepare_local_pty(options: &mut pebrel_terminal::tty::Options) {
+    prepare_local_pty_mode(options, false);
+}
+
+fn prepare_local_pty_mode(options: &mut pebrel_terminal::tty::Options, literal: bool) {
     #[cfg(windows)]
     {
+        if literal {
+            options.escape_args = true;
+        }
         // 同一次启动共用设置快照，避免重复读盘或两次读取间设置变化。
         let settings = pebrel_settings::RuntimeSettings::load();
         super::launch_directory::prepare_wsl(options, settings.startup_directory.as_deref());
+        if !literal {
+            super::shell::prepare_startup_directory(options);
+        }
         prepare_windows_local_pty(options, settings.refresh_environment);
         // Both Windows shells use this adapter after environment refresh. New
         // panes get the selected protocol; existing processes remain unchanged.
@@ -17,12 +38,11 @@ pub(crate) fn prepare_local_pty(options: &mut pebrel_terminal::tty::Options) {
         }
     }
     #[cfg(not(windows))]
-    let _ = options;
+    let _ = (options, literal);
 }
 
 #[cfg(windows)]
 fn prepare_windows_local_pty(options: &mut pebrel_terminal::tty::Options, refresh: bool) {
-    super::shell::prepare_startup_directory(options);
     if refresh && let Err(error) = pebrel_terminal::tty::refresh_environment(options) {
         log::warn!("Could not refresh the Windows environment for a new pane: {error}");
     }
@@ -109,6 +129,31 @@ fn configuration_override(suffix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_program_keeps_its_requested_unc_working_directory() {
+        let directory = std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu\home\guest");
+        let mut options = pebrel_terminal::tty::Options {
+            shell: Some(pebrel_terminal::tty::Shell::new(
+                "powershell.exe".into(),
+                vec!["-NoProfile".into(), "-Command".into(), "pwd".into()],
+            )),
+            working_directory: Some(directory.clone()),
+            ..Default::default()
+        };
+        #[cfg(windows)]
+        let mut legacy = options.clone();
+        super::prepare_literal_command(&mut options);
+        assert_eq!(options.working_directory, Some(directory));
+        #[cfg(windows)]
+        {
+            assert!(options.escape_args);
+            super::prepare_local_pty(&mut legacy);
+            if let Some(home) = super::super::dirs::home_dir() {
+                assert_eq!(legacy.working_directory, Some(home));
+            }
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn inherited_environment_reaches_a_real_child_with_pane_overrides() {

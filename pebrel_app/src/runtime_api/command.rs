@@ -1,6 +1,186 @@
-//! Runtime 请求解析、输入校验与终端采集边界。
+//! Runtime 命令模型、请求解析、输入校验与终端采集边界。
 
 use super::*;
+
+#[derive(Debug, Clone)]
+pub enum RuntimeCommand {
+    Snapshot,
+    Conversation {
+        window_id: u64,
+        pane_id: u64,
+        request: conversation::Request,
+    },
+    Tab {
+        window_id: u64,
+        request: tabs::Request,
+    },
+    NewWindow {
+        /// 普通启动 / Explorer 右键要求新开窗口时，把目标目录一路带到首个标签。
+        cwd: Option<PathBuf>,
+        /// 命令行 `--shell <id>` 指名要用的 shell；`None` = 用设置里的默认 shell。
+        /// 右键菜单「在 Pebrel 中打开（Ubuntu）」靠它把 WSL 意图带进已有实例。
+        shell_id: Option<String>,
+    },
+    CloseWindow {
+        window_id: Option<u64>,
+    },
+    Focus {
+        window_id: Option<u64>,
+        pane_id: Option<u64>,
+    },
+    NewTab {
+        window_id: Option<u64>,
+        cwd: Option<PathBuf>,
+        /// Caller-resolved native interpretation of an ambiguous Windows path.
+        host_cwd: Option<PathBuf>,
+        /// 见 [`RuntimeCommand::NewWindow::shell_id`]。
+        shell_id: Option<String>,
+        /// Literal PTY command; mutually exclusive with an explicit shell id.
+        command: Option<crate::config::ui_config::Program>,
+    },
+    CloseTab {
+        window_id: Option<u64>,
+        tab_index: usize,
+    },
+    RenameTab {
+        window_id: Option<u64>,
+        tab_index: usize,
+        name: String,
+    },
+    MoveTab {
+        window_id: Option<u64>,
+        tab_index: usize,
+        to_index: usize,
+    },
+    Split {
+        window_id: Option<u64>,
+        pane_id: Option<u64>,
+        direction: RuntimeSplitDirection,
+    },
+    ClosePane {
+        window_id: Option<u64>,
+        pane_id: u64,
+    },
+    ZoomPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        zoomed: bool,
+    },
+    ResizePane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        ratio: f32,
+    },
+    Notify {
+        window_id: Option<u64>,
+        pane_id: u64,
+        title: Option<String>,
+        message: String,
+    },
+    Prompt {
+        window_id: Option<u64>,
+        pane_id: u64,
+        text: String,
+        submit: bool,
+    },
+    Paste {
+        window_id: Option<u64>,
+        pane_id: u64,
+        text: String,
+        submit: bool,
+    },
+    ReadPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        lines: usize,
+        screen: Option<ScreenMode>,
+    },
+    ScrollPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        lines: i16,
+        column: u16,
+        row: u16,
+        application_only: bool,
+    },
+    Procs {
+        window_id: Option<u64>,
+        pane_id: u64,
+    },
+    SendKey {
+        window_id: Option<u64>,
+        pane_id: u64,
+        key: RuntimeKey,
+        modifiers: RuntimeKeyModifiers,
+        repeat: u16,
+    },
+    Run {
+        window_id: Option<u64>,
+        pane_id: u64,
+        command: String,
+        wait: bool,
+        timeout_ms: u64,
+    },
+    Exec {
+        window_id: Option<u64>,
+        pane_id: u64,
+        argv: Vec<String>,
+        timeout_ms: u64,
+        max_output_bytes: usize,
+    },
+    Git {
+        window_id: Option<u64>,
+        pane_id: u64,
+        request: git::Request,
+    },
+    AgentStart {
+        window_id: Option<u64>,
+        pane_id: Option<u64>,
+        name: String,
+        kind: crate::ai_agents::AgentKind,
+        cwd: Option<PathBuf>,
+        session_id: Option<String>,
+        command: String,
+        worktree: Option<crate::git_worktree::WorktreeProvenance>,
+    },
+    AgentFork {
+        window_id: Option<u64>,
+        source_pane_id: Option<u64>,
+        source_cwd: Option<PathBuf>,
+        name: String,
+        kind: crate::ai_agents::AgentKind,
+        session_id: Option<String>,
+        command: String,
+        branch: Option<String>,
+        base: Option<String>,
+        path: Option<PathBuf>,
+        allow_dirty_source: bool,
+    },
+    AgentPrompt {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        submit: bool,
+    },
+    AgentPaste {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        submit: bool,
+    },
+    AgentRead {
+        agent: String,
+        generation: Option<u64>,
+        lines: usize,
+    },
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl RuntimeCommand {
+    pub(crate) fn test_request(method: &str, params: Value) -> Result<Self, ApiError> {
+        Self::from_request(&ApiRequest::new("fixture".into(), method, params))
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +204,16 @@ struct WindowParams {
     /// 老客户端不带这个字段的行为不变。
     #[serde(default)]
     shell: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewTabParams {
+    window_id: Option<u64>,
+    cwd: Option<PathBuf>,
+    host_cwd: Option<PathBuf>,
+    shell: Option<String>,
+    argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +268,17 @@ struct PromptParams {
     text: String,
     #[serde(default = "default_true")]
     submit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotifyParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    #[serde(default)]
+    title: Option<String>,
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,11 +481,52 @@ impl RuntimeCommand {
                 Ok(Self::Focus { window_id: params.window_id, pane_id: params.pane_id })
             },
             "tab.new" => {
-                let params: WindowParams = parse_params(&request.params)?;
+                let params: NewTabParams = parse_params(&request.params)?;
+                for (name, directory) in
+                    [("cwd", params.cwd.as_ref()), ("host_cwd", params.host_cwd.as_ref())]
+                {
+                    if directory
+                        .is_some_and(|path| path.as_os_str().as_encoded_bytes().contains(&0))
+                    {
+                        return Err(ApiError::invalid_params(format!(
+                            "{name} must not contain NUL"
+                        )));
+                    }
+                }
+                if let Some(host_cwd) = &params.host_cwd {
+                    if params
+                        .cwd
+                        .as_deref()
+                        .and_then(crate::platform::launch_directory::guest_path)
+                        .is_none()
+                        || !host_cwd.is_absolute()
+                    {
+                        return Err(ApiError::invalid_params(
+                            "host_cwd requires a rooted guest cwd and an absolute native path",
+                        ));
+                    }
+                }
+                let command = params
+                    .argv
+                    .map(|argv| {
+                        validate_exec_argv(&argv)?;
+                        if params.shell.is_some() {
+                            return Err(ApiError::invalid_params(
+                                "shell and argv are mutually exclusive",
+                            ));
+                        }
+                        Ok(crate::config::ui_config::Program::WithArgs {
+                            program: argv[0].clone(),
+                            args: argv[1..].to_vec(),
+                        })
+                    })
+                    .transpose()?;
                 Ok(Self::NewTab {
                     window_id: params.window_id,
                     cwd: params.cwd,
+                    host_cwd: params.host_cwd,
                     shell_id: params.shell,
+                    command,
                 })
             },
             "tab.close" => {
@@ -351,6 +593,19 @@ impl RuntimeCommand {
                     pane_id: params.pane_id,
                     text: params.text,
                     submit: params.submit,
+                })
+            },
+            "pane.notify" => {
+                let params: NotifyParams = parse_params(&request.params)?;
+                validate_notification_text(&params.message, "notification message")?;
+                if let Some(title) = &params.title {
+                    validate_notification_text(title, "notification title")?;
+                }
+                Ok(Self::Notify {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    title: params.title,
+                    message: params.message,
                 })
             },
             "pane.paste" => {
@@ -549,6 +804,14 @@ pub(crate) fn validate_prompt(text: &str) -> Result<(), ApiError> {
         return Err(ApiError::invalid_params(
             "prompt text contains control characters; pane.prompt accepts one plain-text line",
         ));
+    }
+    Ok(())
+}
+
+fn validate_notification_text(text: &str, label: &str) -> Result<(), ApiError> {
+    validate_multiline_text(text, label)?;
+    if text.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params(format!("{label} must be one plain-text line")));
     }
     Ok(())
 }

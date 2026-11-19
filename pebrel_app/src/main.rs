@@ -46,6 +46,7 @@ mod app_icon;
 mod assistant_answer;
 mod atomic_file;
 mod backup_remote;
+mod bearer_token;
 mod brand;
 mod chemistry;
 mod cli;
@@ -103,6 +104,8 @@ mod plugins;
 #[cfg(all(unix, feature = "legacy-shell"))]
 mod polling;
 mod process_tree;
+mod profile_environment;
+mod profile_launch;
 mod prompt_suggestions;
 mod provider_test;
 mod proxy_test;

@@ -5,9 +5,11 @@
 //! actually installed, in a stable, familiar order:
 //! PowerShell 7 → Windows PowerShell → CMD → Git Bash → Zsh → Nushell → WSL distros.
 //!
-//! Detection touches the filesystem and the registry, so callers run it ONCE
-//! per process (at first menu open) and cache the result — see
-//! `Display::nebula_detected_shells`.
+//! Detection touches the filesystem and the registry, so [`detect_shells`]
+//! keeps one process-wide snapshot: repeated callers (startup, session
+//! restore, every new pane) reuse it. Shell pickers call
+//! [`refresh_detection`] when they open, which is also when a shell installed
+//! while Pebrel is running becomes visible.
 //!
 //! Every entry also carries a stable `id` for the "default shell" setting
 //! (`shell=<id>` in nebula_settings.txt): ids re-resolve to fresh paths on
@@ -204,6 +206,7 @@ pub fn display_name_for_id(id: &str) -> String {
         "fish" => "Fish".into(),
         "zellij" => "Zellij".into(),
         "nu" => "Nushell".into(),
+        "niu" => "Niu".into(),
         _ => trimmed.to_owned(),
     }
 }
@@ -216,8 +219,66 @@ fn env_path(var: &str) -> Option<PathBuf> {
     std::env::var_os(var).map(PathBuf::from)
 }
 
+/// Process-wide detection snapshot. The registry and PATH only change when the
+/// user installs or removes a shell, so a reader that finds the snapshot skips
+/// the filesystem walk entirely; [`refresh_detection`] is the explicit boundary
+/// where discovery may run again.
+struct ShellDetection {
+    shells: std::sync::RwLock<Option<Vec<DetectedShell>>>,
+}
+
+impl ShellDetection {
+    const fn new() -> Self {
+        Self { shells: std::sync::RwLock::new(None) }
+    }
+
+    fn snapshot(&self) -> Vec<DetectedShell> {
+        if let Some(shells) = self.read() {
+            return shells;
+        }
+        // Holding the write lock across detection also keeps concurrent first
+        // calls from running the whole scan twice.
+        let mut slot = self.shells.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.get_or_insert_with(detect_uncached).clone()
+    }
+
+    fn replace(&self, shells: Vec<DetectedShell>) {
+        *self.shells.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shells);
+    }
+
+    fn read(&self) -> Option<Vec<DetectedShell>> {
+        self.shells.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+}
+
+static SHELL_DETECTION: std::sync::OnceLock<ShellDetection> = std::sync::OnceLock::new();
+
+fn detection_cache() -> &'static ShellDetection {
+    SHELL_DETECTION.get_or_init(ShellDetection::new)
+}
+
 /// Detect every installed shell, menu order.
+///
+/// The result is a process-wide snapshot; repeated calls do not touch the
+/// registry or PATH again. Call [`refresh_detection`] at an explicit boundary:
+/// a picker opening, or a shell-id lookup that missed the snapshot.
 pub fn detect_shells() -> Vec<DetectedShell> {
+    detection_cache().snapshot()
+}
+
+/// Re-run discovery, replace the process-wide snapshot and return it, so a
+/// shell installed after startup shows up in the next picker that opens. Only
+/// explicit boundaries call this: a picker opening, or a shell-id lookup that
+/// missed the snapshot.
+pub fn refresh_detection() -> Vec<DetectedShell> {
+    let shells = detect_uncached();
+    detection_cache().replace(shells.clone());
+    shells
+}
+
+fn detect_uncached() -> Vec<DetectedShell> {
+    #[cfg(test)]
+    detection_probe::record();
     #[cfg(windows)]
     {
         detect_windows()
@@ -225,6 +286,33 @@ pub fn detect_shells() -> Vec<DetectedShell> {
     #[cfg(not(windows))]
     {
         detect_unix()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod detection_probe {
+    use std::cell::Cell;
+
+    // Per-thread so parallel tests and their unrelated detection cannot skew
+    // the count. Only [`start`] enables counting, and only on this thread.
+    thread_local! {
+        static DETECTIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    pub(crate) fn start() {
+        DETECTIONS.with(|count| count.set(Some(0)));
+    }
+
+    pub(crate) fn record() {
+        DETECTIONS.with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + 1));
+            }
+        });
+    }
+
+    pub(crate) fn stop() -> usize {
+        DETECTIONS.with(|count| count.replace(None).unwrap_or(0))
     }
 }
 
@@ -411,10 +499,10 @@ fn find_windows_zsh(directories: impl IntoIterator<Item = PathBuf>) -> Option<De
         let profile = crate::terminal_profiles::scan_directory(&directory)
             .ok()?
             .into_iter()
-            .find(|profile| profile.shell_id == "zsh")?;
+            .find(|profile| profile.shell_id.as_deref() == Some("zsh"))?;
         Some(DetectedShell {
             name: profile.name,
-            id: profile.shell_id,
+            id: profile.shell_id?,
             program: profile.command.to_string_lossy().into_owned(),
             args: profile.args,
         })
@@ -565,11 +653,13 @@ pub(crate) struct WslOptions<'a> {
     /// Any distribution selector appeared (including `--distribution-id`,
     /// `--system` and an empty name): this launch does not follow the default.
     selects_distribution: bool,
+    opaque_distribution: bool,
     /// The launch picks its own start directory: a leading `~`, `--cd` or `--cd=`.
     pub(crate) chooses_directory: bool,
     /// The guest command's program (after `--` / `-e` / `--exec`, or the first
     /// non-option argument); `None` starts the guest's login shell.
     pub(crate) command: Option<&'a str>,
+    pub(crate) directory: Option<&'a str>,
 }
 
 impl WslOptions<'_> {
@@ -595,7 +685,11 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
     }
     // A leading `~` means "start in the home directory" and does not end the options.
     let home = args.first().is_some_and(|arg| arg == "~");
-    let mut options = WslOptions { chooses_directory: home, ..WslOptions::default() };
+    let mut options = WslOptions {
+        chooses_directory: home,
+        directory: home.then_some("~"),
+        ..WslOptions::default()
+    };
     let mut index = usize::from(home);
     while let Some(arg) = args.get(index) {
         let value = args.get(index + 1).map(String::as_str).and_then(non_empty);
@@ -606,8 +700,14 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
                 options.selects_distribution = true;
             },
             "-u" | "--user" => options.user = value,
-            "--distribution-id" => options.selects_distribution = true,
-            "--cd" => options.chooses_directory = true,
+            "--distribution-id" => {
+                options.selects_distribution = true;
+                options.opaque_distribution = true;
+            },
+            "--cd" => {
+                options.chooses_directory = true;
+                options.directory = value;
+            },
             "--shell-type" => {},
             "--" | "-e" | "--exec" => {
                 options.command = value;
@@ -617,13 +717,15 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
                 index -= 1;
                 if option == "--system" || option.starts_with("--distribution-id=") {
                     options.selects_distribution = true;
+                    options.opaque_distribution = true;
                 } else if let Some(distro) = option.strip_prefix("--distribution=") {
                     options.distro = non_empty(distro);
                     options.selects_distribution = true;
                 } else if let Some(user) = option.strip_prefix("--user=") {
                     options.user = non_empty(user);
-                } else if option.starts_with("--cd=") {
+                } else if let Some(directory) = option.strip_prefix("--cd=") {
                     options.chooses_directory = true;
+                    options.directory = non_empty(directory);
                 } else if !option.starts_with("--shell-type=") {
                     options.command = Some(option);
                     break;
@@ -687,6 +789,18 @@ pub(crate) fn wsl_args_in_directory(
     wsl_args_with_directory(program, args, Some(&wsl_raw_arg(cwd)?))
 }
 
+/// Direct-command argv is escaped once by the native PTY encoder.
+pub(crate) fn wsl_literal_args_in_directory(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+) -> Option<Vec<String>> {
+    if cwd.is_empty() || cwd.chars().any(char::is_control) || !wsl_accepts_startup_arg(cwd) {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(cwd))
+}
+
 /// A value as one raw argument of the command line `wsl.exe` splits itself: a
 /// value with whitespace is quoted whole (see [`wsl_accepts_startup_arg`]).
 fn wsl_raw_arg(value: &str) -> Option<String> {
@@ -717,6 +831,25 @@ pub fn wsl_args_pinned(program: &str, args: &[String], distro: &str) -> Option<V
     let mut pinned = args.to_vec();
     pinned.splice(at..at, ["-d".to_owned(), distro.to_owned()]);
     Some(pinned)
+}
+
+/// Carry a raw own directory only when both launches explicitly identify the same guest.
+pub(crate) fn wsl_args_with_restored_directory(
+    previous_program: &str,
+    previous_args: &[String],
+    program: &str,
+    args: &[String],
+) -> Option<Vec<String>> {
+    let previous = wsl_launch(previous_program, previous_args)?;
+    let current = wsl_launch(program, args)?;
+    if previous.opaque_distribution
+        || current.opaque_distribution
+        || previous.distro.zip(current.distro).is_none_or(|(old, new)| old != new)
+        || previous.user.zip(current.user).is_none_or(|(old, new)| old != new)
+    {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(previous.directory?))
 }
 
 /// Let WSL inherit an explicit host cwd, removing only its own --cd options.
@@ -1595,6 +1728,37 @@ test "$token" = "$__pebrel_shell_token" || exit 96
         assert_eq!(launched.args().first().map(String::as_str), Some("-NoLogo"));
         assert!(launched.args().iter().any(|arg| arg == "-Command"));
         assert!(!launched.args().iter().any(|arg| arg.eq_ignore_ascii_case("-NoProfile")));
+    }
+
+    /// The process snapshot is what production callers pay for: one scan until
+    /// a picker explicitly asks for fresh results.
+    #[test]
+    fn detection_is_cached_until_an_explicit_refresh() {
+        detection_probe::start();
+        refresh_detection();
+        let first = detect_shells();
+        let second = detect_shells();
+        assert_eq!(first, second);
+        assert_eq!(
+            detection_probe::stop(),
+            1,
+            "repeated detect_shells calls must reuse the process snapshot"
+        );
+
+        detection_probe::start();
+        refresh_detection();
+        assert_eq!(detect_shells(), first);
+        assert_eq!(detection_probe::stop(), 1, "refresh must re-run discovery once");
+    }
+
+    /// The cache must not turn an unknown explicit id into the default shell.
+    #[test]
+    fn resolve_id_keeps_unknown_ids_unresolved() {
+        assert_eq!(resolve_id("no-such-shell-is-installed"), None);
+        assert_eq!(resolve_id("  "), None);
+        // An unregistered WSL distro is still unknown here; `resolve_shell_id`
+        // may synthesize a `wsl.exe -d` launch, but `resolve_id` must not.
+        assert_eq!(resolve_id("wsl:definitely-not-registered"), None);
     }
 
     #[test]

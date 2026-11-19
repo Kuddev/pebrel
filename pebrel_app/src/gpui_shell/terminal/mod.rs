@@ -29,6 +29,8 @@ mod osc_links;
 mod reading;
 pub mod session;
 mod session_pump;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use session_pump::native_fixture::LocalPtyPump;
 mod ssh_connect_overlay;
 pub mod suggest;
 pub mod view;
@@ -36,6 +38,13 @@ pub mod view;
 use gpui::{App, KeyBinding};
 
 gpui::actions!(pebrel_terminal, [TerminalTab, TerminalBackTab]);
+
+/// Explicit user-configured terminal bytes, adapted from config::Action::Esc.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = pebrel_terminal, no_json)]
+pub(super) struct SendString {
+    pub(super) text: String,
+}
 
 pub(super) const KEY_CONTEXT: &str = "NebulaTerminal";
 

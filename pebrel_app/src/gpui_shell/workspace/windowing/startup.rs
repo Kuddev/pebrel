@@ -85,11 +85,7 @@ pub(super) fn initial_startup(
     isolated: bool,
 ) -> WorkspaceStartup {
     if let Some(command) = command {
-        let program = command.program().to_owned();
-        let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
-        let launch =
-            crate::session::LaunchSession::Shell { name, program, args: command.args().to_vec() };
-        let launch = super::super::shell_launch::at_explicit_directory(launch, cwd.as_deref());
+        let launch = super::super::shell_launch::command_launch(&command, cwd.as_deref());
         return WorkspaceStartup::LaunchTerminal { cwd, launch };
     }
     if cwd.is_some() || isolated {
@@ -241,7 +237,7 @@ mod startup_tests {
         assert_eq!(actual_cwd, cwd);
         assert_eq!(
             launch,
-            crate::session::LaunchSession::Shell {
+            crate::session::LaunchSession::Command {
                 name: "shell.exe".into(),
                 program: "shell.exe".into(),
                 args: vec!["--literal=two words".into()]
@@ -262,7 +258,7 @@ mod startup_tests {
             else {
                 panic!("explicit WSL launch was discarded");
             };
-            let crate::session::LaunchSession::Shell { program, args, .. } = launch else {
+            let crate::session::LaunchSession::Command { program, args, .. } = launch else {
                 panic!("expected command shell");
             };
             let mut options = pebrel_terminal::tty::Options {
@@ -270,14 +266,15 @@ mod startup_tests {
                 working_directory: actual_cwd,
                 ..Default::default()
             };
-            crate::platform::launch_directory::prepare_wsl(&mut options, Some("/different"));
-            let directory = cwd.to_str().unwrap();
-            let encoded =
-                if directory.contains(' ') { format!("\"{directory}\"") } else { directory.into() };
-            assert_eq!(
-                options.shell.unwrap().args(),
-                &["--cd", &encoded, "-d", "Ubuntu", "--exec", "pwd"]
-            );
+            crate::platform::environment::prepare_literal_command(&mut options);
+            if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+                assert_eq!(
+                    options.shell.unwrap().args(),
+                    &["--cd", cwd.to_str().unwrap(), "-d", "Ubuntu", "--exec", "pwd"]
+                );
+            } else {
+                assert_eq!(options.shell.unwrap().args(), &["-d", "Ubuntu", "--exec", "pwd"]);
+            }
         }
     }
 

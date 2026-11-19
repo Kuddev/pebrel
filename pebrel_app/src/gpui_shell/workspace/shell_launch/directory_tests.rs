@@ -4,6 +4,31 @@ use crate::gpui_shell::workspace::NebulaWorkspace;
 use crate::session::LaunchSession;
 
 #[test]
+fn native_wsl_named_program_receives_only_literal_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let Some(program) = crate::platform::launch_directory::test_posix_echo_alias(directory.path())
+    else {
+        return;
+    };
+    let command = crate::config::ui_config::Program::WithArgs {
+        program: program.to_str().unwrap().into(),
+        args: vec!["literal value".into()],
+    };
+    let LaunchSession::Command { program, args, .. } =
+        command_launch(&command, Some(directory.path()))
+    else {
+        panic!("expected a direct command");
+    };
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"literal value\n");
+}
+
+#[test]
 fn explicit_directory_reaches_the_terminal_without_changing_the_saved_profile() {
     let saved = tempfile::tempdir().unwrap();
     let requested = tempfile::tempdir().unwrap();
@@ -13,22 +38,24 @@ fn explicit_directory_reaches_the_terminal_without_changing_the_saved_profile() 
         args: vec!["--login".into()],
         cwd: Some(saved.path().to_string_lossy().into_owned()),
         shell_id: Some("custom".into()),
+        profile_id: None,
+        env_snapshot: None,
     };
     let snapshot = at_explicit_directory(profile.clone(), Some(requested.path()));
-    let TerminalLaunch::Local { cwd, shell, .. } =
+    let TerminalLaunch::Profile { cwd, profile: resolved } =
         NebulaWorkspace::terminal_launch_from_session(&snapshot, Some(requested.path().into()))
     else {
         panic!("expected a local terminal");
     };
     assert_eq!(cwd.as_deref(), Some(requested.path()));
-    let shell = shell.unwrap();
+    let shell = resolved.shell();
     assert_eq!(shell.program(), "custom-shell");
     assert_eq!(shell.args(), &["--login"]);
 
     // Starting the same saved profile again without an override keeps its default.
     let unchanged = at_explicit_directory(profile.clone(), None);
     assert_eq!(unchanged, profile);
-    let TerminalLaunch::Local { cwd, .. } =
+    let TerminalLaunch::Profile { cwd, .. } =
         NebulaWorkspace::terminal_launch_from_session(&unchanged, None)
     else {
         panic!("expected a local terminal");
@@ -61,6 +88,8 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
             args: args.clone(),
             cwd: None,
             shell_id: Some("wsl:Team Linux".into()),
+            profile_id: None,
+            env_snapshot: None,
         },
         LaunchSession::Shell {
             name: "WSL project".into(),
@@ -70,14 +99,23 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
     ] {
         assert_eq!(at_explicit_directory(launch.clone(), None), launch);
         let snapshot = at_explicit_directory(launch, Some(requested.path()));
-        let TerminalLaunch::Local { cwd, shell, .. } =
-            NebulaWorkspace::terminal_launch_from_session(&snapshot, Some(requested.path().into()))
-        else {
-            panic!("expected WSL to launch through the local PTY");
+        let (cwd, shell) = match NebulaWorkspace::terminal_launch_from_session(
+            &snapshot,
+            Some(requested.path().into()),
+        ) {
+            TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.unwrap()),
+            TerminalLaunch::Profile { cwd, profile } => {
+                (cwd, crate::profile_launch::shell(&profile))
+            },
+            _ => panic!("expected WSL to launch through the local PTY"),
         };
         assert_eq!(cwd.as_deref(), Some(requested.path()));
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            assert_eq!(shell.args(), args.as_slice());
+            continue;
+        }
         assert_eq!(
-            shell.unwrap().args(),
+            shell.args(),
             &[
                 "--cd",
                 requested.path().to_str().unwrap(),
@@ -112,7 +150,11 @@ fn explicit_relative_host_directory_is_absolute_before_wsl_receives_it() {
     let value = directory.to_str().unwrap();
     let encoded =
         if value.contains([' ', '\t']) { format!("\"{value}\"") } else { value.to_owned() };
-    assert_eq!(args, vec!["--cd".to_owned(), encoded]);
+    if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+        assert_eq!(args, vec!["--cd".to_owned(), encoded]);
+    } else {
+        assert!(args.is_empty(), "native programs keep their literal arguments");
+    }
 }
 
 #[test]
@@ -131,6 +173,10 @@ fn explicit_guest_directory_survives_to_the_wsl_launch() {
     };
     let mut options =
         pebrel_terminal::tty::Options { shell, working_directory: cwd, ..Default::default() };
+    if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+        assert_eq!(options.shell.unwrap().args(), &["-d", "Ubuntu", "--user", "guest"]);
+        return;
+    }
     crate::platform::launch_directory::prepare_wsl(&mut options, Some("/different"));
     assert_eq!(
         options.shell.unwrap().args(),
@@ -149,14 +195,24 @@ fn profile_directory_precedes_guest_home_but_explicit_wsl_cd_keeps_precedence() 
             args: if own_directory { vec!["--cd".into(), "/chosen".into()] } else { Vec::new() },
             cwd: Some(directory.path().to_string_lossy().into_owned()),
             shell_id: None,
+            profile_id: None,
+            env_snapshot: None,
         };
-        let TerminalLaunch::Local { shell, cwd, .. } =
+        let TerminalLaunch::Profile { profile, cwd } =
             NebulaWorkspace::terminal_launch_from_session(&profile, None)
         else {
             panic!("expected local WSL launch")
         };
-        let mut options =
-            pebrel_terminal::tty::Options { shell, working_directory: cwd, ..Default::default() };
+        let mut options = pebrel_terminal::tty::Options {
+            shell: Some(crate::profile_launch::shell(&profile)),
+            working_directory: cwd,
+            ..Default::default()
+        };
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            assert_eq!(options.shell.unwrap().args(), profile.args.as_slice());
+            assert_eq!(options.working_directory.as_deref(), Some(directory.path()));
+            continue;
+        }
         crate::platform::launch_directory::prepare_wsl(&mut options, None);
         assert_eq!(
             options.shell.unwrap().args(),

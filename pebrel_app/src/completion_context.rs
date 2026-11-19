@@ -94,7 +94,7 @@ impl NebulaPaneState {
         let scope = self.suggest_env.history_scope();
         history.record(&scope, line, &self.cwd);
         self.completion_context.pending_history = Some((scope, line.trim().to_owned()));
-        self.completion_submitted(line);
+        self.completion_submitted(line.trim());
     }
 
     pub(crate) fn completion_submitted(&mut self, line: &str) {
@@ -240,6 +240,18 @@ pub(crate) fn launch_environment(program: &str, args: &[String]) -> SuggestEnv {
             typed_environment(&SuggestEnv::Local, &words, false)
         },
         _ => SuggestEnv::Local,
+    }
+}
+
+/// Literal programs use the host's execution capabilities, including Unix
+/// executables whose basename happens to be `wsl`.
+pub(crate) fn literal_launch_environment(program: &str, args: &[String]) -> SuggestEnv {
+    if crate::shell_detect::is_wsl_launcher(program)
+        && !crate::platform::launch_directory::is_wsl_program(program)
+    {
+        SuggestEnv::Local
+    } else {
+        launch_environment(program, args)
     }
 }
 

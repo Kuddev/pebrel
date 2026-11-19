@@ -12,6 +12,10 @@ impl WindowContext {
         let launch = tab.launch.as_ref().unwrap_or(&session::LaunchSession::Default);
         match launch {
             session::LaunchSession::Serial { .. } => return false,
+            session::LaunchSession::Command { .. } => {
+                log::warn!("Explicit command restoration requires the GPUI runtime");
+                return false;
+            },
             session::LaunchSession::Default => {
                 self.append_default_tab(tab);
             },
@@ -19,16 +23,9 @@ impl WindowContext {
                 let shell = pebrel_terminal::tty::Shell::new(program.clone(), args.clone());
                 self.spawn_tab_shell(name.clone(), shell, TabPlacement::AfterActive);
             },
-            session::LaunchSession::Profile { name, command, args, cwd, shell_id } => {
+            session::LaunchSession::Profile { .. } => {
                 self.spawn_tab_profile_value(
-                    crate::config::ui_config::Profile {
-                        name: name.clone(),
-                        command: command.clone(),
-                        args: args.clone(),
-                        cwd: cwd.as_ref().map(std::path::PathBuf::from),
-                        shell_id: shell_id.clone(),
-                        terminal_profile_id: None,
-                    },
+                    crate::profile_launch::resolve(launch).expect("profile variant"),
                     TabPlacement::AfterActive,
                 );
             },
@@ -174,13 +171,7 @@ impl WindowContext {
                 program: shell.program().to_owned(),
                 args: shell.args().to_vec(),
             },
-            TabLaunch::Profile(profile) => session::LaunchSession::Profile {
-                name: profile.name.clone(),
-                command: profile.command.clone(),
-                args: profile.args.clone(),
-                cwd: profile.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
-                shell_id: profile.shell_id.clone(),
-            },
+            TabLaunch::Profile(profile) => crate::profile_launch::snapshot(profile.clone()),
             TabLaunch::Ssh(host) => session::LaunchSession::Ssh { host: host.clone() },
         }
     }

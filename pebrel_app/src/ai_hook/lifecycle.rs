@@ -5,7 +5,7 @@
 
 use crate::ai_agents::{AgentStatus, AgentStatusSource, Detection};
 
-use super::{AiHookEvent, AiHookKind};
+use super::{AiHookEvent, AiHookKind, AttentionKind};
 
 /// A stop from these sources proves nothing about the answer unless it carries a result, so
 /// an unclassified one returns the pane to idle instead of announcing completion.
@@ -27,6 +27,7 @@ struct Owner {
     pid: Option<u32>,
     remote_process: Option<String>,
     bridge_instance: Option<String>,
+    antigravity_lease: Option<super::native_events::AntigravityForegroundLease>,
 }
 
 /// Owns status and arbitration. Adapters may submit facts but cannot set fields.
@@ -35,6 +36,7 @@ pub(crate) struct AgentActivity {
     status: AgentStatus,
     source: AgentStatusSource,
     rule: Option<String>,
+    attention_kind: AttentionKind,
     coverage: HookCoverage,
     owner: Option<Owner>,
     idle_samples: u8,
@@ -63,6 +65,7 @@ impl Default for AgentActivity {
             status: AgentStatus::Unknown,
             source: AgentStatusSource::Unknown,
             rule: None,
+            attention_kind: AttentionKind::Unknown,
             coverage: HookCoverage::None,
             owner: None,
             idle_samples: 0,
@@ -95,11 +98,20 @@ impl AgentActivity {
             _ => self.rule.as_deref(),
         }
     }
+    pub fn attention_kind(&self) -> Option<AttentionKind> {
+        (self.status == AgentStatus::Blocked).then_some(match self.source {
+            AgentStatusSource::Hook => self.attention_kind,
+            _ => AttentionKind::Unknown,
+        })
+    }
     pub fn hook_seen(&self) -> bool {
         self.coverage != HookCoverage::None
     }
     pub fn primary_pid(&self) -> Option<u32> {
         self.owner.as_ref().and_then(|owner| owner.pid)
+    }
+    pub fn primary_session(&self) -> Option<&str> {
+        self.owner.as_ref().and_then(|owner| owner.session.as_deref())
     }
     pub fn allows_screen(&self) -> bool {
         !self.command_ended
@@ -176,6 +188,7 @@ impl AgentActivity {
         self.rule = None;
         self.screen_blocked_fallback = None;
         self.turn_observed = true;
+        self.attention_kind = AttentionKind::Unknown;
         self.pending_submit = true;
         self.last_activity_at = Some(std::time::Instant::now());
         self.input_sent();
@@ -183,8 +196,10 @@ impl AgentActivity {
 
     pub fn submitted_text(&mut self, program: &str, text: &str) {
         // Codex /plan 只切换交互模式，不触发任务 hook；若先制造 Running，
-        // 对话输入会一直等一个不存在的完成事件。普通任务仍保留提交屏障。
-        if program == "codex" && text.trim() == "/plan" {
+        // 对话输入会一直等一个不存在的完成事件。Antigravity /new 同理只切新会话。
+        if (program == "codex" && text.trim() == "/plan")
+            || (program == "antigravity" && text.trim() == "/new")
+        {
             self.input_sent();
         } else {
             self.submitted();
@@ -259,12 +274,20 @@ impl AgentActivity {
                 || matches!(event.source.as_str(), "pi" | "omp")
                     && owner.bridge_instance.is_some()
                     && owner.bridge_instance == event.bridge_instance;
+            // Antigravity spawns in-process subagents inside an active primary turn (`Working`
+            // or `Blocked`). Even if a forked subagent's parent registration file is not yet
+            // readable on disk when its `SessionStart` fires, an in-flight foreground turn must
+            // never be replaced mid-turn; legitimate `/new` switches occur only between turns.
+            let active_antigravity_turn = owner.source == "antigravity"
+                && matches!(self.status(), AgentStatus::Working | AgentStatus::Blocked);
             match (owner.pid, event.agent_pid) {
                 (Some(primary), Some(incoming)) if primary != incoming => return false,
                 _ if owner.session.is_some()
                     && event.session_id.is_some()
                     && owner.session != event.session_id
-                    && !(same_process && event.kind == AiHookKind::SessionStart) =>
+                    && !(same_process
+                        && event.kind == AiHookKind::SessionStart
+                        && !active_antigravity_turn) =>
                 {
                     return false;
                 },
@@ -272,6 +295,15 @@ impl AgentActivity {
             }
         }
         true
+    }
+
+    fn antigravity_lease_for(
+        event: &AiHookEvent,
+    ) -> Option<super::native_events::AntigravityForegroundLease> {
+        (event.source == "antigravity" && event.remote_process.is_none())
+            .then_some(event.session_id.as_deref())
+            .flatten()
+            .map(super::native_events::AntigravityForegroundLease::acquire)
     }
 
     fn record_owner(&mut self, event: &AiHookEvent) {
@@ -283,8 +315,12 @@ impl AgentActivity {
             if owner.bridge_instance.is_none() {
                 owner.bridge_instance = event.bridge_instance.clone();
             }
-            if event.session_id.is_some() {
-                owner.session = event.session_id.clone();
+            if let Some(session_id) = event.session_id.as_deref() {
+                if owner.session.as_deref() != Some(session_id) || owner.antigravity_lease.is_none()
+                {
+                    owner.antigravity_lease = Self::antigravity_lease_for(event);
+                }
+                owner.session = Some(session_id.to_owned());
             }
         } else {
             self.owner = Some(Owner {
@@ -293,6 +329,7 @@ impl AgentActivity {
                 pid: event.agent_pid,
                 remote_process: event.remote_process.clone(),
                 bridge_instance: event.bridge_instance.clone(),
+                antigravity_lease: Self::antigravity_lease_for(event),
             });
         }
     }
@@ -330,6 +367,11 @@ impl AgentActivity {
             HookCoverage::Completion
         };
         self.coverage = coverage;
+        self.attention_kind = if event.kind == AiHookKind::SessionStart && event.session_compacted {
+            self.attention_kind().unwrap_or_default()
+        } else {
+            event.attention.as_ref().map(|attention| attention.kind).unwrap_or_default()
+        };
         self.source = AgentStatusSource::Hook;
         self.rule = None;
         self.screen_blocked_fallback = None;

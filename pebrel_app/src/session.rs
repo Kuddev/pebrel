@@ -47,6 +47,13 @@ pub enum LaunchSession {
         program: String,
         args: Vec<String>,
     },
+    /// Explicit program with literal argv, including on Windows. Shell launches
+    /// retain their existing platform bootstrap/command-line-fragment contract.
+    Command {
+        name: String,
+        program: String,
+        args: Vec<String>,
+    },
     /// A quick-launch profile, embedded rather than referenced by name.
     Profile {
         name: String,
@@ -55,6 +62,10 @@ pub enum LaunchSession {
         cwd: Option<String>,
         #[serde(default)]
         shell_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_id: Option<String>,
+        #[serde(skip)]
+        env_snapshot: Option<crate::profile_environment::ProfileEnvironment>,
     },
     /// A saved SSH destination; restoring reconnects automatically.
     Ssh {

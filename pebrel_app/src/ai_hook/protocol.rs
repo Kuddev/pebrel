@@ -24,6 +24,10 @@ static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// then the hook's raw JSON payload verbatim (the helper never re-encodes;
 /// all JSON work happens here, off the turn's hot path).
 pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
+    parse_envelope_with_transport(bytes, true)
+}
+
+fn parse_envelope_with_transport(bytes: &[u8], local_transport: bool) -> Option<AiHookEvent> {
     let received_at_ms = unix_time_ms();
     let received_sequence = RECEIVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let nl = bytes.iter().position(|&b| b == b'\n')?;
@@ -103,6 +107,15 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     } else {
         reported_session_id
     };
+    if source == "antigravity"
+        && super::native_events::classify_antigravity_envelope(
+            &payload,
+            session_id.as_deref(),
+            local_transport,
+        ) != super::native_events::AntigravityVerdict::Primary
+    {
+        return None;
+    }
     let mut event_id =
         context_string(&payload, &["event_id", "eventId"]).map(|id| truncate(&id, ID_MAX_CHARS));
     let turn_id =
@@ -127,6 +140,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     let permission_mode = context_string(&payload, &["permission_mode", "permissionMode"])
         .as_deref()
         .and_then(AiPermissionMode::parse);
+    let mut native_attention = None;
     let (kind, message) = match source.as_str() {
         // 第二道串台门。第一道在 pebrel_hook 里靠环境变量判断调用方是不是别家
         // 的 hook runner；那种门会被上游改名静默失效，所以这里独立再拦一次：
@@ -222,7 +236,9 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         },
         "cursor" if payload.get("hookEventName").is_some() => return None,
         "cursor" | "copilot" | "grok" | "antigravity" => {
-            super::native_events::parse(&source, native_event?, &payload)?
+            let event = super::native_events::parse(&source, native_event?, &payload)?;
+            native_attention = event.attention_kind;
+            (event.kind, event.message)
         },
         _ => return None,
     };
@@ -270,6 +286,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         AiTurnOutcome::Unknown
     };
     let attention = (kind == AiHookKind::NeedsAttention).then(|| AttentionContext {
+        kind: super::attention::from_payload(&source, &payload, permission_mode, native_attention),
         source: source.clone(),
         pane_id: pane,
         session_id: session_id.clone(),
@@ -365,7 +382,7 @@ fn unix_time_ms() -> u64 {
 /// 远端会话只能提交事件语义，Pane 身份始终由本地 PTY 通道覆盖，
 /// 防止远端载荷把通知路由到同一窗口中的其他标签页。
 pub(crate) fn parse_remote_envelope(bytes: &[u8], pane: Option<u64>) -> Option<AiHookEvent> {
-    let mut event = parse_envelope(bytes)?;
+    let mut event = parse_envelope_with_transport(bytes, false)?;
     // Only this entrypoint is reached after SSH/WSL token verification. Ignore
     // claimed process metadata on the local named-pipe path.
     let header = std::str::from_utf8(bytes.split(|byte| *byte == b'\n').next()?).ok()?;

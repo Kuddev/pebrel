@@ -199,6 +199,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::ClosePane { .. }
             | RuntimeCommand::ZoomPane { .. }
             | RuntimeCommand::ResizePane { .. }
+            | RuntimeCommand::Notify { .. }
             | RuntimeCommand::ReadPane { .. }
             | RuntimeCommand::ScrollPane { .. }
             | RuntimeCommand::Procs { .. }
@@ -295,20 +296,19 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::NewTab { window_id, cwd, shell_id } => {
+            RuntimeCommand::NewTab { window_id, cwd, host_cwd, shell_id, command } => {
                 self.runtime_window_requested(*window_id)?;
                 // 带 shell 的请求（右键「在 Pebrel 中打开（Ubuntu）」并入驻留实例）
                 // 必须走 add_terminal_with：add_terminal_at 只认目录，会把 shell
                 // 悄悄丢掉，用户拿到一个自己没要过的 PowerShell 标签。
-                let pane_id = match shell_id {
-                    Some(shell_id) => {
-                        let launch =
-                            super::shell_launch::resolve_shell_at(shell_id, cwd.as_deref())
-                                .map_err(|error| ApiError::new("invalid_shell", error))?;
-                        self.add_terminal_with(launch, cwd.clone(), None, window, cx)
-                    },
-                    None => self.add_terminal_at(cwd.clone(), None, window, cx),
-                };
+                let (launch, directory) = super::shell_launch::runtime_tab_launch(
+                    cwd.clone(),
+                    host_cwd.clone(),
+                    shell_id.as_deref(),
+                    command.as_ref(),
+                    cx,
+                )?;
+                let pane_id = self.add_terminal_with(launch, directory, None, window, cx);
                 self.runtime_result(
                     json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
                     window,
@@ -518,6 +518,29 @@ impl NebulaWorkspace {
                         "pane_id": pane_id,
                         "ratio": ratio
                     }),
+                    window,
+                    cx,
+                )
+            },
+            RuntimeCommand::Notify { window_id, pane_id, title, message } => {
+                self.runtime_window_requested(*window_id)?;
+                if self.tab_of_pane(*pane_id).is_none() {
+                    return Err(ApiError::new(
+                        "target_not_found",
+                        format!("pane {pane_id} does not exist"),
+                    ));
+                }
+                self.deliver_pane_notification(
+                    *pane_id,
+                    crate::notify::Notification::Runtime {
+                        title: title.clone(),
+                        message: message.clone(),
+                    },
+                    window,
+                    cx,
+                );
+                self.runtime_result(
+                    json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
                     window,
                     cx,
                 )

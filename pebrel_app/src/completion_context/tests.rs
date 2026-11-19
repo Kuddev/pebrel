@@ -20,6 +20,24 @@ fn native_confirmation_counts_once_but_repeated_submissions_increase_frequency()
 }
 
 #[test]
+fn leading_space_submissions_stay_out_of_grid_and_native_history() {
+    let scope = HistoryScope::Ssh(format!("leading-space-{}", std::process::id()));
+    let mut state = pane(SuggestEnv::Shell { scope: scope.clone() }, "space-owner");
+    // A grid-observed Enter followed by PSReadLine confirming the same line.
+    state.record_submitted_command(" echo hidden-grid");
+    state.completion_shell_report(INPUT_VAR, "space-owner\n echo hidden-grid");
+    state.completion_shell_report(SHELL_VAR, "space-owner");
+    // A line reported only by PSReadLine.
+    state.completion_shell_report(INPUT_VAR, "space-owner\n echo hidden-native");
+    assert_eq!(state.last_committed, "echo hidden-native");
+    state.completion_shell_report(SHELL_VAR, "space-owner");
+    state.completion_shell_report(INPUT_VAR, "space-owner\necho shown-native");
+    let hint = |prefix| crate::completion::history_hint_for_test(&scope, prefix);
+    assert!(hint("echo hidden").is_none());
+    assert_eq!(hint("echo shown").as_deref(), Some("-native"));
+}
+
+#[test]
 fn native_accepted_input_requires_a_known_owner_and_records_the_complete_line() {
     let scope = HistoryScope::Ssh("native-editor-history-qa".into());
     let mut state = NebulaPaneState::default();
@@ -202,6 +220,17 @@ fn launch_classifies_named_default_wsl_and_direct_ssh() {
         SuggestEnv::Wsl { distro: "Ubuntu".into() }
     );
     assert!(matches!(launch_environment("ssh.exe", &["host".into()]), SuggestEnv::Shell { .. }));
+}
+
+#[test]
+fn literal_program_scope_uses_the_native_wsl_capability() {
+    let actual = literal_launch_environment("wsl.exe", &["-d".into(), "Ubuntu".into()]);
+    if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+        assert_eq!(actual, SuggestEnv::Wsl { distro: "Ubuntu".into() });
+    } else {
+        assert_eq!(actual, SuggestEnv::Local);
+    }
+    assert_eq!(literal_launch_environment("ordinary-program", &[]), SuggestEnv::Local);
 }
 
 #[test]
