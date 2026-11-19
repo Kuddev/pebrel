@@ -5,6 +5,26 @@
       "id": "issue-1028",
       "commit": "37ead86c4f4f0e70000934dd522a6a7f79a0a94d",
       "verification": "Windows x64 exercised disable, enable and remove with an initially absent Startup folder. The Windows shortcut implementation and regression match the tested mainline source. https://github.com/Kuddev/pebrel/actions/runs/44470749751/job/135379819383"
+    },
+    {
+      "id": "issue-1016",
+      "commit": "b131f29145df224db577cf8be9efc13053708bb5",
+      "verification": "The stable candidate converted TIFF clipboard pixels to PNG and kept terminal transfer formats unchanged on Windows x64. The mainline decoder also passed native macOS ARM64 and Intel suites. https://github.com/Kuddev/pebrel/actions/runs/44493984839/job/135456383275"
+    },
+    {
+      "id": "wsl-registry-subtree",
+      "commit": "11fc950e40d31c83a74262ccb2dd303ebae5aac5",
+      "verification": "The parent installer lost an edited WSL verb. The stable Inno installer fixture verified registration and cleanup preserve modified directory and background verbs. https://github.com/Kuddev/pebrel/actions/runs/44493984839/job/135456383662"
+    },
+    {
+      "id": "issue-1042",
+      "commit": "8e436670b0c7dbbdf0bf0510680f12e824f4567d",
+      "verification": "The released Windows build opened powershell.exe. The stable candidate opened the configured pwsh.exe in the running elevated window. https://github.com/Kuddev/pebrel/actions/runs/44493984839/job/135456383275"
+    },
+    {
+      "id": "ssh-hook-complete-answer",
+      "commit": "ee086614c3df0e6d4e595bee5ebf75a8164281b7",
+      "verification": "The stable parent lost fitting completion answers. The backport passed all 16 remote hook tests, including five completion event formats, 1- and 16000-character fitting answers and the 30000-character fallback."
     }
   ]
 }
