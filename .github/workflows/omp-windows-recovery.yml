@@ -1,0 +1,52 @@
+name: OMP 18.22.2 Windows recovery
+on:
+  push:
+    branches: [qa/omp-windows-recovery-1119]
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: "-release-check-v2"
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Build the candidate and its hook helper
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p pebrel -p pebrel_hook --features pebrel/gpui-test-support --bin pebrel --bin pebrel-hook
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install the verified upstream OMP executable
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP omp-bin
+          New-Item -ItemType Directory -Path $bin | Out-Null
+          $exe = Join-Path $bin omp.exe
+          curl.exe --fail --location --retry 3 --output $exe https://github.com/can1357/oh-my-pi/releases/download/v18.22.2/omp-windows-x64.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne 'BAB49ACF7E0BCA6FC98213B1F9F21BC7BFDB5070AFA52EB494EC400337395848') {
+            throw 'OMP release digest does not match v18.22.2'
+          }
+          $bin >> $env:GITHUB_PATH
+      - name: Force-close Pebrel and verify the restored conversation in PowerShell 7
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe
