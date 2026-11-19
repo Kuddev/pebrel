@@ -4,19 +4,21 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.6.0 - Unreleased
+## 2.6.0 - 2026-11-19
 
-- `Pebrel-v2.6.0-android-universal-preview.apk`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-linux-x64-preview.deb`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-relay-manual.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-windows-arm64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-windows-x64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.0-windows-x64.zip`: `PENDING FINAL BUILD`
+```text
+ddab0834fe11765ab743596574a0e97d5d1f6621601b775102aec33af4393d1c  Pebrel-v2.6.0-android-universal-preview.apk
+ff968dc63cc5d0726884c44120cb6010cf84a41b5ee71b379b95b852dceaf4db  Pebrel-v2.6.0-linux-x64-preview.AppImage
+4ffe708184416f7e4a25f41c55ec3bba74625b3a7a9fbeba2fc7f2d5e52ca903  Pebrel-v2.6.0-linux-x64-preview.deb
+11988446d425471e528b070bb2c9987b800d1b14ca3e90964cdeb38bc9dcf662  Pebrel-v2.6.0-linux-x64-preview.tar.gz
+bbf1df83ef12777ed86a88fe890c2cab01f583dfe33d0c55f35fe42914376fa9  Pebrel-v2.6.0-macos-arm64-preview.dmg
+6f5ef424aca1047dd358ab442c8499fa104c111ae2684fad76636addc5d85c46  Pebrel-v2.6.0-macos-x64-preview.dmg
+988a125c24b719efc230e076929fe24708f4dd8f6ba4dc187b25a731fa679bbe  Pebrel-v2.6.0-relay-manual.tar.gz
+728e0c2b16d788adde94ebd096a0d117e84e1125d70c360f4ace6fa28d7e4976  Pebrel-v2.6.0-windows-arm64-setup.exe
+256c9ec2f66b57bac0c3e140cd4259987b4c00b005bdec5ab2d2cce2158db12e  Pebrel-v2.6.0-windows-arm64.zip
+4d5164a4c37f3df8d0f9753d8ca5a4446936be0343f5a94247d17f22408c507e  Pebrel-v2.6.0-windows-x64-setup.exe
+a3ff96b876f508a889119e21dada94a2ff57d07070f065c274f2bbf623139186  Pebrel-v2.6.0-windows-x64.zip
+```
 
 ### English
 
