@@ -123,7 +123,7 @@ def run(app, root):
         time.sleep(1)
         final = ctx.snapshot()
         lost = sorted(set(expected) - pane_ids(final))
-        closed = [ev["pane_id"] for ev in final["pane_lifecycles"]
+        closed = [ev["pane_id"] for ev in final.get("pane_lifecycles", [])
                   if ev["event"] == "closed" and ev["pane_id"] in expected]
         after = observations()
         delivered = sum(after[p]["reports"] - before[p]["reports"] for p in editors)
