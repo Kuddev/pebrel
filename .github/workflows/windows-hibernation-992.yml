@@ -1,0 +1,36 @@
+name: Published Windows tab hibernation and restart
+on:
+  push:
+    branches: [qa/hibernation-windows-992-1119]
+permissions:
+  contents: read
+
+jobs:
+  hibernate:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Extract the published Windows x64 Pebrel 2.5.9 ZIP
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP pebrel-259.zip
+          curl.exe --fail --location --retry 3 --output $zip https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-x64.zip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $zip).Hash -ne '140514042062641FEB09484CF00F5E9FCC6344B84D949CA2E67FBB8025926CD5') {
+            throw 'Pebrel ZIP digest differs from the public release'
+          }
+          $dest = Join-Path $env:RUNNER_TEMP pebrel-259
+          Expand-Archive -LiteralPath $zip -DestinationPath $dest
+          $exe = @(Get-ChildItem $dest -Recurse -File -Filter pebrel.exe)
+          if ($exe.Count -ne 1) { throw 'Expected a single released Pebrel executable' }
+          "PEBREL_RELEASE_EXE=$($exe[0].FullName)" >> $env:GITHUB_ENV
+      - name: Sleep a local tab, wake its original directory and reopen the workspace
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/windows_hibernation_probe.py "$env:PEBREL_RELEASE_EXE"
