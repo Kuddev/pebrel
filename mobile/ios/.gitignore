@@ -1,0 +1,4 @@
+*.xcodeproj/
+.generated/
+.build/
+.swiftpm/

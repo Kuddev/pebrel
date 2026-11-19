@@ -43,3 +43,47 @@ jobs:
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
             cargo rustc --manifest-path mobile/ssh/Cargo.toml --locked --lib --release --crate-type staticlib --target "$target"
           done
+      - name: Generate the iOS application
+        run: |
+          xcodebuild -create-xcframework \
+            -library "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libpebrel_ssh.a" -headers mobile/ssh/include \
+            -library "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/release/libpebrel_ssh.a" -headers mobile/ssh/include \
+            -output tmp/PebrelSSH.xcframework
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          python3 mobile/ios/tools/assets.py
+          export PEBREL_VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pebrel_app/Cargo.toml","rb"))["package"]["version"])')
+          echo "PEBREL_VERSION=$PEBREL_VERSION" >> "$GITHUB_ENV"
+          xcodegen generate --spec mobile/ios/project.yml
+      - name: Test PebrelCore
+        run: swift test --package-path mobile/ios/PebrelCore
+      - name: Test both native libraries and capture the terminal
+        run: |
+          device=$(python3 mobile/ios/tools/simulator.py)
+          xcrun simctl boot "$device" || xcrun simctl bootstatus "$device" -b
+          xcodebuild test -project mobile/ios/Pebrel.xcodeproj -scheme Pebrel \
+            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
+            -derivedDataPath tmp/DerivedData -resultBundlePath tmp/Simulator.xcresult
+          python3 mobile/ios/tools/simulator.py tmp/Simulator.xcresult tmp/screenshots
+      - name: Archive and audit the unsigned IPA
+        run: |
+          xcodebuild archive -project mobile/ios/Pebrel.xcodeproj -scheme Pebrel \
+            -destination 'generic/platform=iOS' -archivePath tmp/Pebrel.xcarchive CODE_SIGNING_ALLOWED=NO
+          mkdir -p tmp/ipa/Payload
+          cp -R tmp/Pebrel.xcarchive/Products/Applications/Pebrel.app tmp/ipa/Payload/
+          (cd tmp/ipa && /usr/bin/zip -qry "../Pebrel-$PEBREL_VERSION-ios-unsigned.ipa" Payload)
+          python3 mobile/ios/tools/audit_ipa.py "tmp/Pebrel-$PEBREL_VERSION-ios-unsigned.ipa" "$PEBREL_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned
+          path: tmp/*-ios-unsigned.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshots
+          path: tmp/screenshots
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('tmp/Simulator.xcresult/Info.plist') != ''
+        with:
+          name: ios-test-results
+          path: tmp/Simulator.xcresult

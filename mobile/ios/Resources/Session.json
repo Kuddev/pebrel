@@ -1,0 +1,10 @@
+[
+  "\u001b[32mdev@atlas\u001b[0m \u001b[34m~/pebrel\u001b[0m $ pwd\r\n",
+  "/home/dev/pebrel\r\n\r\n",
+  "\u001b[32mdev@atlas\u001b[0m \u001b[34m~/pebrel\u001b[0m $ ls\r\n",
+  "\u001b[34massets/      docs/       mobile/\u001b[0m\r\n",
+  "Cargo.toml   LICENSE     README.md\r\n\r\n",
+  "\u001b[32mdev@atlas\u001b[0m \u001b[34m~/pebrel\u001b[0m $ git status --short\r\n",
+  " M mobile/ios/App/TerminalGrid.swift\r\n\r\n",
+  "\u001b[32mdev@atlas\u001b[0m \u001b[34m~/pebrel\u001b[0m $ "
+]
