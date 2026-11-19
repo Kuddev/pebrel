@@ -21,6 +21,18 @@ pub(crate) fn completion_spelling(
     }
 }
 
+/// Determine the desktop host's system volume using its own OS environment.
+pub(crate) fn is_system_mount(mount: &std::path::Path) -> bool {
+    if cfg!(target_os = "windows") {
+        let drive = std::env::var("SystemDrive").ok();
+        drive.is_some_and(|drive| {
+            mount.to_string_lossy().trim_end_matches(['\\', '/']).eq_ignore_ascii_case(&drive)
+        })
+    } else {
+        mount == std::path::Path::new("/")
+    }
+}
+
 /// Match the machine names supplied by the native terminal environment.
 pub(crate) fn matches_hostname(host: &str) -> bool {
     #[cfg(windows)]
