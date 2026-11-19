@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
@@ -29,6 +30,7 @@ def run(executable, root):
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": active["index"], "name": label})
         return active["tab_id"]
 
+    os.environ.update(NEBULA_PTY_RECORD="1", NEBULA_RESIZE_TRACE="1")
     results = {}
     try:
         ctx.start()
@@ -55,6 +57,8 @@ def run(executable, root):
         else:
             raise RuntimeError("The idle PowerShell pane did not enter automatic sleep")
         results["slept_after_seconds"] = round(time.monotonic() - started)
+        trace = ctx.artifact_dir / "pebrel-1.log"
+        offset = trace.stat().st_size
         ctx.api("tab.focus", {"window_id": ctx.window_id, "tab_id": tab})
         live = ctx.poll(lambda: matches(tab, ctx.snapshot()),
                         lambda t: t and t["panes"] and t["panes"][0]["id"] != pane,
@@ -65,6 +69,21 @@ def run(executable, root):
         after = ctx.read(new_pane, lines=250)
         results["after_wake"] = {"stdout": raw_marker in after["text"], "ls": listing_marker in after["text"],
                                  "cwd": Path(live["panes"][0]["cwd"]) == ctx.work_dir}
+        with trace.open("rb") as log:
+            log.seek(offset)
+            wake = log.read().decode("utf-8", errors="replace")
+        results["trace_history"] = [
+            [stage, int(count)] for stage, count in re.findall(
+                r"\[nebula:resize-trace\] ([^ ]+) grid=[^\n]+? history=(\d+)", wake)
+        ][:90]
+        recordings = [p for p in (ctx.work_dir / "nebula.recording", Path.cwd() / "nebula.recording",
+                                   ctx.config_dir / "nebula.recording") if p.is_file()]
+        if recordings:
+            stream = recordings[0].read_bytes()
+            results["wake_sequences"] = {label: [m.start() for m in re.finditer(re.escape(seq), stream)][:8]
+                                        for label, seq in [("ED3", b"\x1b[3J"), ("ED2", b"\x1b[2J"),
+                                                           ("RIS", b"\x1bc"), ("prompt", b"\x1b]133;A")]}
+        results["history_available_after"] = after["history_available"]
         ctx.close_and_wait(timeout=25)
         saved = json.loads(ctx.session_file.read_text(encoding="utf-8"))
         results["clean_exit"] = saved.get("clean_exit")
