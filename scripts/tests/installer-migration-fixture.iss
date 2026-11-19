@@ -218,6 +218,47 @@ begin
   end;
 end;
 
+procedure CheckRelocatedWslMenu(ShellRoot, NewExecutable: string);
+var
+  OldExecutable, Menu, CommandKey, Value: string;
+  Distros: TArrayOfString;
+  Failed: Boolean;
+begin
+  Menu := ShellRoot + '\PebrelWslMenu';
+  CommandKey := Menu + '\shell\PebrelWsl0\command';
+  PreviousInstallDir := ExtractFileDir(NewExecutable) + '-previous';
+  OldExecutable := AddBackslash(PreviousInstallDir) + 'pebrel.exe';
+  SetArrayLength(Distros, 1);
+  Distros[0] := 'Debian';
+  try
+    RegisterWslContextMenuAt(ShellRoot, OldExecutable, '%1', Distros);
+    Check(RegWriteStringValue(HKCU, CommandKey + '\Custom', '', 'keep'), 'seed edited old menu');
+    Failed := False;
+    try
+      RegisterWslContextMenuAt(ShellRoot, NewExecutable, '%1', Distros);
+    except
+      Failed := True;
+    end;
+    Check(Failed and RegKeyExists(HKCU, CommandKey + '\Custom'), 'preserve edited previous installation');
+    Check(RegDeleteKeyIncludingSubkeys(HKCU, CommandKey + '\Custom'), 'remove fixture edit');
+    Check(RegWriteStringValue(HKCU, ShellRoot + '\PebrelWslLegacy\command', '',
+      '"' + OldExecutable + '" --gpui --shell "wsl:Old" --working-directory "%1"'), 'seed old flat verb');
+    RegisterWslContextMenuAt(ShellRoot, NewExecutable, '%1', Distros);
+    Check(not RegKeyExists(HKCU, ShellRoot + '\PebrelWslLegacy'), 'remove flat verb from previous install');
+    Check(RegQueryStringValue(HKCU, Menu, 'PebrelOwner', Value) and (Value = NewExecutable),
+      'register new installation as owner');
+    Check(RegQueryStringValue(HKCU, CommandKey, '', Value) and
+      (Value = '"' + NewExecutable + '" --gpui --shell "wsl:Debian" --working-directory "%1"'),
+      'relocated command uses the new executable');
+    PreviousInstallDir := ExtractFileDir(NewExecutable);
+    RegisterWslContextMenuAt(ShellRoot, NewExecutable, '%1', Distros);
+    Check(RegQueryStringValue(HKCU, Menu, 'PebrelOwner', Value) and (Value = NewExecutable),
+      'repeat install in the same directory');
+  finally
+    PreviousInstallDir := '';
+  end;
+end;
+
 procedure CheckContextMenus(Root: string);
 var
   RegistryRoot, ShellRoot, Executable, Value, Menu, ForeignCommand: string;
@@ -229,6 +270,7 @@ begin
   Executable := Root + '\Program Files\pebrel.exe';
   ForeignCommand := '"D:\other\pebrel.exe" --gpui --shell "wsl:Other" --working-directory "%1"';
   try
+    CheckRelocatedWslMenu(RegistryRoot + '\relocated', Executable);
     for Index := 0 to 1 do begin
       ShellRoot := RegistryRoot + '\root' + IntToStr(Index);
       Menu := ShellRoot + '\PebrelWslMenu';
