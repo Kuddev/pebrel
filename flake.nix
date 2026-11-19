@@ -52,7 +52,7 @@
 
           # 依赖变化（Cargo.lock 变更）后重算：把 cargoHash 设为 p.lib.fakeHash，
           # 运行 `nix build .#pebrel`，用报错里的 got 值更新这里。
-          cargoHash = "sha256-G7dEfSBerROoWL/hbWJdqeDEqw7b0Xlt7lN4jbEh648=";
+          cargoHash = "sha256-sWxONMlesMlyMyI3lN5ebM4m5CZ3Z+eJxQF2cL3zkpQ=";
 
           # 主程序在自身所在目录查找 pebrel-hook。
           cargoBuildFlags = [
