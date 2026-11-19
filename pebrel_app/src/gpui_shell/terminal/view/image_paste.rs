@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::{ClipboardEntry, ClipboardItem, Context, ParentElement as _, SharedString, Window};
 use gpui_component::{Sizable as _, WindowExt as _, checkbox::Checkbox};
@@ -12,16 +13,17 @@ use crate::gpui_shell::prelude::{ButtonVariant, confirm_dialog};
 use crate::gpui_shell::toast::{self, ToastKind};
 use crate::i18n::Message;
 
-const MAX_STAGED_IMAGES: usize = 32;
+mod lifetime;
+use lifetime::{Attachment, Attachments, ImageOwner, Retire};
+
 const MAX_STAGED_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Default)]
 pub(super) struct ImagePasteState {
     pending: bool,
     generation: u64,
-    count: usize,
-    bytes: usize,
-    files: Vec<tempfile::TempPath>,
+    attachments: Attachments,
+    cleanup: Option<gpui::Task<()>>,
 }
 
 impl ImagePasteState {
@@ -84,8 +86,12 @@ enum ImageTarget {
 
 struct StagedImage {
     path: String,
-    file: Option<tempfile::TempPath>,
-    bytes: usize,
+    attachment: Attachment,
+}
+
+enum StageError {
+    Budget,
+    Failed(String),
 }
 
 impl TerminalView {
@@ -121,13 +127,13 @@ impl TerminalView {
     }
 
     fn paste_image(&mut self, bytes: Vec<u8>, window: &mut Window, cx: &mut Context<Self>) {
+        self.image_paste.attachments.forget_disconnected_files();
         let issue = if self.session.is_none() || self.exited.is_some() {
             Some(Message::CommonImagePasteExpired)
         } else if self.image_paste.pending {
             Some(Message::CommonImagePasteBusy)
-        } else if self.image_paste.count >= MAX_STAGED_IMAGES
-            || self.image_paste.bytes >= MAX_STAGED_BYTES
-        {
+        } else if self.image_paste.attachments.remaining() == 0 {
+            log::warn!("Pasted images reached the 128 MiB limit for pane {}", self.pane_id);
             Some(Message::CommonImagePasteLimit)
         } else if self.ssh_destination.is_some() && self.ready_ssh_destination().is_none() {
             Some(Message::CommonImagePasteDisconnected)
@@ -162,14 +168,15 @@ impl TerminalView {
             self.command_started,
         );
         let generation = self.image_paste.generation;
-        let remaining = MAX_STAGED_BYTES - self.image_paste.bytes;
+        let remaining = self.image_paste.attachments.remaining();
         self.image_paste.pending = true;
         let work = cx.background_executor().spawn(async move {
-            let png = super::super::inline_image::clipboard_png(&bytes)?;
+            let png =
+                super::super::inline_image::clipboard_png(&bytes).map_err(StageError::Failed)?;
             if png.len() > remaining {
-                return Err("temporary images exceed the 128 MiB tab limit".to_owned());
+                return Err(StageError::Budget);
             }
-            stage_image(staged_target, connection, png).await
+            stage_image(staged_target, connection, png).await.map_err(StageError::Failed)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -200,15 +207,48 @@ impl TerminalView {
                 }
                 match result {
                     Ok(staged) => {
-                        view.image_paste.count += 1;
-                        view.image_paste.bytes += staged.bytes;
-                        if let Some(file) = staged.file {
-                            view.image_paste.files.push(file);
+                        let current_connection = view
+                            .session
+                            .as_ref()
+                            .and_then(|session| session.remote_connection.lock().ok()?.clone());
+                        if !staged.attachment.belongs_to(current_connection.as_ref()) {
+                            toast::toast(
+                                window,
+                                cx,
+                                ToastKind::Warning,
+                                ui_language().text(Message::CommonImagePasteExpired),
+                            );
+                            return;
                         }
+                        let owner = if view
+                            .running_program
+                            .as_deref()
+                            .and_then(crate::ai_agents::AgentKind::parse)
+                            .is_some()
+                        {
+                            ImageOwner::AgentDraft
+                        } else if view.command_running && !view.command_running_disproved {
+                            ImageOwner::Shell
+                        } else {
+                            ImageOwner::Draft
+                        };
+                        view.image_paste.attachments.push(staged.attachment, owner);
                         // A staged path is valid for this endpoint only.
                         view.paste_now_impl(&staged.path, false, cx);
                     },
-                    Err(error) => {
+                    Err(StageError::Budget) => {
+                        log::warn!(
+                            "Pasted image would exceed the 128 MiB limit for pane {}",
+                            view.pane_id
+                        );
+                        toast::toast(
+                            window,
+                            cx,
+                            ToastKind::Warning,
+                            ui_language().text(Message::CommonImagePasteLimit),
+                        );
+                    },
+                    Err(StageError::Failed(error)) => {
                         log::warn!("image paste failed: {error}");
                         toast::toast(
                             window,
@@ -222,6 +262,62 @@ impl TerminalView {
             });
         })
         .detach();
+    }
+
+    pub(super) fn assign_pasted_images_to_command(&mut self) {
+        self.image_paste.attachments.assign(ImageOwner::Draft, ImageOwner::Shell);
+    }
+
+    pub(super) fn retire_command_images(&mut self, cx: &mut Context<Self>) {
+        self.retire_pasted_images(Retire::Command, cx);
+    }
+
+    pub(super) fn observe_agent_image_lifetime(
+        &mut self,
+        event: &crate::ai_hook::AiHookEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ai_hook::AiHookKind;
+
+        match event.kind {
+            AiHookKind::PromptSubmit => {
+                self.image_paste.attachments.assign(ImageOwner::AgentDraft, ImageOwner::Agent);
+            },
+            AiHookKind::SessionEnd => self.retire_pasted_images(Retire::AgentSession, cx),
+            AiHookKind::TurnDone if event.active_background_tasks() == 0 => {
+                self.retire_pasted_images(Retire::AgentTurn, cx);
+            },
+            _ => {},
+        }
+    }
+
+    fn retire_pasted_images(&mut self, source: Retire, cx: &mut Context<Self>) {
+        self.image_paste.attachments.retire(source, Instant::now());
+        self.schedule_image_paste_cleanup(cx);
+    }
+
+    fn schedule_image_paste_cleanup(&mut self, cx: &mut Context<Self>) {
+        if self.image_paste.cleanup.is_some() {
+            return;
+        }
+        let Some(expires) = self.image_paste.attachments.next_expiry() else { return };
+        let timer =
+            cx.background_executor().timer(expires.saturating_duration_since(Instant::now()));
+        self.image_paste.cleanup = Some(cx.spawn(async move |this, cx| {
+            timer.await;
+            let Ok(cleanup) = this.update(cx, |view, cx| {
+                let expired = view.image_paste.attachments.take_expired(Instant::now());
+                cx.background_executor().spawn(lifetime::remove(expired))
+            }) else {
+                return;
+            };
+            let result = cleanup.await;
+            let _ = this.update(cx, |view, cx| {
+                view.image_paste.cleanup = None;
+                view.image_paste.attachments.finish_cleanup(result, Instant::now());
+                view.schedule_image_paste_cleanup(cx);
+            });
+        }));
     }
 
     // Freeze text with the dialog so a later clipboard change cannot alter it.
@@ -304,11 +400,15 @@ async fn stage_image(
     if let ImageTarget::Ssh(_) = target {
         let (sender, receiver) = futures::channel::oneshot::channel();
         let connection = connection.ok_or("SSH pane connection closed")?;
+        let owner = connection.clone();
         crate::ssh_sftp::upload_clipboard_image_on_pane(connection, png, move |result| {
-            let _ = sender.send(result);
+            let staged = result.map(|path| StagedImage {
+                attachment: Attachment::remote(path.clone(), owner, bytes),
+                path,
+            });
+            let _ = sender.send(staged);
         });
-        let path = receiver.await.map_err(|_| "image upload stopped".to_owned())??;
-        return Ok(StagedImage { path, file: None, bytes });
+        return receiver.await.map_err(|_| "image upload stopped".to_owned())?;
     }
     let file = crate::clipboard::stage_image_png(&png).map_err(|error| error.to_string())?;
     let path = match target {
@@ -319,7 +419,7 @@ async fn stage_image(
     if path.chars().any(char::is_control) {
         return Err("image path contains a control character".to_owned());
     }
-    Ok(StagedImage { path, file: Some(file), bytes })
+    Ok(StagedImage { path, attachment: Attachment::local(file, bytes) })
 }
 
 #[cfg(windows)]

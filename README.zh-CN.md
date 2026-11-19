@@ -158,7 +158,9 @@ Tab 打开列表，再次按 Tab 轮换候选，Enter 插入选中项但不执�
 - 通知跟随来源窗格，点击即可返回对应终端。
 - 已捕获的 Claude Code 与 Codex 回答可在阅读器中打开，支持 Markdown、公式、原文和本地图片预览。
   阅读器控件与提示随所选语言显示；复制原文保留完整回答。详见[阅读器语言说明](docs/answer-reader-language.md)。
-- 剪贴板图片会保存为 PNG，并把路径插入本地、WSL 或 SSH 会话。终端内直接显示图片需要 CLI
+- 剪贴板图片会保存为 PNG，并把路径插入本地、WSL 或 SSH 会话。每个窗格可暂存 128 MiB。
+  接收图片的命令或 Agent 回合结束后，文件至少再保留两分钟。关闭窗格会删除本地临时图片。
+  终端内直接显示图片需要 CLI
   输出 OSC 1337、Kitty protocol（APC，直接传输 RGB/RGBA）或 Sixel（7 位 DCS）协议；
   附件缩略图取决于 CLI 自身。
 
