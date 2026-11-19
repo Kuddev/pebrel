@@ -160,7 +160,7 @@ regex = "1.13.1"
 # `image` 被 GPUI 壳的壁纸、文档 tab、行内图片、数学视图无条件使用，必须是
 # 无条件依赖；此前按 `cfg(not(target_os = "macos"))` 排除会让 macOS 目标在
 # 编译期找不到 crate（2026-09-02 交叉 check 首个暴露的问题）。
-image = { version = "0.25.8", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+image = { version = "0.25.8", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha1 = "0.11.0"
 
