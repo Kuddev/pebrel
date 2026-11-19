@@ -1,33 +1,18 @@
 //! Android invokes the exact same crypto/framing implementation as desktop.
 //! Handles are bounded IDs, never raw pointers; close revokes and zeroizes them.
 
+use crate::link_handles::channel;
 use jni::{
     JNIEnv,
     objects::{JByteArray, JObject},
     sys::{jboolean, jbyteArray, jlong, jobjectArray, jstring},
 };
 use pebrel_mobile_link::{
-    crypto::{LinkError, MAX_MESSAGE, MAX_PACKET, SecureChannel},
+    crypto::{LinkError, MAX_MESSAGE, MAX_PACKET},
     identity::Secret,
 };
-use std::{
-    collections::HashMap,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use zeroize::Zeroizing;
-
-type Channel = Arc<Mutex<SecureChannel>>;
-#[derive(Default)]
-struct Handles {
-    next: i64,
-    channels: HashMap<i64, Channel>,
-}
-
-fn handles() -> &'static Mutex<Handles> {
-    static HANDLES: OnceLock<Mutex<Handles>> = OnceLock::new();
-    HANDLES.get_or_init(|| Mutex::new(Handles::default()))
-}
 
 fn invoke<T: Default>(
     env: &mut JNIEnv,
@@ -54,16 +39,6 @@ fn bytes(env: &JNIEnv, array: &JByteArray, max: usize) -> Result<Zeroizing<Vec<u
     Ok(Zeroizing::new(env.convert_byte_array(array).map_err(|_| LinkError::Frame)?))
 }
 
-fn channel(id: i64) -> Result<Channel, LinkError> {
-    handles()
-        .lock()
-        .map_err(|_| LinkError::State)?
-        .channels
-        .get(&id)
-        .cloned()
-        .ok_or(LinkError::State)
-}
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_kuddev_pebrel_ssh_NativeLink_create(
     mut env: JNIEnv,
@@ -76,19 +51,7 @@ pub extern "system" fn Java_io_github_kuddev_pebrel_ssh_NativeLink_create(
         let host = bytes(env, &host, 32)?;
         let secret = Secret::from_bytes(&bytes(env, &secret, 32)?)?;
         let context = bytes(env, &context, 512)?;
-        let channel = SecureChannel::initiator(
-            host.as_slice().try_into().map_err(|_| LinkError::Credential)?,
-            &secret,
-            &context,
-        )?;
-        let mut handles = handles().lock().map_err(|_| LinkError::State)?;
-        if handles.channels.len() >= 32 {
-            return Err(LinkError::State);
-        }
-        handles.next = handles.next.checked_add(1).ok_or(LinkError::State)?;
-        let id = handles.next;
-        handles.channels.insert(id, Arc::new(Mutex::new(channel)));
-        Ok(id)
+        crate::link_handles::create(&host, &secret, &context)
     })
 }
 
@@ -193,11 +156,5 @@ pub extern "system" fn Java_io_github_kuddev_pebrel_ssh_NativeLink_close(
     _object: JObject,
     id: jlong,
 ) {
-    invoke(&mut env, |_| {
-        let owner = handles().lock().map_err(|_| LinkError::State)?.channels.remove(&id);
-        if let Some(owner) = owner {
-            owner.lock().map_err(|_| LinkError::State)?.close();
-        }
-        Ok(())
-    });
+    invoke(&mut env, |_| crate::link_handles::close(id));
 }
