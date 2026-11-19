@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::CommandRecord;
 
 pub(crate) const MAX_STORE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PANES: usize = 4096;
 const MAX_TRANSACTION_BYTES: usize = 2 * MAX_STORE_BYTES;
 
 pub(crate) fn archive_path() -> std::path::PathBuf {
@@ -19,8 +20,13 @@ pub(crate) fn archive_path() -> std::path::PathBuf {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Archive {
     version: u32,
+    #[serde(deserialize_with = "decode::panes")]
     panes: BTreeMap<String, Vec<CommandRecord>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "decode::previous",
+        skip_serializing_if = "Option::is_none"
+    )]
     previous: Option<Box<Archive>>,
 }
 
@@ -34,14 +40,11 @@ impl Archive {
     }
 
     fn validate(&self) -> io::Result<()> {
-        if self.version != 1 || self.panes.len() > 4096 {
+        if self.version != 1 || self.panes.len() > MAX_PANES {
             return Err(invalid("unsupported or oversized output archive"));
         }
         for (id, records) in &self.panes {
-            if id.is_empty()
-                || id.len() > 128
-                || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            {
+            if !valid_pane_id(id) {
                 return Err(invalid("invalid pane reference"));
             }
             super::RecentOutput::validate_records(records).map_err(invalid)?;
@@ -101,6 +104,10 @@ impl Archive {
     }
 }
 
+fn valid_pane_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
 fn invalid(message: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
 }
@@ -124,6 +131,7 @@ impl Write for LimitedBuffer {
     }
 }
 
+mod decode;
 mod lifecycle;
 pub(crate) use lifecycle::OutputStore;
 
@@ -217,6 +225,35 @@ mod tests {
         oversized.set_len(MAX_TRANSACTION_BYTES as u64 + 1).unwrap();
         drop(oversized);
         assert!(Archive::read_from(&path).is_err());
+    }
+
+    #[test]
+    fn archive_decoder_checks_pane_and_record_limits_before_materializing_the_next_value() {
+        let entries = (0..MAX_PANES).map(|i| format!(r#""pane-{i}":[]"#)).collect::<Vec<_>>();
+        let prefix = format!(r#"{{"version":1,"panes":{{{}"#, entries.join(","));
+        let full = format!("{prefix}}}}}");
+        let archive: Archive = serde_json::from_str(&full).unwrap();
+        assert_eq!(archive.panes.len(), MAX_PANES);
+        let extra = format!(r#"{prefix},"extra":false}}}}"#);
+        let error = serde_json::from_str::<Archive>(&extra).unwrap_err();
+        assert!(error.to_string().contains("too many panes"), "{error}");
+
+        let record = serde_json::to_string(&records("C:>test").remove(0)).unwrap();
+        let mut values = vec![record; super::super::MAX_RECORDS];
+        values.push("false".into());
+        let full = format!(r#"{{"version":1,"panes":{{"pane":[{}]}}}}"#, values.join(","));
+        let error = serde_json::from_str::<Archive>(&full).unwrap_err();
+        assert!(error.to_string().contains("too many command records"), "{error}");
+    }
+
+    #[test]
+    fn previous_generation_accepts_null_and_duplicate_pane_ids_are_rejected() {
+        let json = r#"{"previous":{"previous":null,"panes":{"earlier":[]},"version":1},"panes":{},"version":1}"#;
+        let mut archive: Archive = serde_json::from_str(json).unwrap();
+        assert!(archive.take_records("earlier").is_some());
+        let duplicate = r#"{"version":1,"panes":{"same":[],"same":[]}}"#;
+        let error = serde_json::from_str::<Archive>(duplicate).unwrap_err();
+        assert!(error.to_string().contains("duplicate pane reference"), "{error}");
     }
 
     #[test]

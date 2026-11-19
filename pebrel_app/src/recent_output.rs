@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod storage;
 
+const MAX_RECORDS: usize = 5;
 const MAX_RECORD_BYTES: usize = 256 * 1024;
 const MAX_CAPTURE_CELLS: usize = 4096;
 
@@ -61,7 +62,7 @@ impl RecentOutput {
             start.0 -= 1;
         }
         let end = Line(grid.cursor.point.line.0 + 1);
-        if self.records.len() == 5 {
+        if self.records.len() == MAX_RECORDS {
             self.records.remove(0);
         }
         self.records.push(CommandRecord {
@@ -109,7 +110,7 @@ impl RecentOutput {
     }
 
     pub(crate) fn validate_records(records: &[CommandRecord]) -> Result<(), &'static str> {
-        if records.len() > 5 {
+        if records.len() > MAX_RECORDS {
             return Err("too many command records");
         }
         for record in records {
