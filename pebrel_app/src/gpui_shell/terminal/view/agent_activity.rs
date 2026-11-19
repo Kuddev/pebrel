@@ -9,6 +9,15 @@ use crate::ai_hook::{AiHookEvent, AiHookKind};
 
 use super::{TerminalView, TerminalViewEvent, notifications};
 
+pub(super) fn record_omp_probe(detail: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    if let Some(path) = std::env::var_os("PEBREL_TEST_OMP_EVENTS")
+        && let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(file, "{detail}");
+    }
+}
+
 impl TerminalView {
     pub(super) fn observe_agent_title(
         &mut self,
@@ -29,6 +38,17 @@ impl TerminalView {
     }
 
     pub fn handle_ai_hook(&mut self, event: &AiHookEvent, cx: &mut Context<Self>) -> bool {
+        if event.source == "omp" {
+            record_omp_probe(format_args!(
+                "pane={} hook={:?} client={:?} agent={:?} file={} identity={}",
+                self.pane_id,
+                event.kind,
+                event.client_pid,
+                event.agent_pid,
+                event.session_file.is_some(),
+                event.session_id.is_some()
+            ));
+        }
         self.sync_remote_activity(cx);
         if self.ssh_destination.is_some() && event.remote_context != self.remote_activity.context {
             // Reject queued events from a previous pane/job/connection before
@@ -73,6 +93,9 @@ impl TerminalView {
                 event.source
             );
             return false;
+        }
+        if event.source == "omp" {
+            record_omp_probe(format_args!("pane={} accepted={:?}", self.pane_id, event.kind));
         }
         self.agent_activity.apply_hook(event);
         self.observe_agent_image_lifetime(event, cx);

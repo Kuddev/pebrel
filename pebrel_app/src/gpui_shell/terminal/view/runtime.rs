@@ -136,7 +136,16 @@ impl TerminalView {
     /// after the submitted shell prompt is observed again. OSC 133;D remains
     /// the primary edge; the cached-prompt path calls the same reset so the two
     /// lifecycle routes cannot drift apart.
+    #[track_caller]
     pub(super) fn clear_foreground_agent_state(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.agent_activity.hook_seen() || self.running_program.as_deref() == Some("omp") {
+            super::agent_activity::record_omp_probe(format_args!(
+                "pane={} foreground cleared at {} primary={:?}",
+                self.pane_id,
+                std::panic::Location::caller(),
+                self.agent_activity.primary_pid()
+            ));
+        }
         if let Some(session) = &self.session {
             session.term.lock().set_redraw_anchor_enabled(false);
         }
@@ -174,6 +183,7 @@ impl TerminalView {
         title_changed
     }
 
+    #[track_caller]
     pub(super) fn finish_foreground_command(
         &mut self,
         exit_code: Option<i32>,

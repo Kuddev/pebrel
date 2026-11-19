@@ -43,6 +43,8 @@ def run(app, root, fresh):
     profile = Path(os.environ["USERPROFILE"])
     agent_dir = profile / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
+    events = root / "omp-event-routing.txt"
+    os.environ["PEBREL_TEST_OMP_EVENTS"] = str(events)
     hook_log = root / "hook-outcomes.jsonl"
     os.environ.update(PEBREL_HOOK_LOG=str(hook_log), PI_CODING_AGENT_DIR=str(agent_dir),
                       OMP_SKIP_VERSION_CHECK="1", OMP_SKIP_SETUP="1", PI_OFFLINE="1",
@@ -136,6 +138,11 @@ def run(app, root, fresh):
             verify_live(session_id)
             print("Normal window close and reopen restored the same conversation.", flush=True)
     except Exception:
+        if events.is_file():
+            print("Isolated OMP lifecycle events:", events.read_text(encoding="utf-8")[-4000:], flush=True)
+        current = saved_agent() or {}
+        print("Persisted OMP identity:", current.get("source"), bool(current.get("session_id")),
+              bool(current.get("session_file")), flush=True)
         outcomes = Counter()
         if hook_log.exists():
             for line in hook_log.read_text(encoding="utf-8", errors="replace").splitlines():
