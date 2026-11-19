@@ -43,3 +43,30 @@ jobs:
       previous_tag: ${{ needs.count.outputs.base }}
       publish: true
     secrets: inherit
+
+  next-batch:
+    needs: [count, release]
+    if: >-
+      ${{ !cancelled() && needs.count.result == 'success' &&
+          (needs.release.result == 'success' ||
+           (needs.release.result == 'skipped' &&
+            needs.count.outputs.base == format('v{0}', needs.count.outputs.version))) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ needs.count.outputs.version }}
+          fetch-depth: 0
+      - name: Open an empty batch for the next patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.count.outputs.version }}
+        run: |
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          if [[ "$latest" == "v$VERSION" ]]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            python3 scripts/start_release_batch.py --published-version "$VERSION"
+          fi
