@@ -30,6 +30,11 @@
       "id": "issue-1027",
       "commit": "56ee5311994049f18bf184e0b1a2c3fb8334be8f",
       "verification": "On Windows x64 with PowerShell 7 and OMP 18.22.2, the stable source restored the original session ID and message after forced termination and after confirming a normal window close with a recorded clean exit. https://github.com/Kuddev/pebrel/actions/runs/44498156005/job/135470560189"
+    },
+    {
+      "id": "issue-992-wake-scrollback",
+      "commit": "57e13d36a7a9ba0723bb9b6258c05e11906f7c0a",
+      "verification": "Published Windows x64 2.5.9 lost all nine history lines. The stable candidate retained nine after 310 seconds of automatic tab sleep, restored the directory, directory listing and ordinary stdout, and reopened both named tabs after a clean exit. https://github.com/Kuddev/pebrel/actions/runs/44499791990/job/135476224025"
     }
   ]
 }
