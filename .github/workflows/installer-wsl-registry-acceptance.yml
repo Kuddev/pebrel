@@ -1,0 +1,34 @@
+name: Validate WSL registry ownership with the native installer
+on:
+  push:
+    branches: [qa/installer-wsl-registry-1119]
+permissions:
+  contents: read
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - name: Verify the parent loses an edited verb and the candidate preserves it
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is missing' }
+          git restore --source=e85a3f6a -- scripts/installer-migration.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $observed = $false
+          try {
+            ./scripts/tests/installer-migration.tests.ps1 -InnoCompiler $compiler
+          } catch {
+            if ($_.Exception.Message -notlike '*FAIL: registration must reject an edited WSL verb*') { throw }
+            Write-Output 'Confirmed the original installer proceeded with the edited registry subtree.'
+            $observed = $true
+          }
+          if (!$observed) { throw 'The parent unexpectedly passed the new fixture' }
+          git restore --source=HEAD -- scripts/installer-migration.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/tests/installer-migration.tests.ps1 -InnoCompiler $compiler
