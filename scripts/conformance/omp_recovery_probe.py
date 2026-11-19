@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from conformance.harness import ConformanceContext, ResolvedApp
@@ -61,15 +62,53 @@ def confirm_native_window_close(ctx):
         raise RuntimeError(f"Expected one visible test window, found {len(windows)}")
     hwnd = windows[0]
     ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
+    from PIL import ImageGrab
+    rect = wintypes.RECT()
+    origin = wintypes.POINT()
+    user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    if not user.GetClientRect(hwnd, ctypes.byref(rect)) or not user.ClientToScreen(hwnd, ctypes.byref(origin)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    box = (origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom)
+    before = ImageGrab.grab(bbox=box)
     result = ctypes.c_size_t()
     if not user.SendMessageTimeoutW(hwnd, 0x0010, 0, 0, 0x0002, 5000, ctypes.byref(result)):
         raise ctypes.WinError(ctypes.get_last_error())
-    # Deliver Enter to the same HWND after WM_CLOSE opens its busy-process dialog.
-    for message, flags in [(0x0100, 0x001C0001), (0x0101, 0xC01C0001)]:
-        if not user.PostMessageW(hwnd, message, 0x0D, flags):
+    # The GPUI busy-window dialog uses a wide red confirmation button to the
+    # right of Cancel. Wait for it to render and settle before clicking.
+    def find_confirm():
+        frame = ImageGrab.grab(bbox=box)
+        width, height = frame.size
+        rows = []
+        for y in range(height // 2 - 12, min(height, height // 2 + 180), 2):
+            hits = []
+            for x in range(width // 2, min(width, width // 2 + 320), 3):
+                color = frame.getpixel((x, y))[:3]
+                r, g, b = color
+                if r > g + 38 and r > b + 27 and color != before.getpixel((x, y))[:3]:
+                    hits.append(x)
+            if len(hits) >= 28 and hits[-1] - hits[0] < len(hits) * 4:
+                rows.append(((hits[-1] + hits[0]) // 2, y))
+        return rows[len(rows) // 2] if len(rows) >= 8 else None
+
+    def settled_button():
+        point = find_confirm()
+        if point:
+            time.sleep(0.22)
+            if point == find_confirm():
+                return point
+        return None
+
+    x, y = ctx.poll(settled_button, bool, "busy-window Close button did not render", timeout=15)
+    location = y << 16 | x
+    for message, flags in [(0x0200, 0), (0x0201, 1), (0x0202, 0)]:
+        if not user.SendMessageTimeoutW(hwnd, message, flags, location, 0x0002, 5000, ctypes.byref(result)):
             raise ctypes.WinError(ctypes.get_last_error())
+    print("Clicked the rendered busy-window Close button.", flush=True)
     if ctx.process.wait(timeout=20) != 0:
         raise RuntimeError("The window closed with an unsuccessful process exit")
+    if not json.loads(ctx.session_file.read_text(encoding="utf-8")).get("clean_exit"):
+        raise RuntimeError("Window exit did not persist a clean session")
     ctx.stop(force=True)
 
 
