@@ -700,6 +700,23 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn file_escape_alias_registers_the_native_minimize_key(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.update_keybinds(vec![("esc".into(), "Minimize".into())], cx);
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
+                let contexts = [gpui::KeyContext::parse(context).unwrap()];
+                let keys = [gpui::Keystroke::parse("escape").unwrap()];
+                let (bindings, pending) = keymap.bindings_for_input(&keys, &contexts);
+                assert!(!pending);
+                assert!(bindings.first().unwrap().action().as_any().is::<MinimizeWindow>());
+            }
+        });
+    }
+
+    #[gpui::test]
     fn command_shortcut_registration_follows_runtime_platform(cx: &mut TestAppContext) {
         let (_directory, workspace, mut cx) = open_workspace(1, cx);
         press("cmd-k", &mut cx);
