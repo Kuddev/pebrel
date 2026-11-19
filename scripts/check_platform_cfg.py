@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""平台 cfg 预算：`nebula_app/src/platform/` 之外的平台 `cfg` 只能减不能增。
+"""平台 cfg 预算：`pebrel_app/src/platform/` 之外的平台 `cfg` 只能减不能增。
 
 三端一致性的编译门。平台差异应收进 `platform/`（能力表 + 每平台实现），
 业务代码写 `if CAPABILITIES.xxx` 而不是 `#[cfg(windows)]`。基线数字写在
@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_ROOT = ROOT / "nebula_app" / "src"
+SOURCE_ROOT = ROOT / "pebrel_app" / "src"
 BUDGET_FILE = ROOT / "scripts" / "platform_cfg_budget.txt"
 
 # 只数平台维度的 cfg：windows / unix / target_os。feature 维度（legacy-shell、
@@ -60,7 +60,7 @@ def main(argv: list[str]) -> int:
         for name, count in worst:
             print(f"  {count:4d}  {name}", file=sys.stderr)
         print(
-            "move the platform branch into nebula_app/src/platform/ (or a CAPABILITIES check)",
+            "move the platform branch into pebrel_app/src/platform/ (or a CAPABILITIES check)",
             file=sys.stderr,
         )
         return 1
