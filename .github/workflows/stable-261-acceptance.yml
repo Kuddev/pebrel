@@ -74,6 +74,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe --fresh
 
+      - name: Retain the isolated confirmation dialog if native inspection fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omp-dialog-fixture
+          path: ${{ runner.temp }}/omp-dialog-fixture.png
+          if-no-files-found: ignore
+          retention-days: 1
+
   installer:
     runs-on: windows-2022
     timeout-minutes: 15

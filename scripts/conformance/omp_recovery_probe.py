@@ -10,7 +10,6 @@ import subprocess
 from pathlib import Path
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from conformance.harness import ConformanceContext, ResolvedApp
@@ -45,7 +44,6 @@ def confirm_native_window_close(ctx):
     user.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
                                          wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
                                          ctypes.POINTER(ctypes.c_size_t)]
-    user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     pid = ctx.snapshot()["process_id"]
     windows = []
 
@@ -63,50 +61,40 @@ def confirm_native_window_close(ctx):
     hwnd = windows[0]
     ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
     from PIL import ImageGrab
-    rect = wintypes.RECT()
-    origin = wintypes.POINT()
-    user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-    user.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
-    if not user.GetClientRect(hwnd, ctypes.byref(rect)) or not user.ClientToScreen(hwnd, ctypes.byref(origin)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    box = (origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom)
-    before = ImageGrab.grab(bbox=box)
     result = ctypes.c_size_t()
     if not user.SendMessageTimeoutW(hwnd, 0x0010, 0, 0, 0x0002, 5000, ctypes.byref(result)):
         raise ctypes.WinError(ctypes.get_last_error())
-    # The stable dialog paints its danger fill at 16% opacity. Compare it
-    # with the neutral Cancel button mirrored across the center of the dialog.
-    def find_confirm():
-        frame = ImageGrab.grab(bbox=box)
-        width, height = frame.size
-        rows = []
-        for y in range(height // 2 - 12, min(height, height // 2 + 180), 2):
-            hits = []
-            for x in range(width // 2, min(width, width // 2 + 320), 3):
-                color = frame.getpixel((x, y))[:3]
-                r, g, b = color
-                cr, cg, cb = frame.getpixel((width - x - 1, y))[:3]
-                tint = (r - g) - (cr - cg)
-                if tint > 9 and (r - b) - (cr - cb) > 5 and color != before.getpixel((x, y))[:3]:
-                    hits.append(x)
-            if len(hits) >= 17 and hits[-1] - hits[0] < len(hits) * 4:
-                rows.append(((hits[-1] + hits[0]) // 2, y))
-        return rows[len(rows) // 2] if len(rows) >= 8 else None
-
-    def settled_button():
-        point = find_confirm()
-        if point:
-            time.sleep(0.22)
-            if point == find_confirm():
-                return point
-        return None
-
-    x, y = ctx.poll(settled_button, bool, "busy-window Close button did not render", timeout=15)
-    location = y << 16 | x
-    for message, flags in [(0x0200, 0), (0x0201, 1), (0x0202, 0)]:
-        if not user.SendMessageTimeoutW(hwnd, message, flags, location, 0x0002, 5000, ctypes.byref(result)):
-            raise ctypes.WinError(ctypes.get_last_error())
-    print("Clicked the rendered busy-window Close button.", flush=True)
+    # Query the accessible button inside this HWND. Its name is supplied by
+    # the stable product's localized dialog, independently of its palette.
+    script = r"""
+param([long]$Handle)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+$root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Handle)
+$condition = [Windows.Automation.PropertyCondition]::new(
+    [Windows.Automation.AutomationElement]::NameProperty, 'Force close')
+$deadline = [DateTime]::UtcNow.AddSeconds(8)
+do {
+    $button = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($null -ne $button) {
+        $pattern = $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+        $pattern.Invoke()
+        exit 0
+    }
+    Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $deadline)
+exit 1
+"""
+    helper = ctx.artifact_dir / "confirm-window.ps1"
+    helper.write_text(script, encoding="utf-8")
+    result_code = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                                  "-File", str(helper), str(hwnd)], timeout=18).returncode
+    if result_code:
+        # Save just this synthetic window to diagnose an absent accessibility node.
+        screenshot = Path(os.environ["RUNNER_TEMP"]) / "omp-dialog-fixture.png"
+        ImageGrab.grab(window=hwnd).save(screenshot)
+        raise RuntimeError("The native Force close button was absent from the accessibility tree")
+    print("Invoked the rendered Force close button through Windows UI Automation.", flush=True)
     if ctx.process.wait(timeout=20) != 0:
         raise RuntimeError("The window closed with an unsuccessful process exit")
     if not json.loads(ctx.session_file.read_text(encoding="utf-8")).get("clean_exit"):
