@@ -18,8 +18,13 @@ export default function (pi) {
   pi.on("session_start", (_event, ctx) => {
     const base = path.join(process.env.PEBREL_MOUSE_DIR, process.env.PEBREL_MOUSE_PANE);
     let reports = 0, dirty = false;
-    ctx.ui.onTerminalInput(data => {
-      reports += (data.match(/\x1b\[<\d+;\d+;\d+[Mm]/g) || []).length;
+    let carry = "";
+    process.stdin.on("data", chunk => {
+      const data = carry + String(chunk);
+      const events = [...data.matchAll(/\x1b\[<\d+;\d+;\d+[Mm]/g)];
+      reports += events.length;
+      const last = events.at(-1);
+      carry = (last ? data.slice(last.index + last[0].length) : data).slice(-32);
     });
     setInterval(() => {
       dirty ||= ctx.ui.getEditorText().length > 0;
