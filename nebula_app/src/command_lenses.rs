@@ -2,10 +2,7 @@
 use nebula_terminal::inline_content::CommandView;
 use pebrel_completions::command_context::{CommandContext, ShellSyntax};
 
-pub(crate) fn classify(enabled: bool, shell: &str, line: &str) -> Option<CommandView> {
-    if !enabled {
-        return None;
-    }
+pub(crate) fn classify(shell: &str, line: &str) -> Option<CommandView> {
     let shell = shell.rsplit('|').next()?.split(':').next()?;
     let syntax = ShellSyntax::for_program(shell);
     let words = CommandContext::literal_arguments(line, syntax)?;
@@ -81,77 +78,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabling_automatic_views_keeps_git_status_ansi_colors() {
-        use nebula_settings::{RawSettings, RuntimeSettings};
-        use nebula_terminal::Term;
-        use nebula_terminal::event::EventListener;
-        use nebula_terminal::event_loop::StreamProcessor;
-        use nebula_terminal::grid::Dimensions;
-        use nebula_terminal::index::{Column, Line};
-        use nebula_terminal::term::Config;
-        use nebula_terminal::vte::ansi::{Color, NamedColor};
-
-        #[derive(Clone, Copy)]
-        struct Host(bool);
-        impl EventListener for Host {
-            fn command_view(&self, shell: &str, command: &str) -> Option<CommandView> {
-                classify(self.0, shell, command)
-            }
-        }
-
-        struct Size;
-        impl Dimensions for Size {
-            fn total_lines(&self) -> usize {
-                24
-            }
-            fn screen_lines(&self) -> usize {
-                24
-            }
-            fn columns(&self) -> usize {
-                80
-            }
-        }
-
-        for (settings, captured) in [("", true), ("automatic_command_views=0", false)] {
-            let current = RuntimeSettings::from_raw(&RawSettings::from_text(settings));
-            let host = Host(current.automatic_command_views);
-            let mut terminal = Term::new(Config::default(), &Size, host);
-            let mut stream = StreamProcessor::default();
-            let wire = concat!(
-                "\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07",
-                "\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmdpdCBzdGF0dXM=\x07",
-                "\x1b]133;C\x07\x1b[32mstaged\x1b[0m\r\n",
-                "\x1b[31mchanged\x1b[0m\r\n\x1b]133;D;0\x07"
-            );
-            for chunk in wire.as_bytes().chunks(7) {
-                stream.feed(&mut terminal, &host, chunk);
-            }
-            for (line, text, color) in
-                [(Line(0), "staged", NamedColor::Green), (Line(1), "changed", NamedColor::Red)]
-            {
-                let actual: String =
-                    (0..text.len()).map(|col| terminal.grid()[line][Column(col)].c).collect();
-                assert_eq!(actual, text);
-                let cell = &terminal.grid()[line][Column(0)];
-                assert_eq!(cell.fg, Color::Named(color));
-                assert_eq!(cell.inline_marker().is_some(), captured);
-            }
-        }
-    }
-
-    #[test]
     fn ordinary_commands_match_without_evaluating_shell_code() {
         for line in ["cat long.md", "Get-Content -Raw '中文 文件.md'", "cat ./a.md -Encoding utf8"]
         {
-            assert_eq!(classify(true, "pwsh:1:token", line).unwrap().mime, "text/markdown");
+            assert_eq!(classify("pwsh:1:token", line).unwrap().mime, "text/markdown");
         }
-        assert_eq!(classify(true, "bash:1", "cat 'data.json'").unwrap().mime, "application/json");
-        assert_eq!(classify(true, "pwsh:1", "git -C 'a b' diff").unwrap().mime, "text/x-diff");
+        assert_eq!(classify("bash:1", "cat 'data.json'").unwrap().mime, "application/json");
+        assert_eq!(classify("pwsh:1", "git -C 'a b' diff").unwrap().mime, "text/x-diff");
         for command in ["ls", "ls -la", "ls --color=auto '中文 目录'", "ll"] {
-            assert_eq!(classify(true, "bash:1", command).unwrap().mime, "text/x-terminal-fold");
+            assert_eq!(classify("bash:1", command).unwrap().mime, "text/x-terminal-fold");
         }
         for command in ["ls", "Get-ChildItem", "Nebula-List .", "gci -Force"] {
-            assert_eq!(classify(true, "pwsh:1", command).unwrap().mime, "text/x-terminal-fold");
+            assert_eq!(classify("pwsh:1", command).unwrap().mime, "text/x-terminal-fold");
         }
         for line in [
             "cat x.md | more",
@@ -166,7 +104,7 @@ mod tests {
             "ls | more",
             "ls > files.txt",
         ] {
-            assert!(classify(true, "pwsh:1", line).is_none(), "{line}");
+            assert!(classify("pwsh:1", line).is_none(), "{line}");
         }
     }
 }

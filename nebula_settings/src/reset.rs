@@ -18,7 +18,6 @@ const RESET_KEYS: &[&str] = &[
     "ui_font_size",
     "font_size",
     "ctrl_wheel_font_zoom",
-    "automatic_command_views",
     "ligatures",
     crate::TextAntialiasing::KEY,
     "cursor_shape",
@@ -239,20 +238,6 @@ mod tests {
         let restored = default_settings_text(original);
         assert_eq!(restored, "custom_data=keep\n");
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ai_toasts);
-    }
-
-    #[test]
-    fn resetting_preferences_restores_automatic_command_views() {
-        let enabled =
-            |text| RuntimeSettings::from_raw(&RawSettings::from_text(text)).automatic_command_views;
-        assert!(enabled(""));
-        assert!(enabled("automatic_command_views=invalid"));
-        let saved =
-            crate::apply_updates("custom_data=keep\n", &[("automatic_command_views", "0".into())]);
-        assert!(!enabled(&saved));
-        let restored = default_settings_text(&saved);
-        assert!(enabled(&restored));
-        assert!(restored.contains("custom_data=keep"));
     }
 
     #[test]

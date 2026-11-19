@@ -29,7 +29,6 @@ pub(super) enum SshPresentation {
 #[derive(Clone)]
 pub struct EventProxy {
     events: super::event_mailbox::EventSender,
-    automatic_command_views: bool,
     stages: UnboundedSender<SshPresentation>,
     remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
     resume_target: Arc<std::sync::Mutex<Option<crate::ssh_session::ResumeTarget>>>,
@@ -47,7 +46,7 @@ impl EventListener for EventProxy {
         shell: &str,
         command: &str,
     ) -> Option<nebula_terminal::inline_content::CommandView> {
-        crate::command_lenses::classify(self.automatic_command_views, shell, command)
+        crate::command_lenses::classify(shell, command)
     }
 }
 
@@ -141,7 +140,6 @@ pub(super) fn test_session_with_events() -> (
     let (stages, _) = unbounded();
     let proxy = EventProxy {
         events,
-        automatic_command_views: true,
         stages,
         remote_connection: Default::default(),
         resume_target: Default::default(),
@@ -230,7 +228,7 @@ pub fn spawn(
     term_config: Config,
     options: tty::Options,
 ) -> std::io::Result<SpawnedSession> {
-    spawn_with_scrollback(window_size, term_config, options, None, true)
+    spawn_with_scrollback(window_size, term_config, options, None)
 }
 
 pub(super) fn spawn_with_scrollback(
@@ -238,13 +236,11 @@ pub(super) fn spawn_with_scrollback(
     term_config: Config,
     options: tty::Options,
     scrollback: Option<&mut Option<nebula_terminal::term::grid_content::Scrollback>>,
-    automatic_command_views: bool,
 ) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
     let proxy = EventProxy {
         events: tx,
-        automatic_command_views,
         stages: stage_tx,
         remote_connection: Default::default(),
         resume_target: Default::default(),
@@ -305,14 +301,12 @@ pub fn spawn_serial(
     destination: &str,
     window_size: WindowSize,
     term_config: Config,
-    automatic_command_views: bool,
 ) -> std::io::Result<SpawnedSession> {
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
     let proxy = EventProxy {
         events: tx,
-        automatic_command_views,
         stages: stage_tx,
         remote_connection: Default::default(),
         resume_target: Default::default(),
@@ -354,14 +348,12 @@ pub fn spawn_ssh(
     resume_target: Option<crate::ssh_session::ResumeTarget>,
     window_size: WindowSize,
     term_config: Config,
-    automatic_command_views: bool,
 ) -> std::io::Result<SpawnedSession> {
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
     let proxy = EventProxy {
         events: tx,
-        automatic_command_views,
         stages: stage_tx,
         remote_connection: Default::default(),
         resume_target: Default::default(),

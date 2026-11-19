@@ -1024,7 +1024,6 @@ pub struct RuntimeSettings {
     /// Ctrl+滚轮缩放终端字号。默认开启以保留既有行为；关闭时该手势被整体
     /// 消费：既不缩放，也不回落成普通滚动。不影响普通滚轮与键盘字号快捷键。
     pub ctrl_wheel_font_zoom: bool,
-    pub automatic_command_views: bool,
     /// Enabled by default; explicit theme mode follows the selected theme.
     pub ligatures: Ligatures,
     pub text_antialiasing: TextAntialiasing,
@@ -1227,7 +1226,6 @@ impl RuntimeSettings {
                 .and_then(ScrollbarVisibility::from_settings)
                 .unwrap_or_default(),
             ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
-            automatic_command_views: raw.bool_on("automatic_command_views").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")
                 .and_then(Ligatures::from_settings)
