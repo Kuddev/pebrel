@@ -40,6 +40,7 @@ mod keyboard_contract_tests;
 mod mouse;
 mod program_status;
 mod prompt;
+mod pty_startup;
 pub mod reading;
 mod redraw_anchor;
 mod renderable;
@@ -251,12 +252,7 @@ pub struct Term<T> {
     presentation_origin: Option<Line>,
     presentation_scroll_generation: u64,
 
-    /// One-shot suppression of the next primary-DA answer: the side-loaded
-    /// ConPTY host's bring-up DA1 query was already answered by the response
-    /// pre-primed into conin before the host spawned (see
-    /// `tty::windows::conpty`). Answering it again hits an already-unblocked
-    /// host, which forwards the report to the shell as typed input.
-    bringup_da1_pending: bool,
+    pty_startup: pty_startup::PtyStartup,
 
     /// 当前默认背景是暗还是亮，供 DECSET 2031 的订阅方使用。
     ///
@@ -406,7 +402,7 @@ impl<T> Term<T> {
             scroll_region,
             event_proxy,
             damage,
-            bringup_da1_pending: false,
+            pty_startup: Default::default(),
             // 默认按暗底起步：Nebula 的默认主题是深色，宿主在首次
             // `set_color_scheme` 前不会有订阅方，值不会被读到。
             color_scheme_dark: true,
@@ -537,10 +533,6 @@ impl<T> Term<T> {
         }
         let value = if self.color_scheme_dark { 1 } else { 2 };
         self.event_proxy.send_event(Event::PtyWrite(format!("\x1b[?997;{value}n")));
-    }
-
-    pub(crate) fn suppress_primed_da1(&mut self) {
-        self.bringup_da1_pending = true;
     }
 
     /// Set new options for the [`Term`].

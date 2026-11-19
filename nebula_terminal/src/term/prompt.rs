@@ -23,6 +23,7 @@ impl<T> Term<T> {
         if self.mode.contains(TermMode::ALT_SCREEN) {
             return;
         }
+        self.finish_scrollback_startup();
         let abs = self.nebula_cursor_abs_line();
 
         // A screen redraw (clear, resize) can re-emit a mark for the same or

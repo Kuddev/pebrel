@@ -11,8 +11,7 @@ impl<T: EventListener> Term<T> {
             None => {
                 // The pre-primed ConPTY bring-up query was already answered;
                 // a second answer would reach the shell as typed input.
-                if self.bringup_da1_pending {
-                    self.bringup_da1_pending = false;
+                if std::mem::take(&mut self.pty_startup.primed_da1) {
                     trace!("Suppressing duplicate DA1 response (pre-primed ConPTY handshake)");
                     return;
                 }

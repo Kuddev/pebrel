@@ -96,8 +96,7 @@ impl<T> Term<T> {
         Some(Scrollback { columns: self.columns(), rows, truncated })
     }
 
-    /// Install output into a fresh Term before its event loop reads any data.
-    pub fn seed_scrollback(&mut self, scrollback: Scrollback) {
+    pub(in crate::term) fn install_scrollback(&mut self, scrollback: Scrollback) {
         self.grid.seed_scrollback(scrollback.columns, scrollback.rows);
         self.mark_fully_damaged();
     }
@@ -123,6 +122,7 @@ mod tests {
         let snapshot = source.capture_scrollback(1024 * 1024).unwrap();
         let mut resumed = Term::new(Config::default(), &TermSize::new(28, 5), VoidListener);
         resumed.seed_scrollback(snapshot);
+        resumed.nebula_add_prompt_mark();
         parser.advance(&mut resumed, b"new shell> ");
 
         assert_eq!(resumed.history_size(), 2);
@@ -131,6 +131,58 @@ mod tests {
             .bounds_to_string(Point::new(Line(-2), Column(0)), Point::new(Line(-1), Column(27)));
         assert_eq!(history, "an older line\n中文 🙂");
         assert_ne!(resumed.grid[Line(-1)][Column(0)].fg, Cell::default().fg);
+    }
+
+    fn two_saved_lines() -> Scrollback {
+        let mut source = Term::new(Config::default(), &TermSize::new(12, 3), VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::default();
+        parser.advance(&mut source, b"old first\r\nold second\r\n");
+        source.nebula_add_prompt_mark();
+        source.nebula_mark_prompt_input();
+        source.capture_scrollback(2048).unwrap()
+    }
+
+    #[test]
+    fn conpty_startup_erase_restores_rows_once() {
+        for split in 0..=8 {
+            let mut term = Term::new(Config::default(), &TermSize::new(12, 3), VoidListener);
+            term.pty_startup.scrollback = Some(two_saved_lines());
+            let mut parser = Processor::<StdSyncHandler>::default();
+            parser.advance(&mut term, b"\x1b[?1049h\x1b[3J\x1b[?1049l");
+            let clears = b"\x1b[2J\x1b[3J";
+            parser.advance(&mut term, &clears[..split]);
+            parser.advance(&mut term, &clears[split..]);
+            term.nebula_add_prompt_mark();
+            assert_eq!(term.history_size(), 2);
+            assert_eq!(
+                term.bounds_to_string(
+                    Point::new(Line(-2), Column(0)),
+                    Point::new(Line(-1), Column(11))
+                ),
+                "old first\nold second"
+            );
+            parser.advance(&mut term, b"\x1b[3J");
+            assert_eq!(term.history_size(), 0);
+        }
+    }
+
+    #[test]
+    fn first_prompt_prepends_only_rows_that_fit_before_startup_output() {
+        let config = Config { scrolling_history: 2, ..Default::default() };
+        let mut term = Term::new(config, &TermSize::new(12, 2), VoidListener);
+        term.pty_startup.scrollback = Some(two_saved_lines());
+        let mut parser = Processor::<StdSyncHandler>::default();
+        parser.advance(&mut term, b"banner one\r\nbanner two\r\n");
+        assert_eq!(term.history_size(), 1);
+        term.nebula_add_prompt_mark();
+        assert_eq!(term.history_size(), 2);
+        assert_eq!(
+            term.bounds_to_string(Point::new(Line(-2), Column(0)), Point::new(Line(0), Column(11))),
+            "old second\nbanner one\nbanner two"
+        );
+        assert_eq!(term.grid.cursor.point, Point::new(Line(1), Column(0)));
+        parser.advance(&mut term, b"\x1b[3J");
+        assert_eq!(term.history_size(), 0);
     }
 
     #[test]

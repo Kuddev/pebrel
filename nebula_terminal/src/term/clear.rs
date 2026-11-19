@@ -55,6 +55,9 @@ impl<T: EventListener> Term<T> {
             },
             ansi::ClearMode::Saved => (),
         }
+        if matches!(mode, ansi::ClearMode::Saved) && !self.mode.contains(TermMode::ALT_SCREEN) {
+            self.finish_scrollback_startup();
+        }
         self.mark_fully_damaged();
     }
 }

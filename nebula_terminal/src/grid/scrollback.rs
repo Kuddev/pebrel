@@ -7,8 +7,10 @@ use crate::term::cell::Cell;
 impl Grid<Cell> {
     /// Seed only history; the fresh PTY owns all live-screen coordinates and modes.
     pub(crate) fn seed_scrollback(&mut self, columns: usize, rows: Vec<Vec<Cell>>) {
+        let existing = self.history_size();
+        let available = self.max_scroll_limit - existing;
         let keep = rows.len().min(self.max_scroll_limit);
-        if keep == 0 || self.history_size() != 0 {
+        if keep == 0 || available == 0 {
             return;
         }
         let lines = self.screen_lines();
@@ -24,10 +26,10 @@ impl Grid<Cell> {
             history.raw[Line(index as i32 - keep as i32)] = row;
         }
         history.resize(true, lines, visible_columns);
-        self.increase_scroll_limit(history.history_size());
-        for line in history.topmost_line().0..0 {
-            let line = Line(line);
-            mem::swap(&mut self.raw[line], &mut history.raw[line]);
+        let insert = history.history_size().min(available);
+        self.increase_scroll_limit(insert);
+        for line in -(insert as i32)..0 {
+            mem::swap(&mut self.raw[Line(line - existing as i32)], &mut history.raw[Line(line)]);
         }
     }
 }
