@@ -36,6 +36,29 @@ fn input(receiver: &std::sync::mpsc::Receiver<Msg>) -> Vec<u8> {
 }
 
 #[gpui::test]
+fn repeated_image_pastes_deliver_readable_png_paths_to_one_pane(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    let pixels = image::RgbaImage::from_pixel(1, 1, image::Rgba([21, 47, 89, 255]));
+    image::DynamicImage::ImageRgba8(pixels.clone())
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let clip = gpui::Image::from_bytes(gpui::ImageFormat::Png, encoded.into_inner());
+    window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_image(&clip)));
+    view.update(window, |view, _| feed(view, b"\x1b[?2004l"));
+    let mut paths = std::collections::HashSet::new();
+    for paste in 1..=33 {
+        window.update(|window, cx| view.update(cx, |view, cx| view.paste(window, cx)));
+        window.run_until_parked();
+        let path = String::from_utf8(input(&receiver)).unwrap();
+        assert!(!path.is_empty(), "paste {paste} must reach the terminal");
+        let data = std::fs::read(&path).unwrap();
+        assert_eq!(image::load_from_memory(&data).unwrap().to_rgba8(), pixels);
+        assert!(paths.insert(path), "each paste owns its temporary file");
+    }
+}
+
+#[gpui::test]
 fn native_clipboard_broadcast_keeps_multiline_input_unsubmitted(cx: &mut TestAppContext) {
     let supported = crate::platform::CAPABILITIES.native_shell_clipboard;
     for native_input in [true, false] {
