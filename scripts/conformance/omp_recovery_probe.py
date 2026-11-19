@@ -1,6 +1,9 @@
 """Reopen a real OMP 18.22.2 conversation after terminating its Pebrel workspace."""
 import json
 import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -63,6 +66,14 @@ def run(app, root):
         ctx.poll(lambda: MARKER in ctx.read(lines=100)["text"], bool,
                  "the transcript message was missing from the live terminal", timeout=20)
 
+    binary = shutil.which("omp")
+    if not binary:
+        raise RuntimeError("Verified OMP executable is missing from the ordinary user's PATH")
+    version = subprocess.run([binary, "--version"], capture_output=True, text=True,
+                             timeout=25, cwd=ctx.work_dir, errors="replace")
+    print("OMP version check:", version.returncode,
+          (version.stdout + version.stderr).strip()[:350], flush=True)
+    version.check_returncode()
     try:
         ctx.start()
         ctx.refresh_targets()
@@ -83,6 +94,17 @@ def run(app, root):
         ctx.refresh_targets()
         verify_live()
         print("A fresh Pebrel process restored OMP's confirmed ID and the stored message.", flush=True)
+    except Exception:
+        if ctx.client and ctx.pane_id:
+            screen = ctx.read(lines=45).get("text", "")
+            screen = re.sub(r"(?i)(api[_ -]?key|token)(\s*[:=]\s*)[^\s]+", r"\1\2[redacted]", screen)
+            print("Isolated test pane:", screen[-3000:], flush=True)
+            processes = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": ctx.pane_id},
+                                allow_error=True)
+            rows = (processes.get("result") or {}).get("processes") or []
+            print("Pane processes:", [(row.get("depth"), Path(row.get("executable", "")).name)
+                                       for row in rows], flush=True)
+        raise
     finally:
         ctx.stop(force=True)
         app.close()
