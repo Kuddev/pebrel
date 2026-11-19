@@ -84,6 +84,24 @@ def build_environment(sources: Path, ndk: Path, output: Path) -> dict[str, str]:
     return environment
 
 
+def collect_notices(prefix: Path, sources: Path, zig_root: Path, packages: Path) -> None:
+    notices = prefix / "licenses"
+    notices.mkdir(exist_ok=True)
+    shutil.copy2(sources / "LICENSE", notices / "Ghostty-MIT.txt")
+    shutil.copy2(sources / "build.zig.zon", notices / "upstream-dependencies.zig.zon")
+    shutil.copy2(zig_root / "LICENSE", notices / "Zig-MIT.txt")
+    if packages.is_dir():
+        for package in sorted(packages.iterdir()):
+            if not package.is_dir():
+                continue
+            for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE-MIT", "LICENSE-APACHE", "COPYING", "NOTICE"):
+                notice = package / name
+                if notice.is_file():
+                    target = notices / package.name / name
+                    target.parent.mkdir(exist_ok=True)
+                    shutil.copy2(notice, target)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "mobile/android/ghostty/build/upstream")
@@ -124,22 +142,7 @@ def main() -> None:
             raise RuntimeError(f"Missing static library: {library}")
         (prefix / "SOURCE.json").write_text(json.dumps({**pins, "abi": abi,
             "library_sha256": digest(library)}, indent=2) + "\n", encoding="utf-8")
-        notices = prefix / "licenses"
-        notices.mkdir(exist_ok=True)
-        shutil.copy2(sources / "LICENSE", notices / "Ghostty-MIT.txt")
-        shutil.copy2(sources / "build.zig.zon", notices / "upstream-dependencies.zig.zon")
-        shutil.copy2(zig_root / "LICENSE", notices / "Zig-MIT.txt")
-        packages = output / "cache/global/p"
-        if packages.is_dir():
-            for package in sorted(packages.iterdir()):
-                if not package.is_dir():
-                    continue
-                for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE-MIT", "LICENSE-APACHE", "COPYING", "NOTICE"):
-                    notice = package / name
-                    if notice.is_file():
-                        target = notices / package.name / name
-                        target.parent.mkdir(exist_ok=True)
-                        shutil.copy2(notice, target)
+        collect_notices(prefix, sources, zig_root, output / "cache/global/p")
         print(f"Verified {abi}: {digest(library)}", flush=True)
 
 

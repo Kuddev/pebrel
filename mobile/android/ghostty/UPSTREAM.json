@@ -12,5 +12,7 @@
   "zig_windows_sha256": "3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c",
   "ndk_version": "27.2.12479018",
   "android_api": 26,
-  "license": "MIT"
+  "license": "MIT",
+  "zig_macos_arm64_url": "https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz",
+  "zig_macos_arm64_sha256": "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b"
 }

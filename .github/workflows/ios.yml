@@ -1,0 +1,45 @@
+name: iOS foundation
+on:
+  push:
+    branches: ['feat/mobile-ios-**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/tmp/ios-rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: tmp/ios-vt
+          key: ios-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/ios/tools/build_vt.py', 'mobile/tools/build_ghostty.py') }}
+      - name: Build device and simulator VT slices
+        run: python3 mobile/ios/tools/build_vt.py --output tmp/ios-vt
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            tmp/ios-rust
+          key: ios-rust-${{ runner.arch }}-${{ hashFiles('mobile/ssh/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Build device and simulator SSH slices
+        run: |
+          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
+            cargo rustc --manifest-path mobile/ssh/Cargo.toml --locked --lib --release --crate-type staticlib --target "$target"
+          done
