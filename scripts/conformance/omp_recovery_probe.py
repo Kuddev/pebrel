@@ -1,5 +1,7 @@
 """Reopen a real OMP 18.22.2 conversation after terminating its Pebrel workspace."""
 from collections import Counter
+import ctypes
+from ctypes import wintypes
 import json
 import os
 import re
@@ -31,6 +33,44 @@ def write_conversation(path, cwd):
     path.parent.mkdir()
     path.write_text("".join(json.dumps(item, separators=(",", ":")) + "\n" for item in records),
                     encoding="utf-8", newline="\n")
+
+
+def confirm_native_window_close(ctx):
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                         wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                         ctypes.POINTER(ctypes.c_size_t)]
+    user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    pid = ctx.snapshot()["process_id"]
+    windows = []
+
+    @callback
+    def collect(hwnd, _):
+        owner = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user.IsWindowVisible(hwnd):
+            windows.append(hwnd)
+        return True
+
+    user.EnumWindows(collect, 0)
+    if len(windows) != 1:
+        raise RuntimeError(f"Expected one visible test window, found {len(windows)}")
+    hwnd = windows[0]
+    ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
+    result = ctypes.c_size_t()
+    if not user.SendMessageTimeoutW(hwnd, 0x0010, 0, 0, 0x0002, 5000, ctypes.byref(result)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    # Deliver Enter to the same HWND after WM_CLOSE opens its busy-process dialog.
+    for message, flags in [(0x0100, 0x001C0001), (0x0101, 0xC01C0001)]:
+        if not user.PostMessageW(hwnd, message, 0x0D, flags):
+            raise ctypes.WinError(ctypes.get_last_error())
+    if ctx.process.wait(timeout=20) != 0:
+        raise RuntimeError("The window closed with an unsuccessful process exit")
+    ctx.stop(force=True)
 
 
 def run(app, root, fresh):
@@ -130,7 +170,7 @@ def run(app, root, fresh):
         verify_live(session_id)
         print("A fresh Pebrel process restored OMP's confirmed ID and the stored message.", flush=True)
         if fresh:
-            ctx.close_and_wait(timeout=20)
+            confirm_native_window_close(ctx)
             hook_log = root / "normal-restart-hooks.jsonl"
             os.environ["PEBREL_HOOK_LOG"] = str(hook_log)
             ctx.start(explicit_working_directory=False)
