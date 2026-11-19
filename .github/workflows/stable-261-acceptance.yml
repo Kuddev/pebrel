@@ -1,0 +1,94 @@
+name: Verify five fixes on the 2.6.1 stable source
+on:
+  push:
+    branches: [qa/stable-261-fixes-1119]
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install Pillow==11.3.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: "-release-check-v2"
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Build the candidate and its hook helper
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula -p nebula_hook --features nebula/gpui-test-support --bin pebrel --bin pebrel-hook
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Check clipboard conversion and an absent Windows Startup folder
+        shell: pwsh
+        run: |
+          $cases = @(
+            'gpui_shell::terminal::inline_image::tests::clipboard_bitmaps_become_png_without_extending_terminal_protocol_formats',
+            'platform::startup::tests::startup_shortcut_handles_a_missing_startup_directory'
+          )
+          foreach ($case in $cases) {
+            $lines = @(cargo test --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-test-support --bin pebrel -- $case --exact 2>&1)
+            $code = $LASTEXITCODE
+            $lines | Select-Object -Last 14 | Write-Output
+            if ($code -ne 0 -or ($lines -join "\n") -notmatch '1 passed; 0 failed') { throw "Missing or failed native regression $case" }
+          }
+      - name: Verify the existing elevated window launches the configured PowerShell 7
+        shell: pwsh
+        run: ./scripts/conformance/windows_elevated_directory_profile.ps1 -Executable (Resolve-Path 'target/ci/pebrel.exe').Path -ExpectedHandover pwsh.exe
+      - name: Install the verified upstream OMP executable
+        id: install
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:LOCALAPPDATA omp
+          New-Item -ItemType Directory -Path $bin | Out-Null
+          $exe = Join-Path $bin omp.exe
+          curl.exe --fail --location --retry 3 --output $exe https://github.com/can1357/oh-my-pi/releases/download/v18.22.2/omp-windows-x64.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne 'BAB49ACF7E0BCA6FC98213B1F9F21BC7BFDB5070AFA52EB494EC400337395848') {
+            throw 'OMP release digest does not match v18.22.2'
+          }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          [Environment]::SetEnvironmentVariable('Path', (([string]$userPath).TrimEnd(';') + ';' + $bin), 'User')
+          $bin >> $env:GITHUB_PATH
+      - name: Force-close Pebrel and verify the restored conversation in PowerShell 7
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe
+      - name: Recover a new default-catalog conversation after forced and normal exit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe --fresh
+
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify the stable installer preserves edited WSL registry subtrees
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is missing' }
+          $files = New-Item -ItemType Directory -Force -Path target/installer-tools
+          $translation = Join-Path $files.FullName 'ChineseSimplified.isl'
+          Invoke-WebRequest 'https://raw.githubusercontent.com/jrsoftware/issrc/c495623a97376d524f298b1b160e8fd612375c62/Files/Languages/ChineseSimplified.isl' -OutFile $translation
+          if ((Get-FileHash $translation).Hash -ne '6753BE2C5E2740D859900FD902824DB2EC568DA5C5B52486524C9762D778B0B0') { throw 'Translation digest mismatch' }
+          ./scripts/tests/installer-migration.tests.ps1 -InnoCompiler $compiler
