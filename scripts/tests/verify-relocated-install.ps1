@@ -13,26 +13,12 @@ foreach ($name in 'pebrel.exe','pebrel-cli.exe','pebrel-hook.exe','conpty.dll','
 function Build-Installer($version) {
     $migration = 'scripts/installer-migration.iss'
     $source = [IO.File]::ReadAllText((Resolve-Path $migration))
-    $diagnostic = @'
-  Distros := WslDistroNames;
-  Log(Format('Fixture user=%s distro count=%d', [GetUserNameString, GetArrayLength(Distros)]));
-  Log(Format('Fixture Lxss keys present: default=%d 32=%d 64=%d', [
-    Ord(RegKeyExists(HKCU, LxssRoot)), Ord(RegKeyExists(HKCU32, LxssRoot)), Ord(RegKeyExists(HKCU64, LxssRoot))]));
-'@
+    # Give each real installer the same isolated WSL catalog on this runner.
+    $systemCatalog = 'Software\Microsoft\Windows\CurrentVersion\Lxss'
+    if (!$source.Contains("LxssRoot = '$systemCatalog';")) { throw 'Unexpected catalog declaration' }
     try {
-        $traced = $source.Replace('  Distros := WslDistroNames;', $diagnostic)
-        $traced = $traced.Replace('  SetArrayLength(Result, GetArrayLength(Names));',
-            '  Log(Format(''Fixture WSL subkeys=%d'', [GetArrayLength(Names)]));' + [Environment]::NewLine +
-            '  SetArrayLength(Result, GetArrayLength(Names));')
-        $traced = $traced.Replace('  for Index := 0 to GetArrayLength(Names) - 1 do', @'
-  for Index := 0 to GetArrayLength(Names) - 1 do begin
-    Name := '';
-    Log(Format('Fixture WSL child=%s has name=%d', [Names[Index], Ord(RegQueryStringValue(HKCU, LxssRoot + '\' + Names[Index], 'DistributionName', Name))]));
-    Log('Fixture WSL name=' + Name);
-  end;
-  for Index := 0 to GetArrayLength(Names) - 1 do
-'@)
-        [IO.File]::WriteAllText((Resolve-Path $migration), $traced)
+        $isolated = $source.Replace("LxssRoot = '$systemCatalog';", "LxssRoot = '$fixtureCatalog';")
+        [IO.File]::WriteAllText((Resolve-Path $migration), $isolated)
         & $compiler '/Q' '/DAcceptanceFixture' "/DAppVersion=$version" "/DNumericVersion=$version.0" "/DBuildRoot=$payload" "/O$root" scripts/installer.iss | Out-Host
         if ($LASTEXITCODE) { throw "Compilation failed for $version" }
     } finally { [IO.File]::WriteAllText((Resolve-Path $migration), $source) }
@@ -42,23 +28,16 @@ function Install-At($setup, $dir, $label) {
     $log = Join-Path $root "$label.log"
     $rc = (Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LANG=english',"/DIR=`"$dir`"","/LOG=`"$log`"") -Wait -PassThru).ExitCode
     Write-Host "$label exit=$rc"
-    Select-String -LiteralPath $log -Pattern 'Fixture user|Fixture Lxss|Fixture WSL|WSL submenu|Destination|App Dir' | ForEach-Object { Write-Host $_.Line }
+    Select-String -LiteralPath $log -Pattern 'WSL submenu|Destination|App Dir' | ForEach-Object { Write-Host $_.Line }
     return $rc
 }
 $menus = @('HKCU:\Software\Classes\Directory\shell\PebrelWslMenu',
            'HKCU:\Software\Classes\Directory\Background\shell\PebrelWslMenu')
-$distro = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss\{8A72F0AF-ACC3-4522-967B-2490F9562E72}'
-if ((Test-Path $menus[0]) -or (Test-Path $menus[1]) -or (Test-Path $distro)) { throw 'Fixture requires unused registry keys' }
+$fixtureCatalog = 'Software\PebrelTestFixtures\RelocationDistributions'
+$distro = "HKCU:\$fixtureCatalog\{8A72F0AF-ACC3-4522-967B-2490F9562E72}"
+if ((Test-Path $menus[0]) -or (Test-Path $menus[1]) -or (Test-Path "HKCU:\$fixtureCatalog")) { throw 'Fixture requires unused registry keys' }
 New-Item -Path $distro -Force | Out-Null
 New-ItemProperty -LiteralPath $distro -Name DistributionName -Value 'RelocationFixture' -PropertyType String | Out-Null
-foreach ($view in 'Registry32','Registry64') {
-    $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser',$view)
-    $key = $hive.OpenSubKey($distro.Substring(6))
-    if (!$key) { throw "Missing fixture distribution in $view" }
-    Write-Host "$view seeded distro=$($key.GetValue('DistributionName')) kind=$($key.GetValueKind('DistributionName'))"
-    if ($key) { $key.Dispose() }
-    $hive.Dispose()
-}
 function Assert-Menus($dir) {
     $exe = Join-Path $dir 'pebrel.exe'
     foreach ($i in 0..1) {
