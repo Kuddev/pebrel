@@ -418,6 +418,7 @@ impl SettingsPane {
                 | "focus_follows_mouse"
                 | "dim_inactive_panes"
                 | "refresh_environment"
+                | "command_history_persist"
                 | "automatic_command_views"
         ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
@@ -787,6 +788,7 @@ impl SettingsPane {
             "static_tab_titles" => flag!(static_tab_titles),
             "terminal_proxy" => flag!(terminal_proxy),
             "refresh_environment" => flag!(refresh_environment),
+            "command_history_persist" => flag!(command_history_persist),
             "powerline" => flag!(powerline),
             "ghost" => flag!(ghost),
             "ai_toasts" => flag!(ai_toasts),
@@ -1343,6 +1345,13 @@ impl SettingsPane {
                 "completion_style",
                 language.text(crate::i18n::Message::SettingsCompletionMode),
                 help("completion_style", language),
+                cx,
+            ))
+            .child(self.switch_row(
+                "command_history_persist",
+                language.text(crate::i18n::Message::SettingsCompletionHistoryPersist),
+                language.text(crate::i18n::Message::SettingsCompletionHistoryPersistDescription),
+                self.runtime.command_history_persist,
                 cx,
             ))
             .child(self.command_history_row(cx));

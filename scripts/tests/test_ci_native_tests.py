@@ -200,7 +200,8 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::update_recovery_tracks_its_windows_and_retries_only_missing_slots)"
                           " or test(=gpui_shell::settings_pane::tests::rename_keymap_row_is_searchable_and_enters_capture)"
-                          " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)",
+                          " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)"
+                          " or test(=gpui_shell::settings_pane::command_history::tests::command_history_persistence_switch_saves_and_drives_the_write_gate)",
                 "test-group": "theme-studio",
             }, {
                 "filter": "test(=gpui_shell::terminal::view::startup_tests::"
@@ -253,6 +254,9 @@ class NativeSuiteTests(unittest.TestCase):
             "update_recovery_tracks_its_windows_and_retries_only_missing_slots",
         ):
             self.assertIn(f"fn {name}(", elevated)
+
+        history = (root / "pebrel_app/src/gpui_shell/settings_pane/command_history/tests.rs").read_text(encoding="utf-8")
+        self.assertIn("fn command_history_persistence_switch_saves_and_drives_the_write_gate(", history)
 
         startup = (root / "pebrel_app/src/gpui_shell/workspace/windowing/startup.rs").read_text(encoding="utf-8")
         self.assertIn("fn launch_visibility_reaches_the_actual_workspace(", startup)
