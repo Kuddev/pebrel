@@ -1,0 +1,18 @@
+name: Verify WSL menus across a relocated Windows installation
+on:
+  push:
+    branches: [qa/relocated-wsl-registration-1119]
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Compile and exercise previous and corrected installers
+        shell: pwsh
+        run: ./scripts/tests/verify-relocated-install.ps1
