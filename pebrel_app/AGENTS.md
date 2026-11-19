@@ -40,3 +40,4 @@
 - OSC 8 本地链接的 C1 损坏恢复、显式链接身份与后台匹配边界见 [`file_uri`](../architecture/notes/pebrel_app/file_uri/2026-11-11-c1-corrupted-osc8-file-links.md)。
 
 - 本机命令输出归档的代次、容量与发布顺序见 [最近输出的持久化边界](../architecture/notes/pebrel_app/recent_output/2026-09-21-bounded-local-output.md)。
+- 登录项的启动意图、首窗静默与显式独立实例的运行时和会话归属见 [`启动边界`](../architecture/notes/pebrel_app/platform/startup/)。
