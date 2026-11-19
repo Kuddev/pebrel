@@ -42,7 +42,7 @@ def run(app, root, fresh):
     agent_dir = profile / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     os.environ.update(PI_CODING_AGENT_DIR=str(agent_dir),
-                      OMP_SKIP_VERSION_CHECK="1", PI_OFFLINE="1",
+                      OMP_SKIP_VERSION_CHECK="1", OMP_SKIP_SETUP="1", PI_OFFLINE="1",
                       OPENAI_API_KEY="fixture-only", OPENAI_BASE_URL="http://127.0.0.1:9/v1")
     source = root / "custom sessions" / ("2026-11-19T06-41-00-000Z_" + SID + ".jsonl")
     if not fresh:
@@ -113,9 +113,9 @@ def run(app, root, fresh):
                  and Path(a.get("session_file") or "") == source,
                  "autosave did not retain the native file and identity", timeout=30)
         print("PowerShell 7 displayed the message and autosave recorded its exact transcript.", flush=True)
-        first_pid = ctx.process.pid
+        first_pid = ctx.snapshot()["process_id"]
         ctx.restart()
-        assert ctx.process.pid != first_pid
+        assert ctx.snapshot()["process_id"] != first_pid
         ctx.refresh_targets()
         verify_live(session_id)
         print("A fresh Pebrel process restored OMP's confirmed ID and the stored message.", flush=True)
