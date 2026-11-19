@@ -306,6 +306,34 @@ class RemoteHooksTests(unittest.TestCase):
         self.assertEqual(payloads[-1]["transcript_path"], payloads[0]["transcript_path"])
         self.assertNotIn("last_assistant_message", payloads[-1])
 
+    def test_completion_results_in_oversized_events_use_the_remaining_wire_budget(self):
+        bridge = module("remote_bridge")
+        cases = [
+            ("claude", False, {"hook_event_name": "Stop"}, "last_assistant_message"),
+            ("codex", True, {"hook_event_name": "Stop"}, "last_assistant_message"),
+            ("codex", False, {"type": "agent-turn-complete"}, "last-assistant-message"),
+            ("pi", False, {"kind": "done", "stop_reason": "stop"}, "message"),
+            ("opencode", False, {"kind": "done", "outcome": "failed"}, "message"),
+        ]
+        for source, native, event, key in cases:
+            for copies, fits in [(1, True), (16000, True), (30000, False)]:
+                with self.subTest(source=source, native=native, copies=copies):
+                    answer = "中" * copies
+                    payload = {**event, key: answer, "unused": "z" * 70000}
+                    with patch.object(bridge, "write_terminal") as write:
+                        bridge.send(source, native, "--hooks=full", payload, TOKEN, owner="42:1")
+                    frame = write.call_args.args[0]
+                    envelope = base64.b64decode(frame.split(b";", 3)[3][:-1])
+                    self.assertLessEqual(len(envelope), bridge.MAX_ENVELOPE)
+                    body = json.loads(envelope.split(b"\n", 1)[1])
+                    self.assertNotIn("unused", body)
+                    for field, value in event.items():
+                        self.assertEqual(body[field], value)
+                    if fits:
+                        self.assertEqual(body.get(key), answer)
+                    else:
+                        self.assertNotIn(key, body)
+
     def test_large_pi_events_keep_the_native_file_and_bridge_lifetime(self):
         bridge = module("remote_bridge")
         payload = {"kind": "done", "session_id": "pi-native", "session_file": "/sessions/pi.jsonl",
