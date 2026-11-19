@@ -18,24 +18,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97.1"
-      - uses: ./.github/actions/rust-cache
-        with:
-          key: native
-          extra-key: "-release-check-v2"
-          target: |
-            target/ci
-            target/release
-          revision: dependencies-v1
-          save-if: "false"
-      - name: Build the candidate and its hook helper
+      - name: Extract the published Windows x64 Pebrel 2.5.9 ZIP
         shell: pwsh
         run: |
-          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
-          cargo build --locked --config .github/ci-profile.toml --profile ci -p pebrel -p pebrel_hook --features pebrel/gpui-test-support --bin pebrel --bin pebrel-hook
+          $zip = Join-Path $env:RUNNER_TEMP pebrel-259.zip
+          curl.exe --fail --location --retry 3 --output $zip https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-x64.zip
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $zip).Hash -ne '140514042062641FEB09484CF00F5E9FCC6344B84D949CA2E67FBB8025926CD5') {
+            throw 'Pebrel ZIP digest differs from the public release'
+          }
+          $dest = Join-Path $env:RUNNER_TEMP pebrel-259
+          Expand-Archive -LiteralPath $zip -DestinationPath $dest
+          $exe = @(Get-ChildItem $dest -Recurse -File -Filter pebrel.exe)
+          if ($exe.Count -ne 1) { throw 'Expected a single released Pebrel executable' }
+          "PEBREL_RELEASE_EXE=$($exe[0].FullName)" >> $env:GITHUB_ENV
       - name: Install the pinned Pi binary
         shell: pwsh
         run: |
@@ -51,4 +47,4 @@ jobs:
           if ($exe.Count -ne 1) { throw 'Expected exactly one Pi executable' }
           "PEBREL_FIXTURE_PI=$($exe[0].FullName)" >> $env:GITHUB_ENV
       - name: Paste 33 native clipboard images into the same Pi editor
-        run: python scripts/conformance/windows_standard_user.py scripts/conformance/pi_image_paste_probe.py target/ci/pebrel.exe
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/pi_image_paste_probe.py "$env:PEBREL_RELEASE_EXE"
