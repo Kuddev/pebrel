@@ -1,4 +1,5 @@
 """Reopen a real OMP 18.22.2 conversation after terminating its Pebrel workspace."""
+from collections import Counter
 import json
 import os
 import re
@@ -42,7 +43,8 @@ def run(app, root, fresh):
     profile = Path(os.environ["USERPROFILE"])
     agent_dir = profile / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.update(PI_CODING_AGENT_DIR=str(agent_dir),
+    hook_log = root / "hook-outcomes.jsonl"
+    os.environ.update(PEBREL_HOOK_LOG=str(hook_log), PI_CODING_AGENT_DIR=str(agent_dir),
                       OMP_SKIP_VERSION_CHECK="1", OMP_SKIP_SETUP="1", PI_OFFLINE="1",
                       OPENAI_API_KEY="fixture-only", OPENAI_BASE_URL="http://127.0.0.1:9/v1")
     source = root / "custom sessions" / ("2026-11-19T06-41-00-000Z_" + SID + ".jsonl")
@@ -118,6 +120,8 @@ def run(app, root, fresh):
                  "autosave did not retain the native file and identity", timeout=30)
         print("PowerShell 7 displayed the message and autosave recorded its exact transcript.", flush=True)
         first_pid = ctx.snapshot()["process_id"]
+        hook_log = root / "forced-restart-hooks.jsonl"
+        os.environ["PEBREL_HOOK_LOG"] = str(hook_log)
         ctx.restart()
         assert ctx.snapshot()["process_id"] != first_pid
         ctx.refresh_targets()
@@ -125,11 +129,23 @@ def run(app, root, fresh):
         print("A fresh Pebrel process restored OMP's confirmed ID and the stored message.", flush=True)
         if fresh:
             ctx.close_and_wait(timeout=20)
+            hook_log = root / "normal-restart-hooks.jsonl"
+            os.environ["PEBREL_HOOK_LOG"] = str(hook_log)
             ctx.start(explicit_working_directory=False)
             ctx.refresh_targets()
             verify_live(session_id)
             print("Normal window close and reopen restored the same conversation.", flush=True)
     except Exception:
+        outcomes = Counter()
+        if hook_log.exists():
+            for line in hook_log.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if entry.get("source") == "omp":
+                    outcomes[entry.get("outcome")] += 1
+        print("OMP hook delivery outcomes since the last launch:", dict(outcomes), flush=True)
         if ctx.client and ctx.pane_id:
             screen = ctx.read(lines=45).get("text", "")
             screen = re.sub(r"(?i)(api[_ -]?key|token)(\s*[:=]\s*)[^\s]+", r"\1\2[redacted]", screen)

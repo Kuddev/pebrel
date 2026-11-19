@@ -37,6 +37,7 @@ jobs:
           cargo build --locked --config .github/ci-profile.toml --profile ci -p pebrel -p pebrel_hook --features pebrel/gpui-test-support --bin pebrel --bin pebrel-hook
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install the verified upstream OMP executable
+        id: install
         shell: pwsh
         run: |
           $bin = Join-Path $env:LOCALAPPDATA omp
@@ -53,4 +54,5 @@ jobs:
       - name: Force-close Pebrel and verify the restored conversation in PowerShell 7
         run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe
       - name: Recover a new default-catalog conversation after forced and normal exit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe --fresh
