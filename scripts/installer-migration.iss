@@ -286,6 +286,8 @@ end;
   加精确命令与级联菜单归属标记认领后删除。 }
 
 const
+  DirectoryShell = 'Software\Classes\Directory\shell';
+  BackgroundShell = 'Software\Classes\Directory\Background\shell';
   LxssRoot = 'Software\Microsoft\Windows\CurrentVersion\Lxss';
 
 function WslDistroNames: TArrayOfString;
@@ -384,25 +386,51 @@ end;
 
 procedure RemoveOwnedWslContextMenus;
 var
-  Roots: array[0..1] of string;
-  Index: Integer;
+  Executable: string;
 begin
-  Roots[0] := 'Software\Classes\Directory\shell';
-  Roots[1] := 'Software\Classes\Directory\Background\shell';
-  for Index := 0 to 1 do
-    RemoveOwnedWslContextMenusAt(Roots[Index], ExpandConstant('{app}\pebrel.exe'));
+  Executable := ExpandConstant('{app}\pebrel.exe');
+  RemoveOwnedWslContextMenusAt(DirectoryShell, Executable);
+  RemoveOwnedWslContextMenusAt(BackgroundShell, Executable);
+end;
+
+function PreviousWslExecutable(Executable: string): string;
+begin
+  Result := '';
+  if (PreviousInstallDir <> '') and
+    not SameDirectory(PreviousInstallDir, ExtractFileDir(Executable)) then
+    Result := AddBackslash(NormalizedDirectory(PreviousInstallDir)) + 'pebrel.exe';
+end;
+
+procedure CheckWslContextMenu(Root, Executable, PreviousExecutable: string);
+var
+  Menu: string;
+begin
+  Menu := Root + '\PebrelWslMenu';
+  if RegKeyExists(HKCU, Menu) and not IsOwnedWslMenu(Menu, Executable) and
+    ((PreviousExecutable = '') or not IsOwnedWslMenu(Menu, PreviousExecutable)) then
+    RaiseException(FmtMessage(CustomMessage('WslMenuConflict'), [Menu]));
+end;
+
+procedure CheckWslContextMenus(Executable: string);
+var
+  Previous: string;
+begin
+  Previous := PreviousWslExecutable(Executable);
+  CheckWslContextMenu(DirectoryShell, Executable, Previous);
+  CheckWslContextMenu(BackgroundShell, Executable, Previous);
 end;
 
 procedure RegisterWslContextMenuAt(Root, Executable, DirectoryArgument: string;
   Distros: TArrayOfString);
 var
   Index: Integer;
-  Distro, Verb, Command, Key, Menu: string;
+  Distro, Verb, Command, Key, Menu, Previous: string;
 begin
   Menu := Root + '\PebrelWslMenu';
-  { Never overwrite an unknown installation or an edited submenu. }
-  if RegKeyExists(HKCU, Menu) and not IsOwnedWslMenu(Menu, Executable) then
-    RaiseException(FmtMessage(CustomMessage('WslMenuConflict'), [Menu]));
+  Previous := PreviousWslExecutable(Executable);
+  CheckWslContextMenu(Root, Executable, Previous);
+  if Previous <> '' then
+    RemoveOwnedWslContextMenusAt(Root, Previous);
   RemoveOwnedWslContextMenusAt(Root, Executable);
   if GetArrayLength(Distros) = 0 then
     Exit;
@@ -435,8 +463,9 @@ var
 begin
   Distros := WslDistroNames;
   Executable := ExpandConstant('{app}\pebrel.exe');
-  RegisterWslContextMenuAt('Software\Classes\Directory\shell', Executable, '%1', Distros);
-  RegisterWslContextMenuAt('Software\Classes\Directory\Background\shell', Executable, '%V', Distros);
+  CheckWslContextMenus(Executable);
+  RegisterWslContextMenuAt(DirectoryShell, Executable, '%1', Distros);
+  RegisterWslContextMenuAt(BackgroundShell, Executable, '%V', Distros);
 end;
 
 procedure MigrateLegacyIntegrations;
@@ -493,9 +522,10 @@ var
   Executable: string;
 begin
   Result := '';
-  if LegacyInstallDir = '' then
-    Exit;
   try
+    CheckWslContextMenus(ExpandConstant('{app}\pebrel.exe'));
+    if LegacyInstallDir = '' then
+      Exit;
     Executable := SafePayloadPath(LegacyInstallDir, 'nebula.exe');
     if IsExecutableRunning(Executable) then
       Result := FmtMessage(CustomMessage('CloseLegacyProgram'), [Executable]);
