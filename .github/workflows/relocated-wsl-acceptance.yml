@@ -2,6 +2,9 @@ name: Verify WSL menus across a relocated Windows installation
 on:
   push:
     branches: [qa/relocated-wsl-registration-1119]
+concurrency:
+  group: relocated-wsl-acceptance
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -11,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
       - name: Compile and exercise previous and corrected installers
         shell: pwsh

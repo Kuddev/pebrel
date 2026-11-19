@@ -11,7 +11,7 @@ foreach ($name in 'pebrel.exe','pebrel-cli.exe','pebrel-hook.exe','conpty.dll','
     [IO.File]::WriteAllText((Join-Path $payload $name), 'Installer payload fixture')
 }
 function Build-Installer($version) {
-    & $compiler '/Q' '/DAcceptanceFixture' "/DAppVersion=$version" "/DNumericVersion=$version.0" "/DBuildRoot=$payload" "/O$root" scripts/installer.iss
+    & $compiler '/Q' '/DAcceptanceFixture' "/DAppVersion=$version" "/DNumericVersion=$version.0" "/DBuildRoot=$payload" "/O$root" scripts/installer.iss | Out-Host
     if ($LASTEXITCODE) { throw "Compilation failed for $version" }
     return Join-Path $root "Pebrel-v$version-windows-x64-setup.exe"
 }
