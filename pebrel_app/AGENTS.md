@@ -38,3 +38,5 @@
 - Windows Acrylic 的动画期间透明回退与计时边界见 [`窗口状态切换`](../architecture/notes/pebrel_app/platform/2026-09-22-acrylic-window-transitions.md)。
 - 登录项的启动意图与首窗静默边界见 [`登录启动`](../architecture/notes/pebrel_app/platform/startup/2026-10-10-login-launch-intent.md)。
 - OSC 8 本地链接的 C1 损坏恢复、显式链接身份与后台匹配边界见 [`file_uri`](../architecture/notes/pebrel_app/file_uri/2026-11-11-c1-corrupted-osc8-file-links.md)。
+
+- 本机命令输出归档的代次、容量与发布顺序见 [最近输出的持久化边界](../architecture/notes/pebrel_app/recent_output/2026-09-21-bounded-local-output.md)。
