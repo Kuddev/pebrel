@@ -60,17 +60,6 @@
       <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">Visit AIAPI</a></p>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="240">
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
-    </td>
-    <td>
-      <p><strong>One entry point for accessing and managing the world's leading AI models</strong></p>
-      <p>Thanks to Sidrune AI for sponsoring this project! Sidrune AI serves individual developers, technical teams and enterprises with a unified API for accessing and managing the world's leading AI models. Dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices.</p>
-      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">Visit and sign up now</a> to receive $3 in API credit.</p>
-    </td>
-  </tr>
 </table>
 
 For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
@@ -80,11 +69,11 @@ For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](ma
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-11.jpg"><img src="extra/community/wechat-group-2026-11-11.jpg" alt="QR code for the Pebrel WeChat group, valid before November 11, 2026" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="QR code for the Pebrel WeChat group, valid before November 24, 2026" width="300" /></a>
 </p>
 
 <p align="center">
-  Scan with WeChat to join. Valid before November 11, 2026. Click the image to view full size.
+  Scan with WeChat to join. Valid before November 24, 2026. Click the image to view full size.
 </p>
 
 ## One Workspace

@@ -232,6 +232,7 @@ pub fn banner(window: &mut Window, cx: &mut App, kind: ToastKind, text: impl Int
     push_banner(window, cx, note(kind, text).on_click(|_, _, _| {}), false);
 }
 
+/// Return whether the banner passed admission, including deferred window setup.
 pub(crate) fn banner_for_pane(
     window: &mut Window,
     cx: &mut App,
@@ -239,7 +240,7 @@ pub(crate) fn banner_for_pane(
     text: impl Into<String>,
     pane_id: u64,
     source: &crate::notify::Notification,
-) {
+) -> bool {
     let ai_toast = source.is_ai();
     let text = text.into();
     if text.trim().is_empty()
@@ -247,10 +248,10 @@ pub(crate) fn banner_for_pane(
             pane_id,
             kind,
             &text,
-            Instant::now(),
+            crate::notify::notification_now(),
         )
     {
-        return;
+        return false;
     }
     log::info!("pane banner [{kind:?}] pane={pane_id}: {text}");
     let mut notification = note(kind, text).on_click(move |_, _, cx| {
@@ -272,6 +273,7 @@ pub(crate) fn banner_for_pane(
         _ => BANNER_TTL,
     };
     push_with_duration(window, cx, notification, Some(ttl), ai_toast);
+    true
 }
 
 pub(crate) fn confirmation_for_pane(

@@ -247,24 +247,8 @@ pub enum TerminalViewEvent {
 /// `shell` 是 Tab 创建/恢复时已经裁定好的启动命令。不能只传 cwd 再在
 /// `TerminalView::new` 里读取“此刻的默认 Shell”，否则恢复混合的 PowerShell /
 /// WSL 工作区时，每个 Tab 都会被重新解释成同一个当前默认值。
-pub enum TerminalLaunch {
-    Local {
-        cwd: Option<std::path::PathBuf>,
-        shell: Option<pebrel_terminal::tty::Shell>,
-        /// 只用于欢迎屏选择 PowerShell/Bash 形态，不参与 PTY 启动。
-        shell_name: Option<String>,
-    },
-    Ssh {
-        destination: String,
-        /// Remote cwd inherited by duplicate-tab. `None` starts in the
-        /// account's ordinary login directory.
-        cwd: Option<String>,
-        resume_target: Option<crate::ssh_session::ResumeTarget>,
-    },
-    Serial {
-        destination: String,
-    },
-}
+mod launch;
+pub use launch::TerminalLaunch;
 
 pub(crate) fn last_path_component(path: &str) -> Option<String> {
     let name = path
@@ -745,7 +729,20 @@ impl TerminalView {
                 }
             },
             TermEvent::TextAreaSizeRequest(formatter) => {
-                self.write_bytes(formatter(self.window_size).into_bytes());
+                // The geometry captured at spawn can lag the live grid by a whole
+                // resize: a reader that divides this answer by its cell size then
+                // lays pages out for a pane that no longer exists. Answer from the
+                // grid the session is actually rendering.
+                let mut size = self.window_size;
+                let grid = self.session.as_ref().map(|session| {
+                    let term = session.term.lock();
+                    (term.screen_lines(), term.columns())
+                });
+                if let Some((lines, columns)) = grid {
+                    size.num_lines = lines.min(usize::from(u16::MAX)) as u16;
+                    size.num_cols = columns.min(usize::from(u16::MAX)) as u16;
+                }
+                self.write_bytes(formatter(size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
                 self.retain_failed_session |= !code.success() && self.local_startup_unconfirmed();
@@ -803,10 +800,11 @@ impl TerminalView {
                     Err(error) => log::warn!("terminal image dropped: {error}"),
                 }
             },
-            // APC graphics: pixels arrive raw, already placed in the grid, so
+            // APC graphics: raw pixels arrive already placed in the grid, so
             // decoding is the only work left — and it happens off the UI thread.
+            // A container (PNG) is inflated on that same thread.
             TermEvent::KittyImage { data, channels, placement } => {
-                match self.inline_images.enqueue_pixels(data, channels, placement) {
+                match self.inline_images.enqueue_kitty(data, channels, placement) {
                     Ok(()) => self.drive_inline_image_decode(cx),
                     Err(error) => log::warn!("APC image dropped: {error}"),
                 }
@@ -1082,19 +1080,32 @@ impl TerminalView {
         if self.agent_activity.hook_seen() {
             return;
         }
-        let mode = pebrel_settings::RuntimeSettings::load().bell;
-        if mode == pebrel_settings::BellModeName::None {
+        if !self.play_bell_cue(cx) {
             return;
-        }
-        let audible_ok = if mode.audible() { Self::ring_audible() } else { false };
-        if mode.visual() || (mode.audible() && !audible_ok) {
-            self.flash_bell(cx);
         }
         cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Bell {
             program: self.running_program.clone(),
         }));
         cx.emit(TerminalViewEvent::Bell);
         cx.notify();
+    }
+
+    /// Flash and/or beep according to the bell mode; false when the mode is `none`.
+    pub(crate) fn play_bell_cue(&mut self, cx: &mut Context<Self>) -> bool {
+        let mode = pebrel_settings::RuntimeSettings::load().bell;
+        if mode == pebrel_settings::BellModeName::None {
+            return false;
+        }
+        let audible_ok = if mode.audible() { Self::ring_audible() } else { false };
+        if mode.visual() || (mode.audible() && !audible_ok) {
+            self.flash_bell(cx);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bell_flash_generation(&self) -> u64 {
+        self.bell_flash_epoch
     }
 
     fn ring_audible() -> bool {

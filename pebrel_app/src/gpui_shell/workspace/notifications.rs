@@ -22,9 +22,12 @@ fn delivery_channels(
     ai_toasts: bool,
 ) -> DeliveryChannels {
     DeliveryChannels {
-        in_app: (!visible || notification.is_attention()) && (ai_toasts || !notification.is_ai()),
+        in_app: (!visible
+            || notification.is_attention()
+            || matches!(notification, Notification::Runtime { .. }))
+            && (ai_toasts || !notification.is_ai()),
         // Keep native notification routing independent of the in-app preference.
-        system: !visible,
+        system: !visible || crate::platform::CAPABILITIES.foreground_system_notifications,
     }
 }
 
@@ -104,7 +107,11 @@ impl NebulaWorkspace {
         );
         let source_view =
             panes.iter().find(|pane| pane.id == pane_id).map(|pane| pane.view.clone());
-        if !visible && let Some(meta) = self.tab_meta.get_mut(tab_index) {
+        let runtime = matches!(notification, Notification::Runtime { .. });
+        if !runtime
+            && !visible
+            && let Some(meta) = self.tab_meta.get_mut(tab_index)
+        {
             meta.has_bell = true;
         }
         // Apply once before either channel, so retry errors cannot sound via
@@ -113,14 +120,16 @@ impl NebulaWorkspace {
             pane_id,
             &notification,
             delivery.in_app || delivery.system,
-            std::time::Instant::now(),
+            crate::notify::notification_now(),
         ) {
             cx.notify();
             return;
         }
         let attention = notification.is_attention();
         let confirmation = if attention {
-            source_view.and_then(|view| view.update(cx, |view, _| view.capture_confirmation()))
+            source_view
+                .as_ref()
+                .and_then(|view| view.update(cx, |view, _| view.capture_confirmation()))
         } else {
             None
         };
@@ -143,7 +152,7 @@ impl NebulaWorkspace {
                     confirmation,
                 );
             } else {
-                crate::gpui_shell::toast::banner_for_pane(
+                let admitted = crate::gpui_shell::toast::banner_for_pane(
                     window,
                     cx,
                     kind,
@@ -151,6 +160,17 @@ impl NebulaWorkspace {
                     pane_id,
                     &notification,
                 );
+                if runtime && !admitted {
+                    return;
+                }
+            }
+        }
+        if runtime {
+            if let Some(source) = source_view {
+                source.update(cx, |view, cx| view.play_bell_cue(cx));
+            }
+            if !visible && let Some(meta) = self.tab_meta.get_mut(tab_index) {
+                meta.has_bell = true;
             }
         }
         if delivery.system {
@@ -178,6 +198,7 @@ mod tests {
 
     #[test]
     fn disabling_in_app_ai_toasts_keeps_background_system_notifications() {
+        let foreground_system = crate::platform::CAPABILITIES.foreground_system_notifications;
         for attention in [false, true] {
             let notification =
                 Notification::AiTurn { program: "codex".into(), message: None, attention };
@@ -191,11 +212,11 @@ mod tests {
             );
             assert_eq!(
                 delivery_channels(&notification, true, false),
-                DeliveryChannels { in_app: false, system: false }
+                DeliveryChannels { in_app: false, system: foreground_system }
             );
             assert_eq!(
                 delivery_channels(&notification, true, true),
-                DeliveryChannels { in_app: attention, system: false }
+                DeliveryChannels { in_app: attention, system: foreground_system }
             );
         }
     }
@@ -215,6 +236,22 @@ mod tests {
                 DeliveryChannels { in_app: false, system: true }
             );
         }
+    }
+
+    #[test]
+    fn runtime_notifications_show_in_app_even_when_the_pane_is_visible() {
+        let notification = Notification::Runtime { title: None, message: "touch the key".into() };
+        assert_eq!(
+            delivery_channels(&notification, true, true),
+            DeliveryChannels {
+                in_app: true,
+                system: crate::platform::CAPABILITIES.foreground_system_notifications
+            }
+        );
+        assert_eq!(
+            delivery_channels(&notification, false, false),
+            DeliveryChannels { in_app: true, system: true }
+        );
     }
 
     #[test]

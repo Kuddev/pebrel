@@ -117,6 +117,7 @@ pub(super) fn shell_select_items(
     if let Ok(store) = crate::terminal_profiles::TerminalProfiles::load() {
         for profile in store.as_config_profiles() {
             let Some(id) = profile.settings_id() else { continue };
+            let id = if profile.matches_settings_id(current) { current.to_owned() } else { id };
             if items.iter().any(|item| item.id == id) {
                 continue;
             }

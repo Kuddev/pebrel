@@ -6420,6 +6420,7 @@ dependencies = [
  "sha2 0.11.0",
  "signal-hook",
  "subtle",
+ "sysinfo",
  "tauri-winrt-notification",
  "tempfile",
  "tokio",

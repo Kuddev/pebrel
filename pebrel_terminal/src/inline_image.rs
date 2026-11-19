@@ -239,11 +239,22 @@ pub struct ImageCell {
     pub placement: Option<Arc<KittyPlacement>>,
 }
 
+/// How the bytes an image placement points at are packed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageFormat {
+    /// Raw RGB or RGBA pixels, `channels` bytes each.
+    #[default]
+    Raw,
+    /// A PNG container; the frontend decodes it, so no channel count applies.
+    Png,
+}
+
 #[derive(Clone, Debug)]
 pub struct ImagePlacement {
     pub id: u64,
     pub lifetime: Weak<ImageIdentity>,
     pub layout: ImageLayout,
+    pub format: ImageFormat,
 }
 
 impl ImagePlacement {

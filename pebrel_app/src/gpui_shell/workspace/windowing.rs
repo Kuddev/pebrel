@@ -99,7 +99,13 @@ use crate::runtime_api::{
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod command_launch_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod runtime_notify_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_resize_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tab_launch_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod transfer_tests;
 
@@ -161,7 +167,7 @@ enum RuntimeWindowPolicy {
 /// | `new-window`、需要新窗的 `new-tab` | 创建可见窗口（`focus=false`） | 否 |
 /// | `snapshot`、`read`、`procs`、`agent-read`、`exec` | 否 | 否 |
 /// | `close-*`、`rename-tab`、`move-tab`、`split`、`zoom`、`resize` | 否 | 否 |
-/// | `prompt`、`paste`、`send-key`、`run`、`agent-*`、现有窗 `new-tab` | 否 | 否 |
+/// | `prompt`、`paste`、`notify`、`send-key`、`run`、`agent-*`、现有窗 `new-tab` | 否 | 否 |
 ///
 /// `describe`、`agents`、`wait`、`subscribe` 在 runtime server 内直接应答，
 /// 不会进入此窗口分发器，因此天然不 show、不 activate。
@@ -181,6 +187,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::ClosePane { .. }
         | RuntimeCommand::ZoomPane { .. }
         | RuntimeCommand::ResizePane { .. }
+        | RuntimeCommand::Notify { .. }
         | RuntimeCommand::Prompt { .. }
         | RuntimeCommand::Paste { .. }
         | RuntimeCommand::ReadPane { .. }
@@ -462,6 +469,27 @@ fn open_runtime_window(
     shell_id: Option<String>,
 ) -> Result<(u64, u64), ApiError> {
     let startup = runtime_window_startup(cwd, shell_id.as_deref())?;
+    open_runtime_startup(cx, startup)
+}
+
+fn open_runtime_tab_window(
+    cx: &mut App,
+    cwd: Option<PathBuf>,
+    shell_id: Option<String>,
+    command: Option<crate::config::ui_config::Program>,
+    host_cwd: Option<PathBuf>,
+) -> Result<(u64, u64), ApiError> {
+    let (launch, cwd) = super::shell_launch::runtime_tab_launch(
+        cwd,
+        host_cwd,
+        shell_id.as_deref(),
+        command.as_ref(),
+        cx,
+    )?;
+    open_runtime_startup(cx, WorkspaceStartup::LaunchTerminal { cwd, launch })
+}
+
+fn open_runtime_startup(cx: &mut App, startup: WorkspaceStartup) -> Result<(u64, u64), ApiError> {
     let (window_id, workspace) =
         open_workspace_window(cx, startup, None, None, false, WindowRole::Regular)
             .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
@@ -713,6 +741,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::ClosePane { window_id, pane_id }
         | RuntimeCommand::ZoomPane { window_id, pane_id, .. }
         | RuntimeCommand::ResizePane { window_id, pane_id, .. }
+        | RuntimeCommand::Notify { window_id, pane_id, .. }
         | RuntimeCommand::ReadPane { window_id, pane_id, .. }
         | RuntimeCommand::Procs { window_id, pane_id }
         | RuntimeCommand::SendKey { window_id, pane_id, .. }
@@ -917,19 +946,24 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             dispatch.respond(response);
             return;
         },
-        RuntimeCommand::NewTab { window_id: None, cwd, shell_id }
+        RuntimeCommand::NewTab { window_id: None, cwd, host_cwd, shell_id, command }
             if pebrel_settings::RuntimeSettings::load().windowing_behavior
                 == pebrel_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+            let response = open_runtime_tab_window(
+                cx,
+                cwd.clone(),
+                shell_id.clone(),
+                command.clone(),
+                host_cwd.clone(),
+            )
+            .map(|(window_id, pane_id)| {
+                let snapshot = publish_runtime_snapshot(cx);
+                json!({
+                    "action": { "window_id": window_id, "pane_id": pane_id },
+                    "snapshot": snapshot
+                })
+            });
             dispatch.respond(response);
             return;
         },
@@ -967,18 +1001,24 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
         Err(_error)
             if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
         {
-            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command else {
+            let RuntimeCommand::NewTab { cwd, host_cwd, shell_id, command, .. } = &dispatch.command
+            else {
                 unreachable!()
             };
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+            let response = open_runtime_tab_window(
+                cx,
+                cwd.clone(),
+                shell_id.clone(),
+                command.clone(),
+                host_cwd.clone(),
+            )
+            .map(|(window_id, pane_id)| {
+                let snapshot = publish_runtime_snapshot(cx);
+                json!({
+                    "action": { "window_id": window_id, "pane_id": pane_id },
+                    "snapshot": snapshot
+                })
+            });
             dispatch.respond(response);
             return;
         },
@@ -1777,7 +1817,13 @@ mod tests {
         let preserve = vec![
             RuntimeCommand::Snapshot,
             RuntimeCommand::CloseWindow { window_id: Some(1) },
-            RuntimeCommand::NewTab { window_id: Some(1), cwd: None, shell_id: None },
+            RuntimeCommand::NewTab {
+                window_id: Some(1),
+                cwd: None,
+                host_cwd: None,
+                shell_id: None,
+                command: None,
+            },
             RuntimeCommand::CloseTab { window_id: Some(1), tab_index: 0 },
             RuntimeCommand::RenameTab {
                 window_id: Some(1),

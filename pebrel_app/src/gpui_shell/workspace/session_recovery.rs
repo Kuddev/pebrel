@@ -147,6 +147,7 @@ impl NebulaWorkspace {
             if matches!(launch_session, LaunchSession::Default) {
                 launch_session = super::shell_launch::configured_local_launch(cx);
             }
+            let command_owns_input = matches!(launch_session, LaunchSession::Command { .. });
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);
             let local_cwd =
@@ -167,7 +168,12 @@ impl NebulaWorkspace {
             };
             let mut pane = self.new_pane(grid, launch, None, window, cx);
             pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
-            if !matches!(launch_session, LaunchSession::Default) {
+            if !matches!(
+                launch_session,
+                LaunchSession::Default
+                    | LaunchSession::Profile { .. }
+                    | LaunchSession::Command { .. }
+            ) {
                 pane.view.update(cx, |view, _| view.session_launch = launch_session);
             }
             // Display and persist the restored location while the guest shell
@@ -177,7 +183,10 @@ impl NebulaWorkspace {
                     view.seed_restored_cwd(cwd.clone(), cx);
                 });
             }
-            if resume_ai && let Some(agent) = agent {
+            if resume_ai
+                && !command_owns_input
+                && let Some(agent) = agent
+            {
                 pane.view.update(cx, |view, cx| view.restore_agent(agent.clone(), cx));
             }
             panes.push(pane);

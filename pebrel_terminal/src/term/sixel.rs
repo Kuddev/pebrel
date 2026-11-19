@@ -139,6 +139,11 @@ impl<T: EventListener> Term<T> {
             self.grid.cursor.input_needs_wrap = false;
         }
         self.mark_fully_damaged();
-        Some(ImagePlacement { id: identity.id, lifetime: Arc::downgrade(&identity), layout })
+        Some(ImagePlacement {
+            id: identity.id,
+            lifetime: Arc::downgrade(&identity),
+            layout,
+            format: crate::inline_image::ImageFormat::Raw,
+        })
     }
 }

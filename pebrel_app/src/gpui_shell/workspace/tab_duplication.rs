@@ -8,7 +8,14 @@ use super::{NebulaWorkspace, WorkspaceTab, new_tab_insert_index};
 use crate::session::{LaunchSession, TabSession};
 
 pub(super) fn inherit_guest_directory(launch: &mut LaunchSession, cwd: &str) -> bool {
-    update_wsl_args(launch, |program, args| crate::shell_detect::wsl_args_at(program, args, cwd))
+    let literal = matches!(launch, LaunchSession::Command { .. });
+    update_wsl_args(launch, |program, args| {
+        if literal && cwd.starts_with('/') {
+            crate::shell_detect::wsl_literal_args_in_directory(program, args, cwd)
+        } else {
+            crate::shell_detect::wsl_args_at(program, args, cwd)
+        }
+    })
 }
 
 /// Pin the spawn-time distribution so a bare `wsl` copy cannot follow a later
@@ -25,6 +32,11 @@ fn update_wsl_args(
 ) -> bool {
     let (program, args) = match launch {
         LaunchSession::Shell { program, args, .. } => (program, args),
+        LaunchSession::Command { program, args, .. }
+            if crate::platform::launch_directory::is_wsl_program(program) =>
+        {
+            (program, args)
+        },
         LaunchSession::Profile { command, args, .. } => (command, args),
         _ => return false,
     };
@@ -37,6 +49,11 @@ fn update_wsl_args(
 
 fn wsl_program_args(launch: &LaunchSession) -> Option<(&str, &[String])> {
     match launch {
+        LaunchSession::Command { program, args, .. }
+            if crate::platform::launch_directory::is_wsl_program(program) =>
+        {
+            Some((program, args))
+        },
         LaunchSession::Shell { program, args, .. }
         | LaunchSession::Profile { command: program, args, .. }
             if crate::shell_detect::is_wsl_launcher(program) =>
@@ -109,7 +126,10 @@ pub(super) fn copy_launch(
 ) -> (LaunchSession, Option<PathBuf>) {
     let mut focused = origin.guest;
     match kind {
-        CopyKind::Split if wsl_program_args(&launch).is_none() => {
+        CopyKind::Split
+            if wsl_program_args(&launch).is_none()
+                && !matches!(launch, LaunchSession::Profile { .. }) =>
+        {
             return (LaunchSession::Default, origin.host_cwd);
         },
         CopyKind::Split | CopyKind::Duplicate => {
@@ -124,6 +144,13 @@ pub(super) fn copy_launch(
                     .is_some_and(|options| options.chooses_directory);
             focused = focused.filter(|_| !own_directory);
         },
+    }
+    if matches!(kind, CopyKind::Split) && wsl_program_args(&launch).is_none() {
+        // A running local profile splits in its current pane directory, while
+        // retaining its launch-time environment and stable profile identity.
+        if let LaunchSession::Profile { cwd, .. } = &mut launch {
+            *cwd = None;
+        }
     }
     let same_guest =
         wsl_program_args(&launch).zip(focused).is_some_and(|((program, args), focused)| {
@@ -205,6 +232,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_command_kind_and_literal_arguments_survive_copy_and_restore() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = LaunchSession::Command {
+            name: "program".into(),
+            program: "program.exe".into(),
+            args: vec!["two words".into(), "".into(), "a\\\"b".into()],
+        };
+        let serialized = serde_json::to_vec(&original).unwrap();
+        let decoded: LaunchSession = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(decoded, original);
+        let (copied, cwd) = copy_launch(
+            decoded,
+            CopyKind::Duplicate,
+            PaneOrigin {
+                guest: None,
+                cwd: directory.path().to_str().unwrap(),
+                host_cwd: Some(directory.path().into()),
+            },
+        );
+        assert_eq!(copied, original);
+        let crate::gpui_shell::terminal::view::TerminalLaunch::Command { shell, cwd, .. } =
+            NebulaWorkspace::terminal_launch_from_session(&copied, cwd)
+        else {
+            panic!("literal command became a raw shell launch")
+        };
+        assert_eq!(shell.args(), &["two words", "", "a\\\"b"]);
+        assert_eq!(cwd.as_deref(), Some(directory.path()));
+        let old: LaunchSession = serde_json::from_str(
+            r#"{"kind":"shell","name":"old","program":"shell","args":["raw fragment"]}"#,
+        )
+        .unwrap();
+        assert!(matches!(old, LaunchSession::Shell { .. }));
+    }
+
+    #[test]
+    fn literal_wsl_commands_keep_guest_directory_as_one_unquoted_argument() {
+        let mut launch = LaunchSession::Command {
+            name: "WSL".into(),
+            program: "wsl.exe".into(),
+            args: ["-d", "Team Linux", "--exec", "tool", "two words"].map(String::from).to_vec(),
+        };
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            let original = launch.clone();
+            assert!(!inherit_guest_directory(&mut launch, "/guest directory"));
+            assert_eq!(launch, original);
+            return;
+        }
+        assert!(inherit_guest_directory(&mut launch, "/guest directory"));
+        let LaunchSession::Command { args, .. } = launch else { unreachable!() };
+        assert_eq!(
+            args,
+            ["--cd", "/guest directory", "-d", "Team Linux", "--exec", "tool", "two words"]
+        );
+    }
+
+    #[test]
     fn serial_session_restore_and_duplicate_preserve_transport_and_options() {
         let original = LaunchSession::Serial { destination: "serial:COM3,9600,7E2".into() };
         let restored: LaunchSession =
@@ -251,6 +334,8 @@ mod tests {
             args: ["-d", "Debian", "-u", "guest", "--exec", "zsh", "-l"].map(String::from).to_vec(),
             cwd: None,
             shell_id: None,
+            profile_id: None,
+            env_snapshot: None,
         };
         assert!(inherit_guest_directory(&mut launch, "/home/guest"));
         let LaunchSession::Profile { args, .. } = launch else { panic!("profile identity lost") };
@@ -337,6 +422,46 @@ mod tests {
     }
 
     #[test]
+    fn local_profile_split_follows_current_directory_and_retains_launch_overlay() {
+        use crate::gpui_shell::terminal::view::TerminalLaunch;
+        let initial = tempfile::tempdir().unwrap();
+        let current = tempfile::tempdir().unwrap();
+        let profile = crate::config::ui_config::Profile {
+            name: "synthetic".into(),
+            command: "/bin/sh".into(),
+            args: vec![],
+            cwd: Some(initial.path().into()),
+            shell_id: Some("sh".into()),
+            terminal_profile_id: Some("stable-synthetic".into()),
+            env: crate::profile_environment::ProfileEnvironment::from_pairs([(
+                "QA_VALUE".into(),
+                "frozen".into(),
+            )])
+            .unwrap(),
+        };
+        let expected = profile.clone();
+        let launch = crate::profile_launch::snapshot(profile);
+        let (launch, cwd) = copy_launch(
+            launch,
+            CopyKind::Split,
+            PaneOrigin {
+                guest: None,
+                cwd: current.path().to_str().unwrap(),
+                host_cwd: Some(current.path().into()),
+            },
+        );
+        let TerminalLaunch::Profile { profile, cwd } =
+            NebulaWorkspace::terminal_launch_from_session(&launch, cwd)
+        else {
+            panic!("split lost profile identity")
+        };
+        assert_eq!(cwd.as_deref(), Some(current.path()));
+        assert_eq!(profile.terminal_profile_id, expected.terminal_profile_id);
+        assert_eq!(profile.env, expected.env);
+        assert!(profile.cwd.is_none());
+    }
+
+    #[test]
     fn split_stays_in_the_guest_and_host_panes_keep_the_default_shell() {
         use crate::gpui_shell::terminal::view::TerminalLaunch;
 
@@ -346,7 +471,12 @@ mod tests {
             let (launch, cwd) = copy_launch(session, CopyKind::Split, origin);
             match NebulaWorkspace::terminal_launch_from_session(&launch, cwd) {
                 TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.map(|s| s.args().to_vec())),
-                TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => {
+                TerminalLaunch::Profile { cwd, profile } => {
+                    (cwd, Some(crate::profile_launch::shell(&profile).args().to_vec()))
+                },
+                TerminalLaunch::Ssh { .. }
+                | TerminalLaunch::Serial { .. }
+                | TerminalLaunch::Command { .. } => {
                     panic!("a local split stays local")
                 },
             }

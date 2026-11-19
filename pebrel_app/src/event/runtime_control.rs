@@ -105,8 +105,19 @@ impl Processor {
                 "method_not_found",
                 "shared files and conversations require the GPUI runtime",
             )),
+            RuntimeCommand::Notify { .. } => {
+                Err(ApiError::new("method_not_found", "pane.notify requires the GPUI runtime"))
+            },
             RuntimeCommand::Snapshot => serde_json::to_value(self.publish_runtime_snapshot())
                 .map_err(|error| ApiError::new("serialization_failed", error.to_string())),
+            RuntimeCommand::NewTab { command: Some(_), .. } => Err(ApiError::new(
+                "unsupported_operation",
+                "direct program launches in tab.new require the GPUI runtime",
+            )),
+            RuntimeCommand::NewTab { host_cwd: Some(_), .. } => Err(ApiError::new(
+                "method_not_found",
+                "CLI directory context requires the GPUI runtime",
+            )),
             // 旧壳（winit/GL）没有"按 id 选 shell"的能力。显式拒绝而不是忽略：
             // 调用方（右键菜单的第二份进程）拿到失败会冷启动一份 GPUI 实例，
             // 用户最终得到的是他要的那个发行版；静默忽略则会在旧壳里开一个

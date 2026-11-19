@@ -243,5 +243,17 @@ pub(crate) fn launch_environment(program: &str, args: &[String]) -> SuggestEnv {
     }
 }
 
+/// Literal programs use the host's execution capabilities, including Unix
+/// executables whose basename happens to be `wsl`.
+pub(crate) fn literal_launch_environment(program: &str, args: &[String]) -> SuggestEnv {
+    if crate::shell_detect::is_wsl_launcher(program)
+        && !crate::platform::launch_directory::is_wsl_program(program)
+    {
+        SuggestEnv::Local
+    } else {
+        launch_environment(program, args)
+    }
+}
+
 #[cfg(test)]
 mod tests;

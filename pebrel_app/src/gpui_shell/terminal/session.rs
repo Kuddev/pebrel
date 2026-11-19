@@ -239,19 +239,36 @@ pub(super) fn local_options(
     shell: Option<tty::Shell>,
     pane_id: u64,
     cwd: Option<std::path::PathBuf>,
+    global_env: Option<&std::collections::BTreeMap<String, String>>,
+    profile_env: &crate::profile_environment::ProfileEnvironment,
+    literal_argv: bool,
 ) -> tty::Options {
     let mut options = tty::Options::default();
     options.shell = shell;
     options.working_directory = cwd;
-    if let Err(error) = crate::platform::shell_integration::prepare(&mut options) {
-        log::warn!("Could not prepare shell integration: {error}");
+    if let Some(global) = global_env {
+        crate::profile_environment::overlay(
+            &mut options.env,
+            global,
+            crate::platform::environment::names_case_insensitive(),
+        );
     }
-    crate::platform::environment::prepare_local_pty(&mut options);
+    profile_env.apply(&mut options.env);
+    if literal_argv {
+        crate::platform::environment::prepare_literal_command(&mut options);
+    } else {
+        if let Err(error) = crate::platform::shell_integration::prepare(&mut options) {
+            log::warn!("Could not prepare shell integration: {error}");
+        }
+        crate::platform::environment::prepare_local_pty(&mut options);
+    }
     options.env.insert("PEBREL_NATIVE_RESULTS".into(), "1".into());
     // WSL tab 的命令边界（OSC 133;D/A）与 cwd（OSC 7）：来宾登录 shell 默认
     // 不发，Agent 生命周期、目录树与 Git 视图都会失去来宾侧事实。只对
     // `wsl.exe` 启动生效，见 [`crate::shell_detect::wsl_cwd_report_env`]。
-    if let Some(launch) = &options.shell {
+    if let Some(launch) = options.shell.as_ref().filter(|shell| {
+        !literal_argv || crate::platform::launch_directory::is_wsl_program(shell.program())
+    }) {
         let program = launch.program().to_owned();
         let args = launch.args().to_vec();
         let current_wslenv = options

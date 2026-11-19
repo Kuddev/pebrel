@@ -96,6 +96,8 @@ pub struct Settings {
     /// 默认 shell 的稳定 id（`nebula_settings.txt` 的 `shell=`，如
     /// "pwsh" / "cmd" / "wsl:Ubuntu"）。None = 引擎默认。
     pub shell_id: Option<String>,
+    /// Explicit global child variables, overlaid by each local profile.
+    pub(crate) env: std::collections::BTreeMap<String, String>,
     /// 配置装载时吞掉的第一个错误（toml 解析失败/字段形状不符）。解析
     /// 保持宽容——任何用户配置都不能阻止启动——但错误必须有去处：
     /// 开窗后由工作区放进驻留消息栏（提示三层裁定：这是有待办的事）。
@@ -312,6 +314,7 @@ impl Settings {
             cell_width_mode: runtime.cell_width_mode,
             cjk_bold_regular: runtime.cjk_bold_regular,
             shell_id: runtime.shell.clone(),
+            env: raw.env,
             font_family: normal_family,
             // 未指定中文字体时沿用主字体及平台缺字回退，不隐式指定完整 Maple。
             font_cjk: runtime.font_family_cjk.as_deref().map(|family| {
@@ -667,6 +670,7 @@ fn merge_values(base: toml::Value, other: toml::Value) -> toml::Value {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct RawConfig {
+    env: std::collections::BTreeMap<String, String>,
     font: RawFont,
     colors: RawColors,
     mouse: RawMouse,

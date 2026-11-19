@@ -22,7 +22,7 @@ const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
 enum ImageData {
     Encoded(Arc<Vec<u8>>),
     Sixel { image: Arc<pebrel_terminal::sixel::SixelImage>, background: [u8; 3] },
-    Pixels { data: Weak<Vec<u8>>, channels: u8 },
+    Transfer { data: Weak<Vec<u8>>, channels: u8 },
 }
 
 impl ImageData {
@@ -30,13 +30,13 @@ impl ImageData {
         match self {
             Self::Encoded(data) => data.len(),
             Self::Sixel { image, .. } => image.encoded_len(),
-            Self::Pixels { .. } => 0,
+            Self::Transfer { .. } => 0,
         }
     }
     fn available(&self) -> bool {
         match self {
             Self::Encoded(_) | Self::Sixel { .. } => true,
-            Self::Pixels { data, .. } => data.strong_count() != 0,
+            Self::Transfer { data, .. } => data.strong_count() != 0,
         }
     }
 }
@@ -135,7 +135,7 @@ impl InlineImageStore {
         if self
             .queued
             .iter()
-            .filter(|pending| !matches!(pending.data, ImageData::Pixels { .. }))
+            .filter(|pending| !matches!(pending.data, ImageData::Transfer { .. }))
             .count()
             >= MAX_QUEUED_IMAGES
         {
@@ -156,22 +156,28 @@ impl InlineImageStore {
         Ok(())
     }
 
-    /// Queue a Kitty protocol transfer, whose payload is raw pixels rather than
-    /// an encoded container. `channels` is the byte count per pixel (3 = RGB,
-    /// 4 = RGBA); the pixel geometry rides along in `placement.layout`.
-    pub fn enqueue_pixels(
+    /// Core-owned graphics resources use weak queue slots. PNG and raw pixels
+    /// share the same lifetime and serialized background decoder.
+    pub fn enqueue_kitty(
         &mut self,
         data: Weak<Vec<u8>>,
         channels: u8,
         placement: ImagePlacement,
     ) -> Result<(), &'static str> {
-        if !matches!(channels, 3 | 4) {
-            return Err("image transfer has an unsupported channel count");
-        }
-
-        let Some(pixels_owner) = data.upgrade() else { return Ok(()) };
-        if pixels_owner.len() > MAX_IMAGE_DECODED_BYTES {
-            return Err("image transfer exceeds the decoded image budget");
+        use pebrel_terminal::inline_image::ImageFormat as TransferFormat;
+        let Some(owner) = data.upgrade() else { return Ok(()) };
+        match placement.format {
+            TransferFormat::Raw if matches!(channels, 3 | 4) => {
+                if owner.len() > MAX_IMAGE_DECODED_BYTES {
+                    return Err("image transfer exceeds the decoded image budget");
+                }
+            },
+            TransferFormat::Png if channels == 0 => {
+                if owner.len() > pebrel_terminal::kitty_graphics::MAX_TRANSFER_BYTES {
+                    return Err("PNG transfer exceeds the protocol payload budget");
+                }
+            },
+            _ => return Err("image transfer has an unsupported channel count"),
         }
         if !placement.layout.width.is_finite()
             || !placement.layout.height.is_finite()
@@ -184,7 +190,9 @@ impl InlineImageStore {
         if pixels > MAX_IMAGE_PIXELS {
             return Err("image transfer exceeds the pixel budget");
         }
-        if (pixels * u64::from(channels)) != pixels_owner.len() as u64 {
+        if placement.format == TransferFormat::Raw
+            && (pixels * u64::from(channels)) != owner.len() as u64
+        {
             return Err("image transfer is shorter than its declared size");
         }
         if !placement.is_alive() {
@@ -194,11 +202,12 @@ impl InlineImageStore {
         if self.contains(placement.id) {
             return Ok(());
         }
-        // 原始像素仍归核心的 16 张有界仓库；队列只留弱引用，不与 OSC 编码数据争 32 MiB。
+        // The core retains at most 16 resources within its 128 MiB budget.
+        // Weak slots do not retain additional encoded data or consume the OSC/SIXEL queue.
         if self
             .queued
             .iter()
-            .filter(|pending| matches!(pending.data, ImageData::Pixels { .. }))
+            .filter(|pending| matches!(pending.data, ImageData::Transfer { .. }))
             .count()
             >= MAX_CACHED_IMAGES
         {
@@ -209,7 +218,7 @@ impl InlineImageStore {
         self.next_sequence = self.next_sequence.wrapping_add(1);
         self.queued.push_back(PendingInlineImage {
             sequence,
-            data: ImageData::Pixels { data, channels },
+            data: ImageData::Transfer { data, channels },
             placement,
         });
         Ok(())
@@ -262,22 +271,35 @@ impl InlineImageStore {
 
 pub(super) fn decode(pending: PendingInlineImage) -> Result<(u64, InlineImage), String> {
     let (render_image, decoded_bytes) = match pending.data {
-        ImageData::Pixels { data, channels } => {
+        ImageData::Transfer { data, channels } => {
             let data = data.upgrade().ok_or("image transfer expired")?;
-            decode_pixels(&data, channels, pending.placement.layout)?
+            match pending.placement.format {
+                pebrel_terminal::inline_image::ImageFormat::Raw => {
+                    decode_pixels(&data, channels, pending.placement.layout)?
+                },
+                pebrel_terminal::inline_image::ImageFormat::Png => {
+                    let rgba = decode_rgba(
+                        &data,
+                        ImageFormat::Png,
+                        pebrel_terminal::kitty_graphics::MAX_TRANSFER_BYTES,
+                    )?;
+                    if rgba.width() as f32 != pending.placement.layout.width
+                        || rgba.height() as f32 != pending.placement.layout.height
+                    {
+                        return Err("PNG geometry differs from its placement".to_owned());
+                    }
+                    render_rgba(rgba)
+                },
+            }
         },
         ImageData::Encoded(data) => decode_bytes(data.as_slice())?,
         ImageData::Sixel { image, background } => {
             let (width, height) = image.dimensions();
-            let mut bgra =
+            let rgba =
                 image.decode_rgba_with_background(background).ok_or("invalid SIXEL image")?;
-            let decoded_bytes = bgra.len();
-            for pixel in bgra.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
             let buffer =
-                image::RgbaImage::from_raw(width, height, bgra).ok_or("invalid SIXEL pixels")?;
-            (Arc::new(RenderImage::new([Frame::new(buffer)])), decoded_bytes)
+                image::RgbaImage::from_raw(width, height, rgba).ok_or("invalid SIXEL pixels")?;
+            render_rgba(buffer)
         },
     };
     Ok((
@@ -478,13 +500,16 @@ pub(super) fn decode_bytes(data: &[u8]) -> Result<(Arc<RenderImage>, usize), Str
         return Err(format!("unsupported terminal image format: {format:?}"));
     }
 
-    let mut bgra = decode_rgba(data, format, MAX_IMAGE_ENCODED_BYTES)?;
+    Ok(render_rgba(decode_rgba(data, format, MAX_IMAGE_ENCODED_BYTES)?))
+}
+
+fn render_rgba(mut bgra: image::RgbaImage) -> (Arc<RenderImage>, usize) {
     let decoded_bytes = bgra.len();
     for pixel in bgra.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
     let render_image = Arc::new(RenderImage::new([Frame::new(bgra)]));
-    Ok((render_image, decoded_bytes))
+    (render_image, decoded_bytes)
 }
 
 /// Clipboard bitmaps may be uncompressed; normalization shares the terminal
@@ -557,12 +582,15 @@ fn decode_rgba(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pebrel_terminal::inline_image::{ImageIdentity, ImageLayout};
+    use pebrel_terminal::inline_image::{
+        ImageFormat as TransferFormat, ImageIdentity, ImageLayout,
+    };
 
     fn placement(image: &Arc<ImageIdentity>) -> ImagePlacement {
         ImagePlacement {
             id: image.id,
             lifetime: Arc::downgrade(image),
+            format: TransferFormat::Raw,
             layout: ImageLayout {
                 width: 2.0,
                 height: 1.0,
@@ -606,7 +634,7 @@ mod tests {
         let image = ImageIdentity::new();
         let placement = placement(&image);
         let pixels = Arc::new(vec![1, 2, 3, 4, 5, 6]);
-        store.enqueue_pixels(Arc::downgrade(&pixels), 3, placement).unwrap();
+        store.enqueue_kitty(Arc::downgrade(&pixels), 3, placement).unwrap();
         let pending = store.start_next().expect("queued transfer should start");
         let (_, decoded) = decode(pending).unwrap();
         assert_eq!(decoded.decoded_bytes, 8);
@@ -618,9 +646,88 @@ mod tests {
         let mut store = InlineImageStore::default();
         let image = ImageIdentity::new();
         let pixels = Arc::new(vec![0; 8]);
-        let error =
-            store.enqueue_pixels(Arc::downgrade(&pixels), 2, placement(&image)).unwrap_err();
+        let error = store.enqueue_kitty(Arc::downgrade(&pixels), 2, placement(&image)).unwrap_err();
         assert!(error.contains("channel"), "{error}");
+    }
+
+    #[test]
+    fn kitty_png_crosses_the_owned_queue_limit_and_reaches_the_decoded_cache() {
+        use image::ImageEncoder as _;
+        use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+        for (width, height) in [(2048_u32, 1920_u32), (4096, 2160)] {
+            let mut png = Vec::new();
+            let rgba = [10_u8, 20, 30, 255].repeat(width as usize * height as usize);
+            PngEncoder::new_with_quality(
+                &mut png,
+                CompressionType::Uncompressed,
+                FilterType::NoFilter,
+            )
+            .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+            drop(rgba);
+            assert!(png.len() > MAX_IMAGE_ENCODED_BYTES);
+            if width == 4096 {
+                assert!(png.len() > MAX_QUEUED_BYTES);
+            }
+            assert!(png.len() <= pebrel_terminal::kitty_graphics::MAX_TRANSFER_BYTES);
+            let data = Arc::new(png);
+            let id = ImageIdentity::new();
+            let mut placement = placement(&id);
+            placement.format = TransferFormat::Png;
+            placement.layout.width = width as f32;
+            placement.layout.height = height as f32;
+            placement.layout.cell_width = width as f32 / 2.0;
+            placement.layout.cell_height = height as f32;
+            let mut store = InlineImageStore::default();
+            store.enqueue_kitty(Arc::downgrade(&data), 0, placement).unwrap();
+            assert_eq!(Arc::strong_count(&data), 1, "the queue must not own the container");
+            assert_eq!(store.queued_bytes, 0);
+            let decoded = decode(store.start_next().unwrap()).unwrap();
+            assert_eq!(decoded.1.decoded_bytes, width as usize * height as usize * 4);
+            assert_eq!(&decoded.1.image.as_bytes(0).unwrap()[..4], &[30, 20, 10, 255]);
+            store.finish(Ok(decoded)).unwrap();
+            assert_eq!(store.frame_images().len(), 1);
+            assert!(store.decoded_bytes <= MAX_CACHE_BYTES);
+        }
+    }
+
+    #[test]
+    fn kitty_png_slots_remain_bounded_and_release_expired_source_owners() {
+        let mut store = InlineImageStore::default();
+        let data = Arc::new(encoded_png());
+        let owners: Vec<_> = (0..MAX_CACHED_IMAGES + 1).map(|_| ImageIdentity::new()).collect();
+        for owner in &owners[..MAX_CACHED_IMAGES] {
+            let mut placement = placement(owner);
+            placement.format = TransferFormat::Png;
+            store.enqueue_kitty(Arc::downgrade(&data), 0, placement).unwrap();
+        }
+        let mut placement = placement(owners.last().unwrap());
+        placement.format = TransferFormat::Png;
+        assert!(store.enqueue_kitty(Arc::downgrade(&data), 0, placement).is_err());
+        assert_eq!(Arc::strong_count(&data), 1);
+        drop(data);
+        assert!(store.start_next().is_none());
+        assert!(store.decoding.is_none());
+        assert_eq!(store.queued_bytes, 0);
+    }
+
+    #[test]
+    fn png_transfer_converts_supported_sixteen_bit_samples_to_bgra() {
+        let pixels =
+            image::ImageBuffer::from_pixel(2, 1, image::Rgba([65535_u16, 0, 32896, 65535]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba16(pixels).write_to(&mut png, ImageFormat::Png).unwrap();
+        let data = Arc::new(png.into_inner());
+        let owner = ImageIdentity::new();
+        let mut placement = placement(&owner);
+        placement.format = TransferFormat::Png;
+        let mut store = InlineImageStore::default();
+        store.enqueue_kitty(Arc::downgrade(&data), 0, placement).unwrap();
+        let (_, decoded) = decode(store.start_next().unwrap()).unwrap();
+        assert_eq!(
+            decoded.image.as_bytes(0),
+            Some([128, 0, 255, 255, 128, 0, 255, 255].as_slice())
+        );
     }
 
     #[test]
@@ -635,8 +742,8 @@ mod tests {
         let raw_ids: Vec<_> = (0..MAX_CACHED_IMAGES).map(|_| ImageIdentity::new()).collect();
         let raw: Vec<_> = (0..MAX_CACHED_IMAGES).map(|_| Arc::new(vec![1u8; 8])).collect();
         for (id, data) in raw_ids.iter().zip(&raw) {
-            store.enqueue_pixels(Arc::downgrade(data), 4, placement(id)).unwrap();
-            store.enqueue_pixels(Arc::downgrade(data), 4, placement(id)).unwrap();
+            store.enqueue_kitty(Arc::downgrade(data), 4, placement(id)).unwrap();
+            store.enqueue_kitty(Arc::downgrade(data), 4, placement(id)).unwrap();
             assert_eq!(Arc::strong_count(data), 1, "queue must not retain raw pixel storage");
         }
         assert_eq!(store.queued.len(), MAX_QUEUED_IMAGES + MAX_CACHED_IMAGES);
@@ -645,7 +752,7 @@ mod tests {
             store.finish(decode(pending)).unwrap();
         }
         let id = raw_ids.last().unwrap();
-        store.enqueue_pixels(Arc::downgrade(raw.last().unwrap()), 4, placement(id)).unwrap();
+        store.enqueue_kitty(Arc::downgrade(raw.last().unwrap()), 4, placement(id)).unwrap();
         assert!(store.queued.is_empty(), "new placements reuse the cached bitmap");
         assert!(store.decoded_bytes <= MAX_CACHE_BYTES);
     }
@@ -656,7 +763,7 @@ mod tests {
         let id = ImageIdentity::new();
         let raw = Arc::new(vec![1u8; 8]);
         let weak = Arc::downgrade(&raw);
-        store.enqueue_pixels(weak.clone(), 4, placement(&id)).unwrap();
+        store.enqueue_kitty(weak.clone(), 4, placement(&id)).unwrap();
         drop(raw);
         assert!(weak.upgrade().is_none());
         assert!(store.start_next().is_none());
@@ -731,6 +838,7 @@ mod tests {
             placement: ImagePlacement {
                 id: resource.id,
                 lifetime: Arc::downgrade(&resource),
+                format: TransferFormat::Raw,
                 layout,
             },
         }];
@@ -1005,11 +1113,11 @@ mod tests {
         assert!(store.enqueue(png, placement(&owner)).is_err());
         let raw = Arc::new(vec![1u8; 8]);
         let raw_owner = ImageIdentity::new();
-        store.enqueue_pixels(Arc::downgrade(&raw), 4, placement(&raw_owner)).unwrap();
+        store.enqueue_kitty(Arc::downgrade(&raw), 4, placement(&raw_owner)).unwrap();
         assert_eq!(Arc::strong_count(&raw), 1);
         drop(owner);
         let next = store.start_next().unwrap();
-        assert!(matches!(next.data, ImageData::Pixels { .. }));
+        assert!(matches!(next.data, ImageData::Transfer { .. }));
         assert_eq!(store.queued_bytes, 0);
     }
 
