@@ -25,6 +25,11 @@
       "id": "ssh-hook-complete-answer",
       "commit": "ee086614c3df0e6d4e595bee5ebf75a8164281b7",
       "verification": "The stable parent lost fitting completion answers. The backport passed all 16 remote hook tests, including five completion event formats, 1- and 16000-character fitting answers and the 30000-character fallback."
+    },
+    {
+      "id": "issue-1027",
+      "commit": "56ee5311994049f18bf184e0b1a2c3fb8334be8f",
+      "verification": "On Windows x64 with PowerShell 7 and OMP 18.22.2, the stable source restored the original session ID and message after forced termination and after confirming a normal window close with a recorded clean exit. https://github.com/Kuddev/pebrel/actions/runs/44498156005/job/135470560189"
     }
   ]
 }

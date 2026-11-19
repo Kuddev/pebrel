@@ -29,6 +29,7 @@ macOS, Linux, and Android downloads are Preview builds.
 - Fixed Windows upgrades and uninstalls removing user-edited WSL context menu registry entries.
 - Fixed opening a directory in an existing elevated Windows window ignoring the configured default shell profile. Addresses [#1042](https://github.com/Kuddev/pebrel/issues/1042).
 - Fixed SSH agent hooks dropping a complete answer that fits the message limit when unrelated tool output makes the event too large.
+- Fixed local OMP conversations losing their session on restart. On Windows with PowerShell 7, reopening Pebrel restores the same conversation after a normal close or forced exit. Addresses [#1027](https://github.com/Kuddev/pebrel/issues/1027).
 
 ### 中文
 
@@ -41,6 +42,7 @@ macOS、Linux 和 Android 下载为预览版。
 - 修复 Windows 升级或卸载时误删用户改过的 WSL 右键菜单注册表项的问题。
 - 修复在已打开的 Windows 管理员窗口中打开目录时忽略默认 Shell 配置的问题。对应 [#1042](https://github.com/Kuddev/pebrel/issues/1042)。
 - 修复 SSH 上的 Agent 因工具输出过长而丢失完整答复的问题。答复本身未超出消息上限时会完整送达。
+- 修复本地 OMP 对话在重启后丢失会话的问题。在 Windows 的 PowerShell 7 中，正常关窗或强制退出后重新打开 Pebrel 均可恢复原对话。对应 [#1027](https://github.com/Kuddev/pebrel/issues/1027)。
 
 ### Contributors
 
