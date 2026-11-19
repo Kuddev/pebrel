@@ -1,0 +1,10 @@
+{
+  "base": "v2.6.0",
+  "fixes": [
+    {
+      "id": "issue-1028",
+      "commit": "37ead86c4f4f0e70000934dd522a6a7f79a0a94d",
+      "verification": "Windows x64 exercised disable, enable and remove with an initially absent Startup folder. The Windows shortcut implementation and regression match the tested mainline source. https://github.com/Kuddev/pebrel/actions/runs/44470749751/job/135379819383"
+    }
+  ]
+}

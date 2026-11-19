@@ -4,6 +4,44 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.6.1 - Unreleased
+
+- `Pebrel-v2.6.1-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.1-windows-x64.zip`: `PENDING FINAL BUILD`
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Fixed
+
+- Fixed enabling launch at login on Windows when the user’s Startup folder is missing. Addresses [#1028](https://github.com/Kuddev/pebrel/issues/1028).
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 修复
+
+- 修复 Windows 用户的启动文件夹缺失时无法启用登录自启动的问题。对应 [#1028](https://github.com/Kuddev/pebrel/issues/1028)。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+</p>
+
+- [@Kuddev](https://github.com/Kuddev)
+
 ## 2.6.0 - Unreleased
 
 - `Pebrel-v2.6.0-android-universal-preview.apk`: `PENDING FINAL BUILD`

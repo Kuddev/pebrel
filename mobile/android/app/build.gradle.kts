@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.kuddev.pebrel.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 39
-        versionName = "2.6.0-preview"
+        versionCode = 40
+        versionName = "2.6.1-preview"
         providers.gradleProperty("pebrelVersionCode").orNull?.let { versionCode = it.toInt() }
         providers.gradleProperty("pebrelVersionName").orNull?.let { versionName = it }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
