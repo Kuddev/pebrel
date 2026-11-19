@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from conformance.harness import ConformanceContext, ResolvedApp
@@ -68,7 +69,43 @@ foreach ($file in $files) {
 
 def powershell(script):
     subprocess.run(["pwsh", "-NoProfile", "-Sta", "-Command", "$ErrorActionPreference='Stop'\n" + script],
-                   check=True, timeout=45)
+                   check=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
+
+
+def focus_window(ctx):
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    hwnd_type = wintypes.HWND
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, hwnd_type, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [hwnd_type, ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes = user.SetForegroundWindow.argtypes = [hwnd_type]
+    user.GetForegroundWindow.restype = hwnd_type
+    user.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+
+    def owner(hwnd):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value
+
+    windows = []
+    @enum_proc
+    def collect(hwnd, _):
+        if owner(hwnd) == ctx.process.pid and user.IsWindowVisible(hwnd):
+            windows.append(hwnd)
+        return True
+
+    user.EnumWindows(collect, 0)
+    if len(windows) != 1:
+        raise RuntimeError(f"Expected one visible Pebrel window, found {len(windows)}")
+    user.AllowSetForegroundWindow(ctx.process.pid)
+    ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
+    for _ in range(15):
+        if owner(user.GetForegroundWindow()) == ctx.process.pid:
+            return
+        user.SetForegroundWindow(windows[0])
+        time.sleep(0.1)
+    raise RuntimeError(f"Could not focus Pebrel on hosted desktop; foreground PID "
+                       f"{owner(user.GetForegroundWindow())}, expected {ctx.process.pid}")
 
 
 def native_paste(pid):
@@ -105,8 +142,8 @@ def run(app, root):
         ctx.poll(lambda: "PEBREL-PWSH-7" in ctx.read()["text"], bool, "PowerShell 7 unavailable")
         ctx.prompt("& " + quote(os.environ["PEBREL_FIXTURE_PI"]) + " --no-session -e " + quote(observer))
         ctx.poll((root / "ready").is_file, bool, "Pi editor did not start", timeout=45)
-        ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
         powershell(SET_CLIPBOARD)
+        focus_window(ctx)
         seen = paths()
         received = []
         for number in range(1, 34):
