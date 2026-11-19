@@ -151,7 +151,8 @@ impl NebulaHistory {
     pub fn load() -> Self {
         Self::load_at(
             crate::platform::dirs::data_dir(),
-            pebrel_settings::RuntimeSettings::load().command_history_persist,
+            pebrel_settings::RawSettings::try_load()
+                .is_ok_and(|raw| raw.command_history_persists()),
         )
     }
 
@@ -167,11 +168,14 @@ impl NebulaHistory {
         ] {
             history.load_file(&scope, &directory.join(scope.file_name()));
         }
-        history_debug_log(format!(
-            "history_load scopes={} entries={}",
-            history.pools.len(),
-            history.pools.values().map(|pool| pool.entries.len()).sum::<usize>()
-        ));
+        history_debug_log(
+            directory,
+            format!(
+                "history_load scopes={} entries={}",
+                history.pools.len(),
+                history.pools.values().map(|pool| pool.entries.len()).sum::<usize>()
+            ),
+        );
         history
     }
 
@@ -187,14 +191,17 @@ impl NebulaHistory {
             return;
         }
         let pool = self.pools.entry(scope.clone()).or_default();
+        pool.insert(cmd.to_owned());
         if let Some(directory) = &self.append_directory {
             append(directory, &scope, cmd, cwd);
+            history_debug_log(
+                directory,
+                format!(
+                    "history_record scope={scope:?} cmd={cmd:?} cwd={cwd:?} entries={}",
+                    pool.entries.len()
+                ),
+            );
         }
-        pool.insert(cmd.to_owned());
-        history_debug_log(format!(
-            "history_record scope={scope:?} cmd={cmd:?} cwd={cwd:?} entries={}",
-            pool.entries.len()
-        ));
     }
 
     /// Popup search retains spelling and ranks matching commands by frequency, then recency.
@@ -284,11 +291,7 @@ pub(crate) fn history_file_names() -> [&'static str; 3] {
     [LOCAL_HISTORY_FILE, WSL_HISTORY_FILE, SSH_HISTORY_FILE]
 }
 
-#[cfg(test)]
-fn history_debug_log(_message: impl AsRef<str>) {}
-
-#[cfg(not(test))]
-fn history_debug_log(message: impl AsRef<str>) {
+fn history_debug_log(directory: &Path, message: impl AsRef<str>) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ENABLED.get_or_init(|| {
         std::env::var("PEBREL_DEBUG_LOG").or_else(|_| std::env::var("NEBULA_DEBUG_LOG")).is_ok_and(
@@ -304,7 +307,7 @@ fn history_debug_log(message: impl AsRef<str>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()))
         .unwrap_or_else(|_| "0.000".to_owned());
-    let path = crate::platform::dirs::data_dir().join("pebrel_debug.log");
+    let path = directory.join("pebrel_debug.log");
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "[{ts}] {}", message.as_ref());
     }
