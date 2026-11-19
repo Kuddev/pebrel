@@ -72,7 +72,7 @@ def powershell(script):
                    check=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
 
 
-def focus_window(ctx):
+def focus_window(ctx, app_pid):
     user = ctypes.WinDLL("user32", use_last_error=True)
     hwnd_type = wintypes.HWND
     enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, hwnd_type, wintypes.LPARAM)
@@ -90,22 +90,22 @@ def focus_window(ctx):
     windows = []
     @enum_proc
     def collect(hwnd, _):
-        if owner(hwnd) == ctx.process.pid and user.IsWindowVisible(hwnd):
+        if owner(hwnd) == app_pid and user.IsWindowVisible(hwnd):
             windows.append(hwnd)
         return True
 
     user.EnumWindows(collect, 0)
     if len(windows) != 1:
         raise RuntimeError(f"Expected one visible Pebrel window, found {len(windows)}")
-    user.AllowSetForegroundWindow(ctx.process.pid)
+    user.AllowSetForegroundWindow(app_pid)
     ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
     for _ in range(15):
-        if owner(user.GetForegroundWindow()) == ctx.process.pid:
+        if owner(user.GetForegroundWindow()) == app_pid:
             return
         user.SetForegroundWindow(windows[0])
         time.sleep(0.1)
     raise RuntimeError(f"Could not focus Pebrel on hosted desktop; foreground PID "
-                       f"{owner(user.GetForegroundWindow())}, expected {ctx.process.pid}")
+                       f"{owner(user.GetForegroundWindow())}, expected {app_pid}")
 
 
 def native_paste(pid):
@@ -143,11 +143,13 @@ def run(app, root):
         ctx.prompt("& " + quote(os.environ["PEBREL_FIXTURE_PI"]) + " --no-session -e " + quote(observer))
         ctx.poll((root / "ready").is_file, bool, "Pi editor did not start", timeout=45)
         powershell(SET_CLIPBOARD)
-        focus_window(ctx)
+        # On Windows the harness owns a Python launch gate and its child in one job.
+        app_pid = ctx.snapshot()["process_id"]
+        focus_window(ctx, app_pid)
         seen = paths()
         received = []
         for number in range(1, 34):
-            native_paste(ctx.process.pid)
+            native_paste(app_pid)
             fresh = ctx.poll(lambda: paths() - seen, bool, f"no staged file on paste {number}")
             if len(fresh) != 1:
                 raise RuntimeError(f"paste {number} staged {len(fresh)} files")
