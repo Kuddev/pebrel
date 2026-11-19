@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "mobile/tools"))
 from generate_assets import theme_palettes
+from build_russh import notices
 
 
 def generate():
@@ -24,7 +25,7 @@ def generate():
     licenses = out/"Licenses"
     shutil.copytree(ROOT/"tmp/ios-vt/licenses", licenses/"Ghostty", dirs_exist_ok=True)
     shutil.copytree(ROOT/"mobile/android/third_party/licenses", licenses/"Fonts", dirs_exist_ok=True)
-    shutil.copytree(ROOT/"mobile/ssh/licenses", licenses/"SSH", dirs_exist_ok=True)
+    notices(licenses/"SSH", target="aarch64-apple-ios")
     icon = out / "Assets.xcassets/AppIcon.appiconset"
     icon.mkdir(parents=True, exist_ok=True)
     import subprocess

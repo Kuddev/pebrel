@@ -17,13 +17,15 @@ OUTPUT = ROOT / "mobile/android/ssh/build"
 TARGETS = {"arm64-v8a": "aarch64-linux-android", "x86_64": "x86_64-linux-android"}
 
 
-def notices() -> None:
+def notices(destination: Path = OUTPUT / "assets/licenses/Russh", target: str | None = None) -> None:
     license_source = json.loads((CRATE / "licenses/SOURCE.json").read_text(encoding="utf-8"))
     apache = CRATE / "licenses" / license_source["file"]
-    metadata = json.loads(subprocess.check_output([
+    command = [
         "cargo", "metadata", "--locked", "--format-version", "1", "--manifest-path", str(CRATE / "Cargo.toml")
-    ], text=True, encoding="utf-8"))
-    destination = OUTPUT / "assets/licenses/Russh"
+    ]
+    if target:
+        command.extend(["--filter-platform", target])
+    metadata = json.loads(subprocess.check_output(command, text=True, encoding="utf-8"))
     resolved = {node["id"] for node in metadata["resolve"]["nodes"]}
     packages = collect([package for package in metadata["packages"] if package["id"] in resolved],
                        destination, apache, license_source["sha256"])
