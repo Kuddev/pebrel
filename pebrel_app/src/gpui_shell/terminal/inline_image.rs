@@ -523,6 +523,7 @@ pub(super) fn clipboard_png(data: &[u8]) -> Result<Vec<u8>, String> {
             | ImageFormat::Jpeg
             | ImageFormat::Gif
             | ImageFormat::Bmp
+            | ImageFormat::Tiff
             | ImageFormat::WebP
     ) {
         return Err(format!("unsupported clipboard image format: {format:?}"));
@@ -982,15 +983,14 @@ mod tests {
     #[test]
     fn clipboard_bitmaps_become_png_without_extending_terminal_protocol_formats() {
         let pixels = image::RgbaImage::from_pixel(2, 1, image::Rgba([10, 20, 30, 255]));
-        let mut output = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgba8(pixels.clone())
-            .write_to(&mut output, ImageFormat::Bmp)
-            .unwrap();
-        let bmp = output.into_inner();
-        assert!(decode_bytes(&bmp).is_err());
-        let png = clipboard_png(&bmp).unwrap();
-        assert_eq!(image::guess_format(&png).unwrap(), ImageFormat::Png);
-        assert_eq!(image::load_from_memory(&png).unwrap().into_rgba8(), pixels);
+        for format in [ImageFormat::Bmp, ImageFormat::Tiff] {
+            let mut bitmap = std::io::Cursor::new(Vec::new());
+            pixels.write_to(&mut bitmap, format).unwrap();
+            assert!(decode_bytes(bitmap.get_ref()).is_err());
+            let png = clipboard_png(bitmap.get_ref()).unwrap();
+            assert_eq!(image::guess_format(&png).unwrap(), ImageFormat::Png);
+            assert_eq!(image::load_from_memory(&png).unwrap().into_rgba8(), pixels);
+        }
     }
 
     #[test]
