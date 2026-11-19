@@ -144,17 +144,28 @@ impl HistoryIndex {
 #[derive(Debug, Default)]
 pub struct NebulaHistory {
     pools: HashMap<HistoryScope, HistoryIndex>,
+    append_directory: Option<PathBuf>,
 }
 
 impl NebulaHistory {
     pub fn load() -> Self {
-        let mut history = Self::default();
+        Self::load_at(
+            crate::platform::dirs::data_dir(),
+            pebrel_settings::RuntimeSettings::load().command_history_persist,
+        )
+    }
+
+    fn load_at(directory: &Path, persist: bool) -> Self {
+        let mut history = Self {
+            pools: HashMap::new(),
+            append_directory: persist.then(|| directory.to_path_buf()),
+        };
         for scope in [
             HistoryScope::Local,
             HistoryScope::Wsl(String::new()),
             HistoryScope::Ssh(String::new()),
         ] {
-            history.load_file(&scope, &history_path(scope.file_name()));
+            history.load_file(&scope, &directory.join(scope.file_name()));
         }
         history_debug_log(format!(
             "history_load scopes={} entries={}",
@@ -176,7 +187,9 @@ impl NebulaHistory {
             return;
         }
         let pool = self.pools.entry(scope.clone()).or_default();
-        append(&scope, cmd, cwd);
+        if let Some(directory) = &self.append_directory {
+            append(directory, &scope, cmd, cwd);
+        }
         pool.insert(cmd.to_owned());
         history_debug_log(format!(
             "history_record scope={scope:?} cmd={cmd:?} cwd={cwd:?} entries={}",
@@ -271,10 +284,6 @@ pub(crate) fn history_file_names() -> [&'static str; 3] {
     [LOCAL_HISTORY_FILE, WSL_HISTORY_FILE, SSH_HISTORY_FILE]
 }
 
-fn history_path(file_name: &str) -> PathBuf {
-    crate::platform::dirs::data_dir().join(file_name)
-}
-
 #[cfg(test)]
 fn history_debug_log(_message: impl AsRef<str>) {}
 
@@ -295,13 +304,13 @@ fn history_debug_log(message: impl AsRef<str>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()))
         .unwrap_or_else(|_| "0.000".to_owned());
-    let path = history_path(LOCAL_HISTORY_FILE).with_file_name("pebrel_debug.log");
+    let path = crate::platform::dirs::data_dir().join("pebrel_debug.log");
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "[{ts}] {}", message.as_ref());
     }
 }
 
-fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
+fn append(directory: &Path, scope: &HistoryScope, cmd: &str, cwd: &str) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -318,7 +327,7 @@ fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
         );
         record["target"] = serde_json::Value::String(identity.to_owned());
     }
-    let path = history_path(scope.file_name());
+    let path = directory.join(scope.file_name());
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{record}");
     }

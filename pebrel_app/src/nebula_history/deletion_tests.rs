@@ -58,3 +58,33 @@ fn command_history_clear_reports_partial_failure_and_preserves_failed_entries() 
     history.clear_at(directory.path()).unwrap();
     assert!(history.pools.is_empty());
 }
+
+#[test]
+fn disabling_persistence_keeps_scoped_suggestions_until_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let scopes =
+        [HistoryScope::Local, HistoryScope::Wsl("ubuntu".into()), HistoryScope::Ssh("box".into())];
+    let mut saved = NebulaHistory::load_at(directory.path(), true);
+    for scope in &scopes {
+        saved.record(scope, "echo saved", "/");
+    }
+    let mut memory = NebulaHistory::load_at(directory.path(), false);
+    for scope in &scopes {
+        let path = directory.path().join(scope.file_name());
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(memory.hint(scope, "echo s"), Some("aved"));
+        memory.record(scope, "echo transient", "/");
+        assert_eq!(memory.hint(scope, "echo t"), Some("ransient"));
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+    let mut resumed = NebulaHistory::load_at(directory.path(), true);
+    for scope in &scopes {
+        assert_eq!(resumed.hint(scope, "echo t"), None);
+        resumed.record(scope, "echo new", "/");
+    }
+    let reloaded = NebulaHistory::load_at(directory.path(), false);
+    for scope in &scopes {
+        assert_eq!(reloaded.hint(scope, "echo n"), Some("ew"));
+        assert_eq!(reloaded.hint(scope, "echo s"), Some("aved"));
+    }
+}
