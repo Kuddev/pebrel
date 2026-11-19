@@ -35,6 +35,11 @@
       "id": "issue-992-wake-scrollback",
       "commit": "57e13d36a7a9ba0723bb9b6258c05e11906f7c0a",
       "verification": "Published Windows x64 2.5.9 lost all nine history lines. The stable candidate retained nine after 310 seconds of automatic tab sleep, restored the directory, directory listing and ordinary stdout, and reopened both named tabs after a clean exit. https://github.com/Kuddev/pebrel/actions/runs/44499791990/job/135476224025"
+    },
+    {
+      "id": "shortcut-escape-alias",
+      "commit": "36dddcca01c0baf7d69d57b1bb2524d4b1145291",
+      "verification": "Windows x64 physical keystrokes: esc minimized the candidate and failed on 2.5.9. The escape and ctrl+shift+m controls minimized both builds. https://github.com/Kuddev/pebrel/actions/runs/44503059641"
     }
   ]
 }
