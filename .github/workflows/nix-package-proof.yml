@@ -46,7 +46,13 @@ jobs:
       - name: Exercise the installed app under X11
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils zsh mesa-vulkan-drivers
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils zsh
+          # Use the same Mesa and Vulkan ABI as the installed Nix binary on this GPU-less runner.
+          hook=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#mesa.llvmpipeHook)
+          tools=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#vulkan-tools)
+          source "$hook/nix-support/setup-hook"
+          test -r "$VK_DRIVER_FILES"
+          xvfb-run -a "$tools/bin/vulkaninfo" --summary
           GITHUB_SHA="$CANDIDATE" xvfb-run -a -s '-screen 0 1600x1000x24' \
             python3 scripts/conformance/run.py --app "$RUNNER_TEMP/test-profile/bin/pebrel" \
               --platform linux-x86_64-nix --output "$RUNNER_TEMP/nix-conformance.json" \
