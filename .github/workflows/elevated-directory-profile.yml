@@ -1,0 +1,55 @@
+name: Elevated Windows directory launch with an imported profile
+on:
+  push:
+    branches: [qa/windows-elevated-profile-1042]
+permissions:
+  contents: read
+
+jobs:
+  handover:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: "-release-check-v2"
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Build the candidate and its hook helper
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p pebrel -p pebrel_hook --features pebrel/gpui-test-support --bin pebrel --bin pebrel-hook
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Reproduce the shell fallback on the published 2.5.9 build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'Pebrel-v2.5.9-windows-x64.zip'
+          gh release download v2.5.9 -p 'Pebrel-v2.5.9-windows-x64.zip' -D $env:RUNNER_TEMP
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '140514042062641feb09484cf00f5e9fcc6344b84d949ca2e67fbb8025926cd5') { throw 'Unexpected release digest' }
+          $dir = Join-Path $env:RUNNER_TEMP 'published-259'
+          Expand-Archive $zip $dir
+          $exe = @(Get-ChildItem $dir -Filter pebrel.exe -Recurse -File)
+          if ($exe.Count -ne 1) { throw 'Expected a single product executable in the published ZIP' }
+          ./scripts/conformance/windows_elevated_directory_profile.ps1 -Executable $exe[0].FullName -ExpectedHandover powershell.exe
+      - name: Verify the existing elevated window launches the configured PowerShell 7
+        shell: pwsh
+        run: ./scripts/conformance/windows_elevated_directory_profile.ps1 -Executable (Resolve-Path 'target/ci/pebrel.exe').Path -ExpectedHandover pwsh.exe
