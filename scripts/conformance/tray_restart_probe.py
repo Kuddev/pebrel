@@ -194,7 +194,7 @@ def supervise(executable, variant):
     root = Path(tempfile.gettempdir()) / ("tray-980-" + uuid.uuid4().hex)
     os.environ["PEBREL_QA_TRAY_TRACE"] = str(root / "tray-events")
     args = [sys.executable, str(Path(__file__).with_name("windows_standard_user.py")),
-            __file__, "--worker", executable, temp, variant]
+            __file__, "--worker", executable, str(root), variant]
     worker_proc = subprocess.Popen(args)
     try:
         def ready():
