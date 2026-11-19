@@ -74,6 +74,7 @@ class Desktop:
         self.enum_callback = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
         for library, name, result, args in (
             (self.user, "FindWindowW", wt.HWND, [wt.LPCWSTR, wt.LPCWSTR]),
+            (self.user, "FindWindowExW", wt.HWND, [wt.HWND, wt.HWND, wt.LPCWSTR, wt.LPCWSTR]),
             (self.user, "EnumWindows", wt.BOOL, [self.enum_callback, wt.LPARAM]),
             (self.user, "GetWindowThreadProcessId", wt.DWORD, [wt.HWND, ctypes.POINTER(wt.DWORD)]),
             (self.user, "GetClassNameW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int]),
@@ -118,22 +119,29 @@ class Desktop:
                 return [rect.left, rect.top, rect.right, rect.bottom]
         return None
 
-    def restart_explorer(self):
-        old = wait_for("the existing Explorer taskbar", self.taskbar)
+    def stop_explorer(self, pid):
         subprocess.run(
-            ["taskkill.exe", "/F", "/PID", str(old)], timeout=20, check=True, capture_output=True,
+            ["taskkill.exe", "/F", "/PID", str(pid), "/FI", "IMAGENAME eq explorer.exe"],
+            timeout=20, check=True, capture_output=True,
         )
-        try:
-            wait_for("the old taskbar to exit", lambda: self.taskbar() != old)
-            if self.taskbar() is None:
-                subprocess.Popen([str(Path(os.environ["WINDIR"]) / "explorer.exe")])
-            new = wait_for("the replacement Explorer taskbar", self.taskbar, 35)
-            if new == old:
-                raise RuntimeError("Explorer taskbar owner did not change")
-            return old, new
-        finally:
-            if self.taskbar() is None:
-                subprocess.Popen([str(Path(os.environ["WINDIR"]) / "explorer.exe")])
+        wait_for("the old taskbar to exit", lambda: self.taskbar() != pid)
+
+    def ordinary_notification_area(self):
+        if not self.taskbar():
+            subprocess.Popen([str(Path(os.environ["WINDIR"]) / "explorer.exe")],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+
+        def ready():
+            bar = self.user.FindWindowW("Shell_TrayWnd", None)
+            if bar and self.user.FindWindowExW(bar, None, "TrayNotifyWnd", None):
+                return self.owner(bar)[1]
+            return None
+
+        pid = wait_for("Explorer's notification area on the worker desktop", ready, 45)
+        if is_elevated(pid):
+            raise RuntimeError(f"Explorer PID {pid} is elevated on the ordinary user's desktop")
+        return pid
 
     def verify_tray_menu(self, hwnd):
         thread, _ = self.owner(hwnd)
@@ -156,6 +164,8 @@ class Desktop:
 def worker(executable, root, candidate):
     root.mkdir()
     desktop = Desktop()
+    original_shell = desktop.ordinary_notification_area()
+    print("Initial notification-area PID:", original_shell, flush=True)
     app = ResolvedApp(executable)
     ctx = ConformanceContext(app, "windows-x86_64", root / "config", root / "project",
                              root / "evidence", startup_timeout=45)
@@ -170,8 +180,11 @@ def worker(executable, root, candidate):
         hwnd = wait_for("the Runtime process's tray HWND", lambda: desktop.tray_window(pid), 30)
         before = wait_for("the initial registered icon", lambda: fresh_icon_rect(hwnd), 45)
         print("Initial registered icon:", before, flush=True)
-        (root / "ready").touch()
-        wait_for("a new Explorer taskbar", lambda: (root / "restarted").exists(), 75)
+        desktop.stop_explorer(original_shell)
+        replacement = desktop.ordinary_notification_area()
+        if original_shell == replacement:
+            raise RuntimeError("Explorer did not restart")
+        print("Replacement notification-area PID:", replacement, flush=True)
         if candidate:
             after = wait_for("the restored icon", lambda: fresh_icon_rect(hwnd), 45)
             desktop.verify_tray_menu(hwnd)
@@ -195,25 +208,17 @@ def supervise(executable, variant):
     os.environ["PEBREL_QA_TRAY_TRACE"] = str(root / "tray-events")
     args = [sys.executable, str(Path(__file__).with_name("windows_standard_user.py")),
             __file__, "--worker", executable, str(root), variant]
-    worker_proc = subprocess.Popen(args)
+    # A hosted desktop may start with an elevated Explorer. Its replacement
+    # and Pebrel must share the ordinary user's desktop and integrity level.
+    existing = desktop.taskbar()
+    if existing and is_elevated(existing):
+        desktop.stop_explorer(existing)
     try:
-        def ready():
-            if worker_proc.poll() is not None:
-                raise RuntimeError(f"Ordinary-user fixture exited early: {worker_proc.returncode}")
-            return (root / "ready").is_file()
-        wait_for("the ordinary user's initial icon", ready, 140)
-        old, new = desktop.restart_explorer()
-        print("Replaced Explorer taskbar owner:", old, new, "elevated:", is_elevated(new), flush=True)
-        (root / "restarted").touch()
-        if worker_proc.wait(timeout=90):
-            raise RuntimeError("Tray recovery verification failed")
+        subprocess.run(args, check=True, timeout=240)
     finally:
         path = root / "tray-events"
         if path.is_file():
             print("Registration events:", path.read_text(errors="replace")[:3000])
-        if worker_proc.poll() is None:
-            worker_proc.terminate()
-            worker_proc.wait(timeout=10)
         if root.is_dir():
             shutil.rmtree(root, ignore_errors=True)
 

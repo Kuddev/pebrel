@@ -9,10 +9,6 @@ jobs:
   tray:
     runs-on: windows-2022
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [baseline, candidate]
     env:
       PYTHONUTF8: "1"
     steps:
@@ -22,29 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - if: matrix.variant == 'candidate'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97.1"
-      - if: matrix.variant == 'candidate'
-        uses: ./.github/actions/rust-cache
-        with:
-          key: native
-          extra-key: "-release-check-v2"
-          target: |
-            target/ci
-            target/release
-          revision: dependencies-v1
-          save-if: "false"
-      - name: Build the trace-enabled candidate
-        if: matrix.variant == 'candidate'
-        shell: pwsh
-        run: |
-          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
-          cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-shell --bin pebrel
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Extract the released comparison package
-        if: matrix.variant == 'baseline'
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP pebrel-259.zip
@@ -56,10 +30,27 @@ jobs:
           $exe = @(Get-ChildItem $dest -Recurse -File -Filter pebrel.exe)
           if ($exe.Count -ne 1) { throw 'Expected one released executable' }
           "TRAY_BASELINE=$($exe[0].FullName)" >> $env:GITHUB_ENV
-      - name: Observe the ordinary user's icon before and after replacing Explorer
+      - name: Reproduce the published tray icon loss
         shell: pwsh
-        env:
-          VARIANT: ${{ matrix.variant }}
+        run: python scripts/conformance/tray_restart_probe.py $env:TRAY_BASELINE baseline
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        with:
+          key: native
+          extra-key: "-release-check-v2"
+          target: |
+            target/ci
+            target/release
+          revision: dependencies-v1
+          save-if: "false"
+      - name: Build the trace-enabled candidate
+        shell: pwsh
         run: |
-          $exe = if ($env:VARIANT -eq 'baseline') { $env:TRAY_BASELINE } else { 'target/ci/pebrel.exe' }
-          python scripts/conformance/tray_restart_probe.py $exe $env:VARIANT
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-shell --bin pebrel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify the candidate icon and context menu after Explorer restarts
+        shell: pwsh
+        run: python scripts/conformance/tray_restart_probe.py target/ci/pebrel.exe candidate
