@@ -39,7 +39,7 @@ Get-Command git -ErrorAction Stop | Out-Null
 Push-Location $repoRoot
 try {
     [Environment]::SetEnvironmentVariable("CARGO_TARGET_DIR", $resolvedTarget, "Process")
-    $common = @("-p", "nebula", "--features", "gpui-shell", "--jobs", "$Jobs")
+    $common = @("-p", "pebrel", "--features", "gpui-shell", "--jobs", "$Jobs")
     if ($Locked) {
         $common += "--locked"
     }

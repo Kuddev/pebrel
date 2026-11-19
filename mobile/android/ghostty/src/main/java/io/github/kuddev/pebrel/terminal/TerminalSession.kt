@@ -337,6 +337,11 @@ class TerminalSession(private val transport: SessionTransport, private val callb
         return current.rows.slice((end - 8).coerceAtLeast(0)..end)
             .joinToString("\n") { it?.text?.trimEnd().orEmpty() }.take(2048)
     }
+    /** Every row of the screen, read from the engine even while no view shows this terminal. */
+    suspend fun screenText(): String = withContext(stateDispatcher) {
+        val current = core?.snapshot() ?: frame ?: return@withContext ""
+        current.rows.joinToString("\n") { it?.text?.trimEnd().orEmpty() }.take(32 * 1024)
+    }
     fun finishIfRunning() {
         if (!closed.compareAndSet(false, true)) return
         ready = false

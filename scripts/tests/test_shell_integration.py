@@ -11,7 +11,7 @@ import time
 import unittest
 from urllib.parse import quote
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "nebula_app/res/shell"
+SCRIPTS = Path(__file__).resolve().parents[2] / "pebrel_app/res/shell"
 # Hosted runners ship group/world-writable fpath directories; a native compinit would
 # stop at compaudit's prompt there too. Drop what compaudit rejects (the directory,
 # its parent, its .zwc digest or a file inside it) before the login shell's compinit.
