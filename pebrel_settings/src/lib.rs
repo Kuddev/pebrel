@@ -113,6 +113,10 @@ impl RawSettings {
             .filter(|value| !value.is_empty())
     }
 
+    pub fn command_history_persists(&self) -> bool {
+        self.bool_on("command_history_persist").unwrap_or(true)
+    }
+
     pub fn f32(&self, key: &str) -> Option<f32> {
         self.value(key)?.parse().ok()
     }
@@ -1257,7 +1261,7 @@ impl RuntimeSettings {
                 .value("completion_style")
                 .and_then(CompletionStyleName::from_settings)
                 .unwrap_or_default(),
-            command_history_persist: raw.bool_on("command_history_persist").unwrap_or(true),
+            command_history_persist: raw.command_history_persists(),
             prompt_suggestions: PromptSuggestions::from_raw(raw),
             cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
             tabs_position: raw
