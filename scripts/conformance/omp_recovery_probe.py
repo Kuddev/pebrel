@@ -10,6 +10,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from conformance.harness import ConformanceContext, ResolvedApp
+from conformance.omp_fixture_provider import REPLY, start_provider
 
 
 SID = "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c"
@@ -45,6 +46,7 @@ def run(app, root, fresh):
                       OMP_SKIP_VERSION_CHECK="1", OMP_SKIP_SETUP="1", PI_OFFLINE="1",
                       OPENAI_API_KEY="fixture-only", OPENAI_BASE_URL="http://127.0.0.1:9/v1")
     source = root / "custom sessions" / ("2026-11-19T06-41-00-000Z_" + SID + ".jsonl")
+    provider = start_provider(agent_dir) if fresh else None
     if not fresh:
         write_conversation(source, ctx.work_dir)
 
@@ -84,11 +86,13 @@ def run(app, root, fresh):
         ctx.poll(lambda: "PEBREL-PWSH-7" in ctx.read()["text"], bool,
                  "the pane did not run PowerShell 7")
         if fresh:
-            ctx.prompt("omp")
+            ctx.prompt("omp --model pebrelfixture/fixture")
             _, session_id, _ = ctx.poll(
                 live_agent, lambda state: state[0] == "omp" and state[1] and state[2],
                 "a new OMP session did not announce its native identity", timeout=60)
             ctx.prompt(MARKER)
+            ctx.poll(lambda: REPLY in ctx.read(lines=100)["text"], bool,
+                     "the native OMP editor did not receive the local model reply", timeout=50)
             def native_conversation():
                 for transcript in (agent_dir / "sessions").rglob("*.jsonl"):
                     try:
@@ -139,6 +143,9 @@ def run(app, root, fresh):
     finally:
         ctx.stop(force=True)
         app.close()
+        if provider:
+            provider.shutdown()
+            provider.server_close()
 
 
 if __name__ == "__main__":
