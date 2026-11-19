@@ -7,7 +7,7 @@ permissions:
 
 jobs:
   tray:
-    runs-on: windows-2022
+    runs-on: windows-11-arm
     timeout-minutes: 45
     env:
       PYTHONUTF8: "1"
@@ -22,9 +22,9 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP pebrel-259.zip
-          curl.exe --fail --location --retry 3 --output $zip https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-x64.zip
+          curl.exe --fail --location --retry 3 --output $zip https://github.com/Kuddev/pebrel/releases/download/v2.5.9/Pebrel-v2.5.9-windows-arm64.zip
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          if ((Get-FileHash $zip).Hash -ne '140514042062641FEB09484CF00F5E9FCC6344B84D949CA2E67FBB8025926CD5') { throw 'Digest mismatch' }
+          if ((Get-FileHash $zip).Hash -ne 'D83C8E904CADB72F6C9FDD86F4008722C890422232DCB179776ABBDB047562D8') { throw 'Digest mismatch' }
           $dest = Join-Path $env:RUNNER_TEMP released
           Expand-Archive -LiteralPath $zip -DestinationPath $dest
           $exe = @(Get-ChildItem $dest -Recurse -File -Filter pebrel.exe)
@@ -38,7 +38,7 @@ jobs:
           toolchain: "1.97.1"
       - uses: ./.github/actions/rust-cache
         with:
-          key: native
+          key: native-arm64
           extra-key: "-release-check-v2"
           target: |
             target/ci
@@ -48,7 +48,7 @@ jobs:
       - name: Build the trace-enabled candidate
         shell: pwsh
         run: |
-          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture arm64
           cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula --features gpui-shell --bin pebrel
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Verify the candidate icon and context menu after Explorer restarts

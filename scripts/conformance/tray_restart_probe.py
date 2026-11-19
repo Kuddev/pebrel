@@ -4,6 +4,7 @@ import ctypes
 from ctypes import wintypes as wt
 import json
 import os
+import platform
 import shutil
 from pathlib import Path
 import subprocess
@@ -111,10 +112,14 @@ class Desktop:
         self.user.EnumWindows(inspect, 0)
         return windows[0] if windows else None
 
-    def icon_rect(self, hwnd):
+    def icon_rect(self, hwnd, diagnose=False):
         icon = NotifyIconId(size=ctypes.sizeof(NotifyIconId), window=hwnd, icon=1)
         rect = wt.RECT()
-        if self.shell.Shell_NotifyIconGetRect(ctypes.byref(icon), ctypes.byref(rect)) == 0:
+        status = self.shell.Shell_NotifyIconGetRect(ctypes.byref(icon), ctypes.byref(rect))
+        if diagnose:
+            print(f"Shell_NotifyIconGetRect HRESULT 0x{status & 0xffffffff:08x}, "
+                  f"rect=({rect.left}, {rect.top}, {rect.right}, {rect.bottom})", flush=True)
+        if status == 0:
             if rect.right > rect.left and rect.bottom > rect.top:
                 return [rect.left, rect.top, rect.right, rect.bottom]
         return None
@@ -167,7 +172,8 @@ def worker(executable, root, candidate):
     original_shell = desktop.ordinary_notification_area()
     print("Initial notification-area PID:", original_shell, flush=True)
     app = ResolvedApp(executable)
-    ctx = ConformanceContext(app, "windows-x86_64", root / "config", root / "project",
+    print("Windows build:", sys.getwindowsversion().build, "architecture:", platform.machine(), flush=True)
+    ctx = ConformanceContext(app, "windows-arm64", root / "config", root / "project",
                              root / "evidence", startup_timeout=45)
     ctx.prepare()
     settings = ctx.config_dir / "pebrel_settings.txt"
@@ -178,7 +184,11 @@ def worker(executable, root, candidate):
         if is_elevated(pid):
             raise RuntimeError("The test product must run as an ordinary user")
         hwnd = wait_for("the Runtime process's tray HWND", lambda: desktop.tray_window(pid), 30)
-        before = wait_for("the initial registered icon", lambda: fresh_icon_rect(hwnd), 45)
+        try:
+            before = wait_for("the initial registered icon", lambda: fresh_icon_rect(hwnd), 45)
+        except RuntimeError:
+            desktop.icon_rect(hwnd, diagnose=True)
+            raise
         print("Initial registered icon:", before, flush=True)
         desktop.stop_explorer(original_shell)
         replacement = desktop.ordinary_notification_area()
