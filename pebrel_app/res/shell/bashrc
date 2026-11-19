@@ -56,6 +56,10 @@ _nebula_preexec() {
 
 _nebula_capture_status() {
     _nebula_last_status=${1:-$?}
+    # A killed TUI cannot turn mouse reporting off before Readline takes input again.
+    if [[ $_nebula_last_status == 137 && -t 1 ]]; then
+        printf '\e[?1000l\e[?1002l\e[?1003l\e[?1006l'
+    fi
     if [[ ${_nebula_native_preexec:-0} == 1 ]]; then
         _nebula_command_running=${_nebula_at_prompt:-0}
     fi

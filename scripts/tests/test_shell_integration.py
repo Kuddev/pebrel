@@ -205,6 +205,16 @@ class ShellIntegrationTests(unittest.TestCase):
         session.command("(exit 7)", b"\x1b]133;D;7\x07")
         self.assertIn(b"USER_PROMPT", session.output)
 
+    def test_bash_clears_mouse_reporting_after_a_killed_foreground_command(self) -> None:
+        session = self.start("bash", "PROMPT_COMMAND='printf \"STATUS=%s_END\" \"$?\"'\n")
+        output = session.command(r"""sh -c 'printf "\033[?1000h\033[?1006h"; kill -KILL $$'""",
+                                 b"\x1b]133;D;137\x07")
+        reset = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
+        self.assertIn(b"\x1b[?1000h\x1b[?1006h", output)
+        self.assertIn(reset, output)
+        self.assertLess(output.index(reset), output.index(b"STATUS=137_END"))
+        self.assertNotIn(reset, session.command("false", b"\x1b]133;D;1\x07"))
+
     def test_bash_does_not_replace_user_debug_trap(self) -> None:
         session = self.start("bash", "trap 'printf USER_DEBUG' DEBUG\n")
         session.command("trap -p DEBUG", b"trap -- 'printf USER_DEBUG' DEBUG")
