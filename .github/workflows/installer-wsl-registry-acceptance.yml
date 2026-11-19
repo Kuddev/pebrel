@@ -12,12 +12,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 0
       - name: Verify the parent loses an edited verb and the candidate preserves it
         shell: pwsh
         run: |
           $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
           if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is missing' }
+          $files = New-Item -ItemType Directory -Force -Path target/installer-tools
+          $translation = Join-Path $files.FullName 'ChineseSimplified.isl'
+          Invoke-WebRequest 'https://raw.githubusercontent.com/jrsoftware/issrc/c495623a97376d524f298b1b160e8fd612375c62/Files/Languages/ChineseSimplified.isl' -OutFile $translation
+          if ((Get-FileHash $translation).Hash -ne '6753BE2C5E2740D859900FD902824DB2EC568DA5C5B52486524C9762D778B0B0') { throw 'Translation digest mismatch' }
           git restore --source=e85a3f6a -- scripts/installer-migration.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $observed = $false
