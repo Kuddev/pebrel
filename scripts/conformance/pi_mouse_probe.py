@@ -17,9 +17,10 @@ import path from "node:path";
 export default function (pi) {
   pi.on("session_start", (_event, ctx) => {
     const base = path.join(process.env.PEBREL_MOUSE_DIR, process.env.PEBREL_MOUSE_PANE);
-    let reports = 0, dirty = false;
+    let reports = 0, bytes = 0, dirty = false;
     let carry = "";
     process.stdin.on("data", chunk => {
+      bytes += chunk.length;
       const data = carry + String(chunk);
       const events = [...data.matchAll(/\x1b\[<\d+;\d+;\d+[Mm]/g)];
       reports += events.length;
@@ -28,7 +29,7 @@ export default function (pi) {
     });
     setInterval(() => {
       dirty ||= ctx.ui.getEditorText().length > 0;
-      fs.writeFileSync(base + ".tmp", JSON.stringify({reports, dirty, pid:process.pid}));
+      fs.writeFileSync(base + ".tmp", JSON.stringify({reports, bytes, dirty, pid:process.pid}));
       fs.renameSync(base + ".tmp", base + ".json");
     }, 250).unref();
   });
@@ -110,7 +111,8 @@ def run(app, root):
         idle = {lower, expected[-2], expected[-1]}
         editors = sorted(set(expected) - idle)
         for pane in expected:
-            ctx.poll(lambda: ctx.read(pane)["text"], lambda s: bool(s.strip()), "shell not ready", 30)
+            ctx.api("window.focus", {"window_id":ctx.window_id, "pane_id":pane})
+            ctx.poll(lambda: ctx.read(pane)["text"], lambda s: bool(s.strip()), f"shell {pane} not ready", 60)
             ctx.prompt("Write-Output ('PS-VERSION-' + $PSVersionTable.PSVersion.ToString(2))", pane)
             ctx.poll(lambda: ctx.read(pane)["text"], lambda s: "PS-VERSION-5.1" in s, "PowerShell 5.1 required", 30)
             if pane in editors:
@@ -135,6 +137,7 @@ def run(app, root):
         dirty = [p for p in editors if after[p]["dirty"]]
         idle_fragments = [p for p in idle if p not in lost and re.search(r"\d+;\d+;\d+[Mm]", ctx.read(p)["text"])]
         print(json.dumps(dict(native_drags=40, wheel_events=80, raw_sgr_reports=delivered,
+                              stdin_bytes=sum(after[p]["bytes"] - before[p]["bytes"] for p in editors),
                               editor_text_changed=dirty, idle_sgr=idle_fragments, lost=lost, closed=closed)), flush=True)
         assert delivered > 0, "Pi did not receive measurable SGR mouse input"
         assert not (dirty or idle_fragments or lost or closed), "Detected a reported symptom"
