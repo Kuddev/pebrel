@@ -39,7 +39,7 @@ jobs:
       - name: Install the verified upstream OMP executable
         shell: pwsh
         run: |
-          $bin = Join-Path $env:RUNNER_TEMP omp-bin
+          $bin = Join-Path $env:LOCALAPPDATA omp
           New-Item -ItemType Directory -Path $bin | Out-Null
           $exe = Join-Path $bin omp.exe
           curl.exe --fail --location --retry 3 --output $exe https://github.com/can1357/oh-my-pi/releases/download/v18.22.2/omp-windows-x64.exe
@@ -47,6 +47,8 @@ jobs:
           if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne 'BAB49ACF7E0BCA6FC98213B1F9F21BC7BFDB5070AFA52EB494EC400337395848') {
             throw 'OMP release digest does not match v18.22.2'
           }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          [Environment]::SetEnvironmentVariable('Path', (([string]$userPath).TrimEnd(';') + ';' + $bin), 'User')
           $bin >> $env:GITHUB_PATH
       - name: Force-close Pebrel and verify the restored conversation in PowerShell 7
         run: python scripts/conformance/windows_standard_user.py scripts/conformance/omp_recovery_probe.py target/ci/pebrel.exe

@@ -38,10 +38,10 @@ def run(app, root):
     settings = ctx.config_dir / "pebrel_settings.txt"
     settings.write_text(settings.read_text().replace("resume_ai=0", "resume_ai=1")
                         + "ai_hooks_omp=1\nshell=pwsh\n", encoding="utf-8")
-    profile = root / "fixture-profile"
+    profile = Path(os.environ["USERPROFILE"])
     agent_dir = profile / ".omp" / "agent"
     agent_dir.mkdir(parents=True)
-    os.environ.update(USERPROFILE=str(profile), PI_CODING_AGENT_DIR=str(agent_dir),
+    os.environ.update(PI_CODING_AGENT_DIR=str(agent_dir),
                       OMP_SKIP_VERSION_CHECK="1", PI_OFFLINE="1",
                       OPENAI_API_KEY="fixture-only", OPENAI_BASE_URL="http://127.0.0.1:9/v1")
     source = root / "custom sessions" / ("2026-11-19T06-41-00-000Z_" + SID + ".jsonl")
