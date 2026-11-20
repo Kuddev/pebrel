@@ -68,7 +68,8 @@ def verify_standalone(executable, root):
             assert set(panes) == set(names)
             for name, pane in panes.items():
                 ctx.poll(lambda: ctx.read(pane)["text"].strip(), bool, "missing command prompt")
-                ctx.prompt("codex --no-daemon " + name, pane)
+                codex = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
+                ctx.prompt(f'set "CODEX_HOME={home}" && "{codex}" --no-daemon {name}', pane)
                 ctx.poll(lambda: ctx.read(pane)["text"], lambda text: "Fixture reply." in text,
                          "local model did not reply", timeout=35)
             history = {r["text"]: r["session_id"] for r in map(json.loads,
