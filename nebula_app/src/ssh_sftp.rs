@@ -512,6 +512,7 @@ impl SftpBrowseSession {
         let mut path = normalize_remote_path("/", path);
         let mut slot = self.session.lock().await;
         loop {
+            let cached = slot.is_some();
             // read_dir may leave a handle open if it fails or is cancelled.
             // Each failed attempt retires its subsystem, including during recovery.
             let session = match slot.take() {
@@ -523,6 +524,7 @@ impl SftpBrowseSession {
                     *slot = Some(session);
                     return Ok((path, entries));
                 },
+                Err(error) if cached && stale_browse_session(&error) => continue,
                 Err(SftpClientError::Status(status))
                     if status.status_code == StatusCode::NoSuchFile
                         && mode == SftpBrowseMode::RecoverMissing
@@ -543,6 +545,20 @@ impl SftpBrowseSession {
         crate::ssh_session::open_sftp(&self.destination)
             .await
             .map_err(|error| format!("无法连接 {}：{error}", self.destination))
+    }
+}
+
+fn stale_browse_session(error: &SftpClientError) -> bool {
+    match error {
+        SftpClientError::IO(_) | SftpClientError::Timeout => true,
+        SftpClientError::Status(status) => {
+            matches!(status.status_code, StatusCode::NoConnection | StatusCode::ConnectionLost)
+        },
+        SftpClientError::UnexpectedBehavior(message) => {
+            matches!(message.as_str(), "session closed" | "sender dropped")
+                || message.starts_with("SendError:")
+        },
+        _ => false,
     }
 }
 
@@ -1655,6 +1671,46 @@ mod tests {
                 assert!(retired, "cancelled readdir must not retain its open remote handle");
             },
         );
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[tokio::test]
+    async fn stale_cached_listing_reopens_once_and_permission_errors_stop() {
+        use super::{SftpBrowseSession, SftpSession};
+        use russh_sftp::protocol::{Handle, StatusCode};
+
+        struct Peer(StatusCode);
+        impl russh_sftp::server::Handler for Peer {
+            type Error = StatusCode;
+
+            fn unimplemented(&self) -> StatusCode {
+                StatusCode::OpUnsupported
+            }
+
+            async fn opendir(&mut self, _: u32, path: String) -> Result<Handle, StatusCode> {
+                assert_eq!(path, "/saved");
+                Err(self.0)
+            }
+        }
+
+        async fn session(error: StatusCode) -> SftpSession {
+            let (client, server) = tokio::io::duplex(4096);
+            tokio::spawn(russh_sftp::server::run(server, Peer(error)));
+            SftpSession::new(client).await.unwrap()
+        }
+
+        let browser = SftpBrowseSession::from_test_sessions(
+            "fixture".into(),
+            [
+                session(StatusCode::ConnectionLost).await,
+                session(StatusCode::PermissionDenied).await,
+                session(StatusCode::PermissionDenied).await,
+            ],
+        );
+        let error =
+            browser.list_dir("/saved", super::SftpBrowseMode::RecoverMissing).await.unwrap_err();
+        assert!(error.contains(&StatusCode::PermissionDenied.to_string()), "{error}");
+        assert_eq!(super::lock(browser.test_sessions.as_ref().unwrap()).len(), 1);
     }
 
     #[test]
