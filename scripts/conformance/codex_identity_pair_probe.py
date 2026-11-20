@@ -36,6 +36,20 @@ class LocalModel(BaseHTTPRequestHandler):
         pass
 
 
+def configure_provider(home, work_dir, port):
+    config = (
+        'model="gpt-5.4"\nmodel_provider="fixture"\ncheck_for_update_on_startup=false\n'
+        '[tui]\nstatus_line=["session-id"]\n'
+        '[model_providers.fixture]\nname="fixture"\nwire_api="responses"\n'
+        'requires_openai_auth=false\nsupports_websockets=false\n'
+        f'base_url="http://127.0.0.1:{port}/v1"\n'
+        f'[projects.{json.dumps(str(work_dir))}]\ntrust_level="trusted"\n'
+        '[windows]\nsandbox="unelevated"\n'
+    )
+    (home / "config.toml").write_text(config, encoding="utf-8")
+    (home / "auth.json").write_text('{"OPENAI_API_KEY":"fixture"}', encoding="utf-8")
+
+
 def verify_standalone(executable, root):
     app = ResolvedApp(executable)
     ctx = ConformanceContext(app, "windows", root / "config", root / "same-cwd", root / "out")
@@ -44,17 +58,7 @@ def verify_standalone(executable, root):
     home.mkdir()
     server = ThreadingHTTPServer(("127.0.0.1", 0), LocalModel)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    config = (
-        'model="gpt-5.4"\nmodel_provider="fixture"\ncheck_for_update_on_startup=false\n'
-        '[tui]\nstatus_line=["session-id"]\n'
-        '[model_providers.fixture]\nname="fixture"\nwire_api="responses"\n'
-        'requires_openai_auth=false\nsupports_websockets=false\n'
-        f'base_url="http://127.0.0.1:{server.server_port}/v1"\n'
-        f'[projects.{json.dumps(str(ctx.work_dir))}]\ntrust_level="trusted"\n'
-        '[windows]\nsandbox="unelevated"\n'
-    )
-    (home / "config.toml").write_text(config, encoding="utf-8")
-    (home / "auth.json").write_text('{"OPENAI_API_KEY":"fixture"}', encoding="utf-8")
+    configure_provider(home, ctx.work_dir, server.server_port)
     names = ["qa-alpha", "qa-bravo"]
     shell = {"kind": "shell", "name": "Command Prompt", "program": os.environ["ComSpec"], "args": ["/D"]}
     tabs = [{"cwd": str(ctx.work_dir), "custom_name": name, "active_pane": 0,

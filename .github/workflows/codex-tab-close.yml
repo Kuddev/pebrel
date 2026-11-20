@@ -1,7 +1,7 @@
-name: Check Codex thread switching on Windows
+name: Verify PowerShell split recovery on Windows
 on:
   push:
-    branches: [qa/codex-new-thread-windows-1120]
+    branches: [qa/windows-shell-split-1120]
 permissions:
   contents: read
 jobs:
@@ -29,7 +29,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install Pillow==11.3.0
       - name: Run the public 2.6.1 binary with the native Codex CLI
         shell: pwsh
         run: |
@@ -50,11 +49,5 @@ jobs:
           if ($LASTEXITCODE) { throw "Codex executable did not run" }
           $env:Path = "$root/cli;" + $env:Path
           $exe = (Get-ChildItem "$root/app" -Filter pebrel.exe -Recurse | Select-Object -First 1).FullName
-          python scripts/conformance/windows_standard_user.py scripts/conformance/codex_closed_tab_probe.py $exe
+          python scripts/conformance/windows_standard_user.py scripts/conformance/powershell_split_recovery.py $exe
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: codex-close-desktop-${{ matrix.arch }}
-          path: ${{ runner.temp }}/codex-close-desktop.png
-          retention-days: 1
