@@ -257,8 +257,14 @@ mod tests {
                     assert!(find.right() < commands.left(), "{position:?}, {fullscreen}");
                     assert!(find.top() >= title.top() && find.bottom() <= title.bottom());
                     assert!(commands.top() >= title.top() && commands.bottom() <= title.bottom());
-                    #[cfg(target_os = "macos")]
-                    assert_eq!(title.size.height, px(52.0));
+                    let expected_height = if crate::platform::Platform::current()
+                        == crate::platform::Platform::MacOS
+                    {
+                        52.0
+                    } else {
+                        48.0
+                    };
+                    assert_eq!(title.size.height, px(expected_height));
                 }
             }
         }
