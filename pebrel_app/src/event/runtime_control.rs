@@ -362,7 +362,8 @@ impl Processor {
             RuntimeCommand::AgentStart { .. } | RuntimeCommand::AgentFork { .. } => {
                 self.execute_agent_runtime_command(command)
             },
-            RuntimeCommand::AgentPrompt { agent, generation, text, submit } => {
+            RuntimeCommand::AgentPrompt { agent, generation, text, .. }
+            | RuntimeCommand::DelegationPrompt { agent, generation, text, .. } => {
                 let managed = self.runtime_hub.active_agent(agent, *generation)?;
                 let id = WindowId::from(managed.window_id);
                 let Some(window) = self.windows.get_mut(&id) else {
@@ -371,7 +372,19 @@ impl Processor {
                         format!("agent {:?} no longer has a live window", managed.name),
                     ));
                 };
-                window.runtime_prompt(managed.pane_id, text.clone(), *submit)?;
+                match command {
+                    RuntimeCommand::DelegationPrompt { task_id, .. } => window
+                        .runtime_delegate_prompt(
+                            &self.runtime_hub,
+                            task_id,
+                            &managed,
+                            text.clone(),
+                        )?,
+                    RuntimeCommand::AgentPrompt { submit, .. } => {
+                        window.runtime_prompt(managed.pane_id, text.clone(), *submit)?
+                    },
+                    _ => unreachable!(),
+                }
                 self.runtime_result(serde_json::json!({ "agent": managed }))
             },
             RuntimeCommand::AgentPaste { agent, generation, text, submit } => {
