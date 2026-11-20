@@ -236,6 +236,10 @@ impl TerminalView {
         if (agent.source != "pi" && !local_omp_file) || self.ssh_destination.is_some() {
             if let Some(command) = agent.resume_command() {
                 self.run_command(command, cx);
+            } else if agent.source == "codex"
+                && agent.session_id.as_deref().is_none_or(str::is_empty)
+            {
+                self.choose_codex_recovery_session(cx);
             } else {
                 self.recovery.failed = true;
                 cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
