@@ -150,7 +150,9 @@ fn native_shells_bind_only_their_own_open_rollout_and_keep_the_id_and_file_curso
     for powershell in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let fixture = Fixture::launch(root.path(), &executable, &[&file], powershell);
-        let found = probe(fixture.child.id()).expect("read the owned CMD/PowerShell child rollout");
+        let found = probe(fixture.child.id())
+            .and_then(|rollouts| rollouts.select(None))
+            .expect("read the unique owned CMD/PowerShell child rollout");
         assert_eq!(found.session_id, ID);
         assert_eq!(Path::new(&found.session_file), file);
         assert_eq!(found.cwd.as_deref(), temp.path().to_str());
@@ -162,7 +164,9 @@ fn native_shells_bind_only_their_own_open_rollout_and_keep_the_id_and_file_curso
             "id": ID, "cwd": root.path(), "source": "cli", "thread_source": "user",
         }});
         std::fs::write(&file, format!("{updated}\n")).unwrap();
-        let refreshed = probe(fixture.child.id()).expect("a reused worker reads current metadata");
+        let refreshed = probe(fixture.child.id())
+            .and_then(|rollouts| rollouts.select(None))
+            .expect("a reused worker reads current metadata");
         assert_eq!(refreshed.session_id, ID);
         assert_eq!(refreshed.cwd.as_deref(), root.path().to_str());
         fixture.finish();
@@ -172,14 +176,17 @@ fn native_shells_bind_only_their_own_open_rollout_and_keep_the_id_and_file_curso
 }
 
 #[test]
-fn native_probe_rejects_ambiguous_and_mismatched_rollouts_without_changing_them() {
+fn native_probe_requires_selection_for_multiple_rollouts_and_rejects_mismatched_ids() {
     let temp = tempfile::tempdir_in(std::env::current_exe().unwrap().parent().unwrap()).unwrap();
     let executable = temp.path().join("codex.exe");
     std::fs::hard_link(std::env::current_exe().unwrap(), &executable).unwrap();
     let first = rollout(temp.path(), ID, ID, "cli");
     let second = rollout(temp.path(), OTHER, OTHER, "cli");
     let fixture = Fixture::launch(temp.path(), &executable, &[&first, &second], false);
-    assert!(probe(fixture.child.id()).is_none());
+    let rollouts = probe(fixture.child.id()).expect("both owned rollouts have valid metadata");
+    assert!(rollouts.select(None).is_none());
+    let selected = probe(fixture.child.id()).unwrap().select(Some(OTHER)).unwrap();
+    assert_eq!(Path::new(&selected.session_file), second);
     fixture.finish();
     std::fs::remove_file(temp.path().join("ready")).unwrap();
     rollout(temp.path(), ID, OTHER, "cli");

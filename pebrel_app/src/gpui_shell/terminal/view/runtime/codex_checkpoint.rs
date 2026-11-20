@@ -8,7 +8,8 @@ use crate::platform::ai_session_identity::CodexRollouts;
 fn displayed_thread_id(screen: &str) -> Option<&str> {
     let mut rows = screen.lines().rev().map(str::trim).filter(|line| !line.is_empty());
     let last = rows.next()?;
-    let id = if last.starts_with("? for shortcuts") { rows.next()? } else { last };
+    let shortcuts = last.strip_prefix("← for agents · ").unwrap_or(last);
+    let id = if shortcuts.starts_with("? for shortcuts") { rows.next()? } else { last };
     (rows.next()? == "› Ask Codex to do anything").then_some(id)
 }
 
@@ -135,13 +136,20 @@ mod tests {
     fn thread_footer_belongs_below_the_codex_composer() {
         let prompt = "› Ask Codex to do anything";
         let id = "01a079fa-4a9b-7d93-8a4a-4a7a9edaf247";
-        for hint in ["", "\n  ? for shortcuts", "\n  ? for shortcuts      ⚠ 1 warning"] {
+        for hint in [
+            "",
+            "\n  ? for shortcuts",
+            "\n  ? for shortcuts      ⚠ 1 warning",
+            "\n  ← for agents · ? for shortcuts",
+            "\n  ← for agents · ? for shortcuts                      ⚠ 1 warning · f2 to view",
+        ] {
             assert_eq!(displayed_thread_id(&format!("{prompt}\n\n  {id}{hint}\n")), Some(id));
         }
         for screen in [
             format!("{id}\n{prompt}"),
             format!("shell$\n{id}"),
             format!("{prompt}\n{id}\nnext shell command"),
+            format!("{prompt}\n{id}\n← for agents · user output"),
             format!("› user-supplied draft\n{id}"),
         ] {
             assert_ne!(displayed_thread_id(&screen), Some(id));
@@ -167,7 +175,10 @@ mod tests {
                 view.running_program = Some("codex".into());
                 view.apply_codex_rollouts(CodexRollouts::from_test_records(&single), cx);
                 assert_eq!(view.session_agent().unwrap().session_id.as_deref(), Some(old));
-                feed(view, format!("› Ask Codex to do anything\r\n\r\n  {new}").as_bytes());
+                let footer = format!(
+                    "› Ask Codex to do anything\r\n\r\n  {new}\r\n← for agents · ? for shortcuts"
+                );
+                feed(view, footer.as_bytes());
                 view.apply_codex_rollouts(CodexRollouts::from_test_records(&pair), cx);
                 assert_eq!(view.session_agent().unwrap().session_id.as_deref(), Some(new));
 

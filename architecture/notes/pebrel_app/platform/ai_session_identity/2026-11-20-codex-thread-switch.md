@@ -17,7 +17,9 @@ main/user rollouts. The new thread accepted two messages while the checkpoint
 kept the old ID. After process termination, a new message went into the old
 thread. On Windows x64 and ARM64, Codex 0.167.0 likewise changed the native ID
 while the checkpoint retained the old one for 30 seconds. The neighboring
-pane kept its own ID. [Windows acceptance](https://github.com/Kuddev/pebrel/actions/runs/44707360005)
+pane kept its own ID. The Windows TUI displayed an agent-navigation hint
+before the shortcuts hint on the line below the native ID.
+[Windows reproduction](https://github.com/Kuddev/pebrel/actions/runs/44707360005) · [Captured footer](https://github.com/Kuddev/pebrel/actions/runs/44713190737)
 
 ## Decision
 
