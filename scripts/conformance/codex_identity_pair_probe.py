@@ -42,6 +42,10 @@ def verify_standalone(executable, root):
     app = ResolvedApp(executable)
     ctx = ConformanceContext(app, "windows", root / "config", root / "same-cwd", root / "out")
     ctx.prepare()
+    settings = ctx.config_dir / "pebrel_settings.txt"
+    config_text = settings.read_text(encoding="utf-8")
+    assert "resume_ai=0" in config_text
+    settings.write_text(config_text.replace("resume_ai=0", "resume_ai=1"), encoding="utf-8")
     home = root / "provider"
     home.mkdir()
     server = ThreadingHTTPServer(("127.0.0.1", 0), LocalModel)
@@ -138,6 +142,24 @@ def verify_standalone(executable, root):
             print("Windows /new: tab and pane IDs unchanged, native thread changed, persisted target=" + outcome,
                   flush=True)
             assert outcome == "current", "did not checkpoint the current native Codex thread"
+
+            ctx.close_and_wait(timeout=18)
+            assert saved_ids() == {"qa-alpha": second, "qa-bravo": expected["qa-bravo"]}
+            ctx.start(explicit_working_directory=False)
+            ctx.refresh_targets()
+            restored = tab_and_pane()
+            assert set(restored) == set(expected)
+            for name, thread_id in [("qa-alpha", second), ("qa-bravo", expected["qa-bravo"])]:
+                _, pane = restored[name]
+                ctx.poll(lambda: ctx.read(pane)["text"], lambda text: "Fixture reply." in text,
+                         "cold launch did not restore the synthetic transcript", timeout=45)
+                marker = f"qa-after-normal-restart-{name}"
+                ctx.prompt(marker, pane)
+                rows = ctx.poll(native_history, lambda history: marker in history,
+                                "Codex did not record the post-restart input", timeout=35)
+                assert rows[marker] == thread_id, f"{name} resumed the wrong conversation"
+            print("Normal restart: both new messages reached their respective original threads.",
+                  flush=True)
     finally:
         ctx.stop(force=True)
         app.close()
