@@ -1338,6 +1338,7 @@ fn cold_resume_of_supported_clis_waits_for_the_shell_and_preserves_each_target(
         ("cursor", "agent --resume=saved-conversation"),
         ("copilot", "copilot --resume saved-conversation"),
         ("grok", "grok --resume saved-conversation"),
+        ("codebuddy", "codebuddy --resume saved-conversation"),
         ("omp", "omp --resume saved-conversation"),
         ("kimi", "kimi --session saved-conversation"),
     ] {
