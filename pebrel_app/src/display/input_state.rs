@@ -416,19 +416,41 @@ fn safe_shell_prompt_marker(prompt: &str, marker: char, env: &SuggestEnv) -> boo
     marker == '>' && likely_prompt(prompt, marker, env)
 }
 
-fn remote_prompt_anchor(prompt: &str, expected_marker: char) -> Option<&str> {
+// Bash prompts can include a clock that changes while the command is running.
+fn strip_remote_prompt_clock(prompt: &str) -> Option<&str> {
+    let (clock, body) = prompt.strip_prefix('[')?.split_once("] ")?;
+    let mut parts = clock.split(':');
+    for limit in [24u8, 60, 60] {
+        let part = parts.next()?;
+        if part.len() != 2
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+            || part.parse::<u8>().ok()? >= limit
+        {
+            return None;
+        }
+    }
+    parts.next().is_none().then_some(body)
+}
+
+fn remote_prompt_anchor(prompt: &str, expected_marker: char) -> Option<(bool, &str)> {
     let normalized = prompt.trim_end();
     if normalized.chars().next_back()? != expected_marker {
         return None;
     }
     let head = normalized[..normalized.len() - expected_marker.len_utf8()].trim_end();
+    let without_clock = strip_remote_prompt_clock(head);
+    let head = without_clock.unwrap_or(head);
     let colon = head.find(':')?;
     let suffix = head[colon + 1..].trim_start();
     if !matches!(suffix.chars().next(), Some('~' | '/')) {
         return None;
     }
+    if without_clock.is_some() && suffix.contains(expected_marker) {
+        return None;
+    }
     let anchor = head[..colon].trim();
-    (!anchor.is_empty() && !anchor.chars().any(char::is_whitespace)).then_some(anchor)
+    (!anchor.is_empty() && !anchor.chars().any(char::is_whitespace))
+        .then_some((without_clock.is_some(), anchor))
 }
 
 fn input_after_prompt(
@@ -722,6 +744,23 @@ mod tests {
         assert!(!shell_prompt_restored("❯", "❯ ", &env));
         assert!(!shell_prompt_restored("Password:", "Password: ", &env));
         assert!(!shell_prompt_restored("u944-pdsgd9gu:~#", "build output#", &env));
+    }
+
+    #[test]
+    fn remote_prompt_clock_can_advance_while_the_same_host_is_busy() {
+        let env = SuggestEnv::Ssh { destination: "dev@box".into() };
+        let before = "[23:59:58] dev@box:~$";
+        assert!(shell_prompt_restored(before, "[00:00:02] dev@box:/work$ ", &env));
+        for other in [
+            "[00:00:02] dev@other:/work$",
+            "[00:00:02] root@box:~#",
+            "[00:00:02] dev@box:~$ echo $",
+            "[99:78:69] dev@box:~$",
+            "[00:00:02] dev@box:~$ draft",
+            "dev@box:~$",
+        ] {
+            assert!(!shell_prompt_restored(before, other, &env), "{other}");
+        }
     }
 
     #[test]
