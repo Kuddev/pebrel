@@ -104,7 +104,7 @@ def run(executable, root):
         ctx.refresh_targets()
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 0, "name": "keep-this-shell"})
         created = ctx.api("tab.new", {"window_id": ctx.window_id, "shell": "cmd"})
-        ctx.pane_id = created["pane_id"]
+        ctx.pane_id = created["action"]["pane_id"]
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 1, "name": "closed-codex"})
         ctx.poll(lambda: ctx.read(lines=15)["text"], lambda text: ">" in text,
                  "cmd did not display its prompt in the target pane", timeout=25)
