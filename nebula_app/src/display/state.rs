@@ -172,7 +172,6 @@ pub struct NebulaInlineImage {
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeSubmitBarrier {
     pub(crate) baseline_screen: String,
-    pub(crate) submit_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Default, Clone)]

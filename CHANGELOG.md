@@ -4,6 +4,46 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.6.2 - Unreleased
+
+- `Pebrel-v2.6.2-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.6.2-windows-x64.zip`: `PENDING FINAL BUILD`
+
+### English
+
+macOS, Linux, and Android downloads are Preview builds.
+
+#### Fixed
+
+- Fixed a delegated prompt remaining in the terminal editor when the agent changed keyboard mode before Enter was sent.
+
+### 中文
+
+macOS、Linux 和 Android 下载为预览版。
+
+#### 修复
+
+- 修复 Agent 在接收委派内容后切换键盘模式，导致回车未提交、指令留在输入框的问题。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+  <a href="https://github.com/yjjheizhu"><img src="https://avatars.githubusercontent.com/u/86939240?v=4&amp;s=96" width="48" height="48" alt="yjjheizhu" title="yjjheizhu" /></a>
+</p>
+
+- [@Kuddev](https://github.com/Kuddev)
+- [@yjjheizhu](https://github.com/yjjheizhu)
+
 ## 2.6.1 - 2026-11-20
 
 - `Pebrel-v2.6.1-android-universal-preview.apk`: `PENDING FINAL BUILD`
