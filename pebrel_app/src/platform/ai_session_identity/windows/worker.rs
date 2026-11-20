@@ -61,7 +61,7 @@ impl Drop for UpdatePause {
     }
 }
 
-pub(super) fn probe(pid: u32, created: u64) -> Option<super::CodexSession> {
+pub(super) fn probe(pid: u32, created: u64) -> Option<super::CodexRollouts> {
     if UPDATE_PAUSES.load(Ordering::Acquire) != 0 {
         return None;
     }
