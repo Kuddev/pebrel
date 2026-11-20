@@ -257,6 +257,10 @@ impl TerminalView {
                 .and_then(|command| self.configured_recovery_command(command, &agent.source, cx))
             {
                 self.run_command(command, cx);
+            } else if agent.source == "codex"
+                && agent.session_id.as_deref().is_none_or(str::is_empty)
+            {
+                self.choose_codex_recovery_session(cx);
             } else {
                 self.recovery.failed = true;
                 cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
@@ -291,10 +295,9 @@ impl TerminalView {
                 view.recovery.resolving = false;
                 match result {
                     Ok(target) => {
-                        let command = resolved_resume_command(&target, view.path_quote())
-                            .and_then(|command| {
-                                view.configured_recovery_command(command, &target.source, cx)
-                            });
+                        let command = resolved_resume_command(&target, view.path_quote()).and_then(
+                            |command| view.configured_recovery_command(command, &target.source, cx),
+                        );
                         view.recovery.target = Some(target);
                         if let Some(command) = command {
                             view.run_command(command, cx);

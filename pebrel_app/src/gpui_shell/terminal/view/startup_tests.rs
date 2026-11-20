@@ -1338,6 +1338,7 @@ fn cold_resume_of_supported_clis_waits_for_the_shell_and_preserves_each_target(
         ("cursor", "agent --resume=saved-conversation"),
         ("copilot", "copilot --resume saved-conversation"),
         ("grok", "grok --resume saved-conversation"),
+        ("codebuddy", "codebuddy --resume saved-conversation"),
         ("omp", "omp --resume saved-conversation"),
         ("kimi", "kimi --session saved-conversation"),
     ] {
@@ -1418,6 +1419,29 @@ fn cold_resume_preserves_codex_id_with_a_legacy_native_file(cx: &mut TestAppCont
         }));
         assert_eq!(view.session_agent(), Some(saved));
         assert!(view.recovery_pending(), "submission still waits for provider confirmation");
+    });
+}
+
+#[gpui::test]
+fn codex_snapshot_without_an_id_queues_the_native_picker_at_the_shell_prompt(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let saved = crate::session::AgentSession {
+            source: "codex".into(),
+            session_id: None,
+            session_file: None,
+        };
+        view.restore_agent(saved.clone(), cx);
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        view.process_event(Event::Wakeup, cx);
+        assert!(receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"codex resume")
+        }));
+        assert!(view.recovery_pending());
+        assert_eq!(view.session_agent(), Some(saved));
     });
 }
 
@@ -1696,6 +1720,51 @@ fn invalid_resume_arguments_fail_without_submitting_a_default_or_shell_expressio
         assert!(view.pending_shell_command.is_none());
         assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
         assert_eq!(view.session_agent(), Some(saved));
+    });
+}
+
+#[gpui::test]
+fn shift_home_and_end_reach_the_local_powershell_editor(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+                &pebrel_terminal::tty::Options {
+                    shell: Some(pebrel_terminal::tty::Shell::new("powershell.exe".into(), vec![])),
+                    ..Default::default()
+                },
+            ));
+            for (token, forwarded) in
+                [(None, true), (Some("pwsh:42"), true), (Some("bash:43"), false)]
+            {
+                if let Some(token) = token {
+                    view.suggest.completion_shell_report("pebrel_shell", token);
+                }
+                for chord in ["shift-home", "shift-end"] {
+                    let event = KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse(chord).unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    };
+                    let expected = keymap::encode(&event.keystroke, &view.term_mode()).unwrap();
+                    view.on_key_down(&event, window, cx);
+                    let input: Vec<_> = receiver
+                        .try_iter()
+                        .filter_map(|msg| match msg {
+                            Msg::Input(bytes) => Some(bytes.into_owned()),
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect();
+                    assert_eq!(
+                        input,
+                        if forwarded { expected } else { vec![] },
+                        "{token:?} {chord}"
+                    );
+                }
+            }
+        });
     });
 }
 

@@ -607,6 +607,10 @@ function global:Nebula-List {
     $items = Get-ChildItem -Force $target -ErrorAction SilentlyContinue |
         Sort-Object @{ Expression = { -not $_.PSIsContainer } }, Name
     foreach ($i in $items) {
+        if ($i -isnot [System.IO.FileSystemInfo]) {
+            $i
+            continue
+        }
         $isDir = $i.PSIsContainer
         if ($isDir) {
             $mode = 'drwxr-xr-x'
@@ -1409,6 +1413,25 @@ $env:PEBREL_CONFIG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) 'pebrel-ps-
 $env:NEBULA_CONFIG_DIR = $env:PEBREL_CONFIG_DIR
 function global:Set-PSReadLineOption { }
 "#;
+
+    #[test]
+    fn powershell_ls_retains_nonfilesystem_provider_objects() {
+        let checks = r#"
+$ErrorActionPreference = 'Stop'
+$env:PEBREL_LIST_FIXTURE = 'provider-value'
+if ((Get-Alias ls).Definition -ne 'Nebula-List') { throw 'ls integration not active' }
+$entry = ls Env: | Where-Object Name -eq 'PEBREL_LIST_FIXTURE'
+if ($entry.Value -ne 'provider-value') { throw 'Environment object lost' }
+Push-Location Alias:
+try {
+    if ((ls ls) -isnot [System.Management.Automation.AliasInfo]) { throw 'Alias object lost' }
+} finally { Pop-Location }
+if ((ls $PSCommandPath) -notmatch 'rw-r--r--') { throw 'File listing lost its formatting' }
+"#;
+        for executable in ["powershell", "pwsh"] {
+            run_powershell_case(executable, PS_PRELUDE, checks);
+        }
+    }
 
     #[test]
     fn powershell_reports_cwd_before_the_next_command_on_the_same_line() {
