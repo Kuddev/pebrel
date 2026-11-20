@@ -48,17 +48,19 @@ macOS、Linux 和 Android 下载为预览版。
 
 ## 2.6.1 - 2026-11-20
 
-- `Pebrel-v2.6.1-android-universal-preview.apk`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-linux-x64-preview.deb`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-relay-manual.tar.gz`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-windows-arm64.zip`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-windows-x64-setup.exe`: `PENDING FINAL BUILD`
-- `Pebrel-v2.6.1-windows-x64.zip`: `PENDING FINAL BUILD`
+```text
+35e690d01788fc26eb9175c7c3027bfc7834d783bd3ebb9f6fd99dc86dea2628  Pebrel-v2.6.1-android-universal-preview.apk
+210ad32e62a4f74f7d9c1ca8dcd47062fa7cd3b4d6df0de1a37f29ab627ec670  Pebrel-v2.6.1-linux-x64-preview.AppImage
+ea011973273a954468c74fa793010223d86d1b7243ce874ba25515aa445d2a09  Pebrel-v2.6.1-linux-x64-preview.deb
+1190f22c007ded15594476bc62730e7945c6ac05b45386d8de49906e098e5678  Pebrel-v2.6.1-linux-x64-preview.tar.gz
+0683b79912c422337128c254ad2a7449cc9bc25fdeb06ee23d7f9b54fa2512c2  Pebrel-v2.6.1-macos-arm64-preview.dmg
+eab33a95700630c0660159b0875ab0a7f3fc057c6a967860cf8c94b80400764d  Pebrel-v2.6.1-macos-x64-preview.dmg
+9656ae6d6a6ace94aa00032e008610cb3355666916af7ae95b63cbacada66c72  Pebrel-v2.6.1-relay-manual.tar.gz
+d1137609b60f9739de791487eef1dd6d09c653d03ca9e52c23a0b5bd5056d75b  Pebrel-v2.6.1-windows-arm64-setup.exe
+54be1d08514f2d3fecee8705f1bd12625a2b2c1df20437fb98356bbbcdddfdbf  Pebrel-v2.6.1-windows-arm64.zip
+f3812c572f912d419b205eee7bab943b587dcdd94c1eee4f72a3c93b2d3650ef  Pebrel-v2.6.1-windows-x64-setup.exe
+55191de815fad98fa72c7db222f20416292d8e499f33e6e2b4def020a5997417  Pebrel-v2.6.1-windows-x64.zip
+```
 
 ### English
 
