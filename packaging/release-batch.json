@@ -40,6 +40,11 @@
       "id": "shortcut-escape-alias",
       "commit": "36dddcca01c0baf7d69d57b1bb2524d4b1145291",
       "verification": "Windows x64 physical keystrokes: esc minimized the candidate and failed on 2.5.9. The escape and ctrl+shift+m controls minimized both builds. https://github.com/Kuddev/pebrel/actions/runs/44503059641"
+    },
+    {
+      "id": "wsl-menu-installation-move",
+      "commit": "0f6116efa0d945fc9b7ebc0b335463d99e23ac61",
+      "verification": "The Windows x64 Inno Setup upgrade fixture changed the installation directory, migrated project-owned WSL menu commands and retained user-edited verbs. https://github.com/Kuddev/pebrel/actions/runs/44518468245/job/135540580177"
     }
   ]
 }
