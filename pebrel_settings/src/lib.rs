@@ -113,6 +113,10 @@ impl RawSettings {
             .filter(|value| !value.is_empty())
     }
 
+    pub fn command_history_persists(&self) -> bool {
+        self.bool_on("command_history_persist").unwrap_or(true)
+    }
+
     pub fn f32(&self, key: &str) -> Option<f32> {
         self.value(key)?.parse().ok()
     }
@@ -1058,6 +1062,9 @@ pub struct RuntimeSettings {
     pub ghost: bool,
     pub accept: AcceptKeyName,
     pub completion_style: CompletionStyleName,
+    /// Append submitted commands to `pebrel_history*.jsonl`. Off keeps new commands
+    /// in memory only. Saved history still loads. Restart to apply file edits.
+    pub command_history_persist: bool,
     pub prompt_suggestions: PromptSuggestions,
     /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗）。
     pub cjk_bold_regular: bool,
@@ -1254,6 +1261,7 @@ impl RuntimeSettings {
                 .value("completion_style")
                 .and_then(CompletionStyleName::from_settings)
                 .unwrap_or_default(),
+            command_history_persist: raw.command_history_persists(),
             prompt_suggestions: PromptSuggestions::from_raw(raw),
             cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
             tabs_position: raw
