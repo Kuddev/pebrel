@@ -66,30 +66,35 @@ def verify_standalone(executable, root):
             ctx.refresh_targets()
             panes = {t["label"]: t["panes"][0]["id"] for t in ctx.snapshot()["windows"][0]["tabs"]}
             assert set(panes) == set(names)
+            def native_history():
+                try:
+                    records = (home / "history.jsonl").read_text(encoding="utf-8").splitlines()
+                    return {r["text"]: r["session_id"] for r in map(json.loads, records)}
+                except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+                    return {}
+
             for name, pane in panes.items():
                 ctx.poll(lambda: ctx.read(pane)["text"].strip(), bool, "missing command prompt")
                 codex = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
                 ctx.prompt(f'set "CODEX_HOME={home}" && "{codex}" --no-daemon {name}', pane)
-                ctx.poll(lambda: ctx.read(pane)["text"], lambda text: "Fixture reply." in text,
-                         "local model did not reply", timeout=35)
-            history = {r["text"]: r["session_id"] for r in map(json.loads,
-                       (home / "history.jsonl").read_text(encoding="utf-8").splitlines())}
+                ctx.poll(native_history, lambda rows: name in rows,
+                         "Codex did not record the test prompt in a native thread", timeout=35)
+            history = native_history()
             expected = {name: history[name] for name in names}
             assert len(set(expected.values())) == len(names)
             for name, pane in panes.items():
                 other = next(i for n, i in expected.items() if n != name)
-                screen = ctx.read(pane)["text"]
-                assert re.search(r"(?m)^\s*" + re.escape(expected[name]) + r"\s*$", screen)
+                row = re.compile(r"(?m)^\s*" + re.escape(expected[name]) + r"\s*$")
+                screen = ctx.poll(lambda: ctx.read(pane)["text"], row.search,
+                                  "native thread did not appear in its own status line", timeout=30)
                 assert other not in screen
             print("Both Codex status rows exactly matched their native threads.", flush=True)
 
             def saved_ids():
                 try:
                     snap = json.loads(ctx.session_file.read_text(encoding="utf-8"))
-                except PermissionError as error:
-                    if getattr(error, "winerror", None) not in (5, 32, 33):
-                        raise
-                    return {"snapshot_read_error": error.winerror}
+                except (PermissionError, FileNotFoundError) as error:
+                    return {"snapshot_read_error": str(error)}
                 return {t["custom_name"]: (t.get("layout", {}).get("agent") or {}).get("session_id")
                         for t in snap["tabs"]}
 
