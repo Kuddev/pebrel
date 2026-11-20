@@ -1297,8 +1297,11 @@ impl RuntimeHub {
             _ => "completed",
         };
         let result = event
-            .message
-            .as_deref()
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.source())
+            .map(|text| text.as_ref())
+            .or(event.message.as_deref())
             .map(|message| truncate_chars(message, MAX_DELEGATION_RESULT_CHARS))
             .unwrap_or_else(|| "No structured final message was provided; inspect the target pane if details are needed.".to_owned());
         let result =
