@@ -112,7 +112,10 @@ fn native_linux_silent_start_close_and_restore_keep_the_same_session() {
                         window.refresh();
                         window.draw(cx).clear(cx);
                         if backend == "wayland" {
-                            assert!(matches!(window.window_decorations(), gpui::Decorations::Client { .. }));
+                            assert!(matches!(
+                                window.window_decorations(),
+                                gpui::Decorations::Client { .. }
+                            ));
                         }
                         let title = window.debug_bounds_for_selector("workspace-titlebar").unwrap();
                         // 固定组件的关闭按钮宽 34 px；使用真实标题栏布局，避免窗口边框偏移。
