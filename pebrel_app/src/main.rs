@@ -109,6 +109,7 @@ mod profile_launch;
 mod prompt_suggestions;
 mod provider_test;
 mod proxy_test;
+mod recent_output;
 mod remote_dirs;
 mod render_cache;
 #[cfg(feature = "legacy-shell")]
