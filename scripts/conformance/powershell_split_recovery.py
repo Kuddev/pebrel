@@ -54,10 +54,13 @@ def split_leaves(ctx):
 
 
 def shell_reply(ctx, pane):
+    ctx.poll(lambda: ctx.read(pane)["text"][-500:],
+             lambda tail: bool(re.search(r"(?m)^\s*PS [^\r\n]*>\s*$", tail)),
+             "the split did not display a ready PowerShell prompt", timeout=35)
     marker = uuid4().hex[:8]
     ctx.prompt(f"Write-Output ('{marker}-' + $PSVersionTable.PSVersion.Major)", pane)
     output = re.compile(r"(?m)^\s*" + marker + r"-5\s*$")
-    ctx.poll(lambda: bool(output.search(ctx.read(pane)["text"])), bool,
+    ctx.poll(lambda: ctx.read(pane)["text"][-800:], output.search,
              "Windows PowerShell did not execute the marker", timeout=18)
 
 
