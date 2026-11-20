@@ -46,7 +46,7 @@ fn creation_time(process: HANDLE) -> Option<u64> {
         .then_some(u64::from(created.dwHighDateTime) << 32 | u64::from(created.dwLowDateTime))
 }
 
-pub(super) fn probe(shell_pid: u32) -> Option<CodexSession> {
+pub(super) fn probe(shell_pid: u32) -> Option<CodexRollouts> {
     // Keep the actual shell object alive across helper startup. A recycled PID
     // cannot silently bind this pane to a different process tree.
     let shell = open_process(shell_pid, PROCESS_QUERY_INFORMATION)?;

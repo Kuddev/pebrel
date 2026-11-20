@@ -474,24 +474,48 @@ impl SftpBrowseSession {
     /// calling `canonicalize` before every `readdir` adds a full network RTT
     /// without changing the result.
     pub(crate) async fn list_dir(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
+        self.list_dir_with(path, crate::ssh_session::open_sftp(&self.destination)).await
+    }
+
+    async fn list_dir_with(
+        &self,
+        path: &str,
+        open: impl Future<Output = SftpResult<SftpSession>>,
+    ) -> Result<Vec<SftpEntry>, String> {
         let path = normalize_remote_path("/", path);
         let mut slot = self.session.lock().await;
         // russh-sftp 的 read_dir 只在正常结束时关闭目录句柄。将会话暂时移出
         // 缓存，使导航取消也能关闭子通道；否则句柄和未完成请求会留在复用会话里。
-        let session = match slot.take() {
-            Some(session) => session,
-            None => crate::ssh_session::open_sftp(&self.destination)
-                .await
-                .map_err(|err| format!("无法连接 {}：{err}", self.destination))?,
-        };
-        let result = read_remote_dir(&session, &path)
-            .await
-            .map_err(|err| format!("无法读取目录 {path}：{err}"));
-        if result.is_ok() {
-            // 正常读取仍复用 SFTP 子通道；取消或失败仅回收它，不关闭共享 SSH 连接。
-            *slot = Some(session);
+        if let Some(session) = slot.take() {
+            match read_remote_dir(&session, &path).await {
+                Ok(entries) => {
+                    *slot = Some(session);
+                    return Ok(entries);
+                },
+                Err(error) if stale_browse_session(&error) => {},
+                Err(error) => return Err(format!("无法读取目录 {path}：{error}")),
+            }
         }
-        result
+        let session = open.await.map_err(|err| format!("无法连接 {}：{err}", self.destination))?;
+        let entries = read_remote_dir(&session, &path)
+            .await
+            .map_err(|err| format!("无法读取目录 {path}：{err}"))?;
+        *slot = Some(session);
+        Ok(entries)
+    }
+}
+
+fn stale_browse_session(error: &SftpError) -> bool {
+    match error.downcast_ref::<SftpClientError>() {
+        Some(SftpClientError::IO(_) | SftpClientError::Timeout) => true,
+        Some(SftpClientError::Status(status)) => {
+            matches!(status.status_code, StatusCode::NoConnection | StatusCode::ConnectionLost)
+        },
+        Some(SftpClientError::UnexpectedBehavior(message)) => {
+            matches!(message.as_str(), "session closed" | "sender dropped")
+                || message.starts_with("SendError:")
+        },
+        _ => false,
     }
 }
 
@@ -1591,6 +1615,45 @@ mod tests {
                 tokio::time::timeout(Duration::from_secs(2), released).await.unwrap().unwrap();
                 assert!(retired, "cancelled readdir must not retain its open remote handle");
             },
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_cached_listing_reopens_once_and_permission_errors_stop() {
+        use super::{SftpBrowseSession, SftpSession};
+        use russh_sftp::protocol::{Handle, StatusCode};
+
+        struct Peer(StatusCode);
+        impl russh_sftp::server::Handler for Peer {
+            type Error = StatusCode;
+
+            fn unimplemented(&self) -> StatusCode {
+                StatusCode::OpUnsupported
+            }
+
+            async fn opendir(&mut self, _: u32, path: String) -> Result<Handle, StatusCode> {
+                assert_eq!(path, "/saved");
+                Err(self.0)
+            }
+        }
+
+        async fn session(error: StatusCode) -> SftpSession {
+            let (client, server) = tokio::io::duplex(4096);
+            tokio::spawn(russh_sftp::server::run(server, Peer(error)));
+            SftpSession::new(client).await.unwrap()
+        }
+
+        let browser = SftpBrowseSession::new("fixture");
+        *browser.session.lock().await = Some(session(StatusCode::ConnectionLost).await);
+        let error = browser
+            .list_dir_with("/saved", async { Ok(session(StatusCode::PermissionDenied).await) })
+            .await
+            .unwrap_err();
+        assert!(error.contains(&StatusCode::PermissionDenied.to_string()), "{error}");
+
+        *browser.session.lock().await = Some(session(StatusCode::PermissionDenied).await);
+        assert!(
+            browser.list_dir_with("/saved", async { panic!("permission is final") }).await.is_err()
         );
     }
 

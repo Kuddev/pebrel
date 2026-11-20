@@ -101,6 +101,8 @@ use crate::runtime_api::{
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod command_launch_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod delegation_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_notify_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod runtime_resize_tests;
@@ -200,6 +202,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::AgentStart { .. }
         | RuntimeCommand::AgentFork { .. }
         | RuntimeCommand::AgentPrompt { .. }
+        | RuntimeCommand::DelegationPrompt { .. }
         | RuntimeCommand::AgentPaste { .. }
         | RuntimeCommand::AgentRead { .. } => RuntimeWindowPolicy::Preserve,
     }
@@ -753,6 +756,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
             (*window_id, *source_pane_id)
         },
         RuntimeCommand::AgentPrompt { agent, generation, .. }
+        | RuntimeCommand::DelegationPrompt { agent, generation, .. }
         | RuntimeCommand::AgentPaste { agent, generation, .. }
         | RuntimeCommand::AgentRead { agent, generation, .. } => {
             let managed = runtime_hub.active_agent(agent, *generation)?;
@@ -844,7 +848,7 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
 }
 
 pub(crate) fn dispatch_ai_events(events: Vec<crate::ai_hook::AiHookEvent>, cx: &mut App) {
-    let mut handled = Vec::new();
+    let mut handled = false;
     for event in crate::ai_hook::reorder_batch(events) {
         // 明确 pane id 是严格路由合同：pane 已关闭时，迟到 Hook 必须丢弃；
         // 只有发送端确实没有 NEBULA_PANE_ID 时才允许落到 MRU 窗口。
@@ -854,20 +858,21 @@ pub(crate) fn dispatch_ai_events(events: Vec<crate::ai_hook::AiHookEvent>, cx: &
         };
         let Some(entry) = target else { continue };
         if let Some(workspace) = entry.workspace.upgrade() {
-            let routed = event.clone();
             if workspace.update(cx, |workspace, cx| workspace.handle_ai_hook(event, cx)) {
-                handled.push(routed);
+                handled = true;
             }
         }
     }
-    if handled.is_empty() {
+    if !handled {
         return;
     }
     publish_runtime_snapshot(cx);
-    let hub = cx.global::<WindowRegistry>().runtime_hub.clone();
-    for event in &handled {
-        hub.complete_delegations_for_turn(event);
-    }
+    dispatch_ready_delegation_callbacks(cx);
+}
+
+pub(super) fn complete_ai_turn(event: &crate::ai_hook::AiHookEvent, cx: &mut App) {
+    publish_runtime_snapshot(cx);
+    cx.global::<WindowRegistry>().runtime_hub.complete_delegations_for_turn(event);
     dispatch_ready_delegation_callbacks(cx);
 }
 
