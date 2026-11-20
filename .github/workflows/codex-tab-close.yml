@@ -1,0 +1,51 @@
+name: Verify Codex tab close and normal restart on Windows
+on:
+  push:
+    branches: [qa/codex-tab-close-windows-1120]
+permissions:
+  contents: read
+jobs:
+  recovery:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: x64
+            codex: x86_64
+            app_hash: a3ff96b876f508a889119e21dada94a2ff57d07070f065c274f2bbf623139186
+            cli_hash: 94b51ca84648a6923784ef71f06e2feb1e10796ddb3f5d033ccb0fbe8daa2f16
+          - os: windows-11-arm
+            arch: arm64
+            codex: aarch64
+            app_hash: 256c9ec2f66b57bac0c3e140cd4259987b4c00b005bdec5ab2d2cce2158db12e
+            cli_hash: c437e561e756477c5cbef0e8f99d17761cc59ef87ca5567f2a00a8964ec131cf
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install Pillow==11.3.0
+      - name: Run the public 2.6.0 binary with the native Codex CLI
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP codex-close
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $app = "https://github.com/Kuddev/pebrel/releases/download/v2.6.0/Pebrel-v2.6.0-windows-${{ matrix.arch }}.zip"
+          $cli = "https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-${{ matrix.codex }}-pc-windows-msvc.exe.zip"
+          foreach ($item in @(@($app,"app","${{ matrix.app_hash }}"), @($cli,"cli","${{ matrix.cli_hash }}"))) {
+            $zip = Join-Path $root ($item[1] + ".zip")
+            curl.exe --fail --location --retry 3 --silent --show-error --output $zip $item[0]
+            if ($LASTEXITCODE -or (Get-FileHash $zip).Hash -ne $item[2]) { throw "Archive verification failed" }
+            Expand-Archive $zip (Join-Path $root $item[1])
+          }
+          $native = Get-ChildItem "$root/cli" -Filter 'codex-*-pc-windows-msvc.exe' -Recurse | Select-Object -First 1
+          Copy-Item $native.FullName "$root/cli/codex.exe"
+          $env:Path = "$root/cli;" + $env:Path
+          $exe = (Get-ChildItem "$root/app" -Filter pebrel.exe -Recurse | Select-Object -First 1).FullName
+          python scripts/conformance/windows_standard_user.py scripts/conformance/codex_closed_tab_probe.py $exe
+          exit $LASTEXITCODE
