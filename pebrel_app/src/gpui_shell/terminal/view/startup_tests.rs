@@ -1623,6 +1623,51 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn shift_home_and_end_reach_the_local_powershell_editor(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+                &pebrel_terminal::tty::Options {
+                    shell: Some(pebrel_terminal::tty::Shell::new("powershell.exe".into(), vec![])),
+                    ..Default::default()
+                },
+            ));
+            for (token, forwarded) in
+                [(None, true), (Some("pwsh:42"), true), (Some("bash:43"), false)]
+            {
+                if let Some(token) = token {
+                    view.suggest.completion_shell_report("pebrel_shell", token);
+                }
+                for chord in ["shift-home", "shift-end"] {
+                    let event = KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse(chord).unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    };
+                    let expected = keymap::encode(&event.keystroke, &view.term_mode()).unwrap();
+                    view.on_key_down(&event, window, cx);
+                    let input: Vec<_> = receiver
+                        .try_iter()
+                        .filter_map(|msg| match msg {
+                            Msg::Input(bytes) => Some(bytes.into_owned()),
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect();
+                    assert_eq!(
+                        input,
+                        if forwarded { expected } else { vec![] },
+                        "{token:?} {chord}"
+                    );
+                }
+            }
+        });
+    });
+}
+
+#[gpui::test]
 fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, _| {
