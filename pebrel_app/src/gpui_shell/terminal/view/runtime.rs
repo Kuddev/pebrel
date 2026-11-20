@@ -179,6 +179,9 @@ impl TerminalView {
         exit_code: Option<i32>,
         cx: &mut Context<Self>,
     ) {
+        if self.command_running || self.running_program.is_some() {
+            self.retire_command_images(cx);
+        }
         let choose_codex_session = self.codex_restore_target_missing(exit_code);
         self.notify_command_done(exit_code, cx);
         self.last_command_failed = exit_code.is_some_and(|code| code != 0);
@@ -1186,6 +1189,7 @@ impl TerminalView {
     pub(super) fn mark_command_running(&mut self) {
         self.consume_native_prompt();
         if !self.command_running {
+            self.assign_pasted_images_to_command();
             self.prompt_process_probe = None;
             self.last_prompt_process_probe = None;
             self.command_started = Some(std::time::Instant::now());
