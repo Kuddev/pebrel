@@ -45,6 +45,9 @@ jobs:
           }
           $native = Get-ChildItem "$root/cli" -Filter 'codex-*-pc-windows-msvc.exe' -Recurse | Select-Object -First 1
           Copy-Item $native.FullName "$root/cli/codex.exe"
+          $env:PEBREL_QA_CODEX_BIN = "$root/cli/codex.exe"
+          & $env:PEBREL_QA_CODEX_BIN --version
+          if ($LASTEXITCODE) { throw "Codex executable did not run" }
           $env:Path = "$root/cli;" + $env:Path
           $exe = (Get-ChildItem "$root/app" -Filter pebrel.exe -Recurse | Select-Object -First 1).FullName
           python scripts/conformance/windows_standard_user.py scripts/conformance/codex_closed_tab_probe.py $exe

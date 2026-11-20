@@ -106,13 +106,26 @@ def run(executable, root):
         ctx.api("tab.new", {"window_id": ctx.window_id})
         ctx.refresh_targets()
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 1, "name": "closed-codex"})
-        ctx.prompt('codex')
+        ctx.prompt("Write-Output ('CLOSE-' + 'FIXTURE-READY')")
+        ctx.poll(lambda: ctx.read(lines=20)["text"], lambda t: "CLOSE-FIXTURE-READY" in t,
+                 "PowerShell did not start in the new tab", timeout=25)
+        binary = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
+        ctx.prompt("& '" + str(binary).replace("'", "''") + "'")
         def running():
             rows = ctx.api("agents.list", {}).get("agents", [])
             return next((row["agent"] for row in rows if row["pane_id"] == ctx.pane_id
                          and row["agent"]["kind"] == "codex"), None)
-        agent = ctx.poll(running, bool, "Codex did not become visible in its test pane", timeout=55)
-        print("Codex recognized before close. Native identity:", bool(agent.get("session_id")), flush=True)
+        def codex_process():
+            rows = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})["processes"]
+            return any("codex" in str(row.get("executable") or "").lower() for row in rows)
+        try:
+            ctx.poll(codex_process, bool, "The Windows pane did not run the released Codex executable", timeout=25)
+        except Exception:
+            print("Test terminal:", ctx.read(lines=15)["text"][-900:])
+            raise
+        agent = running() or {}
+        print("Codex process present. Agent recognized:", bool(agent),
+              "Native identity:", bool(agent.get("session_id")), flush=True)
         ctx.poll(stored_names, lambda names: "closed-codex" in names,
                  "the original Codex tab was never checkpointed")
         hwnd = close_codex_tab(ctx)
