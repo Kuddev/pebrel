@@ -38,7 +38,7 @@ jobs:
           save-if: "false"
       - name: Build the desktop executable
         run: |
-          cargo build --locked --profile ci -p pebrel --bin pebrel --features gpui-shell
+          cargo build --config .github/ci-profile.toml --locked --profile ci -p pebrel --bin pebrel --features gpui-shell
           install -s -m 755 target/ci/pebrel "$RUNNER_TEMP/pebrel"
           sha256sum "$RUNNER_TEMP/pebrel"
       - uses: actions/upload-artifact@v4
