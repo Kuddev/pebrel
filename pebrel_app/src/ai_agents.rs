@@ -269,6 +269,7 @@ impl AgentKind {
             Self::Cursor => format!("agent --resume={session_id}"),
             Self::Copilot => format!("copilot --resume {session_id}"),
             Self::Grok => format!("grok --resume {session_id}"),
+            Self::CodeBuddy => format!("codebuddy --resume {session_id}"),
             Self::Pi => format!("pi --session {session_id}"),
             Self::OhMyPi => format!("omp --resume {session_id}"),
             Self::Antigravity => format!("agy --conversation {session_id}"),
@@ -285,8 +286,7 @@ impl AgentKind {
             | Self::Kilo
             | Self::Qoder
             | Self::Maki
-            | Self::Trae
-            | Self::CodeBuddy => return None,
+            | Self::Trae => return None,
             Self::Kimi => format!("kimi --session {session_id}"),
             Self::CommandCode => format!("command-code --resume {session_id}"),
         })
@@ -1071,7 +1071,11 @@ mod tests {
             assert_eq!(AgentKind::parse_command(command), None, "{command}");
         }
         assert_eq!(AgentKind::CodeBuddy.start_command(), None);
-        assert_eq!(AgentKind::CodeBuddy.resume_command("session-1"), None);
+        assert_eq!(
+            AgentKind::parse("cbc").unwrap().resume_command("session-1").as_deref(),
+            Some("codebuddy --resume session-1")
+        );
+        assert_eq!(AgentKind::CodeBuddy.resume_command("wrong id"), None);
         assert_eq!(AgentKind::CodeBuddy.fork_command("session-1"), None);
     }
 

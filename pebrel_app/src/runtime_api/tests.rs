@@ -1,6 +1,9 @@
 use super::command::wait_state_matches;
 use super::*;
 
+mod delegation_submission;
+use delegation_submission::submitted_delegation;
+
 #[cfg(feature = "gpui-test-support")]
 impl RuntimeHub {
     pub(crate) fn test_snapshot_receiver(&self) -> Receiver<RuntimeSnapshot> {
@@ -841,7 +844,7 @@ fn managed_identity_requires_real_agent_and_session_evidence() {
 #[test]
 fn delegation_completion_returns_one_json_escaped_callback() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
-    let receipt = hub.begin_delegation(3, &target).unwrap();
+    let receipt = submitted_delegation(&hub, 3, &target);
     let result = "fixed \"vc\" skill\nall checks passed";
     let event = codex_turn_done(result);
 
@@ -860,25 +863,89 @@ fn delegation_completion_returns_one_json_escaped_callback() {
 }
 
 #[test]
+fn claude_delegation_returns_the_native_answer_or_the_available_diagnostic() {
+    let hub = RuntimeHub::new();
+    let session = "claude-session-1";
+    let target = hub
+        .register_agent(
+            "worker".into(),
+            crate::ai_agents::AgentKind::Claude,
+            7,
+            3,
+            Some(session.into()),
+            None,
+        )
+        .unwrap();
+    hub.publish(delegation_snapshot(
+        RuntimeTaskState::Finished,
+        RuntimeTaskState::Finished,
+        Some(session),
+    ));
+
+    let callback_result = |mut payload: Value| {
+        payload["session_id"] = json!(session);
+        let raw = format!("nebula-hook/1 source=claude pane=3\n{payload}");
+        let receipt = submitted_delegation(&hub, 4, &target);
+        let event = crate::ai_hook::parse_remote_envelope(raw.as_bytes(), Some(3)).unwrap();
+        hub.complete_delegations_for_turn(&event);
+        let callbacks = hub.take_ready_delegation_callbacks();
+        assert_eq!(callbacks.len(), 1);
+        assert_eq!(callbacks[0].task_id, receipt.task_id);
+        let encoded = callbacks[0].prompt.split_once("worker_output=").unwrap().1;
+        serde_json::from_str::<String>(encoded).unwrap()
+    };
+
+    let text = "line 1\n\"done\"";
+    assert_eq!(
+        callback_result(json!({"hook_event_name":"Stop", "last_assistant_message":text})),
+        text
+    );
+    let prefix = "字".repeat(MAX_DELEGATION_RESULT_CHARS);
+    assert_eq!(
+        callback_result(
+            json!({"hook_event_name":"Stop", "last_assistant_message":format!("{prefix}界")})
+        ),
+        format!("{prefix}...")
+    );
+    assert_eq!(
+        callback_result(json!({"hook_event_name":"StopFailure", "error":"provider disconnected"})),
+        "provider disconnected"
+    );
+    assert_eq!(
+        callback_result(json!({"hook_event_name":"Stop"})),
+        "No structured final message was provided; inspect the target pane if details are needed."
+    );
+}
+
+#[test]
 fn agent_delegate_dispatches_a_generation_bound_prompt() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Finished);
     let expected_agent_id = target.agent_id.clone();
     let expected_generation = target.generation;
     let dispatched = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let dispatched_for_sink = dispatched.clone();
+    let sink_hub = hub.clone();
+    let sink_target = target.clone();
     let sink = EventSink::Callback(Arc::new(move |callback| {
         if let RuntimeCallback::Control(dispatch) = callback {
-            assert!(matches!(
-                &dispatch.command,
-                RuntimeCommand::AgentPrompt {
-                    agent,
-                    generation: Some(generation),
-                    text,
-                    submit: true,
-                } if agent == &expected_agent_id
-                    && *generation == expected_generation
-                    && text == "inspect the vc skill"
-            ));
+            let RuntimeCommand::DelegationPrompt { agent, generation, text, task_id } =
+                &dispatch.command
+            else {
+                panic!("expected a delegation");
+            };
+            assert_eq!(agent, &expected_agent_id);
+            assert_eq!(*generation, Some(expected_generation));
+            assert_eq!(text, "inspect the vc skill");
+            let actual = detected_agent("codex", Some(TEST_CODEX_SESSION));
+            sink_hub
+                .submit_delegation(
+                    task_id,
+                    &sink_target,
+                    Some(&actual),
+                    RuntimeTaskState::Finished,
+                    || Ok(()),
+                )
+                .unwrap();
             dispatched_for_sink.store(true, std::sync::atomic::Ordering::SeqCst);
             dispatch.respond(Ok(json!({ "submitted": true })));
         }
@@ -909,7 +976,7 @@ fn agent_delegate_dispatches_a_generation_bound_prompt() {
 #[test]
 fn delegation_callback_waits_for_the_original_agent_to_finish() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Running);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.complete_delegations_for_turn(&codex_turn_done("done"));
     assert!(hub.take_ready_delegation_callbacks().is_empty());
 
@@ -931,7 +998,7 @@ fn delegation_callback_waits_for_the_original_agent_to_finish() {
 #[test]
 fn delegation_callback_never_moves_to_a_replacement_origin_session() {
     let (hub, target) = delegation_hub(RuntimeTaskState::Running);
-    hub.begin_delegation(3, &target).unwrap();
+    submitted_delegation(&hub, 3, &target);
     hub.complete_delegations_for_turn(&codex_turn_done("done"));
 
     hub.publish(delegation_snapshot(

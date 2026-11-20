@@ -113,6 +113,48 @@ fn moving_one_of_two_tabs_preserves_source_and_identity(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn busy_tab_confirmation_tracks_its_target_across_removal(cx: &mut TestAppContext) {
+    initialize_test(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    for removed in [0, 1] {
+        let (entry, workspace, survivor) = cx.update(|cx| {
+            let (id, workspace) = open_test_window(cx, 3);
+            let entry = entry_by_id(id, cx).unwrap();
+            let survivor = workspace.read(cx).tab_meta[2].runtime_id.clone();
+            entry
+                .handle
+                .update(cx, |_, window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        let pane = workspace.tabs[1].focused_view().unwrap().clone();
+                        pane.update(cx, |view, _| {
+                            view.install_completion_test_session();
+                            view.running_program = Some("codex".into());
+                        });
+                        workspace.request_close_tab(1, window, cx);
+                        workspace.finish_close_tab(removed, window, cx);
+                    });
+                })
+                .unwrap();
+            (entry, workspace, survivor)
+        });
+        cx.run_until_parked();
+        let mut visual = gpui::VisualTestContext::from_window(entry.handle, cx);
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let confirm = visual.debug_bounds("confirm-dialog-ok").expect("close confirmation");
+        visual.simulate_click(confirm.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.tabs.len(), if removed == 0 { 1 } else { 2 });
+            assert_eq!(workspace.tab_meta.last().unwrap().runtime_id, survivor);
+            assert_eq!(workspace.snapshot_session(cx).tabs.len(), workspace.tabs.len());
+        });
+    }
+}
+
+#[gpui::test]
 fn ordinary_window_geometry_is_in_the_durable_snapshot(cx: &mut TestAppContext) {
     initialize_test(cx);
     cx.update(|cx| {

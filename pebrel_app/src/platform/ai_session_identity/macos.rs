@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashSet;
 
 #[cfg(target_os = "macos")]
-pub(super) fn probe(shell_pid: u32) -> Option<CodexSession> {
+pub(super) fn probe(shell_pid: u32) -> Option<CodexRollouts> {
     let candidates = || -> Option<HashSet<u32>> {
         Some(
             crate::process_tree::descendants(shell_pid)
