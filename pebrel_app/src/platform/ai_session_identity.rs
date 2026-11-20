@@ -120,6 +120,31 @@ pub(crate) struct CodexSession {
     pub cwd: Option<String>,
 }
 
+/// Distinct user rollouts verified against the processes in this pane.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CodexRollouts(Vec<CodexSession>);
+
+impl CodexRollouts {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn from_test_records(output: &str) -> Self {
+        parse_probe_context(output).expect("fixture must include a valid native user rollout")
+    }
+
+    pub(crate) fn needs_selection(&self) -> bool {
+        self.0.len() > 1
+    }
+
+    pub(crate) fn select(mut self, displayed_id: Option<&str>) -> Option<CodexSession> {
+        if !self.needs_selection() {
+            return self.0.pop();
+        }
+        let id = displayed_id?;
+        let mut matches = self.0.into_iter().filter(|session| session.session_id == id);
+        let session = matches.next()?;
+        matches.next().is_none().then_some(session)
+    }
+}
+
 /// Probe the active Codex rollout for one pane.
 ///
 /// WSL panes are inspected inside the guest because Windows Toolhelp cannot
@@ -131,7 +156,7 @@ pub(crate) fn probe_codex_session(
     pane_id: u64,
     exec_context: Option<&crate::runtime_exec::PaneExecContext>,
     shell_pid: Option<u32>,
-) -> Option<CodexSession> {
+) -> Option<CodexRollouts> {
     let pane_id = pane_id.to_string();
     let context = exec_context?;
     let instance = context.process_instance()?;
@@ -174,8 +199,8 @@ pub(crate) fn local_hook_agent_pid(_source: &str, client_pid: u32) -> Result<Opt
     Ok(crate::process_tree::nearest_agent_ancestor(client_pid).map(|(pid, _)| pid))
 }
 
-fn parse_probe_context(output: &str) -> Option<CodexSession> {
-    let mut candidate = None;
+fn parse_probe_context(output: &str) -> Option<CodexRollouts> {
+    let mut candidates = Vec::new();
     for record in output.lines().filter_map(parse_probe_record) {
         let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.first_line) else {
             continue;
@@ -211,15 +236,11 @@ fn parse_probe_context(output: &str) -> Option<CodexSession> {
                 .filter(|cwd| valid_cwd(cwd))
                 .map(str::to_owned),
         };
-        if candidate.as_ref().is_some_and(|existing| existing != &context) {
-            // More than one distinct main/user rollout is ambiguous.  A
-            // process can have guardian/sub-agent files open, but it must not
-            // have two possible user conversations silently choose one.
-            return None;
+        if !candidates.contains(&context) {
+            candidates.push(context);
         }
-        candidate = Some(context);
     }
-    candidate
+    (!candidates.is_empty()).then_some(CodexRollouts(candidates))
 }
 
 fn valid_cwd(cwd: &str) -> bool {
@@ -233,7 +254,7 @@ fn valid_cwd(cwd: &str) -> bool {
 
 #[cfg(test)]
 fn parse_probe_records(output: &str) -> Option<String> {
-    parse_probe_context(output).map(|context| context.session_id)
+    parse_probe_context(output)?.select(None).map(|context| context.session_id)
 }
 
 fn parse_probe_record(line: &str) -> Option<ProbeRecord> {
@@ -274,7 +295,7 @@ fn probe_wsl(
     user: Option<&str>,
     pane_id: &str,
     instance: &str,
-) -> Option<CodexSession> {
+) -> Option<CodexRollouts> {
     let mut command = Command::new("wsl.exe");
     command.args(wsl_probe_args(distro, user, pane_id, instance));
     crate::platform::process::hidden_command(&mut command);
@@ -308,7 +329,7 @@ fn wsl_probe_args(
 
 /// Bound the guest lookup by time and output size. A temporary file avoids a
 /// reader thread surviving when a descendant keeps the output handle open.
-fn run_probe_command(command: Command) -> Option<CodexSession> {
+fn run_probe_command(command: Command) -> Option<CodexRollouts> {
     parse_probe_context(&String::from_utf8_lossy(&run_probe_output(command)?))
 }
 
@@ -333,7 +354,7 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "linux")]
-fn probe_local_proc(pane_id: &str, instance: &str, shell_pid: u32) -> Option<CodexSession> {
+fn probe_local_proc(pane_id: &str, instance: &str, shell_pid: u32) -> Option<CodexRollouts> {
     use super::process_snapshot::linux_process;
 
     let terminal = linux_process(shell_pid)?.terminal;
@@ -503,7 +524,7 @@ mod tests {
             let output = format!(
                 "42\t7\t/home/hello/.codex/sessions/rollout-x-{ROOT_ID}.jsonl\t{metadata}\n"
             );
-            let context = parse_probe_context(&output).unwrap();
+            let context = parse_probe_context(&output).unwrap().select(None).unwrap();
             assert_eq!(context.session_id, ROOT_ID);
             assert_eq!(context.cwd.as_deref(), expected);
         }
@@ -559,6 +580,11 @@ mod tests {
             "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ROOT_ID}\",\"source\":\"cli\"}}}}\n1996\t38\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{GUARDIAN_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{GUARDIAN_ID}\",\"source\":\"cli\"}}}}\n"
         );
         assert_eq!(parse_probe_records(&output), None);
+        let rollouts = || parse_probe_context(&output).unwrap();
+        assert!(rollouts().needs_selection());
+        assert_eq!(rollouts().select(Some(GUARDIAN_ID)).unwrap().session_id, GUARDIAN_ID);
+        assert_eq!(rollouts().select(Some(ROOT_ID)).unwrap().session_id, ROOT_ID);
+        assert_eq!(rollouts().select(Some("foreign-thread")), None);
     }
 
     #[cfg(unix)]
@@ -729,7 +755,8 @@ mod tests {
                 // Assert immediately after each single probe. An eager array
                 // erased which implementation failed in the original CI log.
                 let started = Instant::now();
-                let found = probe_local_proc(query_pane, query_instance, child.0.id());
+                let found = probe_local_proc(query_pane, query_instance, child.0.id())
+                    .and_then(|rollouts| rollouts.select(None));
                 assert_found("local_proc", found, started.elapsed());
 
                 let mut guest = Command::new("/bin/sh");
@@ -741,7 +768,7 @@ mod tests {
                     query_instance,
                 ]);
                 let started = Instant::now();
-                let found = run_probe_command(guest);
+                let found = run_probe_command(guest).and_then(|rollouts| rollouts.select(None));
                 assert_found("guest_shell", found, started.elapsed());
             }
         }
