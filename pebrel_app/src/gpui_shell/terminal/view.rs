@@ -1389,6 +1389,25 @@ impl TerminalView {
         }
     }
 
+    fn powershell_owns_line_selection(&self) -> bool {
+        if self.ssh_destination.is_some() || !self.suggest.suggest_env.is_this_machine() {
+            return false;
+        }
+        if self.running_program.is_some() || self.command_running && !self.command_running_disproved
+        {
+            return false;
+        }
+        if let Some(token) = self.suggest.completion_context.current_shell_token() {
+            return token.starts_with("pwsh:");
+        }
+        self.exec_context.as_ref().and_then(|context| context.shell_program()).is_some_and(
+            |program| {
+                use pebrel_completions::command_context::ShellSyntax;
+                ShellSyntax::for_program(program) == ShellSyntax::PowerShell
+            },
+        )
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // 搜索输入具有独立焦点，祖先终端不得再次把同一按键写入 PTY。
         if !self.focus_handle.is_focused(window) {
@@ -1485,12 +1504,17 @@ impl TerminalView {
         }
 
         // 回滚快捷键（对齐旧壳默认绑定，仅主屏）：Shift+PageUp/PageDown
-        // 翻页、Shift+Home/End 到顶/到底；备用屏下不拦截，交给编码器
+        // 翻页、Shift+Home/End 到顶/到底。PowerShell 提示符用后者选区；备用屏交给编码器
         // 把带修饰的键序发给应用（less 自己处理 Shift+PageUp）。
         if mods.shift && !mods.control && !mods.alt && !mode.contains(TermMode::ALT_SCREEN) {
             let scroll = match ks.key.as_str() {
                 "pageup" => Some(Scroll::PageUp),
                 "pagedown" => Some(Scroll::PageDown),
+                "home" | "end"
+                    if !mode.contains(TermMode::VI) && self.powershell_owns_line_selection() =>
+                {
+                    None
+                },
                 "home" => Some(Scroll::Top),
                 "end" => Some(Scroll::Bottom),
                 _ => None,
