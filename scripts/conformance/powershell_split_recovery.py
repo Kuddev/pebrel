@@ -53,12 +53,20 @@ def split_leaves(ctx):
     return [layout[key]["pane_id"] for key in ("first", "second")]
 
 
+def shell_command(ctx, pane, command):
+    ctx.prompt(command, pane, submit=False)
+    # Native ConPTY can present the prompt before PSReadLine accepts Enter.
+    ctx.poll(lambda: command[-14:] in "".join(ctx.read(pane)["text"].splitlines()),
+             bool, "PowerShell did not display the test command", timeout=20)
+    ctx.send_key("enter", pane)
+
+
 def shell_reply(ctx, pane):
     ctx.poll(lambda: ctx.read(pane)["text"][-500:],
              lambda tail: bool(re.search(r"(?m)^\s*PS [^\r\n]*>\s*$", tail)),
              "the split did not display a ready PowerShell prompt", timeout=35)
     marker = uuid4().hex[:8]
-    ctx.prompt(f"Write-Output ('{marker}-' + $PSVersionTable.PSVersion.Major)", pane)
+    shell_command(ctx, pane, f"Write-Output ('{marker}-' + $PSVersionTable.PSVersion.Major)")
     output = re.compile(r"(?m)^\s*" + marker + r"-5\s*$")
     ctx.poll(lambda: ctx.read(pane)["text"][-800:], output.search,
              "Windows PowerShell did not execute the marker", timeout=18)
@@ -111,8 +119,8 @@ def run(executable, root, port):
         for pane in (top, bottom):
             shell_reply(ctx, pane)
         marker = "qa-split-" + uuid4().hex[:8]
-        ctx.prompt(f"$env:CODEX_HOME={quote(home)}", top)
-        ctx.prompt(f"& {quote(cli)} --no-daemon {marker}", top)
+        shell_command(ctx, top, f"$env:CODEX_HOME={quote(home)}")
+        shell_command(ctx, top, f"& {quote(cli)} --no-daemon {marker}")
         native = ctx.poll(lambda: provider_id(home, marker), bool, "native ID missing", timeout=45)
         ctx.poll(lambda: saved_agents(ctx), lambda a: a and a[0] and a[0].get("source") == "codex"
                  and a[0].get("session_id") == native and not a[1],
