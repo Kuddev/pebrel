@@ -101,7 +101,7 @@ pub(super) fn load_restore(
     let restore_directory_size =
         crate::platform::CAPABILITIES.restore_directory_window_size && !has_regular_window;
     load_restore_from(id, startup, restore_directory_size, cx, || {
-        if crate::platform::elevation::requires_isolation() {
+        if crate::platform::startup::instance::is_private() {
             return None;
         }
         crate::session::load().and_then(|session| session.startup_window_state())

@@ -241,6 +241,44 @@ fn shell_metadata_cannot_replace_a_hook_owned_agent_identity(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn omp_message_redraw_keeps_its_session_until_the_process_exits(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.session.as_mut().unwrap().shell_pid = 4242;
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        let wire = br#"nebula-hook/1 source=omp pane=42
+{"kind":"session-start","session_id":"omp-message-redraw"}"#;
+        let mut event = crate::ai_hook::parse_remote_envelope(wire, Some(42)).unwrap();
+        event.agent_pid = Some(100);
+        assert!(view.handle_ai_hook(&event, cx));
+        view.on_command_start(cx);
+        view.process_event(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+        assert_eq!(view.ai_session.as_ref().unwrap().session_id, "omp-message-redraw");
+        assert!(view.agent_activity.hook_seen());
+
+        let gone = crate::process_tree::ActivityEvidence {
+            agent: None,
+            primary_present: Some(false),
+            child_present: false,
+            busy: false,
+        };
+        view.apply_activity_evidence(view.command_started, 4242, Some(100), Ok(gone), cx);
+        assert!(view.ai_session.is_none());
+        assert!(view.running_program.is_none());
+        assert!(!view.agent_activity.hook_seen());
+
+        view.on_command_start(cx);
+        let wire = br#"nebula-hook/1 source=omp pane=42
+{"kind":"session-start","session_id":"omp-real-error"}"#;
+        let next = crate::ai_hook::parse_remote_envelope(wire, Some(42)).unwrap();
+        assert!(view.handle_ai_hook(&next, cx));
+        view.process_event(TermEvent::CommandDone { exit_code: Some(1) }, cx);
+        assert!(view.ai_session.is_none());
+        assert!(view.last_command_failed);
+    });
+}
+
+#[gpui::test]
 fn command_end_clears_progress_and_stale_agent_state(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
