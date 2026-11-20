@@ -25,6 +25,11 @@
       "id": "ssh-clock-prompt-agent-exit",
       "commit": "e9e1d48a4808d4303e658607743e20446fcb50a6",
       "verification": "The returning clock-bearing SSH prompt cleared Codex; the matcher rejected foreign hosts, invalid clocks and typed commands. https://github.com/Kuddev/pebrel/actions/runs/44708110681/job/136193004155"
+    },
+    {
+      "id": "codex-standalone-thread-switch",
+      "commit": "700ddbf32f47e00c8f0cd27fddf0a75cf299fbf1",
+      "verification": "The stable native suite verified replacement of the previous pane-owned rollout and rejection of ambiguous or foreign IDs. https://github.com/Kuddev/pebrel/actions/runs/44715077885/job/136216628772"
     }
   ]
 }
