@@ -1,4 +1,30 @@
 {
   "base": "v2.6.1",
-  "fixes": []
+  "fixes": [
+    {
+      "id": "agent-submit-keyboard-mode",
+      "commit": "0e98f377abb093c0cb9e31e887268c6ee5fa3a2e",
+      "verification": "The GPUI terminal sent the correct Enter sequence when keyboard reporting changed in either direction after a delegated prompt was written. https://github.com/Kuddev/pebrel/actions/runs/44708110681/job/136193004155"
+    },
+    {
+      "id": "claude-delegation-final-answer",
+      "commit": "3a7f764ebdc761afc0d8e34a3421fed1bdf5d0b0",
+      "verification": "The caller received the native Claude answer, an available diagnostic on older events, and bounded completion text. https://github.com/Kuddev/pebrel/actions/runs/44708110681/job/136193004155"
+    },
+    {
+      "id": "delegation-completion-after-submission",
+      "commit": "7e8b82fb7a55ee99d1c8c03f6f01a09e2bcd170d",
+      "verification": "A reply predating the actual input could not finish the new task. Worker eligibility at submission and cleanup after failed input also passed. https://github.com/Kuddev/pebrel/actions/runs/44708110681/job/136193004155"
+    },
+    {
+      "id": "wsl-pane-delegation-callback",
+      "commit": "1a57d1f378755713ecc1ee952db44841c242fdb3",
+      "verification": "Eight GPUI cases verified two-way WSL completion, busy callers, replay, foreign workers, native parity, Claude final text and a missing pane. https://github.com/Kuddev/pebrel/actions/runs/44708110681/job/136193004155"
+    },
+    {
+      "id": "ssh-clock-prompt-agent-exit",
+      "commit": "e9e1d48a4808d4303e658607743e20446fcb50a6",
+      "verification": "The returning clock-bearing SSH prompt cleared Codex; the matcher rejected foreign hosts, invalid clocks and typed commands. https://github.com/Kuddev/pebrel/actions/runs/44708110681/job/136193004155"
+    }
+  ]
 }
