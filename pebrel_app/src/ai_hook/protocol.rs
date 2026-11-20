@@ -18,6 +18,11 @@ pub(super) fn claude_style(source: &str) -> bool {
 const TURN_RESULT_MAX_CHARS: usize = 4_000;
 static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// First sequence a freshly received hook can have at this point.
+pub(crate) fn next_receive_sequence() -> u64 {
+    RECEIVE_SEQUENCE.load(Ordering::Relaxed)
+}
+
 /// Parse one pipe message: a `nebula-hook/1 source=<s> pane=<n>` header line
 /// (`pebrel-hook/1` is accepted too; emitters keep the original name so hook
 /// helpers from another installed version still reach this one),
