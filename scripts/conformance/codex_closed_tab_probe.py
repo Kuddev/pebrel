@@ -177,9 +177,62 @@ def run(executable, root):
         app.close()
 
 
+def isolated_desktop():
+    # The ARM image can start with a full-screen Windows setup page. Run only
+    # the fixture on a fresh desktop and return to the previous desktop on exit.
+    import subprocess
+    from conformance.windows_standard_user import StartupInfo, ProcessInfo
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.CreateDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+    user.CreateDesktopW.restype = wintypes.HANDLE
+    user.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user.OpenInputDesktop.restype = wintypes.HANDLE
+    user.SwitchDesktop.argtypes = user.CloseDesktop.argtypes = [wintypes.HANDLE]
+    name = "PebrelRecovery" + str(os.getpid())
+    previous = user.OpenInputDesktop(0, False, 0x100)
+    if not previous:
+        raise ctypes.WinError(ctypes.get_last_error())
+    desktop = user.CreateDesktopW(name, None, None, 0, 0x1FF, None)
+    if not desktop:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if not user.SwitchDesktop(desktop):
+            raise ctypes.WinError(ctypes.get_last_error())
+        startup = StartupInfo()
+        startup.cb = ctypes.sizeof(startup)
+        startup.lpDesktop = "winsta0\\" + name
+        startup.dwFlags = 0x100
+        kernel.GetStdHandle.restype = wintypes.HANDLE
+        startup.hStdInput, startup.hStdOutput, startup.hStdError = [kernel.GetStdHandle(i) for i in (-10,-11,-12)]
+        info = ProcessInfo()
+        args = [sys.executable, __file__, sys.argv[1], "--desktop-ready"]
+        command = ctypes.create_unicode_buffer(subprocess.list2cmdline(args))
+        if not kernel.CreateProcessW(sys.executable, command, None, None, True, 0, None, None,
+                                     ctypes.byref(startup), ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if kernel.WaitForSingleObject(wintypes.HANDLE(info.hProcess), 120000) != 0:
+                raise RuntimeError("isolated desktop fixture did not exit")
+            code = wintypes.DWORD()
+            if not kernel.GetExitCodeProcess(wintypes.HANDLE(info.hProcess), ctypes.byref(code)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return code.value
+        finally:
+            kernel.CloseHandle(wintypes.HANDLE(info.hThread))
+            kernel.CloseHandle(wintypes.HANDLE(info.hProcess))
+    finally:
+        user.SwitchDesktop(previous)
+        user.CloseDesktop(desktop)
+        user.CloseDesktop(previous)
+
+
 if __name__ == "__main__":
     if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.name != "nt":
         raise SystemExit("Requires an isolated hosted Windows desktop")
+    if "--desktop-ready" not in sys.argv and os.environ.get("RUNNER_ARCH") == "ARM64":
+        raise SystemExit(isolated_desktop())
     ctypes.WinDLL("user32").SetProcessDPIAware()
     with tempfile.TemporaryDirectory(prefix="pebrel-codex-close-", ignore_cleanup_errors=True) as test_dir:
         run(sys.argv[1], Path(test_dir))
