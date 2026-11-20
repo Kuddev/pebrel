@@ -1,3 +1,4 @@
+pub(crate) mod instance;
 #[cfg(target_os = "macos")]
 #[path = "portable.rs"]
 mod portable;

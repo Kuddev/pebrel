@@ -109,6 +109,7 @@ mod profile_launch;
 mod prompt_suggestions;
 mod provider_test;
 mod proxy_test;
+mod recent_output;
 mod remote_dirs;
 mod render_cache;
 #[cfg(feature = "legacy-shell")]
@@ -212,6 +213,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Load command line options.
     let options = Options::new();
+    #[cfg(feature = "gpui-shell")]
+    platform::startup::instance::initialize(options.new_instance);
     let startup = platform::startup::prepare_data(&options).and_then(|launch| {
         use platform::startup::Launch;
         match launch {
@@ -599,7 +602,7 @@ fn wants_gpui_shell(options: &Options) -> bool {
 /// 驻留进程，再 `tab.new`。GPUI 与 winit 共用，避免第二份进程无声退出。
 #[cfg(windows)]
 fn try_hand_over_to_resident(options: &Options) -> bool {
-    if platform::elevation::requires_isolation() {
+    if platform::startup::instance::is_private() {
         return false;
     }
     let terminal_options = &options.window_options.terminal_options;

@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::platform::elevation::handover::{Dispatch, Request};
-use crate::session::LaunchSession;
 
 pub(super) fn dispatch(request: Arc<Dispatch>, cx: &mut App) {
     request.run(|request| open(request, cx).map(|_| ()).map_err(|error| error.message));
@@ -46,7 +45,9 @@ fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
     };
     let (launch, cwd) = match startup {
         WorkspaceStartup::LaunchTerminal { launch, cwd } => (launch, cwd),
-        WorkspaceStartup::NewTerminal { cwd } => (LaunchSession::Default, cwd),
+        WorkspaceStartup::NewTerminal { cwd } => {
+            (super::super::shell_launch::configured_at(cx, cwd.as_deref()), cwd)
+        },
         _ => return Err(ApiError::new("invalid_startup", "handover cannot restore a session")),
     };
     let workspace = target.workspace.clone();
@@ -70,6 +71,7 @@ mod tests {
     use super::*;
     use crate::config::ui_config::Program;
     use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+    use crate::session::LaunchSession;
 
     fn configure(behavior: &str) {
         let path = pebrel_settings::settings_path();
