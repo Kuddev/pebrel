@@ -313,3 +313,47 @@ fn cli_directory_is_interpreted_by_the_residents_default_or_imported_program(
         }
     });
 }
+
+#[gpui::test]
+fn elevated_directory_handover_uses_the_imported_default_profile(cx: &mut TestAppContext) {
+    use crate::platform::elevation::handover::{Dispatch, Request};
+    use crate::session::LaunchSession;
+
+    if isolated("elevated_directory_handover_uses_the_imported_default_profile") {
+        return;
+    }
+    let root = crate::platform::profile_test_isolation::root();
+    let mut profile = imported_profile(&root, "pwsh.exe");
+    profile.shell_id = Some("pwsh".into());
+    let mut store = crate::terminal_profiles::TerminalProfiles::default();
+    store.upsert(profile.clone()).unwrap();
+    store.save().unwrap();
+    configure("use_any_existing");
+    initialize_test(cx);
+    cx.update(|cx| {
+        let (_, workspace) = open_test_window(cx, 0);
+        let mut settings =
+            crate::gpui_shell::config::Settings::load(pebrel_settings::ThemeName::Nord);
+        settings.shell_id = Some(format!("profile:pwsh|{}", profile.id));
+        cx.set_global(settings);
+        let (dispatch, reply) = Dispatch::new(Request {
+            cwd: Some(root.clone()),
+            command: None,
+            shell_id: None,
+            update_restore: None,
+        });
+        dispatch_shell_events(vec![GpuiShellEvent::ElevatedLaunch(dispatch)], cx);
+        reply.try_recv().unwrap().unwrap();
+        let workspace = workspace.read(cx);
+        let metadata = workspace.meta(workspace.active);
+        let Some(LaunchSession::Profile { command, args, profile_id, cwd, .. }) = &metadata.launch
+        else {
+            panic!("elevated directory launch lost the imported profile")
+        };
+        assert_eq!(profile_id.as_deref(), Some(profile.id.as_str()));
+        assert_eq!(command, profile.command.to_str().unwrap());
+        assert_eq!(args, &profile.args);
+        assert_eq!(cwd.as_deref(), root.to_str());
+        assert_eq!(metadata.shell_tag.as_deref(), Some("pwsh"));
+    });
+}

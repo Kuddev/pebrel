@@ -75,6 +75,7 @@ impl TerminalView {
             return false;
         }
         self.agent_activity.apply_hook(event);
+        self.observe_agent_image_lifetime(event, cx);
         if matches!(
             event.kind,
             AiHookKind::SessionStart

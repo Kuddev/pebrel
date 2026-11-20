@@ -79,7 +79,7 @@ class StableReleaseTests(unittest.TestCase):
     def release_job_runs(
         self, workflow: str, job: str, results: dict[str, str], include_android: str,
         *, cancelled: bool = False, windows_only: bool = False,
-        event: str = "workflow_dispatch", publish: bool = False,
+        event: str = "workflow_dispatch", publish: bool = False, ref_type: str = "tag",
     ) -> bool:
         section = workflow.split(f"\n  {job}:\n", 1)[1]
         guard = section.split("if:", 1)[1].split("\n    needs:", 1)[0]
@@ -89,6 +89,7 @@ class StableReleaseTests(unittest.TestCase):
         values = {
             "cancelled()": repr(cancelled), "inputs.windows_only": repr(windows_only),
             "inputs.publish": repr(publish), "github.event_name": repr(event),
+            "github.ref_type": repr(ref_type),
             "needs.prepare.outputs.include_android": repr(include_android),
         }
         values.update({f"needs.{name}.result": repr(value) for name, value in results.items()})
@@ -192,6 +193,8 @@ class StableReleaseTests(unittest.TestCase):
             for status in ("failure", "skipped", "cancelled"):
                 with self.subTest(publication_dependency=job, status=status):
                     self.assertFalse(self.release_job_runs(workflow, "publish", {**verified, job: status}, "false", publish=True))
+        self.assertFalse(self.release_job_runs(workflow, "publish", verified, "false", event="push", ref_type="branch"))
+        self.assertTrue(self.release_job_runs(workflow, "publish", verified, "false", event="push", ref_type="branch", publish=True))
         self.assertFalse(self.release_job_runs(workflow, "publish", verified, "false", publish=True, cancelled=True))
         self.assertFalse(self.release_job_runs(workflow, "publish", verified, "false", publish=True, windows_only=True))
 
