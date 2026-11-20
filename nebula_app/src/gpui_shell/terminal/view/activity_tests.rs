@@ -431,6 +431,27 @@ fn ssh_shell_prompt_return_clears_a_command_without_a_done_marker(cx: &mut TestA
     });
 }
 
+#[gpui::test]
+fn ssh_clock_prompt_clears_codex_identity_after_exit_without_hooks(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.ssh_destination = Some("dev@fixture".into());
+        view.suggest.suggest_env =
+            crate::display::SuggestEnv::Ssh { destination: "dev@fixture".into() };
+        view.suggest.last_committed = "codex".into();
+        view.suggest.pending_command_prompt = Some("[08:19:10] dev@fixture:~$".into());
+        view.on_command_start(cx);
+        assert_eq!(view.runtime_agent().unwrap().kind, "codex");
+        screen(view, "[08:19:12] dev@other:~$ ");
+        view.refresh_agent_screen_state(cx);
+        assert!(view.runtime_agent().is_some());
+        screen(view, "[08:19:13] dev@fixture:~$ ");
+        view.refresh_agent_screen_state(cx);
+        assert!(view.runtime_agent().is_none());
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+    });
+}
+
 /// SSH pane 里 agent 的两个会话周期：退出后再次启动，新 CLI 进程的
 /// SessionStart 必须重新建立身份（图标/状态/摘要的输入），无论上一个会话的
 /// 收尾事件是否完整到达（SessionEnd 在 bridge 通道上有真实丢失路径）。

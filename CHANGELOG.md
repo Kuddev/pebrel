@@ -28,6 +28,7 @@ macOS, Linux, and Android downloads are Preview builds.
 - Fixed delegated Claude Code tasks reporting that no final message was available even when Claude supplied an answer.
 - Fixed a reply from a worker’s previous turn being returned for a newly delegated task.
 - Fixed WSL worker replies failing to reach the pane that delegated the task.
+- Fixed SSH panes retaining the Codex identity after exit when the remote Bash prompt displayed a changing clock.
 
 ### 中文
 
@@ -39,6 +40,7 @@ macOS、Linux 和 Android 下载为预览版。
 - 修复 Claude Code 已经给出最终答复，发起委派的窗格却显示没有最终消息的问题。
 - 修复新任务刚被委派时，调用方可能收到上一轮答复的问题。
 - 修复 WSL 中的 Agent 完成任务后，发起委派的窗格收不到答复的问题。
+- 修复远端 Bash 提示符的时钟变化后，退出 Codex 的 SSH 窗格仍显示 Codex 身份的问题。
 
 ### Contributors
 
