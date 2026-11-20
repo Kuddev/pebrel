@@ -67,3 +67,34 @@ fn accepted_sftp_can_reopen_on_the_original_pane_transport() {
         fixture.forget(&acquired.session).await;
     });
 }
+
+#[test]
+fn clipboard_channel_retries_on_the_same_live_pane() {
+    check(async {
+        let fixture = Fixture::new(Mode::BusyFirstSftpChannel).await;
+        let acquired = fixture.connect().await;
+        let (_scope, pane) =
+            super::super::super::pane_connection::PaneConnectionScope::new(&acquired.session);
+        pane.open_sftp().await.unwrap().close().await.unwrap();
+        assert!(Arc::ptr_eq(&acquired.session, &fixture.connect().await.session));
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn directory_connection_recovers_from_a_pooled_transport_refusing_channels() {
+    check(async {
+        let fixture = Fixture::new(Mode::BusyFirstSftpTransport).await;
+        let first = fixture.connect().await;
+        super::super::super::sftp::open_on_route(&fixture.route)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+        let replacement = fixture.connect().await;
+        assert!(!Arc::ptr_eq(&first.session, &replacement.session));
+        assert!(!first.session.is_closed());
+        fixture.forget(&replacement.session).await;
+    });
+}

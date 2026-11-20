@@ -161,6 +161,11 @@ impl TerminalView {
         {
             cx.emit(TerminalViewEvent::Notification(notification));
         }
+        // An unaddressed native hook can update the focused pane, but cannot
+        // identify a delegated worker. The OSC parser supplies its receiving pane.
+        if event.kind == AiHookKind::TurnDone && event.pane == Some(self.pane_id) {
+            cx.emit(TerminalViewEvent::AiTurnDone(std::sync::Arc::new(event.clone())));
+        }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
         true
