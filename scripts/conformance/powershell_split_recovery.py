@@ -54,6 +54,7 @@ def split_leaves(ctx):
 
 
 def shell_command(ctx, pane, command):
+    ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": pane})
     ctx.prompt(command, pane, submit=False)
     # Native ConPTY can present the prompt before PSReadLine accepts Enter.
     ctx.poll(lambda: command[-14:] in "".join(ctx.read(pane)["text"].splitlines()),
@@ -65,11 +66,15 @@ def shell_reply(ctx, pane):
     ctx.poll(lambda: ctx.read(pane)["text"][-500:],
              lambda tail: bool(re.search(r"(?m)^\s*PS [^\r\n]*>\s*$", tail)),
              "the split did not display a ready PowerShell prompt", timeout=35)
-    marker = uuid4().hex[:8]
-    shell_command(ctx, pane, f"Write-Output ('{marker}-' + $PSVersionTable.PSVersion.Major)")
-    output = re.compile(r"(?m)^\s*" + marker + r"-5\s*$")
-    ctx.poll(lambda: ctx.read(pane)["text"][-800:], output.search,
-             "Windows PowerShell did not execute the marker", timeout=18)
+    marker = uuid4().hex[:8] + ".txt"
+    shell_command(ctx, pane, f"$PSVersionTable.PSVersion.Major > {marker}")
+    path = ctx.work_dir / marker
+    def reply():
+        try:
+            return path.read_text(encoding="utf-16").strip()
+        except (OSError, UnicodeError):
+            return None
+    ctx.poll(reply, lambda version: version == "5", "PowerShell did not write its version", timeout=20)
 
 
 def saved_agents(ctx):
@@ -120,13 +125,15 @@ def run(executable, root, port):
             shell_reply(ctx, pane)
         marker = "qa-split-" + uuid4().hex[:8]
         shell_command(ctx, top, f"$env:CODEX_HOME={quote(home)}")
-        shell_command(ctx, top, f"& {quote(cli)} --no-daemon {marker}")
+        shell_command(ctx, top, f"$env:Path={quote(str(cli.parent) + chr(59))} + $env:Path")
+        shell_command(ctx, top, f"codex --no-daemon {marker}")
         native = ctx.poll(lambda: provider_id(home, marker), bool, "native ID missing", timeout=45)
         ctx.poll(lambda: saved_agents(ctx), lambda a: a and a[0] and a[0].get("source") == "codex"
                  and a[0].get("session_id") == native and not a[1],
                  "Codex did not bind to its own leaf", timeout=65)
         shell_reply(ctx, bottom)
         ctx.poll(lambda: "Fixture reply." in ctx.read(top)["text"], bool, "model reply missing")
+        ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": top})
         ctx.prompt("/exit", top)
         ctx.poll(lambda: saved_agents(ctx), lambda a: a == [None, None],
                  "exited Codex remained in the snapshot", timeout=35)
@@ -139,6 +146,13 @@ def run(executable, root, port):
             shell_reply(ctx, pane)
         assert saved_agents(ctx) == [None, None]
         print("Verified the native ID, shell-only sibling, clean WM_CLOSE and both restored shells.", flush=True)
+    except Exception:
+        for window in ctx.snapshot().get("windows", []):
+            for tab in window["tabs"]:
+                for pane in tab["panes"]:
+                    print("Fixture pane", pane.get("id"), "foreground", pane.get("foreground"),
+                          "agent", pane.get("agent"), flush=True)
+        raise
     finally:
         ctx.stop(force=True)
         app.close()
