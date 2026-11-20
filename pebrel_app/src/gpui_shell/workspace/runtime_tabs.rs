@@ -49,7 +49,7 @@ impl WorkspaceTab {
 }
 
 impl NebulaWorkspace {
-    fn runtime_tab_index(&self, id: &str) -> Result<usize, ApiError> {
+    pub(super) fn runtime_tab_index(&self, id: &str) -> Result<usize, ApiError> {
         self.tab_meta.iter().position(|meta| meta.runtime_id.0 == id).ok_or_else(|| {
             ApiError::new(
                 "target_not_found",

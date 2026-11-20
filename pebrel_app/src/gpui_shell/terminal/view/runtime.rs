@@ -1,5 +1,7 @@
 //! GPUI 终端对 Runtime API 暴露的读取、输入与任务状态边界。
 
+mod codex_checkpoint;
+
 use gpui::{Context, EventEmitter as _, Window, px};
 use pebrel_terminal::grid::Dimensions as _;
 use pebrel_terminal::index::{Column, Line, Point as TermPoint};
@@ -640,14 +642,13 @@ impl TerminalView {
         }
         let bytes =
             crate::input::terminal_input::build_runtime_text_sequence(&command, self.term_mode());
-        let submit_bytes = self.runtime_key_sequence(
+        self.runtime_key_sequence(
             crate::runtime_api::RuntimeKey::Enter,
             crate::runtime_api::RuntimeKeyModifiers::default(),
             1,
         )?;
         self.pending_runtime_submit = Some(crate::display::state::RuntimeSubmitBarrier {
             baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
-            submit_bytes,
         });
         self.capture_runtime_prompt();
         let run = crate::runtime_api::begin_runtime_run();
@@ -719,7 +720,6 @@ impl TerminalView {
             } else {
                 self.pending_runtime_submit = Some(crate::display::state::RuntimeSubmitBarrier {
                     baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
-                    submit_bytes,
                 });
             }
         }
@@ -853,14 +853,13 @@ impl TerminalView {
         let codex_submit =
             submit && self.runtime_agent().is_some_and(|agent| agent.kind == "codex");
         if submit && !codex_submit {
-            let submit_bytes = self.runtime_key_sequence(
+            self.runtime_key_sequence(
                 crate::runtime_api::RuntimeKey::Enter,
                 crate::runtime_api::RuntimeKeyModifiers::default(),
                 1,
             )?;
             self.pending_runtime_submit = Some(crate::display::state::RuntimeSubmitBarrier {
                 baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
-                submit_bytes,
             });
         }
         if codex_submit {
@@ -887,101 +886,6 @@ impl TerminalView {
     pub fn ai_fork_command(&self) -> Option<String> {
         let identity = self.ai_session.as_ref()?;
         crate::ai_agents::AgentKind::parse(&identity.source)?.fork_command(&identity.session_id)
-    }
-
-    pub(crate) fn prepare_ai_session_save(&mut self, cx: &mut Context<Self>) {
-        // A refresh may fail or time out. Keep the last confirmed native ID.
-        self.last_ai_session_probe = None;
-        self.probe_missing_codex_session(cx);
-    }
-
-    pub(crate) fn ai_session_save_pending(&self) -> bool {
-        // A failed refresh cannot erase an already durable identity. Pi/Codex
-        // without any native target must finish identifying before safe exit.
-        self.ai_session_probe_pending
-            || self.session_agent().is_some_and(|agent| {
-                matches!(agent.source.as_str(), "pi" | "codex")
-                    && agent.session_id.as_deref().is_none_or(str::is_empty)
-            })
-    }
-
-    /// Read the active conversation metadata when its hook has not reported an ID.
-    /// File and process operations run on the background executor. Only results
-    /// for the same foreground command and unchanged identity are applied.
-    pub(super) fn probe_missing_codex_session(&mut self, cx: &mut Context<Self>) {
-        if self.exited.is_some()
-            || self.ai_session_probe_pending
-            || self.ssh_destination.is_some()
-            || !self
-                .running_program
-                .as_deref()
-                .and_then(crate::ai_agents::AgentKind::parse)
-                .is_some_and(|agent| agent == crate::ai_agents::AgentKind::Codex)
-        {
-            return;
-        }
-        if self.last_ai_session_probe.is_some_and(|at| {
-            at.elapsed()
-                < std::time::Duration::from_secs(if self.ai_session.is_some() { 10 } else { 2 })
-        }) {
-            return;
-        }
-        let Some(exec_context) = self.exec_context.clone() else { return };
-        let epoch = self.ai_session_probe_epoch;
-        let pane_id = self.pane_id;
-        let shell_pid = self.session.as_ref().map(|session| session.shell_pid);
-        let previous_target = self.session_agent();
-        self.ai_session_probe_pending = true;
-        self.last_ai_session_probe = Some(std::time::Instant::now());
-        let work = cx.background_executor().spawn(async move {
-            crate::platform::ai_session_identity::probe_codex_session(
-                pane_id,
-                Some(&exec_context),
-                shell_pid,
-            )
-        });
-        cx.spawn(async move |this, cx| {
-            let session_id = work.await;
-            let _ = this.update(cx, |view, cx| {
-                if view.ai_session_probe_epoch == epoch {
-                    view.ai_session_probe_pending = false;
-                }
-                if !probe_result_is_current(
-                    view.ai_session_probe_epoch,
-                    epoch,
-                    view.session_agent() != previous_target,
-                    view.running_program.as_deref(),
-                ) {
-                    return;
-                }
-                if let Some(session) = session_id {
-                    log::debug!("agent session identity from active rollout: pane={pane_id}");
-                    let target = crate::session::AgentSession {
-                        source: "codex".to_owned(),
-                        session_id: Some(session.session_id.clone()),
-                        session_file: Some(session.session_file),
-                    };
-                    let previous = view.recovery.target.clone();
-                    if !view.recovery.confirm(target) {
-                        return;
-                    }
-                    if previous != view.recovery.target {
-                        cx.emit(TerminalViewEvent::SessionIdentityChanged);
-                    }
-                    view.ai_session = Some(crate::display::AiSessionIdentity {
-                        source: "codex".to_owned(),
-                        session_id: session.session_id,
-                    });
-                    if let Some(cwd) = session.cwd {
-                        view.process_event(pebrel_terminal::event::Event::CwdReport(cwd), cx);
-                    }
-                    view.ai_session_from_probe = true;
-                    cx.emit(TerminalViewEvent::TitleChanged);
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
     }
 
     pub(super) fn sync_native_prompt(&mut self) {
@@ -1356,8 +1260,14 @@ impl TerminalView {
         if screen == pending.baseline_screen {
             return;
         }
-        let pending = self.pending_runtime_submit.take().expect("checked above");
-        self.write_input(pending.submit_bytes, cx);
+        // A cold CLI can negotiate a different keyboard protocol while its
+        // text is being echoed. Encode Enter at delivery, never at queuing.
+        let submit_bytes = crate::input::terminal_input::build_runtime_deferred_submission(
+            self.running_program.as_deref(),
+            self.term_mode(),
+        );
+        self.pending_runtime_submit = None;
+        self.write_input(submit_bytes, cx);
     }
 }
 
