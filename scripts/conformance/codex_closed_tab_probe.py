@@ -94,7 +94,7 @@ def run(executable, root):
                              root / "evidence", startup_timeout=50)
     ctx.prepare()
     with (ctx.config_dir / "pebrel_settings.txt").open("a", encoding="utf-8") as settings:
-        settings.write("\nshell=pwsh\nresume_ai=1\n")
+        settings.write("\nshell=cmd\nresume_ai=1\n")
     def stored_names():
         return [tab.get("custom_name") for tab in json.loads(ctx.session_file.read_text(encoding="utf-8"))["tabs"]]
     def live_names():
@@ -103,14 +103,13 @@ def run(executable, root):
         ctx.start()
         ctx.refresh_targets()
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 0, "name": "keep-this-shell"})
-        ctx.api("tab.new", {"window_id": ctx.window_id})
-        ctx.refresh_targets()
+        created = ctx.api("tab.new", {"window_id": ctx.window_id, "shell": "cmd"})
+        ctx.pane_id = created["pane_id"]
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 1, "name": "closed-codex"})
-        ctx.prompt("Write-Output ('CLOSE-' + 'FIXTURE-READY')")
-        ctx.poll(lambda: ctx.read(lines=20)["text"], lambda t: "CLOSE-FIXTURE-READY" in t,
-                 "PowerShell did not start in the new tab", timeout=25)
+        ctx.poll(lambda: ctx.read(lines=15)["text"], lambda text: ">" in text,
+                 "cmd did not display its prompt in the target pane", timeout=25)
         binary = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
-        ctx.prompt("& '" + str(binary).replace("'", "''") + "'")
+        ctx.prompt(f'"{binary}"')
         def running():
             rows = ctx.api("agents.list", {}).get("agents", [])
             return next((row["agent"] for row in rows if row["pane_id"] == ctx.pane_id
