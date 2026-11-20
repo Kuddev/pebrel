@@ -28,7 +28,11 @@ pub(crate) struct CompletionContext {
 
 impl CompletionContext {
     pub(crate) fn owns_current(&self, token: &str) -> bool {
-        self.frames.last().is_some_and(|frame| frame.token.as_deref() == Some(token))
+        self.current_shell_token() == Some(token)
+    }
+
+    pub(crate) fn current_shell_token(&self) -> Option<&str> {
+        self.frames.last()?.token.as_deref()
     }
 
     fn submit(&mut self, env: &SuggestEnv, cwd: &str, line: &str) -> Option<SuggestEnv> {
