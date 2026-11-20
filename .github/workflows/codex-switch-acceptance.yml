@@ -1,0 +1,57 @@
+name: Verify native Codex thread checkpoints on Windows
+on:
+  push:
+    branches: [qa/codex-switch-fixed-win-1120]
+permissions:
+  contents: read
+jobs:
+  recovery:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: x64
+            codex: x86_64
+            cli_hash: 94b51ca84648a6923784ef71f06e2feb1e10796ddb3f5d033ccb0fbe8daa2f16
+          - os: windows-11-arm
+            arch: arm64
+            codex: aarch64
+            cli_hash: c437e561e756477c5cbef0e8f99d17761cc59ef87ca5567f2a00a8964ec131cf
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the GPUI client and its native hook
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture ${{ matrix.arch }}
+          cargo build --locked --release -p pebrel --bin pebrel -p pebrel_hook --bin pebrel-hook --features pebrel/gpui-shell
+      - name: Compare the two native threads across /new
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP codex-close
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $cli = "https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-${{ matrix.codex }}-pc-windows-msvc.exe.zip"
+          $zip = Join-Path $root "cli.zip"
+          curl.exe --fail --location --retry 3 --silent --show-error --output $zip $cli
+          if ($LASTEXITCODE -or (Get-FileHash $zip).Hash -ne "${{ matrix.cli_hash }}") { throw "CLI verification failed" }
+          Expand-Archive $zip (Join-Path $root "cli")
+          $native = Get-ChildItem "$root/cli" -Filter 'codex-*-pc-windows-msvc.exe' -Recurse | Select-Object -First 1
+          Copy-Item $native.FullName "$root/cli/codex.exe"
+          $env:PEBREL_QA_CODEX_BIN = "$root/cli/codex.exe"
+          & $env:PEBREL_QA_CODEX_BIN --version
+          if ($LASTEXITCODE) { throw "Codex executable did not run" }
+          $env:Path = "$root/cli;" + $env:Path
+          $exe = (Resolve-Path target/release/pebrel.exe).Path
+          python scripts/conformance/windows_standard_user.py scripts/conformance/codex_identity_pair_probe.py $exe
+          exit $LASTEXITCODE
