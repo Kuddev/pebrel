@@ -1,5 +1,7 @@
 """Compare two real Codex TUIs with their native history on an isolated Windows desktop."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -143,7 +145,7 @@ def verify_standalone(executable, root):
                   flush=True)
             assert outcome == "current", "did not checkpoint the current native Codex thread"
 
-            ctx.close_and_wait(timeout=18)
+            confirm_native_window_close(ctx)
             assert saved_ids() == {"qa-alpha": second, "qa-bravo": expected["qa-bravo"]}
             ctx.start(explicit_working_directory=False)
             ctx.refresh_targets()
@@ -167,9 +169,139 @@ def verify_standalone(executable, root):
         server.server_close()
 
 
+def confirm_native_window_close(ctx):
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                         wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                         ctypes.POINTER(ctypes.c_size_t)]
+    user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    pid = ctx.snapshot()["process_id"]
+    windows = []
+
+    @callback
+    def collect(hwnd, _):
+        owner = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user.IsWindowVisible(hwnd):
+            windows.append(hwnd)
+        return True
+
+    user.EnumWindows(collect, 0)
+    if len(windows) != 1:
+        raise RuntimeError(f"Expected one visible test window, found {len(windows)}")
+    hwnd = windows[0]
+    ctx.api("window.focus", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
+    from PIL import ImageGrab
+    rect = wintypes.RECT()
+    origin = wintypes.POINT()
+    user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    if not user.GetClientRect(hwnd, ctypes.byref(rect)) or not user.ClientToScreen(hwnd, ctypes.byref(origin)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    box = (origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom)
+    before = ImageGrab.grab(bbox=box)
+    result = ctypes.c_size_t()
+    if not user.SendMessageTimeoutW(hwnd, 0x0010, 0, 0, 0x0002, 5000, ctypes.byref(result)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    # The GPUI busy-window dialog uses a wide red confirmation button to the
+    # right of Cancel. Wait for it to render and settle before clicking.
+    def find_confirm():
+        frame = ImageGrab.grab(bbox=box)
+        width, height = frame.size
+        rows = []
+        for y in range(height // 2 - 12, min(height, height // 2 + 180), 2):
+            hits = []
+            for x in range(width // 2, min(width, width // 2 + 320), 3):
+                color = frame.getpixel((x, y))[:3]
+                r, g, b = color
+                if r > g + 38 and r > b + 27 and color != before.getpixel((x, y))[:3]:
+                    hits.append(x)
+            if len(hits) >= 28 and hits[-1] - hits[0] < len(hits) * 4:
+                rows.append(((hits[-1] + hits[0]) // 2, y))
+        return rows[len(rows) // 2] if len(rows) >= 8 else None
+
+    def settled_button():
+        point = find_confirm()
+        if point:
+            time.sleep(0.22)
+            if point == find_confirm():
+                return point
+        return None
+
+    x, y = ctx.poll(settled_button, bool, "busy-window Close button did not render", timeout=15)
+    location = y << 16 | x
+    for message, flags in [(0x0200, 0), (0x0201, 1), (0x0202, 0)]:
+        if not user.SendMessageTimeoutW(hwnd, message, flags, location, 0x0002, 5000, ctypes.byref(result)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    print("Clicked the rendered busy-window Close button.", flush=True)
+    if ctx.process.wait(timeout=20) != 0:
+        raise RuntimeError("The window closed with an unsuccessful process exit")
+    if not json.loads(ctx.session_file.read_text(encoding="utf-8")).get("clean_exit"):
+        raise RuntimeError("Window exit did not persist a clean session")
+    ctx.stop(force=True)
+
+
+def isolated_desktop():
+    # The ARM image can start with a full-screen Windows setup page. Run only
+    # the fixture on a fresh desktop and return to the previous desktop on exit.
+    import subprocess
+    from conformance.windows_standard_user import StartupInfo, ProcessInfo
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.CreateDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+    user.CreateDesktopW.restype = wintypes.HANDLE
+    user.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user.OpenInputDesktop.restype = wintypes.HANDLE
+    user.SwitchDesktop.argtypes = user.CloseDesktop.argtypes = [wintypes.HANDLE]
+    name = "PebrelRecovery" + str(os.getpid())
+    previous = user.OpenInputDesktop(0, False, 0x100)
+    if not previous:
+        raise ctypes.WinError(ctypes.get_last_error())
+    desktop = user.CreateDesktopW(name, None, None, 0, 0x1FF, None)
+    if not desktop:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if not user.SwitchDesktop(desktop):
+            raise ctypes.WinError(ctypes.get_last_error())
+        startup = StartupInfo()
+        startup.cb = ctypes.sizeof(startup)
+        startup.lpDesktop = "winsta0\\" + name
+        startup.dwFlags = 0x100
+        kernel.GetStdHandle.restype = wintypes.HANDLE
+        startup.hStdInput, startup.hStdOutput, startup.hStdError = [kernel.GetStdHandle(i) for i in (-10,-11,-12)]
+        info = ProcessInfo()
+        args = [sys.executable, __file__, sys.argv[1], "--desktop-ready"]
+        command = ctypes.create_unicode_buffer(subprocess.list2cmdline(args))
+        if not kernel.CreateProcessW(sys.executable, command, None, None, True, 0, None, None,
+                                     ctypes.byref(startup), ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if kernel.WaitForSingleObject(wintypes.HANDLE(info.hProcess), 240000) != 0:
+                raise RuntimeError("isolated desktop fixture did not exit")
+            code = wintypes.DWORD()
+            if not kernel.GetExitCodeProcess(wintypes.HANDLE(info.hProcess), ctypes.byref(code)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return code.value
+        finally:
+            kernel.CloseHandle(wintypes.HANDLE(info.hThread))
+            kernel.CloseHandle(wintypes.HANDLE(info.hProcess))
+    finally:
+        user.SwitchDesktop(previous)
+        user.CloseDesktop(desktop)
+        user.CloseDesktop(previous)
+
+
 if __name__ == "__main__":
     from tempfile import TemporaryDirectory
     if os.name != "nt" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise SystemExit("Requires an isolated hosted Windows runner")
+    if "--desktop-ready" not in sys.argv and os.environ.get("RUNNER_ARCH") == "ARM64":
+        raise SystemExit(isolated_desktop())
+    ctypes.WinDLL("user32").SetProcessDPIAware()
     with TemporaryDirectory(prefix="pebrel-checkpoint-", ignore_cleanup_errors=True) as directory:
         verify_standalone(sys.argv[1], Path(directory))

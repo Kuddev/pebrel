@@ -27,6 +27,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - run: python -m pip install Pillow==11.3.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
