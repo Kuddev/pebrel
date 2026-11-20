@@ -126,6 +126,22 @@ def stream_state(token, identity):
             yield state
 
 
+def completion_field(source, native, payload):
+    if (source == "claude" or native) and payload.get("hook_event_name") == "Stop":
+        return "last_assistant_message"
+    if source == "codex" and not native and payload.get("type") == "agent-turn-complete":
+        return "last-assistant-message"
+    if source in ("opencode", "pi") and payload.get("kind") == "done":
+        return "message"
+    return None
+
+
+def encode_envelope(header, payload):
+    return header.encode() + b"\n" + json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+
 def send(source, native, mode, payload, token, owner=None, route=None, deadline=None):
     owner = owner or process_identity(source)
     with stream_state(token, owner or source) as state:
@@ -146,18 +162,22 @@ def send(source, native, mode, payload, token, owner=None, route=None, deadline=
             header += " tmux=" + route["context"]
         if native:
             header += " codex_hooks=" + mode.split("=", 1)[1]
-        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        envelope = header.encode() + b"\n" + encoded
+        envelope = encode_envelope(header, payload)
         if len(envelope) > MAX_ENVELOPE:
-            # Lifecycle must still arrive when a tool or answer is huge. Keep
-            # protocol identities and drop content, without inventing a result.
             keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
-            question_input = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
-            tool_name = payload.get("tool_name")
-            payload = {key: payload[key] for key in keep if key in payload}
-            if question_input is not None:
-                payload.update(tool_name=tool_name, tool_input=question_input)
-            envelope = header.encode() + b"\n" + json.dumps(payload, separators=(",", ":")).encode()
+            compact = {key: payload[key] for key in keep if key in payload}
+            if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") and payload.get("tool_input") is not None:
+                compact.update(tool_name=payload["tool_name"], tool_input=payload["tool_input"])
+            if source == "opencode" and payload.get("outcome") in ("succeeded", "failed", "cancelled"):
+                compact["outcome"] = payload["outcome"]
+            envelope = encode_envelope(header, compact)
+            field = completion_field(source, native, payload)
+            answer = payload.get(field)
+            if field and isinstance(answer, str) and len(answer) <= MAX_ENVELOPE - len(envelope):
+                compact[field] = answer
+                with_answer = encode_envelope(header, compact)
+                if len(with_answer) <= MAX_ENVELOPE:
+                    envelope = with_answer
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"

@@ -115,6 +115,10 @@ impl RawSettings {
             .filter(|value| !value.is_empty())
     }
 
+    pub fn command_history_persists(&self) -> bool {
+        self.bool_on("command_history_persist").unwrap_or(true)
+    }
+
     pub fn f32(&self, key: &str) -> Option<f32> {
         self.value(key)?.parse().ok()
     }
@@ -658,32 +662,7 @@ impl CompletionStyleName {
 }
 
 #[cfg(test)]
-mod completion_mode_tests {
-    use super::*;
-
-    #[test]
-    fn modes_round_trip_preserve_other_settings_and_reset_to_inline() {
-        for mode in CompletionStyleName::ALL {
-            let input = "accept=right\nunknown=keep\ncompletion_style=inline\n";
-            let saved = apply_updates(input, &[("completion_style", mode.settings_value().into())]);
-            assert_eq!(
-                RuntimeSettings::from_raw(&RawSettings::from_text(&saved)).completion_style,
-                mode
-            );
-            assert!(saved.contains("unknown=keep"));
-            assert!(saved.contains("accept=right"));
-            assert_eq!(CompletionStyleName::from_settings(mode.settings_value()), Some(mode));
-        }
-        assert_eq!(CompletionStyleName::Hybrid.cycle(), CompletionStyleName::Inline);
-        assert_eq!(CompletionStyleName::from_settings("ghost"), Some(CompletionStyleName::Inline));
-        assert_eq!(CompletionStyleName::from_settings("list"), Some(CompletionStyleName::Popup));
-        assert_eq!(
-            RuntimeSettings::from_raw(&RawSettings::from_text("completion_style=invalid"))
-                .completion_style,
-            CompletionStyleName::Inline
-        );
-    }
-}
+mod completion_mode_tests;
 
 /// 标签栏位置。这里只提供产品当前支持的两种布局，避免把设置扩成未实现的
 /// 通用停靠系统。
@@ -1060,6 +1039,9 @@ pub struct RuntimeSettings {
     pub ghost: bool,
     pub accept: AcceptKeyName,
     pub completion_style: CompletionStyleName,
+    /// Append submitted commands to `pebrel_history*.jsonl`. Off keeps new commands
+    /// in memory only. Saved history still loads. Restart to apply file edits.
+    pub command_history_persist: bool,
     pub prompt_suggestions: PromptSuggestions,
     /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗）。
     pub cjk_bold_regular: bool,
@@ -1258,6 +1240,7 @@ impl RuntimeSettings {
                 .value("completion_style")
                 .and_then(CompletionStyleName::from_settings)
                 .unwrap_or_default(),
+            command_history_persist: raw.command_history_persists(),
             prompt_suggestions: PromptSuggestions::from_raw(raw),
             cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
             tabs_position: raw
