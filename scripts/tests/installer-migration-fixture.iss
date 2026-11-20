@@ -185,6 +185,39 @@ begin
   Check(FileExists(NewLink), 'shortcut pointing at another program is preserved');
 end;
 
+procedure CheckEditedWslVerbs(ShellRoot, Menu, Executable, DirectoryArgument: string;
+  Distros: TArrayOfString);
+var
+  Depth: Integer;
+  Verb, Flat, Suffix, Value: string;
+  Failed: Boolean;
+begin
+  Verb := Menu + '\shell\PebrelWsl0';
+  Flat := ShellRoot + '\PebrelWslLegacy';
+  for Depth := 0 to 1 do begin
+    if Depth = 0 then Suffix := '\Custom' else Suffix := '\command\Custom';
+    Check(RegWriteStringValue(HKCU, Verb + Suffix, '', 'keep'), 'seed edited cascade verb');
+    Check(RegWriteStringValue(HKCU, Flat + '\command', '',
+      '"' + Executable + '" --gpui --shell "wsl:Old" --working-directory "' +
+      DirectoryArgument + '"'), 'seed legacy verb');
+    Check(RegWriteStringValue(HKCU, Flat + Suffix, '', 'keep'), 'seed edited legacy verb');
+    Failed := False;
+    try
+      RegisterWslContextMenuAt(ShellRoot, Executable, DirectoryArgument, Distros);
+    except
+      Failed := True;
+    end;
+    Check(Failed, 'registration must reject an edited WSL verb');
+    RemoveOwnedWslContextMenusAt(ShellRoot, Executable);
+    Check(RegQueryStringValue(HKCU, Verb + Suffix, '', Value) and (Value = 'keep'),
+      'preserve nested user data inside cascading verbs');
+    Check(RegQueryStringValue(HKCU, Flat + Suffix, '', Value) and (Value = 'keep'),
+      'preserve nested user data inside legacy verbs');
+    Check(RegDeleteKeyIncludingSubkeys(HKCU, Verb + Suffix), 'remove cascade fixture edit');
+    Check(RegDeleteKeyIncludingSubkeys(HKCU, Flat), 'remove legacy fixture edit');
+  end;
+end;
+
 procedure CheckContextMenus(Root: string);
 var
   RegistryRoot, ShellRoot, Executable, Value, Menu, ForeignCommand: string;
@@ -212,6 +245,7 @@ begin
       Check(not RegKeyExists(HKCU, ShellRoot + '\PebrelWsl0'), 'migrate old flat entry');
       Check(RegGetSubkeyNames(HKCU, ShellRoot, Names) and (GetArrayLength(Names) = 3), 'only normal, cascade and foreign roots remain');
       Check(RegGetSubkeyNames(HKCU, Menu + '\shell', Names) and (GetArrayLength(Names) = 3), 'three distros live inside cascade');
+      CheckEditedWslVerbs(ShellRoot, Menu, Executable, Value, Distros);
       Check(RegQueryStringValue(HKCU, Menu, 'SubCommands', Value) and (Value = ''), 'enable static cascade');
       Check(RegQueryStringValue(HKCU, Menu + '\shell\PebrelWsl1\command', '', Value), 'child command exists');
       if Index = 0 then

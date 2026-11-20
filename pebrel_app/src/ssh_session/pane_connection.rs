@@ -29,6 +29,14 @@ impl Drop for PaneConnectionScope {
 }
 
 impl PaneConnection {
+    pub(crate) fn same_scope(&self, other: &Self) -> bool {
+        self.closed.same_channel(&other.closed)
+    }
+
+    pub(crate) fn scope_closed(&self) -> bool {
+        *self.closed.borrow() || self.closed.has_changed().is_err()
+    }
+
     pub(crate) async fn closed(&self) {
         let mut closed = self.closed.clone();
         while !*closed.borrow_and_update() {
