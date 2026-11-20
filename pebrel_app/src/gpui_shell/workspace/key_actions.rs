@@ -1,6 +1,7 @@
 //! Workspace keyboard actions and their tab/focus transitions.
 
 use gpui::{Context, Focusable as _, Window};
+use gpui_component::{Root, WindowExt as _};
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
