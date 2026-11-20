@@ -46,11 +46,21 @@ def close_codex_tab(ctx):
     if not user.GetClientRect(hwnd, ctypes.byref(rect)) or not user.ClientToScreen(hwnd, ctypes.byref(origin)):
         raise ctypes.WinError(ctypes.get_last_error())
     box = (origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom)
-    before = ImageGrab.grab(bbox=box)
     result = ctypes.c_size_t()
+    user.GetForegroundWindow.restype = wintypes.HWND
     user.SetForegroundWindow.argtypes = [wintypes.HWND]
-    user.SetForegroundWindow(hwnd)
+    user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user.ShowWindow(hwnd, 9)
     user.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+    # Windows grants the last input recipient permission to activate another
+    # window. Release Alt, focus the fixture, and verify keyboard ownership.
+    user.keybd_event(0x12, 0, 0, 0)
+    user.keybd_event(0x12, 0, 2, 0)
+    user.SetForegroundWindow(hwnd)
+    ctx.poll(user.GetForegroundWindow, lambda target: target == hwnd,
+             "the fixture window did not acquire keyboard focus", timeout=5)
+    time.sleep(0.3)
+    before = ImageGrab.grab(bbox=box)
     for key in (0x11, 0x10, 0x57):
         user.keybd_event(key, 0, 0, 0)
     for key in (0x57, 0x10, 0x11):
@@ -158,6 +168,10 @@ def run(executable, root):
         ctx.start(explicit_working_directory=False)
         assert live_names() == ["keep-this-shell"], live_names()
         print("Fresh Windows process restored exactly the surviving tab.", flush=True)
+    except Exception:
+        from PIL import ImageGrab
+        ImageGrab.grab().save(Path(os.environ["RUNNER_TEMP"]) / "codex-close-desktop.png")
+        raise
     finally:
         ctx.stop(force=True)
         app.close()
@@ -166,5 +180,6 @@ def run(executable, root):
 if __name__ == "__main__":
     if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.name != "nt":
         raise SystemExit("Requires an isolated hosted Windows desktop")
+    ctypes.WinDLL("user32").SetProcessDPIAware()
     with tempfile.TemporaryDirectory(prefix="pebrel-codex-close-", ignore_cleanup_errors=True) as test_dir:
         run(sys.argv[1], Path(test_dir))
