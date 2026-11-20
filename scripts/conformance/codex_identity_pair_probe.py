@@ -124,6 +124,13 @@ def verify_standalone(executable, root):
                               "no native message after /new", timeout=35)["qa-after-new"]
             assert second != first and footer() == second
             assert tab_and_pane() == initial
+            def print_synthetic_footer():
+                lines = ctx.read(active, 80)["text"].splitlines()
+                rows = [thread_pattern.sub("<native-id>", line.strip()) for line in lines if line.strip()][-6:]
+                print("Synthetic footer rows: " + ascii(rows), flush=True)
+
+            print_synthetic_footer()
+
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 observed = saved_ids()
@@ -131,6 +138,7 @@ def verify_standalone(executable, root):
                     break
                 time.sleep(0.3)
             assert observed.get("qa-bravo") == expected["qa-bravo"]
+            print_synthetic_footer()
             target = observed.get("qa-alpha")
             outcome = "current" if target == second else ("previous" if target == first else "missing-or-other")
             print("Windows /new: tab and pane IDs unchanged, native thread changed, persisted target=" + outcome,
