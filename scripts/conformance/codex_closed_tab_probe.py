@@ -108,7 +108,7 @@ def close_codex_tab(ctx):
     return hwnd
 
 
-def run(executable, root):
+def run(executable, root, *, last_tab):
     app = ResolvedApp(executable)
     ctx = ConformanceContext(app, "windows-x86_64", root / "config", root / "work",
                              root / "evidence", startup_timeout=50)
@@ -127,11 +127,13 @@ def run(executable, root):
         tabs = [{"cwd": str(ctx.work_dir), "custom_name": name, "active_pane": 0,
                  "launch": {**cmd, "args": args}} for name, args in (
                      ("keep-this-shell", ["/D"]), ("closed-codex", ["/D", "/K", str(binary)]))]
+        if last_tab:
+            tabs = tabs[-1:]
         ctx.session_file.write_text(json.dumps({"version": 4, "boot_attempts": 0,
-            "active_tab": 1, "tabs": tabs, "clean_exit": True}), encoding="utf-8")
+            "active_tab": len(tabs) - 1, "tabs": tabs, "clean_exit": True}), encoding="utf-8")
         ctx.start(explicit_working_directory=False)
         ctx.refresh_targets()
-        assert live_names() == ["keep-this-shell", "closed-codex"], live_names()
+        assert live_names() == [tab["custom_name"] for tab in tabs], live_names()
         target = {"window_id": ctx.window_id, "pane_id": ctx.pane_id}
         def processes():
             return [row.get("executable", "") for row in ctx.api("pane.procs", target)["processes"]]
@@ -153,21 +155,29 @@ def run(executable, root):
         ctx.poll(stored_names, lambda names: "closed-codex" in names,
                  "the original Codex tab was never checkpointed")
         hwnd = close_codex_tab(ctx)
-        ctx.poll(live_names, lambda names: names == ["keep-this-shell"],
-                 "tab confirmation did not remove the selected Codex tab")
-        print("Stored names immediately after tab close:", stored_names(), flush=True)
-        user = ctypes.WinDLL("user32", use_last_error=True)
-        user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        if not user.PostMessageW(hwnd, 0x0010, 0, 0):
-            raise ctypes.WinError(ctypes.get_last_error())
+        if not last_tab:
+            ctx.poll(live_names, lambda names: names == ["keep-this-shell"],
+                     "tab confirmation did not remove the selected Codex tab")
+            print("Stored names immediately after tab close:", stored_names(), flush=True)
+            user = ctypes.WinDLL("user32", use_last_error=True)
+            user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            if not user.PostMessageW(hwnd, 0x0010, 0, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
         assert ctx.process.wait(timeout=25) == 0
         assert json.loads(ctx.session_file.read_text(encoding="utf-8"))["clean_exit"]
+        expected = [] if last_tab else ["keep-this-shell"]
         print("Stored names after normal program exit:", stored_names(), flush=True)
-        assert stored_names() == ["keep-this-shell"]
+        assert stored_names() == expected, stored_names()
         ctx.stop(force=True)
         ctx.start(explicit_working_directory=False)
-        assert live_names() == ["keep-this-shell"], live_names()
-        print("Fresh Windows process restored exactly the surviving tab.", flush=True)
+        names = live_names()
+        if last_tab:
+            assert names and "closed-codex" not in names, names
+            ctx.refresh_targets()
+            assert not codex_process(), "explicitly closed Codex relaunched"
+        else:
+            assert names == expected, names
+        print("Fresh Windows process:", names, "last-tab case:", last_tab, flush=True)
     except Exception:
         from PIL import ImageGrab
         ImageGrab.grab().save(Path(os.environ["RUNNER_TEMP"]) / "codex-close-desktop.png")
@@ -235,4 +245,5 @@ if __name__ == "__main__":
         raise SystemExit(isolated_desktop())
     ctypes.WinDLL("user32").SetProcessDPIAware()
     with tempfile.TemporaryDirectory(prefix="pebrel-codex-close-", ignore_cleanup_errors=True) as test_dir:
-        run(sys.argv[1], Path(test_dir))
+        for last_tab in (False, True):
+            run(sys.argv[1], Path(test_dir) / ("only" if last_tab else "pair"), last_tab=last_tab)
