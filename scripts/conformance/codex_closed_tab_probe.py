@@ -100,19 +100,21 @@ def run(executable, root):
     def live_names():
         return [tab["label"] for window in ctx.snapshot()["windows"] for tab in window["tabs"]]
     try:
-        ctx.start()
+        binary = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
+        # Start the real CLI as a child of cmd using the released v4 schema.
+        # This also exercises closing a tab opened by an earlier restore.
+        cmd = {"kind": "shell", "name": "Command Prompt", "program": os.environ["ComSpec"]}
+        tabs = [{"cwd": str(ctx.work_dir), "custom_name": name, "active_pane": 0,
+                 "launch": {**cmd, "args": args}} for name, args in (
+                     ("keep-this-shell", ["/D"]), ("closed-codex", ["/D", "/K", str(binary)]))]
+        ctx.session_file.write_text(json.dumps({"version": 4, "boot_attempts": 0,
+            "active_tab": 1, "tabs": tabs, "clean_exit": True}), encoding="utf-8")
+        ctx.start(explicit_working_directory=False)
         ctx.refresh_targets()
-        ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 0, "name": "keep-this-shell"})
-        created = ctx.api("tab.new", {"window_id": ctx.window_id, "shell": "cmd"})
-        ctx.pane_id = created["action"]["pane_id"]
-        ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 1, "name": "closed-codex"})
+        assert live_names() == ["keep-this-shell", "closed-codex"], live_names()
         target = {"window_id": ctx.window_id, "pane_id": ctx.pane_id}
         def processes():
             return [row.get("executable", "") for row in ctx.api("pane.procs", target)["processes"]]
-        ctx.poll(processes, lambda names: any(Path(name).name.lower() == "cmd.exe" for name in names),
-                 "cmd did not start in the target pane", timeout=25)
-        binary = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
-        ctx.api("pane.run", {**target, "command": f'"{binary}"'})
         def running():
             rows = ctx.api("agents.list", {}).get("agents", [])
             return next((row["agent"] for row in rows if row["pane_id"] == ctx.pane_id
