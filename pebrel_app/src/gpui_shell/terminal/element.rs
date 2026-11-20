@@ -1,0 +1,1980 @@
+//! 终端网格的自定义 GPUI Element。
+//!
+//! 热路径约定：paint 内只对 `Term` 加一次锁，通过渲染合同
+//! （`pebrel_terminal::render::RenderSnapshot`）把可见网格快照成纯数据后立刻
+//! 放锁；颜色解析（调色板 + OSC 覆盖表）与绘制都在锁外进行。
+//!
+//! 定位合同：字形落在 `列号 × cell_width`，不使用 `force_width` 的
+//! 1px 吸附容差。关闭连字时逐格塑形；开启时，同样式的相邻 ASCII 格
+//! 共同塑形，再由 `ligatures` 把字形簇映射回固定列号。其余字符逐格
+//! 绘制，组合字符跟随基字；编辑、光标和选区不能改变无关格的原点。
+
+use gpui::{
+    App, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseButton,
+    MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Rgba, SharedString, Style, TextRun,
+    UnderlineStyle, Window, fill, outline, point, px, relative, size,
+};
+use gpui_component::ActiveTheme as _;
+use pebrel_terminal::grid::Dimensions as _;
+use pebrel_terminal::render::{RenderSnapshot, SnapshotConfig, boxdraw};
+use pebrel_terminal::term::TermMode;
+use pebrel_terminal::term::color::Colors;
+use pebrel_terminal::vte::ansi::{Color, CursorShape, NamedColor};
+
+use super::colors::Palette;
+use super::cursor_painter::{CursorPaint, paint_box_glyph};
+use super::view::TerminalView;
+use super::view::cursor::CursorGeometry;
+
+mod cell_fit;
+#[cfg(test)]
+#[path = "element/color_tests.rs"]
+mod color_tests;
+mod reading;
+mod snapshot;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(in crate::gpui_shell) mod snapshot_probe;
+
+#[path = "element/app_colors.rs"]
+mod app_colors;
+use app_colors::{resolve_app_colors_into, resolve_text_foreground};
+
+pub struct TerminalElement {
+    view: gpui::Entity<TerminalView>,
+}
+
+impl TerminalElement {
+    pub fn new(view: gpui::Entity<TerminalView>) -> Self {
+        Self { view }
+    }
+
+    fn capture_pointer_drag(&self, window: &mut Window) {
+        // Register even before a press: input can arrive between paint frames.
+        // The owning view decides whether to consume the gesture at dispatch.
+        let view = self.view.downgrade();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+            if phase == DispatchPhase::Capture
+                && view
+                    .update(cx, |view, cx| {
+                        view.move_application_mouse(event)
+                            || view.move_completion_popup_scrollbar(event, cx)
+                    })
+                    .unwrap_or(false)
+            {
+                cx.stop_propagation();
+            }
+        });
+        let view = self.view.downgrade();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+            if phase == DispatchPhase::Capture
+                && event.button == MouseButton::Left
+                && view
+                    .update(cx, |view, cx| {
+                        view.finish_application_mouse(Some(event))
+                            || view.finish_completion_popup_scrollbar(event.position, cx)
+                    })
+                    .unwrap_or(false)
+            {
+                cx.stop_propagation();
+            }
+        });
+    }
+}
+
+pub struct TermLayout {
+    cell_width: Pixels,
+    line_height: Pixels,
+    rows: usize,
+    cols: usize,
+    hitbox: Hitbox,
+}
+
+impl TerminalElement {
+    /// 把**应用写死的**颜色按当前主题矫正，直接写回快照。
+    ///
+    /// 用的是旧壳那一个 `TerminalColorResolver`（`display::terminal_color`）：最低
+    /// 对比度 + 旧主题表面重映射，判据、缓存语义、`is_terminal_graphic` 白名单全
+    /// 部同源。没有这一步，codex/cc 用 truecolor 写死的配色在切主题后原样留在屏
+    /// 幕上——它们只在启动那一刻用 OSC 11 问过一次底色。
+    ///
+    /// Palette entries stay unchanged. Ordinary text, including ANSI gray/white,
+    /// is checked against its actual cell background; readable pairs are preserved.
+    ///
+    /// 三个实现选择：
+    /// - **写回 `Color::Spec` 而不是另开一张色表**：下游 `theme.resolve` 对 `Spec`
+    ///   原样透传，整条绘制路径一行都不用改。
+    /// - **一帧一次 `view.update`**：`resolve_foreground` 要 `&mut`（结果缓存），
+    ///   逐格去借实体比整帧借一次贵得多。
+    /// - **底色按 run 矫正，不带 `is_terminal_graphic` 守卫**（前景带）。旧壳对
+    ///   底色也上了那道守卫，于是一个框线字符的底不跟着搬、邻居跟着搬，浅色主题
+    ///   上会留一道缝。要逐字符复刻就得按字符切碎 bg run，代价远大于那点一致性，
+    ///   所以这里刻意不跟——前景才是那条注释真正在讲的东西。
+    fn resolve_app_colors(
+        &self,
+        snap: &mut RenderSnapshot,
+        links: &mut super::osc_links::LinkCells,
+        theme: &Palette,
+        overrides: &Colors,
+        cx: &mut App,
+    ) {
+        self.view.update(cx, |view, _| {
+            resolve_app_colors_into(snap, theme, overrides, &mut view.color_resolver);
+            for cell in links.values_mut() {
+                if let Some(fg) = resolve_text_foreground(
+                    cell.fg,
+                    cell.bg,
+                    cell.bold,
+                    cell.dim,
+                    cell.bg_dim,
+                    theme,
+                    overrides,
+                    &mut view.color_resolver,
+                ) {
+                    cell.fg = fg;
+                    cell.dim = false;
+                }
+            }
+        });
+    }
+}
+
+impl gpui::IntoElement for TerminalElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for TerminalElement {
+    type RequestLayoutState = ();
+    type PrepaintState = TermLayout;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = relative(1.).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let (font, font_size) = {
+            let view = self.view.read(cx);
+            (view.font.clone(), view.font_size)
+        };
+        let sample = window.text_system().shape_line(
+            SharedString::new_static("M"),
+            font_size,
+            &[TextRun {
+                len: 1,
+                font,
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        );
+        let scale = window.scale_factor();
+        let view = self.view.read(cx);
+        let cell_width = view.cell_width_for_advance(sample.width.as_f32(), scale);
+        let line_height =
+            view.line_height_for_metrics(sample.ascent.as_f32() + sample.descent.as_f32(), scale);
+
+        // 网格裁定（floor、最小网格、resize 合流）全部由渲染合同的
+        // ViewportTracker 在 view 内完成；元素只上报内容矩形与度量。
+        self.view.update(cx, |view, cx| {
+            view.set_layout(bounds.origin, cell_width, line_height, bounds.size, scale, cx);
+        });
+
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+
+        let view = self.view.read(cx);
+        // Bounded, opt-in evidence that a real layout reached this pane. PTY
+        // resize traces alone cannot distinguish missing prepaint from a
+        // viewport which still matches the spawn grid.
+        static TRACE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static TRACE_SAMPLES: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        if *TRACE_ENABLED.get_or_init(|| std::env::var_os("PEBREL_RESIZE_TRACE").is_some())
+            && TRACE_SAMPLES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 256
+        {
+            crate::gpui_shell::try_write_stderr(format_args!(
+                "[nebula:resize-trace] prepaint pane={} origin=({:.2},{:.2}) content={:.2}x{:.2} cell={:.2}x{:.2} scale={:.2} viewport={}x{}",
+                view.pane_id,
+                bounds.origin.x.as_f32(),
+                bounds.origin.y.as_f32(),
+                bounds.size.width.as_f32(),
+                bounds.size.height.as_f32(),
+                cell_width.as_f32(),
+                line_height.as_f32(),
+                scale,
+                view.grid_cols(),
+                view.grid_rows(),
+            ));
+        }
+        TermLayout {
+            cell_width,
+            line_height,
+            rows: view.grid_rows(),
+            cols: view.grid_cols(),
+            hitbox,
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        layout: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.capture_pointer_drag(window);
+        let theme = self.view.read(cx).palette.clone();
+        // 元素不画底色：卡容器统一负责"卡底色（带窗口透明度）→ 壁纸"
+        // 两层（旧壳 draw_window_backdrop 同模型），元素只画单元格背景、
+        // 文字与光标——默认背景的格子保持透明，让模糊/壁纸透进来。
+
+        let focus_handle = self.view.read(cx).focus_handle.clone();
+        window.handle_input(
+            &focus_handle,
+            gpui::ElementInputHandler::new(bounds, self.view.clone()),
+            cx,
+        );
+
+        let focused = focus_handle.is_focused(window);
+        // 旧壳只让光标本身参与闪烁；ghost、弹窗补齐和 IME 仍复用同一个坐标锚点。
+        let cursor_visible = self.view.read(cx).cursor_visible();
+        let Some(snapshot::FrameSnapshot {
+            mut snap,
+            mut art_source,
+            prompt_line,
+            history,
+            mut dashed,
+            viewport_top_abs,
+            mode,
+            reading_epoch,
+        }) = self.snapshot(layout.rows, layout.cols, cx)
+        else {
+            return;
+        };
+        let alternate_screen = mode.contains(TermMode::ALT_SCREEN);
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        snapshot_probe::record(&self.view, &snap, bounds, layout, cx);
+        let suggest_anchor =
+            snap.cursor.as_ref().map(|cursor| (cursor.row as usize, cursor.col as usize));
+        self.view.update(cx, |view, cx| {
+            view.refresh_suggestion_from_snapshot(prompt_line, suggest_anchor, cx);
+            // 补齐只会**登记**要问哪个来宾/远端目录（按键路径上不做 IO），
+            // 真正的往返在这里派出去。
+            view.drive_pending_remote_dir(cx);
+        });
+        let overrides = snap.color_overrides;
+        self.resolve_app_colors(&mut snap, &mut dashed, &theme, &overrides, cx);
+        if let Some((_, source)) = &mut art_source {
+            self.resolve_app_colors(source, &mut Default::default(), &theme, &overrides, cx);
+        }
+        let (theme_anchor, theme_is_light) = themed_anchor(&theme, cx);
+        let host_cursor_follows_theme = is_default_host_cursor(&theme);
+        let app_cursor = snap.cursor.as_ref().filter(|cursor| {
+            cursor.shape == CursorShape::Hidden
+                && crate::display::content::is_application_cursor_glyph(
+                    cursor.cell_ch,
+                    cursor.cell_flags,
+                    crate::display::content::cell_background_is_fixed(cursor.cell_bg, &overrides),
+                )
+        });
+
+        // 公式覆盖层：与本帧快照同一份网格状态（term 锁内扫描 + 计划），
+        // 探测/fit/几何合同全部由共享的 display::terminal_math 裁定。
+        let scale_factor = window.scale_factor();
+        let math_pixels_per_point = crate::math::pixels_per_point(scale_factor);
+        let pending_math_frame = {
+            let cell_w = layout.cell_width.as_f32();
+            let line_h = layout.line_height.as_f32();
+            let font_px = f32::from(self.view.read(cx).font_size);
+            let fg = self.view.read(cx).palette.foreground;
+            let foreground = crate::display::color::Rgb::new(
+                (fg.r * 255.0).round() as u8,
+                (fg.g * 255.0).round() as u8,
+                (fg.b * 255.0).round() as u8,
+            );
+            self.view.update(cx, |view, cx| {
+                view.math.bind_resources(cx);
+                let vertical = view.native_results.projection.borrow();
+                let size_info = super::math_overlay::grid_size_info(
+                    layout.cols,
+                    vertical.source_rows(layout.rows),
+                    cell_w,
+                    line_h,
+                );
+                if view.reading.panel.is_some() {
+                    return view.math.clear_frame(&size_info, math_pixels_per_point);
+                }
+                // CLI identity must not disable grid math. The answer reader
+                // replaces TerminalElement in TerminalView::render only while
+                // actually open; merely detecting Codex/Claude is not a handoff.
+                let Some(term) = view.session.as_ref().map(|session| session.term.clone()) else {
+                    return view.math.clear_frame(&size_info, math_pixels_per_point);
+                };
+                let term = term.lock();
+                view.math.plan_frame(
+                    &term,
+                    &size_info,
+                    foreground,
+                    font_px,
+                    math_pixels_per_point,
+                    |row| !vertical.covers(row),
+                )
+            })
+        };
+        // 位图预检必须在格子绘制之前、term 锁之外：合成不出位图的公式不能进
+        // 覆盖掩码，否则源格被藏掉而公式又没画出来，屏幕上就是一片空白。旧壳
+        // 的 draw_overlays 靠失败后补画 fallback 达到同一保证。
+        let math_frame = self
+            .view
+            .update(cx, |view, cx| view.math.finalize_frame(pending_math_frame, scale_factor, cx));
+
+        let vertical = self.view.read(cx).native_results.projection.borrow().clone();
+        let art = self.view.update(cx, |view, _| {
+            let screen =
+                view.session.as_ref().map_or(0, |s| std::sync::Arc::as_ptr(&s.term) as usize);
+            let (offset, source) =
+                art_source.as_ref().map_or((0, &snap), |(offset, source)| (*offset, source));
+            view.character_art.update(
+                source,
+                (screen, reading_epoch, alternate_screen, snap.cols),
+                viewport_top_abs + offset,
+                layout.cell_width.as_f32(),
+                layout.line_height.as_f32(),
+                mode.contains(TermMode::VI),
+                |row| vertical.row(row + offset as f32),
+                |row, col| {
+                    let row = row as i64 + offset;
+                    !vertical.covers_source_row(row)
+                        && (row < 0
+                            || (!math_frame.covers(row as usize, col)
+                                && math_frame.project_cell(row as usize, col, layout.cols)
+                                    == Some(col)))
+                },
+            );
+            view.character_art.frame.shift_source(offset);
+            view.character_art.frame.clone()
+        });
+        let row_y = |row: f32| layout.line_height * vertical.row(row);
+        let cell_rect = |row: usize, start: usize, count: usize| -> Bounds<Pixels> {
+            Bounds::new(
+                point(
+                    bounds.origin.x + layout.cell_width * start as f32,
+                    bounds.origin.y + row_y(row as f32),
+                ),
+                size(layout.cell_width * count as f32, layout.line_height),
+            )
+        };
+        let visual_column = |row: u16, source_column: u16| {
+            math_frame.visual_column(row as usize, source_column as usize, layout.cols)
+        };
+
+        let target_col =
+            snap.cursor.as_ref().map_or(0, |cursor| visual_column(cursor.row, cursor.col));
+        let cursor_geometry = CursorGeometry {
+            screen: (
+                self.view
+                    .read(cx)
+                    .session
+                    .as_ref()
+                    .map_or(0, |s| std::sync::Arc::as_ptr(&s.term) as usize),
+                alternate_screen,
+                viewport_top_abs,
+            ),
+            grid: (layout.cols, layout.rows),
+            metrics: (layout.cell_width.as_f32(), layout.line_height.as_f32(), scale_factor),
+            projection_shift: snap
+                .cursor
+                .as_ref()
+                .map_or(0, |c| target_col as i32 - i32::from(c.col)),
+            row_projection_shift: snap
+                .cursor
+                .as_ref()
+                .map_or(0.0, |c| vertical.row(c.row as f32) - c.row as f32),
+            shape: snap.cursor.as_ref().map_or(CursorShape::Hidden, |c| c.shape),
+        };
+        let visual = self.view.update(cx, |view, cx| {
+            view.visual_cursor(
+                snap.cursor.as_ref(),
+                target_col,
+                cursor_geometry,
+                vertical.scroll_state().map_or(snap.display_offset == 0, |(offset, _)| offset == 0),
+                window,
+                cx,
+            )
+        });
+        let cursor_paint = visual.zip(snap.cursor.as_ref()).map(|(visual, cursor)| {
+            let block_alpha = if theme_is_light {
+                crate::display::ui::tokens::terminal_feedback::BLOCK_CURSOR_ALPHA_LIGHT
+            } else {
+                crate::display::ui::tokens::terminal_feedback::BLOCK_CURSOR_ALPHA_DARK
+            };
+            let stroke_alpha = if theme_is_light {
+                crate::display::ui::tokens::terminal_feedback::STROKE_CURSOR_ALPHA_LIGHT
+            } else {
+                crate::display::ui::tokens::terminal_feedback::STROKE_CURSOR_ALPHA_DARK
+            };
+            CursorPaint {
+                rect: Bounds::new(
+                    point(
+                        bounds.origin.x + layout.cell_width * visual.col as f32,
+                        bounds.origin.y + layout.line_height * visual.row as f32,
+                    ),
+                    size(
+                        layout.cell_width * if cursor.wide { 2.0 } else { 1.0 },
+                        layout.line_height,
+                    ),
+                ),
+                shape: cursor.shape,
+                focused,
+                visible: cursor_visible,
+                block_color: if host_cursor_follows_theme {
+                    rgba_rgb(theme_anchor, block_alpha)
+                } else {
+                    theme.cursor
+                },
+                stroke: if host_cursor_follows_theme {
+                    rgba_rgb(theme_anchor, stroke_alpha)
+                } else {
+                    match cursor.shape {
+                        CursorShape::Beam | CursorShape::Underline => {
+                            theme.cursor_stroke.unwrap_or(theme.cursor)
+                        },
+                        _ => theme.cursor,
+                    }
+                },
+                text_color: (!host_cursor_follows_theme)
+                    .then(|| theme.cursor_text.unwrap_or(theme.background).into()),
+            }
+        });
+
+        for run in &snap.bg_runs {
+            let mut paint = |start: u16, end: u16, color: Color| {
+                if start >= end {
+                    return;
+                }
+                let color = theme.resolve_styled(color, &overrides, false, run.dim);
+                for visual in math_frame.projected_runs(
+                    run.row as usize,
+                    start as usize..end as usize,
+                    layout.cols,
+                    true,
+                ) {
+                    window.paint_quad(fill(
+                        cell_rect(run.row as usize, visual.start, visual.len()),
+                        color,
+                    ));
+                }
+            };
+            if let Some(cursor) = app_cursor {
+                if run.row == cursor.row {
+                    let skip_end = cursor.col.saturating_add(if cursor.wide { 2 } else { 1 });
+                    if run.start < skip_end && cursor.col < run.end {
+                        paint(run.start, cursor.col, run.color);
+                        paint(skip_end, run.end, run.color);
+                        continue;
+                    }
+                }
+            }
+            paint(run.start, run.end, run.color);
+        }
+        let selection_fill = if is_default_selection(&theme) {
+            let alpha = if theme_is_light {
+                crate::display::ui::tokens::terminal_feedback::SELECTION_ALPHA_LIGHT
+            } else {
+                crate::display::ui::tokens::terminal_feedback::SELECTION_ALPHA_DARK
+            };
+            rgba_rgb(theme_anchor, alpha)
+        } else {
+            theme.selection
+        };
+        for run in &snap.selection_runs {
+            for visual in math_frame.projected_runs(
+                run.row as usize,
+                run.start as usize..run.end as usize,
+                layout.cols,
+                false,
+            ) {
+                art.spans(
+                    i64::from(run.row),
+                    visual,
+                    vertical.row(f32::from(run.row)),
+                    |columns, y, h| {
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(
+                                    bounds.origin.x + layout.cell_width * columns.start as f32,
+                                    bounds.origin.y + layout.line_height * y,
+                                ),
+                                size(
+                                    layout.cell_width * columns.len() as f32,
+                                    layout.line_height * h,
+                                ),
+                            ),
+                            selection_fill,
+                        ));
+                    },
+                );
+            }
+        }
+        self.paint_reading_highlight(bounds, layout, viewport_top_abs, window, cx);
+        let selection_foreground = theme.selection_foreground;
+        let selected_foreground = |row: u16, col: u16| -> Option<Rgba> {
+            let foreground = selection_foreground?;
+            snap.selection_runs
+                .iter()
+                .any(|run| run.row == row && run.start <= col && col < run.end)
+                .then_some(foreground)
+        };
+
+        if let Some(cursor) = &cursor_paint {
+            cursor.paint_background(window);
+        }
+        // CC/Codex：DECSCUSR Hidden 后自己画反色空格。旧壳把那格从反色黑
+        // 改成叠在主题底上的 theme_anchor；块元素则只换前景，保留字形。
+        let app_cursor_color = app_cursor.map(|cursor| {
+            let alpha = if theme_is_light {
+                crate::display::ui::tokens::terminal_feedback::BLOCK_CURSOR_ALPHA_LIGHT
+            } else {
+                crate::display::ui::tokens::terminal_feedback::BLOCK_CURSOR_ALPHA_DARK
+            };
+            let base = if cursor.cell_ch == ' ' {
+                rgb_from_rgba(theme.background)
+            } else {
+                rgb_from_rgba(theme.resolve(cursor.cell_bg, &overrides, false))
+            };
+            let (color, _) =
+                crate::display::content::composite_overlay(theme_anchor, alpha, base, 1.0);
+            rgba_rgb(color, 1.0)
+        });
+        if let Some(cursor) = app_cursor {
+            if cursor.cell_ch == ' ' {
+                if let Some(color) = app_cursor_color {
+                    let width = if cursor.wide { 2 } else { 1 };
+                    window.paint_quad(fill(
+                        cell_rect(
+                            cursor.row as usize,
+                            visual_column(cursor.row, cursor.col),
+                            width,
+                        ),
+                        color,
+                    ));
+                }
+            }
+        }
+
+        let (font, bold_font, italic_font, bold_italic_font, font_size, ligatures) = {
+            let view = self.view.read(cx);
+            (
+                view.font.clone(),
+                view.font_bold.clone(),
+                view.font_italic.clone(),
+                view.font_bold_italic.clone(),
+                view.font_size,
+                view.ligatures,
+            )
+        };
+        // 全宽（CJK 等）bold run 的字形策略（设置 `cjk_bold_regular`，默认
+        // 开）：bold 只提亮颜色（resolve 已做），字形保持 Regular——旧壳
+        // `wide_bold_use_regular` 的同义移植。CJK 假粗体在小字号糊成一团，
+        // 这是旧壳早已裁定过的取舍。
+        let cjk_bold_regular = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .map(|settings| settings.cjk_bold_regular)
+            .unwrap_or(true);
+        let cjk_fonts = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .and_then(|settings| settings.font_cjk.clone());
+        let pick_font = |bold: bool, italic: bool, wide: bool| {
+            let bold = bold && !(wide && cjk_bold_regular);
+            if let Some(fonts) = cjk_fonts.as_ref().filter(|_| wide) {
+                return fonts[usize::from(bold) + 2 * usize::from(italic)].clone();
+            }
+            match (bold, italic) {
+                (false, false) => font.clone(),
+                (true, false) => bold_font.clone(),
+                (false, true) => italic_font.clone(),
+                (true, true) => bold_italic_font.clone(),
+            }
+        };
+        // 内建几何字形（框线/块元素/Powerline）：不走字体，直接以图元填充。
+        // 几何由渲染合同裁定（含设备像素吸附），保证盖满单元格、相邻无缝
+        // —— CJK 字体下的框线错位就此根治。
+        let scale = window.scale_factor();
+        for glyph in &snap.box_glyphs {
+            if math_frame.covers(glyph.row as usize, glyph.col as usize) {
+                continue;
+            }
+            let Some(visual_col) =
+                math_frame.project_cell(glyph.row as usize, glyph.col as usize, layout.cols)
+            else {
+                continue;
+            };
+            let fg = if app_cursor
+                .is_some_and(|cursor| cursor.row == glyph.row && cursor.col == glyph.col)
+            {
+                app_cursor_color.unwrap_or_else(|| {
+                    theme.resolve_styled(glyph.fg, &overrides, glyph.bold, glyph.dim)
+                })
+            } else if let Some(foreground) = selected_foreground(glyph.row, glyph.col) {
+                foreground
+            } else {
+                theme.resolve_styled(glyph.fg, &overrides, glyph.bold, glyph.dim)
+            };
+            let span = if glyph.wide { 2.0 } else { 1.0 };
+            let (glyph_row, glyph_height) = art.cell(
+                usize::from(glyph.row),
+                usize::from(glyph.col),
+                vertical.row(f32::from(glyph.row)),
+            );
+            let Some(prims) = boxdraw::primitives(
+                glyph.ch,
+                layout.cell_width.as_f32() * span,
+                layout.line_height.as_f32() * glyph_height,
+                scale,
+            ) else {
+                continue;
+            };
+            let origin = point(
+                snap_to_device(bounds.origin.x + layout.cell_width * visual_col as f32, scale),
+                snap_to_device(bounds.origin.y + layout.line_height * glyph_row, scale),
+            );
+            paint_box_glyph(window, &prims, origin, fg);
+            if let Some(cursor) = &cursor_paint {
+                let cell_bounds =
+                    Bounds::new(origin, size(layout.cell_width * span, layout.line_height));
+                if let Some(color) = cursor.inverted_color(cell_bounds) {
+                    window.with_content_mask(Some(ContentMask { bounds: cursor.rect }), |window| {
+                        paint_box_glyph(window, &prims, origin, color.into());
+                    });
+                }
+            }
+        }
+
+        // 连字仅合并同一行内同样式的窄 ASCII 格，光标、选区和公式
+        // 投影边界仍逐格裁定。字形簇的原点始终由固定网格决定。
+        for seg in &snap.segments {
+            let mut cells = seg.cells.as_slice();
+            while let Some(cell) = cells.first() {
+                let remaining = cells;
+                cells = &cells[1..];
+                // 被公式覆盖的源格不画原文（公式直接落在卡底上，与旧壳
+                // CoverageMask 合同一致；计划失败的公式不进掩码、原文保留）。
+                if math_frame.covers(seg.row as usize, cell.col as usize) {
+                    continue;
+                }
+                let Some(visual_col) =
+                    math_frame.project_cell(seg.row as usize, cell.col as usize, layout.cols)
+                else {
+                    continue;
+                };
+                let fg: Hsla = if let Some(foreground) = selected_foreground(seg.row, cell.col) {
+                    foreground.into()
+                } else {
+                    theme.resolve_styled(cell.fg, &overrides, cell.bold, cell.dim).into()
+                };
+                let dashed_link = dashed.contains_key(&(seg.row, cell.col));
+                let underline = (cell.underline && !dashed_link).then(|| UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(fg),
+                    wavy: false,
+                });
+                let strikethrough = cell
+                    .strikethrough
+                    .then(|| gpui::StrikethroughStyle { thickness: px(1.0), color: Some(fg) });
+                let run = TextRun {
+                    len: cell.text.len(),
+                    font: pick_font(cell.bold, cell.italic, seg.wide),
+                    color: fg,
+                    background_color: None,
+                    underline,
+                    strikethrough,
+                };
+                let (text_row, text_height) = art.cell(
+                    usize::from(seg.row),
+                    usize::from(cell.col),
+                    vertical.row(f32::from(seg.row)),
+                );
+                let text_line_height = layout.line_height * text_height;
+                let origin = point(
+                    bounds.origin.x + layout.cell_width * visual_col as f32,
+                    bounds.origin.y + layout.line_height * text_row,
+                );
+                let count = if ligatures && !seg.wide && !dashed_link && text_height == 1.0 {
+                    super::ligatures::span_len(remaining, |next, offset| {
+                        !math_frame.covers(seg.row as usize, next.col as usize)
+                            && art.same_region(
+                                seg.row as usize,
+                                cell.col as usize,
+                                next.col as usize,
+                            )
+                            && math_frame.project_cell(
+                                seg.row as usize,
+                                next.col as usize,
+                                layout.cols,
+                            ) == Some(visual_col + offset)
+                            && selected_foreground(seg.row, next.col)
+                                == selected_foreground(seg.row, cell.col)
+                            && !dashed.contains_key(&(seg.row, next.col))
+                    })
+                } else {
+                    1
+                };
+                if count > 1 {
+                    let text: String =
+                        remaining[..count].iter().map(|cell| cell.text.as_str()).collect();
+                    let shaped = super::ligatures::shape_ascii_span(
+                        window.text_system(),
+                        text.into(),
+                        font_size,
+                        run.clone(),
+                        layout.cell_width,
+                    );
+                    let _ = shaped.paint(
+                        origin,
+                        text_line_height,
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                    if let Some(cursor) = &cursor_paint {
+                        cursor.paint_inverted_text(
+                            &shaped,
+                            run,
+                            origin,
+                            text_line_height,
+                            window,
+                            cx,
+                        );
+                    }
+                    cells = &remaining[count..];
+                } else {
+                    let shaped = cell_fit::shape_cell(
+                        window.text_system(),
+                        &cell.text,
+                        font_size,
+                        &run,
+                        layout.cell_width,
+                    );
+                    let _ = shaped.paint(
+                        origin,
+                        text_line_height,
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                    if let Some(cursor) = &cursor_paint {
+                        cursor.paint_inverted_text(
+                            &shaped,
+                            run,
+                            origin,
+                            text_line_height,
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some((offset, source)) = &art_source {
+            super::character_art::paint_overflow(
+                &art,
+                source,
+                *offset,
+                snap.rows,
+                bounds.origin,
+                (layout.cell_width, layout.line_height),
+                &theme,
+                &overrides,
+                selection_fill,
+                selection_foreground,
+                font_size,
+                &pick_font,
+                window,
+                cx,
+            );
+        }
+
+        // Link decoration follows grid columns, including wide-character spacer
+        // cells and spaces omitted by text shaping. Every cell shares one dash
+        // phase, so font fallback and ASCII/CJK boundaries cannot restart it.
+        for (&(row, col), cell) in &dashed {
+            if math_frame.covers(row as usize, col as usize) {
+                continue;
+            }
+            let Some(visual_col) = math_frame.project_cell(row as usize, col as usize, layout.cols)
+            else {
+                continue;
+            };
+            let color = if let Some(foreground) = selected_foreground(row, col) {
+                foreground
+            } else {
+                theme.resolve_styled(cell.fg, &overrides, cell.bold, cell.dim)
+            };
+            let (y, h) = art.cell(row as usize, col as usize, vertical.row(f32::from(row)));
+            let rect = Bounds::new(
+                point(
+                    bounds.origin.x + layout.cell_width * visual_col as f32,
+                    bounds.origin.y + layout.line_height * y,
+                ),
+                size(layout.cell_width, layout.line_height * h),
+            );
+            super::link_underline::paint(window, rect, bounds.origin.x, color.into());
+            if let Some(cursor) = &cursor_paint {
+                if let Some(color) = cursor.inverted_color(rect) {
+                    window.with_content_mask(Some(ContentMask { bounds: cursor.rect }), |window| {
+                        super::link_underline::paint(window, rect, bounds.origin.x, color);
+                    });
+                }
+            }
+        }
+
+        // 公式位图画在格子文本之后、装饰（ghost/光标/滚动条）之前，
+        // 与旧壳 draw_rects → draw_overlays 的次序一致。
+        if !math_frame.is_empty() {
+            super::math_overlay::paint_frame(
+                &math_frame,
+                bounds.origin,
+                (layout.cell_width.as_f32(), layout.line_height.as_f32()),
+                math_pixels_per_point,
+                Rgba { a: 1.0, ..selection_fill },
+                &|y| row_y(y / layout.line_height.as_f32()).as_f32(),
+                window,
+                cx,
+            );
+        }
+
+        super::molecule_overlay::paint(
+            &self.view,
+            &snap,
+            bounds,
+            layout.cell_width,
+            layout.line_height,
+            !theme_is_light,
+            window,
+            cx,
+        );
+
+        let inline_images = self.view.update(cx, |view, _| view.inline_images.frame_images());
+        let image_runs = math_frame.project_image_runs(&snap.image_runs, layout.cols);
+        super::inline_image::paint(
+            &inline_images,
+            &image_runs,
+            bounds,
+            layout.cell_width,
+            layout.line_height,
+            &row_y,
+            window,
+        );
+
+        if snap.cursor.is_none() {
+            super::effects::paint(
+                &self.view, bounds, &theme, &overrides, None, focused, window, cx,
+            );
+        }
+
+        if let Some(cursor) = &snap.cursor {
+            let cursor_visual_col = visual_column(cursor.row, cursor.col);
+            // 内联 ghost 余量与弹窗补全：结果由 view 在本帧 render 时算好
+            // （引擎与旧壳共享），元素只负责画。IME 组合中让位给 preedit，
+            // 与旧壳同一抑制条件；窗口失焦不灭（对齐旧壳 draw_pane）。
+            let (ghost_text, popup_items, popup_selected, popup_offset, popup_hovered) = {
+                let view = self.view.read(cx);
+                let ime_active = view.marked_text.as_deref().is_some_and(|m| !m.is_empty());
+                let same_frame =
+                    view.suggest_anchor == Some((cursor.row as usize, cursor.col as usize));
+                if ime_active || !same_frame {
+                    (None, Vec::new(), None, 0, None)
+                } else {
+                    (
+                        (!view.suggest.suggestion.is_empty())
+                            .then(|| view.suggest.suggestion.clone()),
+                        view.suggest.completion_items.clone(),
+                        view.suggest.completion_selected,
+                        view.completion_viewport.offset,
+                        view.completion_viewport.hovered,
+                    )
+                }
+            };
+            if ghost_text.is_some() || !popup_items.is_empty() {
+                let colors = crate::gpui_shell::theme::completion_colors(cx, theme.background);
+                if let Some(ghost) = &ghost_text {
+                    let avail = layout.cols.saturating_sub(cursor_visual_col);
+                    if avail > 0 {
+                        grid_text(
+                            window,
+                            cx,
+                            ghost,
+                            &font,
+                            font_size,
+                            colors.ghost,
+                            point(
+                                bounds.origin.x + layout.cell_width * cursor_visual_col as f32,
+                                bounds.origin.y + row_y(cursor.row as f32),
+                            ),
+                            layout.cell_width,
+                            layout.line_height,
+                            avail,
+                        );
+                    }
+                }
+            }
+
+            // Stroke shapes stay above completion ghost text; the IME anchor below is logical.
+            if let Some(cursor) = &cursor_paint {
+                cursor.paint_foreground(window);
+            }
+
+            // IME 组合文本锚点与预编辑串：跟随光标单元格。
+            // 后处理位于真实终端与光标之后，补齐菜单和预编辑串之前。
+
+            super::effects::paint(
+                &self.view,
+                bounds,
+                &theme,
+                &overrides,
+                cursor_paint.as_ref(),
+                focused,
+                window,
+                cx,
+            );
+            let colors = crate::gpui_shell::theme::completion_colors(cx, theme.background);
+            if !popup_items.is_empty() {
+                paint_completion_popup(
+                    window,
+                    cx,
+                    &popup_items,
+                    popup_selected,
+                    popup_offset,
+                    popup_hovered,
+                    vertical.row(cursor.row as f32).max(0.0) as usize,
+                    cursor_visual_col,
+                    layout,
+                    &bounds,
+                    &colors,
+                    &font,
+                    font_size,
+                );
+            }
+
+            let anchor = cell_rect(cursor.row as usize, cursor_visual_col, 1);
+            let marked = self.view.read(cx).marked_text.clone();
+            self.view.update(cx, |view, _| view.ime_bounds = anchor);
+            if let Some(marked) = marked.filter(|m| !m.is_empty()) {
+                let marked = crate::text_preview::single_line_label(&marked).into_owned();
+                let run = TextRun {
+                    len: marked.len(),
+                    font: font.clone(),
+                    color: theme.foreground.into(),
+                    background_color: None,
+                    underline: Some(UnderlineStyle {
+                        thickness: px(1.0),
+                        color: Some(theme.foreground.into()),
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                };
+                let shaped = window.text_system().shape_line(
+                    SharedString::from(marked),
+                    font_size,
+                    &[run],
+                    None,
+                );
+                let bg = Bounds::new(anchor.origin, size(shaped.width, layout.line_height));
+                window.paint_quad(fill(bg, theme.background));
+                let _ = shaped.paint(
+                    anchor.origin,
+                    layout.line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+        }
+
+        // Overlay 滚动条：可见性由用户策略和拖拽状态共同决定。
+        // 几何来自 view 的单一真值源——命中测试拿的是同一个矩形（旧壳
+        // `draw_scrollbar` / `scrollbar_grab` 共用 `scrollbar_geometry` 同构）。
+        let (dragging, thumb) = {
+            let view = self.view.read(cx);
+            (view.scrollbar_highlighted(), view.scrollbar_thumb(snap.display_offset, history))
+        };
+        if let Some(thumb) = thumb {
+            let color = if dragging {
+                cx.theme().scrollbar_thumb_hover
+            } else {
+                cx.theme().scrollbar_thumb
+            };
+            let radius = thumb.size.width / 2.0;
+            window.paint_quad(fill(thumb, color).corner_radii(radius));
+        }
+
+        let (bell_flash, link_hover) = {
+            let view = self.view.read(cx);
+            (view.bell_flash, view.link_hover.clone())
+        };
+        if bell_flash {
+            let mut flash = theme.foreground;
+            flash.a = 0.12;
+            window.paint_quad(fill(bounds, flash));
+        }
+        if let Some(hover) = link_hover {
+            window.set_cursor_style(CursorStyle::PointingHand, &layout.hitbox);
+            let anchor_col = math_frame.visual_column(
+                hover.anchor_row as usize,
+                hover.anchor_col as usize,
+                layout.cols,
+            );
+            paint_link_preview(
+                window,
+                cx,
+                &hover.preview,
+                vertical.row(hover.anchor_row as f32).max(0.0) as usize,
+                anchor_col,
+                layout,
+                &bounds,
+                &font,
+                font_size,
+            );
+        }
+    }
+}
+
+/// Align geometry-only terminal primitives to the device pixel grid. Cell
+/// widths/heights are already measured in device pixels and converted back to
+/// logical units, but a pane origin can still be fractional after a split or
+/// DPI-scaled layout. Rounding the absolute origin keeps box-drawing fills and
+/// polygon edges on the same physical pixels as their neighbouring cells.
+pub(super) fn snap_to_device(value: Pixels, scale: f32) -> Pixels {
+    let scale = scale.max(0.5);
+    px((value.as_f32() * scale).round() / scale)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_link_preview(
+    window: &mut Window,
+    cx: &mut App,
+    preview: &str,
+    anchor_row: usize,
+    anchor_col: usize,
+    layout: &TermLayout,
+    bounds: &Bounds<Pixels>,
+    font: &gpui::Font,
+    font_size: Pixels,
+) {
+    let preview = crate::text_preview::single_line_label(preview);
+    let line =
+        if anchor_row + 1 < layout.rows { anchor_row + 1 } else { anchor_row.saturating_sub(1) };
+    let label_size = px(font_size.as_f32() * 0.85);
+    let run = TextRun {
+        len: preview.len(),
+        font: font.clone(),
+        color: cx.theme().popover_foreground,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped = window.text_system().shape_line(
+        SharedString::from(preview.into_owned()),
+        label_size,
+        &[run],
+        None,
+    );
+    let pad = px(8.0);
+    let bubble_w = shaped.width + pad * 2.0;
+    let bubble_h = layout.line_height * 0.85 + pad;
+    let max_x = (bounds.origin.x + bounds.size.width - bubble_w).max(bounds.origin.x);
+    let x = (bounds.origin.x + layout.cell_width * anchor_col as f32).min(max_x);
+    let y =
+        bounds.origin.y + layout.line_height * line as f32 + (layout.line_height - bubble_h) * 0.5;
+    let bubble = Bounds::new(point(x, y), size(bubble_w, bubble_h));
+    window.paint_quad(fill(bubble, cx.theme().popover).corner_radii(px(6.0)));
+    window.paint_quad(
+        outline(bubble, cx.theme().border, gpui::BorderStyle::Solid).corner_radii(px(6.0)),
+    );
+    let _ = shaped.paint(
+        point(x + pad, y + (bubble_h - layout.line_height * 0.85) * 0.5),
+        layout.line_height * 0.85,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+}
+
+/// 单格文本落笔原语：单 cell 文本塑形后从调用方给定的整数 cell
+/// 原点起笔，不传 `force_width`（首字形天然在 x=0，位置只由列号决定）。
+/// 网格的单格回退、ghost 和弹窗经由此处；ASCII 连字由 `ligatures`
+/// 显式映射字形簇到列号。两条路径都不依赖自然 advance 定位后续格。
+fn paint_cell_text(
+    window: &mut Window,
+    cx: &mut App,
+    text: SharedString,
+    run: TextRun,
+    font_size: Pixels,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+) {
+    let shaped = window.text_system().shape_line(text, font_size, &[run], None);
+    let _ = shaped.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
+}
+
+/// 网格对齐的浮层文本（ghost/弹窗共用），与网格文字同一定位合同：每个可见
+/// 字符单独塑形、从 `起始格 + 已用格数` 的整数 cell 原点起笔，超出
+/// `max_cells` 截断。绝不批量 `force_width`——其 1px 容差会沿字符累积并在
+/// 重塑形时翻转吸附，删除 `bypassPermission` 一类提示时就会逐字向左挤。
+/// 单字符行命中 GPUI 行缓存，逐字塑形没有额外热路径成本。
+#[allow(clippy::too_many_arguments)]
+fn grid_text(
+    window: &mut Window,
+    cx: &mut App,
+    text: &str,
+    font: &gpui::Font,
+    font_size: Pixels,
+    color: Hsla,
+    origin: gpui::Point<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+    max_cells: usize,
+) -> usize {
+    use unicode_width::UnicodeWidthChar as _;
+
+    let mut used = 0usize;
+    for character in text.chars() {
+        // 与旧壳 draw_string 一致：零宽字符不单占格，宽字符占两格。
+        let width = character.width().unwrap_or(0);
+        if width == 0 {
+            continue;
+        }
+        if used + width > max_cells {
+            break;
+        }
+        let text = character.to_string();
+        let run = TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        paint_cell_text(
+            window,
+            cx,
+            SharedString::from(text),
+            run,
+            font_size,
+            point(origin.x + cell_width * used as f32, origin.y),
+            line_height,
+        );
+        used += width;
+    }
+    used
+}
+
+const COMPLETION_PANEL_WIDTH: f32 = 520.0;
+const COMPLETION_PANEL_PAD: f32 = 4.0;
+const COMPLETION_PANEL_GAP: f32 = 6.0;
+const COMPLETION_ROW_HEIGHT: f32 = 36.0;
+const COMPLETION_ROW_LEFT_PAD: f32 = 8.0;
+const COMPLETION_ROW_RIGHT_PAD: f32 = 9.0;
+const COMPLETION_ICON_WIDTH: f32 = 22.0;
+const COMPLETION_ICON_SIZE: f32 = 17.0;
+const COMPLETION_COLUMN_GAP: f32 = 8.0;
+const COMPLETION_TAG_WIDTH: f32 = 46.0;
+
+#[derive(Clone, Copy)]
+enum CompletionVisualKind {
+    History,
+    Command,
+    Directory,
+    Rust,
+    Toml,
+    Markdown,
+    File,
+}
+
+fn completion_visual_kind(item: &crate::display::NebulaCompletionItem) -> CompletionVisualKind {
+    use crate::display::NebulaCompletionKind;
+
+    match item.kind {
+        NebulaCompletionKind::History => CompletionVisualKind::History,
+        NebulaCompletionKind::Command => CompletionVisualKind::Command,
+        NebulaCompletionKind::Dir => CompletionVisualKind::Directory,
+        NebulaCompletionKind::File => {
+            // 候选 label 保留真实扩展名；先按 Path 解析，避免把目录名中间的点
+            // 或命令参数误认成文件类型。引号只可能包住整段显示文本。
+            let label = item.label.trim_matches(|c| c == '"' || c == '\'');
+            match std::path::Path::new(label).extension().and_then(|ext| ext.to_str()) {
+                Some(ext) if ext.eq_ignore_ascii_case("rs") => CompletionVisualKind::Rust,
+                Some(ext) if ext.eq_ignore_ascii_case("toml") => CompletionVisualKind::Toml,
+                Some(ext)
+                    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") =>
+                {
+                    CompletionVisualKind::Markdown
+                },
+                _ => CompletionVisualKind::File,
+            }
+        },
+    }
+}
+
+fn completion_tag(kind: CompletionVisualKind) -> &'static str {
+    match kind {
+        CompletionVisualKind::History => "HIS",
+        CompletionVisualKind::Command => "CMD",
+        CompletionVisualKind::Directory => "DIR",
+        CompletionVisualKind::Rust => "RS",
+        CompletionVisualKind::Toml => "TOML",
+        CompletionVisualKind::Markdown => "MD",
+        CompletionVisualKind::File => "FILE",
+    }
+}
+
+fn completion_kind_color(
+    colors: &crate::gpui_shell::theme::CompletionColors,
+    kind: CompletionVisualKind,
+) -> Hsla {
+    match kind {
+        CompletionVisualKind::History => colors.history,
+        CompletionVisualKind::Command => colors.command,
+        CompletionVisualKind::Directory => colors.directory,
+        CompletionVisualKind::Rust => colors.rust_file,
+        CompletionVisualKind::Toml => colors.toml,
+        CompletionVisualKind::Markdown => colors.markdown,
+        CompletionVisualKind::File => colors.file,
+    }
+}
+
+fn completion_cells(text: &str) -> usize {
+    use unicode_width::UnicodeWidthChar as _;
+
+    text.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+fn completion_label_parts(item: &crate::display::NebulaCompletionItem) -> (&str, &str) {
+    if !item.insert.is_empty() && item.label.ends_with(&item.insert) {
+        item.label.split_at(item.label.len() - item.insert.len())
+    } else {
+        ("", &item.label)
+    }
+}
+
+/// 绘制与命中共用的像素几何。这里刻意不再用终端 cell 拼凑 UI 列：
+/// 22px 图标槽、两段 8px 间距和 46px 标签槽必须与 HTML 原型一一对应。
+#[derive(Clone, Copy)]
+pub(super) struct CompletionPopupLayout {
+    content_x: Pixels,
+    content_y: Pixels,
+    content_width: Pixels,
+    pub row_height: Pixels,
+    pub offset: usize,
+    pub rows: usize,
+    pub label_width: usize,
+    pub selected: Option<usize>,
+}
+
+impl CompletionPopupLayout {
+    pub(super) fn content_bounds(self, origin: gpui::Point<Pixels>) -> Bounds<Pixels> {
+        Bounds::new(
+            point(origin.x + self.content_x, origin.y + self.content_y),
+            size(self.content_width, self.row_height * self.rows),
+        )
+    }
+
+    pub(super) fn panel_bounds(self, origin: gpui::Point<Pixels>) -> Bounds<Pixels> {
+        let content = self.content_bounds(origin);
+        let pad = px(COMPLETION_PANEL_PAD);
+        Bounds::new(
+            point(content.origin.x - pad, content.origin.y - pad),
+            size(content.size.width + pad * 2.0, content.size.height + pad * 2.0),
+        )
+    }
+
+    fn row_bounds(self, origin: gpui::Point<Pixels>, row: usize) -> Bounds<Pixels> {
+        let content = self.content_bounds(origin);
+        Bounds::new(
+            point(content.origin.x, content.origin.y + self.row_height * row),
+            size(content.size.width, self.row_height),
+        )
+    }
+
+    pub(super) fn scrollbar_bounds(
+        self,
+        origin: gpui::Point<Pixels>,
+        count: usize,
+    ) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+        if count <= self.rows {
+            return None;
+        }
+        let content = self.content_bounds(origin);
+        let track_height = content.size.height - px(4.0);
+        let track = Bounds::new(
+            point(content.right() + px(1.0), content.origin.y + px(2.0)),
+            size(px(2.0), track_height),
+        );
+        let thumb_height =
+            (track_height * (self.rows as f32 / count as f32)).max(px(14.0)).min(track_height);
+        let progress = self.offset.min(count - self.rows) as f32 / (count - self.rows) as f32;
+        let thumb = Bounds::new(
+            point(track.origin.x, track.origin.y + (track_height - thumb_height) * progress),
+            size(track.size.width, thumb_height),
+        );
+        Some((track, thumb))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn completion_popup_layout(
+    items: &[crate::display::NebulaCompletionItem],
+    selected: Option<usize>,
+    offset: usize,
+    cursor_row: usize,
+    cursor_col: usize,
+    screen_lines: usize,
+    columns: usize,
+    cell_width: Pixels,
+    line_height: Pixels,
+) -> Option<CompletionPopupLayout> {
+    if columns < 12 || screen_lines < 2 || items.is_empty() {
+        return None;
+    }
+
+    let cell_width = cell_width.as_f32();
+    let line_height = line_height.as_f32();
+    if cell_width <= 0.0 || line_height <= 0.0 {
+        return None;
+    }
+
+    let viewport_width = cell_width * columns as f32;
+    let viewport_height = line_height * screen_lines as f32;
+    let panel_width = COMPLETION_PANEL_WIDTH.min(viewport_width);
+    let content_width = panel_width - COMPLETION_PANEL_PAD * 2.0;
+    let fixed_columns = COMPLETION_ROW_LEFT_PAD
+        + COMPLETION_ICON_WIDTH
+        + COMPLETION_COLUMN_GAP * 2.0
+        + COMPLETION_TAG_WIDTH
+        + COMPLETION_ROW_RIGHT_PAD;
+    let label_width = ((content_width - fixed_columns) / cell_width).floor() as isize;
+    if label_width <= 0 {
+        return None;
+    }
+
+    let cursor_row = cursor_row.min(screen_lines - 1);
+    let cursor_col = cursor_col.min(columns - 1);
+    let cursor_top = line_height * cursor_row as f32;
+    let cursor_bottom = cursor_top + line_height;
+    let below_space = (viewport_height - cursor_bottom - COMPLETION_PANEL_GAP).max(0.0);
+    let above_space = (cursor_top - COMPLETION_PANEL_GAP).max(0.0);
+    let rows_that_fit = |space: f32| {
+        ((space - COMPLETION_PANEL_PAD * 2.0).max(0.0) / COMPLETION_ROW_HEIGHT).floor() as usize
+    };
+    let below = rows_that_fit(below_space);
+    let above = rows_that_fit(above_space);
+    let want = items.len().min(8);
+    let place_below = below >= want || below >= above;
+    let rows = want.min(if place_below { below } else { above });
+    if rows == 0 {
+        return None;
+    }
+
+    let panel_height = COMPLETION_ROW_HEIGHT * rows as f32 + COMPLETION_PANEL_PAD * 2.0;
+    let panel_y = if place_below {
+        cursor_bottom + COMPLETION_PANEL_GAP
+    } else {
+        (cursor_top - COMPLETION_PANEL_GAP - panel_height).max(0.0)
+    };
+
+    // 光标处优先对齐列表内容；若 520px 面板越过右边界，整块向左滑，
+    // 而不是压缩图标/标签列，窄窗里只牺牲中间文字宽度。
+    let desired_panel_x = cell_width * cursor_col as f32 - COMPLETION_PANEL_PAD;
+    let max_panel_x = (viewport_width - panel_width).max(0.0);
+    let panel_x = desired_panel_x.clamp(0.0, max_panel_x);
+
+    let selected = selected.filter(|index| *index < items.len());
+    let offset = offset.min(items.len().saturating_sub(rows));
+    Some(CompletionPopupLayout {
+        content_x: px(panel_x + COMPLETION_PANEL_PAD),
+        content_y: px(panel_y + COMPLETION_PANEL_PAD),
+        content_width: px(content_width),
+        row_height: px(COMPLETION_ROW_HEIGHT),
+        offset,
+        rows,
+        label_width: label_width as usize,
+        selected,
+    })
+}
+
+fn completion_icon_point(
+    origin: gpui::Point<Pixels>,
+    scale: f32,
+    x: f32,
+    y: f32,
+) -> gpui::Point<Pixels> {
+    point(origin.x + px(x * scale), origin.y + px(y * scale))
+}
+
+fn add_file_outline(path: &mut PathBuilder, origin: gpui::Point<Pixels>, scale: f32) {
+    let at = |x, y| completion_icon_point(origin, scale, x, y);
+    path.move_to(at(14.5, 2.0));
+    path.line_to(at(6.0, 2.0));
+    path.curve_to(at(4.0, 4.0), at(4.0, 2.0));
+    path.line_to(at(4.0, 20.0));
+    path.curve_to(at(6.0, 22.0), at(4.0, 22.0));
+    path.line_to(at(18.0, 22.0));
+    path.curve_to(at(20.0, 20.0), at(20.0, 22.0));
+    path.line_to(at(20.0, 7.5));
+    path.line_to(at(14.5, 2.0));
+    path.move_to(at(14.0, 2.0));
+    path.line_to(at(14.0, 8.0));
+    path.line_to(at(20.0, 8.0));
+}
+
+/// HTML 原型使用的 Lucide 线框被直接转换为 GPUI stroke path；不再用
+/// ↶、›、/、· 这些字符假装图标，字体变化也不会破坏列间距。
+fn paint_completion_icon(
+    window: &mut Window,
+    kind: CompletionVisualKind,
+    bounds: Bounds<Pixels>,
+    color: Hsla,
+) {
+    let scale = COMPLETION_ICON_SIZE / 24.0;
+    let origin = point(
+        bounds.origin.x + (bounds.size.width - px(COMPLETION_ICON_SIZE)) * 0.5,
+        bounds.origin.y + (bounds.size.height - px(COMPLETION_ICON_SIZE)) * 0.5,
+    );
+    let at = |x, y| completion_icon_point(origin, scale, x, y);
+    let mut path = PathBuilder::stroke(px(1.35));
+
+    match kind {
+        CompletionVisualKind::History => {
+            path.move_to(at(3.0, 12.0));
+            path.arc_to(
+                point(px(9.0 * scale), px(9.0 * scale)),
+                px(0.0),
+                true,
+                false,
+                at(6.0, 5.3),
+            );
+            path.line_to(at(3.0, 8.0));
+            path.move_to(at(3.0, 3.0));
+            path.line_to(at(3.0, 8.0));
+            path.line_to(at(8.0, 8.0));
+            path.move_to(at(12.0, 7.0));
+            path.line_to(at(12.0, 12.0));
+            path.line_to(at(15.0, 14.0));
+        },
+        CompletionVisualKind::Command => {
+            path.move_to(at(5.0, 4.0));
+            path.line_to(at(19.0, 4.0));
+            path.curve_to(at(21.0, 6.0), at(21.0, 4.0));
+            path.line_to(at(21.0, 18.0));
+            path.curve_to(at(19.0, 20.0), at(21.0, 20.0));
+            path.line_to(at(5.0, 20.0));
+            path.curve_to(at(3.0, 18.0), at(3.0, 20.0));
+            path.line_to(at(3.0, 6.0));
+            path.curve_to(at(5.0, 4.0), at(3.0, 4.0));
+            path.move_to(at(7.0, 9.0));
+            path.line_to(at(10.0, 12.0));
+            path.line_to(at(7.0, 15.0));
+            path.move_to(at(13.0, 15.0));
+            path.line_to(at(17.0, 15.0));
+        },
+        CompletionVisualKind::Directory => {
+            path.move_to(at(4.0, 3.0));
+            path.line_to(at(7.9, 3.0));
+            path.curve_to(at(9.6, 3.9), at(9.0, 3.0));
+            path.line_to(at(10.4, 5.1));
+            path.curve_to(at(12.1, 6.0), at(11.0, 6.0));
+            path.line_to(at(20.0, 6.0));
+            path.curve_to(at(22.0, 8.0), at(22.0, 6.0));
+            path.line_to(at(22.0, 18.0));
+            path.curve_to(at(20.0, 20.0), at(22.0, 20.0));
+            path.line_to(at(4.0, 20.0));
+            path.curve_to(at(2.0, 18.0), at(2.0, 20.0));
+            path.line_to(at(2.0, 5.0));
+            path.curve_to(at(4.0, 3.0), at(2.0, 3.0));
+        },
+        CompletionVisualKind::Rust => {
+            add_file_outline(&mut path, origin, scale);
+            path.move_to(at(10.0, 13.0));
+            path.line_to(at(8.0, 15.0));
+            path.line_to(at(10.0, 17.0));
+            path.move_to(at(14.0, 17.0));
+            path.line_to(at(16.0, 15.0));
+            path.line_to(at(14.0, 13.0));
+        },
+        CompletionVisualKind::Toml => {
+            add_file_outline(&mut path, origin, scale);
+            path.move_to(at(10.0, 13.0));
+            path.curve_to(at(9.0, 14.5), at(9.0, 13.0));
+            path.curve_to(at(7.0, 16.0), at(9.0, 16.0));
+            path.move_to(at(14.0, 13.0));
+            path.curve_to(at(15.0, 14.5), at(15.0, 13.0));
+            path.curve_to(at(17.0, 16.0), at(15.0, 16.0));
+        },
+        CompletionVisualKind::Markdown => {
+            add_file_outline(&mut path, origin, scale);
+            path.move_to(at(8.0, 13.0));
+            path.line_to(at(16.0, 13.0));
+            path.move_to(at(8.0, 17.0));
+            path.line_to(at(14.0, 17.0));
+        },
+        CompletionVisualKind::File => {
+            add_file_outline(&mut path, origin, scale);
+            path.move_to(at(8.0, 15.0));
+            path.line_to(at(16.0, 15.0));
+        },
+    }
+
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// 弹窗补全列表严格复用 HTML 原型的三列间距；底部空间容不下时整体翻到
+/// 光标上方。选中态没有箭头光标，只在行左侧画候选语义色的 2px 竖线。
+#[allow(clippy::too_many_arguments)]
+fn paint_completion_popup(
+    window: &mut Window,
+    cx: &mut App,
+    items: &[crate::display::NebulaCompletionItem],
+    selected: Option<usize>,
+    offset: usize,
+    hovered: Option<usize>,
+    cursor_row: usize,
+    cursor_col: usize,
+    layout: &TermLayout,
+    bounds: &Bounds<Pixels>,
+    colors: &crate::gpui_shell::theme::CompletionColors,
+    font: &gpui::Font,
+    font_size: Pixels,
+) {
+    let Some(popup) = completion_popup_layout(
+        items,
+        selected,
+        offset,
+        cursor_row,
+        cursor_col,
+        layout.rows,
+        layout.cols,
+        layout.cell_width,
+        layout.line_height,
+    ) else {
+        return;
+    };
+    let visible = &items[popup.offset..(popup.offset + popup.rows).min(items.len())];
+    let panel_bounds = popup.panel_bounds(bounds.origin);
+    let panel_radius = px(6.0);
+    window.paint_drop_shadows(
+        panel_bounds,
+        panel_radius.into(),
+        &[
+            gpui::BoxShadow {
+                color: colors.panel_shadow,
+                offset: point(px(0.0), px(20.0)),
+                blur_radius: px(45.0),
+                spread_radius: px(0.0),
+                inset: false,
+            },
+            gpui::BoxShadow {
+                color: colors.panel_shadow.opacity(0.62),
+                offset: point(px(0.0), px(4.0)),
+                blur_radius: px(12.0),
+                spread_radius: px(0.0),
+                inset: false,
+            },
+        ],
+    );
+    window.paint_quad(fill(panel_bounds, colors.panel_bg).corner_radii(panel_radius));
+    window.paint_quad(
+        outline(panel_bounds, colors.panel_border, gpui::BorderStyle::Solid)
+            .corner_radii(panel_radius),
+    );
+
+    for (row, item) in visible.iter().enumerate() {
+        let row_bounds = popup.row_bounds(bounds.origin, row);
+        let is_selected = Some(popup.offset + row) == popup.selected;
+        let is_hovered = Some(popup.offset + row) == hovered;
+        let visual_kind = completion_visual_kind(item);
+        let semantic = completion_kind_color(colors, visual_kind);
+        let row_radius = if is_selected || is_hovered { px(4.0) } else { px(0.0) };
+        let background = if is_selected {
+            colors.selected_bg
+        } else if is_hovered {
+            colors.selected_bg.opacity(0.45)
+        } else {
+            colors.row_bg
+        };
+        window.paint_quad(fill(row_bounds, background).corner_radii(row_radius));
+        if is_selected {
+            window.paint_quad(fill(
+                Bounds::new(row_bounds.origin, size(px(2.0), row_bounds.size.height)),
+                semantic,
+            ));
+        }
+
+        let icon_slot = Bounds::new(
+            point(row_bounds.origin.x + px(COMPLETION_ROW_LEFT_PAD), row_bounds.origin.y),
+            size(px(COMPLETION_ICON_WIDTH), row_bounds.size.height),
+        );
+        paint_completion_icon(window, visual_kind, icon_slot, semantic);
+
+        let label_origin = point(
+            row_bounds.origin.x
+                + px(COMPLETION_ROW_LEFT_PAD + COMPLETION_ICON_WIDTH + COMPLETION_COLUMN_GAP),
+            row_bounds.origin.y,
+        );
+        let (matched, remainder) = completion_label_parts(item);
+        let used = grid_text(
+            window,
+            cx,
+            matched,
+            font,
+            font_size,
+            colors.match_fg,
+            label_origin,
+            layout.cell_width,
+            popup.row_height,
+            popup.label_width,
+        );
+        grid_text(
+            window,
+            cx,
+            remainder,
+            font,
+            font_size,
+            if is_selected { colors.selected_fg } else { colors.row_fg },
+            point(label_origin.x + layout.cell_width * used, label_origin.y),
+            layout.cell_width,
+            popup.row_height,
+            popup.label_width.saturating_sub(used),
+        );
+
+        let tag = completion_tag(visual_kind);
+        let tag_font_size = font_size * 0.75;
+        let tag_cell_width = layout.cell_width * 0.75;
+        let tag_cells = completion_cells(tag);
+        let tag_right = row_bounds.origin.x + row_bounds.size.width - px(COMPLETION_ROW_RIGHT_PAD);
+        let tag_origin = point(tag_right - tag_cell_width * tag_cells, row_bounds.origin.y);
+        grid_text(
+            window,
+            cx,
+            tag,
+            font,
+            tag_font_size,
+            semantic,
+            tag_origin,
+            tag_cell_width,
+            popup.row_height,
+            tag_cells,
+        );
+    }
+
+    if let Some((track, thumb)) = popup.scrollbar_bounds(bounds.origin, items.len()) {
+        window.paint_quad(fill(track, colors.scroll_track).corner_radii(px(1.0)));
+        window.paint_quad(fill(thumb, colors.scroll_thumb).corner_radii(px(1.0)));
+    }
+}
+
+fn rgba_channels(color: Rgba) -> (u8, u8, u8) {
+    (
+        (color.r * 255.0).round() as u8,
+        (color.g * 255.0).round() as u8,
+        (color.b * 255.0).round() as u8,
+    )
+}
+
+fn is_default_host_cursor(palette: &super::colors::Palette) -> bool {
+    rgba_channels(palette.cursor) == default_cursor_rgb()
+}
+
+fn is_default_selection(palette: &super::colors::Palette) -> bool {
+    rgba_channels(palette.selection) == default_cursor_rgb()
+        && (palette.selection.a - 0.60).abs() < 0.05
+}
+
+fn default_cursor_rgb() -> (u8, u8, u8) {
+    match crate::config::color::NEBULA_DEFAULT_CURSOR.background {
+        crate::display::color::CellRgb::Rgb(rgb) => (rgb.r, rgb.g, rgb.b),
+        _ => (0x49, 0x4d, 0x72),
+    }
+}
+
+pub(super) fn rgb_from_rgba(color: Rgba) -> crate::display::color::Rgb {
+    let (r, g, b) = rgba_channels(color);
+    crate::display::color::Rgb::new(r, g, b)
+}
+
+pub(super) fn rgba_rgb(color: crate::display::color::Rgb, alpha: f32) -> Rgba {
+    Rgba {
+        r: f32::from(color.r) / 255.0,
+        g: f32::from(color.g) / 255.0,
+        b: f32::from(color.b) / 255.0,
+        a: alpha,
+    }
+}
+
+fn themed_anchor(palette: &super::colors::Palette, cx: &App) -> (crate::display::color::Rgb, bool) {
+    let sk = crate::gpui_shell::theme::resolved_skin(cx);
+    // ANSI magenta = index 5；旧壳 `display.colors[NamedColor::Magenta]`。
+    let magenta = rgb_from_rgba(palette.ansi[5]);
+    let mix = if sk.is_light {
+        crate::display::ui::tokens::terminal_feedback::ANCHOR_NEUTRAL_MIX_LIGHT
+    } else {
+        crate::display::ui::tokens::terminal_feedback::ANCHOR_NEUTRAL_MIX_DARK
+    };
+    (crate::display::content::mix_rgb(magenta, sk.ink_dim, mix), sk.is_light)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{completion_popup_layout, snap_to_device};
+    use crate::display::{NebulaCompletionItem, NebulaCompletionKind};
+
+    mod app_color_resolution {
+        use pebrel_terminal::render::{RenderSnapshot, SnapshotConfig};
+        use pebrel_terminal::term::color::Colors;
+        use pebrel_terminal::term::test::TermSize;
+        use pebrel_terminal::term::{Config, Term};
+        use pebrel_terminal::vte::ansi::{self, Color, NamedColor};
+
+        use super::super::{Palette, resolve_app_colors_into, rgb_from_rgba};
+        use crate::display::terminal_color::TerminalColorResolver;
+        use crate::display::ui::tokens::terminal_feedback::FIXED_TEXT_MIN_CONTRAST;
+
+        /// 把一串字节喂进真终端再截快照——`RenderSnapshot` 只能这么造，顺带把
+        /// 「SGR 落到哪个 `Color` 变体」这段也一起钉住。
+        fn snapshot_of(bytes: &[u8]) -> RenderSnapshot {
+            let size = TermSize::new(40, 2);
+            let mut term =
+                Term::new(Config::default(), &size, pebrel_terminal::event::VoidListener);
+            let mut parser: ansi::Processor = ansi::Processor::new();
+            parser.advance(&mut term, bytes);
+            RenderSnapshot::capture(&term, &SnapshotConfig { rows: 2, cols: 40 })
+        }
+
+        fn first_cell_fg(snap: &RenderSnapshot) -> Color {
+            snap.segments.first().expect("应有一段文字").cells.first().expect("应有一格").fg
+        }
+
+        fn resolved(bytes: &[u8]) -> (Color, Palette) {
+            let theme = Palette::default();
+            let mut snap = snapshot_of(bytes);
+            let mut resolver = TerminalColorResolver::default();
+            resolve_app_colors_into(&mut snap, &theme, &Colors::default(), &mut resolver);
+            (first_cell_fg(&snap), theme)
+        }
+
+        /// 应用写死的 truecolor 在当前底色上读不出来，就得被拉到最低对比度。
+        /// 这是「深色主题下 codex 挑的配色、切成浅色主题后一片糊」的那条路。
+        #[test]
+        fn unreadable_truecolor_foreground_is_pulled_to_the_minimum_contrast() {
+            // #1a1d3a 压在默认底 #080a18 上，对比度远不到 4.5。
+            let (fg, theme) = resolved(b"\x1b[38;2;26;29;58mnearly invisible");
+            let Color::Spec(rgb) = fg else {
+                panic!("写死色必须被矫正成具体色，实得 {fg:?}")
+            };
+            let bg = rgb_from_rgba(theme.background);
+            assert!(
+                rgb.contrast(*bg) >= FIXED_TEXT_MIN_CONTRAST,
+                "矫正后仍不可读：{rgb:?} on {bg:?}"
+            );
+        }
+
+        /// Readable ANSI text keeps its original color identity.
+        #[test]
+        fn theme_owned_ansi_colors_are_left_alone() {
+            let (fg, _) = resolved(b"\x1b[31mred text");
+            assert_eq!(fg, Color::Named(NamedColor::Red));
+        }
+
+        #[test]
+        fn ansi_input_and_osc_foreground_are_readable_on_light_surfaces() {
+            let mut theme = Palette::default();
+            theme.background = gpui::rgb(0xfcfbf9);
+            theme.foreground = gpui::rgb(0x1a1a1a);
+            theme.ansi[7] = gpui::rgb(0xdddddd);
+            theme.ansi[15] = gpui::rgb(0xffffff);
+            for bytes in [b"\x1b[37m/seagull".as_slice(), b"\x1b[97mURL", b"\x1b[38;5;7mtext"] {
+                let mut snap = snapshot_of(bytes);
+                let mut resolver = TerminalColorResolver::default();
+                resolve_app_colors_into(&mut snap, &theme, &Colors::default(), &mut resolver);
+                let fg =
+                    rgb_from_rgba(theme.resolve(first_cell_fg(&snap), &Colors::default(), false));
+                assert!(fg.contrast(*rgb_from_rgba(theme.background)) >= FIXED_TEXT_MIN_CONTRAST);
+            }
+            let mut overrides = Colors::default();
+            overrides[NamedColor::Foreground] = Some(ansi::Rgb { r: 238, g: 238, b: 238 });
+            let mut snap = snapshot_of("你好".as_bytes());
+            let mut resolver = TerminalColorResolver::default();
+            resolve_app_colors_into(&mut snap, &theme, &overrides, &mut resolver);
+            let fg = rgb_from_rgba(theme.resolve(first_cell_fg(&snap), &overrides, false));
+            assert!(fg.contrast(*rgb_from_rgba(theme.background)) >= FIXED_TEXT_MIN_CONTRAST);
+        }
+
+        /// 图形字符（Nerd Font 私用区、emoji）的颜色表达图形本身。哪怕它写死了
+        /// 一个在当前底色上很淡的色，也不能矫正——图标被改色就是另一张图了。
+        #[test]
+        fn graphic_glyphs_keep_their_own_color() {
+            let mut bytes = b"\x1b[38;2;26;29;58m".to_vec();
+            // U+F256 nf-fa-hand_paper_o，落在 is_terminal_graphic 的 PUA 区间。
+            bytes.extend("\u{f256}".as_bytes());
+            let (fg, _) = resolved(&bytes);
+            assert!(
+                matches!(fg, Color::Spec(rgb) if (rgb.r, rgb.g, rgb.b) == (26, 29, 58)),
+                "图形字符的写死色必须原样保留，实得 {fg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn popup_keeps_a_single_short_exact_command_visible() {
+        let items = [NebulaCompletionItem {
+            replace_chars: 0,
+            replace_after_chars: 0,
+            label: "cat".to_owned(),
+            insert: " ".to_owned(),
+            kind: NebulaCompletionKind::Command,
+        }];
+
+        let popup = completion_popup_layout(
+            &items,
+            Some(0),
+            0,
+            2,
+            7,
+            24,
+            80,
+            gpui::px(8.0),
+            gpui::px(21.0),
+        )
+        .expect("短命令的精确候选也必须形成可见面板");
+        assert_eq!(popup.rows, 1);
+        assert!(popup.label_width >= 3);
+    }
+
+    #[test]
+    fn popup_layout_preserves_the_unselected_state() {
+        let items = [NebulaCompletionItem {
+            replace_chars: 0,
+            replace_after_chars: 0,
+            label: "git pull upstream".to_owned(),
+            insert: " upstream".to_owned(),
+            kind: NebulaCompletionKind::History,
+        }];
+
+        let popup =
+            completion_popup_layout(&items, None, 0, 2, 7, 24, 80, gpui::px(8.0), gpui::px(21.0))
+                .expect("空选中态仍应显示候选面板");
+        assert_eq!(popup.selected, None);
+        assert_eq!(popup.offset, 0);
+    }
+
+    #[test]
+    fn scrolling_is_independent_of_selection_and_popup_position() {
+        let items = (0..30)
+            .map(|index| NebulaCompletionItem {
+                replace_chars: 0,
+                replace_after_chars: 0,
+                label: format!("command-{index}"),
+                insert: format!("{index}"),
+                kind: NebulaCompletionKind::Command,
+            })
+            .collect::<Vec<_>>();
+        for cursor_row in [2, 22] {
+            let popup = completion_popup_layout(
+                &items,
+                Some(0),
+                10,
+                cursor_row,
+                7,
+                24,
+                80,
+                gpui::px(8.0),
+                gpui::px(21.0),
+            )
+            .unwrap();
+            assert_eq!(popup.offset, 10);
+            assert_eq!(popup.selected, Some(0));
+            let (track, thumb) = popup
+                .scrollbar_bounds(gpui::point(gpui::px(0.0), gpui::px(0.0)), items.len())
+                .unwrap();
+            assert!(thumb.origin.y >= track.origin.y);
+            assert!(thumb.bottom() <= track.bottom());
+        }
+    }
+
+    #[test]
+    fn popup_flips_above_the_cursor_near_the_bottom_edge() {
+        let items = [NebulaCompletionItem {
+            replace_chars: 0,
+            replace_after_chars: 0,
+            label: "completion.rs".to_owned(),
+            insert: "ompletion.rs".to_owned(),
+            kind: NebulaCompletionKind::File,
+        }];
+
+        let line_height = gpui::px(21.0);
+        let cursor_row = 22;
+        let popup = completion_popup_layout(
+            &items,
+            None,
+            0,
+            cursor_row,
+            7,
+            24,
+            80,
+            gpui::px(8.0),
+            line_height,
+        )
+        .expect("底部空间不足时仍应在光标上方显示候选");
+        let cursor_top = line_height * cursor_row;
+        assert!(popup.content_y + popup.row_height < cursor_top);
+    }
+
+    #[test]
+    fn boxdraw_origin_snaps_in_absolute_device_pixels() {
+        let snapped = snap_to_device(gpui::px(10.2), 2.0);
+        assert!((snapped.as_f32() - 10.0).abs() < 1e-5);
+
+        let snapped = snap_to_device(gpui::px(10.25), 1.5);
+        assert!((snapped.as_f32() - 10.0).abs() < 1e-5);
+    }
+}

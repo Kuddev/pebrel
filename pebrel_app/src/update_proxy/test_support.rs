@@ -1,0 +1,194 @@
+//! Local HTTP/CONNECT fixtures for the updater's actual request paths.
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+pub(crate) struct Server {
+    pub(crate) address: SocketAddr,
+    worker: Option<JoinHandle<Vec<(String, String)>>>,
+}
+
+impl Server {
+    pub(crate) fn start(responses: Vec<String>) -> Self {
+        Self::start_with_socks_auth(responses, None)
+    }
+
+    pub(crate) fn authenticated_socks(responses: Vec<String>, user: &str, password: &str) -> Self {
+        Self::start_with_socks_auth(responses, Some((user.to_owned(), password.to_owned())))
+    }
+
+    fn start_with_socks_auth(responses: Vec<String>, auth: Option<(String, String)>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "fixture received no connection");
+                            thread::sleep(Duration::from_millis(5));
+                        },
+                        Err(error) => panic!("fixture accept failed: {error}"),
+                    }
+                };
+                // Windows accepted sockets inherit the listener's nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream);
+                let (connect, request) = if reader.fill_buf().unwrap().first() == Some(&5) {
+                    (socks_connect(&mut reader, auth.as_ref()), read_headers(&mut reader))
+                } else {
+                    let first = read_headers(&mut reader);
+                    if first.starts_with("CONNECT ") {
+                        reader
+                            .get_mut()
+                            .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                            .unwrap();
+                        (first, read_headers(&mut reader))
+                    } else {
+                        (String::new(), first)
+                    }
+                };
+                requests.push((connect, request));
+                reader.get_mut().write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        Self { address, worker: Some(worker) }
+    }
+
+    pub(crate) fn agent(&self, exclusions: &[&str]) -> ureq::Agent {
+        self.agent_for_server(&self.address.to_string(), exclusions)
+    }
+
+    pub(crate) fn socks_agent(&self) -> ureq::Agent {
+        self.agent_for_server(&format!("socks=socks5h://{}", self.address), &[])
+    }
+
+    /// Synthetic Network settings; never read or alter the user's preferences.
+    pub(crate) fn network_agent(
+        &self,
+        scheme: &str,
+        credentials: Option<&str>,
+        exclusions: &[&str],
+    ) -> ureq::Agent {
+        let prefix = if scheme.is_empty() { String::new() } else { format!("{scheme}://") };
+        let userinfo = credentials.map(|value| format!("{value}@")).unwrap_or_default();
+        let config = crate::ssh_proxy::SshProxyConfig {
+            mode: crate::ssh_proxy::ProxyMode::Custom,
+            url: format!("{prefix}{userinfo}{}", self.address),
+            no_proxy: exclusions.iter().map(|entry| (*entry).to_owned()).collect(),
+        };
+        let proxy = super::resolve_with_network(
+            &config,
+            || panic!("custom Network proxy should win over system"),
+            || panic!("custom Network proxy should win over environment"),
+        )
+        .unwrap();
+        ureq::config::Config::builder()
+            .proxy(proxy)
+            .timeout_global(Some(Duration::from_secs(4)))
+            .build()
+            .new_agent()
+    }
+
+    fn agent_for_server(&self, server: &str, exclusions: &[&str]) -> ureq::Agent {
+        // Go through the same system-value parser and fallback policy as production.
+        let url = super::parse_windows_proxy_server(server, "http").unwrap();
+        let proxy = super::resolve_with_system(
+            Some((url, exclusions.iter().map(|entry| (*entry).to_owned()).collect())),
+            || panic!("system proxy should win"),
+        );
+        ureq::config::Config::builder()
+            .proxy(proxy)
+            .timeout_global(Some(Duration::from_secs(4)))
+            .build()
+            .new_agent()
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<(String, String)> {
+        self.worker.take().unwrap().join().expect("HTTP fixture failed")
+    }
+}
+
+fn socks_connect(reader: &mut BufReader<TcpStream>, auth: Option<&(String, String)>) -> String {
+    let mut greeting = [0; 2];
+    reader.read_exact(&mut greeting).unwrap();
+    assert_eq!(greeting[0], 5);
+    let mut methods = vec![0; greeting[1] as usize];
+    reader.read_exact(&mut methods).unwrap();
+    if let Some((expected_user, expected_password)) = auth {
+        assert!(methods.contains(&2));
+        reader.get_mut().write_all(&[5, 2]).unwrap();
+        let mut header = [0; 2];
+        reader.read_exact(&mut header).unwrap();
+        assert_eq!(header[0], 1);
+        let mut user = vec![0; header[1] as usize];
+        reader.read_exact(&mut user).unwrap();
+        let mut length = [0];
+        reader.read_exact(&mut length).unwrap();
+        let mut password = vec![0; length[0] as usize];
+        reader.read_exact(&mut password).unwrap();
+        assert_eq!(user, expected_user.as_bytes());
+        assert_eq!(password, expected_password.as_bytes());
+        reader.get_mut().write_all(&[1, 0]).unwrap();
+    } else {
+        assert!(methods.contains(&0));
+        reader.get_mut().write_all(&[5, 0]).unwrap();
+    }
+    let mut request = [0; 5];
+    reader.read_exact(&mut request).unwrap();
+    assert_eq!(&request[..4], &[5, 1, 0, 3], "SOCKS5h must send the hostname to the proxy");
+    let mut host = vec![0; request[4] as usize];
+    reader.read_exact(&mut host).unwrap();
+    let mut port = [0; 2];
+    reader.read_exact(&mut port).unwrap();
+    reader.get_mut().write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).unwrap();
+    format!("SOCKS5 {}:{}", String::from_utf8(host).unwrap(), u16::from_be_bytes(port))
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            // Even a failing test retires its bounded fixture thread.
+            let _ = worker.join();
+        }
+    }
+}
+
+fn read_headers(reader: &mut BufReader<TcpStream>) -> String {
+    let mut headers = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).unwrap() > 0, "unexpected fixture EOF");
+        if line == "\r\n" {
+            // PROPFIND 等请求携带正文；未读完就关闭连接会在 Windows 上触发 TCP reset。
+            let length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .map(|(_, value)| value.trim().parse::<u64>().unwrap())
+                .unwrap_or(0);
+            assert!(length <= 128 * 1024, "fixture request body is too large");
+            let read = std::io::copy(&mut reader.take(length), &mut std::io::sink()).unwrap();
+            assert_eq!(read, length, "unexpected fixture body EOF");
+            return headers;
+        }
+        headers.push_str(&line);
+        assert!(headers.len() < 16 * 1024);
+    }
+}
+
+pub(crate) fn response(status: &str, headers: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+        body.len()
+    )
+}

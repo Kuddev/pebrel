@@ -1,0 +1,4 @@
+<resources>
+    <string name="reader_extension_error">渲染失败，可展开源码查看。</string>
+    <string name="reader_extension_loading">正在渲染…</string>
+</resources>

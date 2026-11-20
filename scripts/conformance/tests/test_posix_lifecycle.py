@@ -63,6 +63,8 @@ class PosixLifecycleTests(unittest.TestCase):
         self.addCleanup(self.cleanup_owned_processes)
 
         def launch_fixture(command, **kwargs):
+            if command[0] != os.fspath(self.app.executable):
+                return REAL_POPEN(command, **kwargs)
             launch = self.root / f"launch-{len(self.launches) + 1}"
             launch.mkdir()
             self.launches.append(launch)
@@ -141,7 +143,8 @@ class PosixLifecycleTests(unittest.TestCase):
         self.context.start()
         self.capture_descendants()
         (self.launches[-1] / "exit").touch()
-        self.context.process.wait(timeout=5)
+        self.context._wait_process(timeout=5)
+        self.assertIsNone(self.context.process.returncode, "retain the exited leader until cleanup")
         self.context.stop(force=True)
         self.assert_tree_exited(self.parents[-1])
 
@@ -198,10 +201,62 @@ class PosixLifecycleTests(unittest.TestCase):
         self.context.start()
         self.capture_descendants()
         process = self.context.process
-        with patch("conformance.harness.os.killpg", side_effect=OSError("cleanup unavailable")):
-            with self.assertRaisesRegex(OSError, "cleanup unavailable"):
-                self.context.stop(force=True)
+        for error in (OSError("cleanup unavailable"), PermissionError("cleanup unavailable")):
+            with self.subTest(error=type(error).__name__), patch(
+                "conformance.harness.os.killpg", side_effect=error,
+            ):
+                with self.assertRaisesRegex(OSError, "cleanup unavailable"):
+                    self.context.stop(force=True)
         self.assertIs(self.context.process, process)
+        self.context.stop(force=True)
+        self.assert_tree_exited(process)
+
+    def test_zombie_only_group_permission_error_still_reaps_the_leader(self) -> None:
+        self.fixture.write_text("import time; time.sleep(60)\n", encoding="utf-8")
+        self.context.start()
+        process = self.context.process
+        os.kill(process.pid, signal.SIGKILL)
+        self.context._wait_process(timeout=5)
+        with patch("conformance.harness.os.killpg", side_effect=PermissionError("zombie-only group")):
+            self.context.stop(force=True)
+        self.assertEqual(process.returncode, -signal.SIGKILL)
+        self.assert_tree_exited(process)
+
+    def test_force_stop_drains_descendants_missed_by_first_group_signal(self) -> None:
+        self.context.start()
+        self.capture_descendants()
+        process = self.context.process
+        real_killpg = os.killpg
+        signals = []
+
+        def partial_delivery(pgid, signum):
+            signals.append((pgid, signum))
+            if len(signals) == 1:
+                # 确定性模拟成员快照漏掉孙进程，不依赖机器负载碰撞 fork 时序。
+                os.kill(process.pid, signum)
+                os.kill(self.descendants[0], signum)
+            else:
+                self.assertIsNone(process.returncode, "PGID must stay reserved until drained")
+                real_killpg(pgid, signum)
+
+        with patch("conformance.harness.os.killpg", side_effect=partial_delivery):
+            self.context.stop(force=True)
+        self.assertGreaterEqual(len(signals), 2)
+        self.assertTrue(all(pgid == process.pid for pgid, _ in signals))
+        self.assert_tree_exited(process)
+
+    def test_drain_timeout_retains_the_leader_for_retry(self) -> None:
+        self.context.start()
+        self.capture_descendants()
+        process = self.context.process
+        os.kill(process.pid, signal.SIGKILL)
+        self.context._wait_process(timeout=5)
+        # 保留真实活后代来模拟投递失败，避免伪造的进程表与 Darwin 僵尸状态矛盾。
+        with patch("conformance.harness.os.killpg", return_value=None):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.context.stop(force=True, timeout=0.1)
+        self.assertIs(self.context.process, process)
+        self.assertIsNone(process.returncode)
         self.context.stop(force=True)
         self.assert_tree_exited(process)
 

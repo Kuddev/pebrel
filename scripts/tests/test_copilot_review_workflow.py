@@ -100,6 +100,13 @@ class CopilotReviewWorkflowTests(unittest.TestCase):
                                 text=True, encoding='utf-8', capture_output=True, check=True)
         return json.loads(result.stdout)
 
+    def test_review_has_no_automatic_event_subscriptions(self):
+        triggers = self.workflow.split('permissions:', 1)[0]
+        self.assertIn('  workflow_dispatch:', triggers)
+        for automatic in ('workflow_run:', 'pull_request_target:', 'pull_request:',
+                          'issues:', 'issue_comment:', 'schedule:', 'push:'):
+            self.assertNotIn(automatic, triggers)
+
     def test_external_ready_pr_claimed_then_requested_after_all_required_ci(self):
         result = self.run_gate(self.fixture())
         self.assertEqual([row[0] for row in result['writes']], ['claim', 'request'])
@@ -233,8 +240,8 @@ class CopilotReviewWorkflowTests(unittest.TestCase):
         self.assertNotIn('contents: write', self.workflow)
         self.assertNotIn('createReview', self.script)
         self.assertNotIn('synchronize', self.workflow)
-        self.assertIn('types: [ready_for_review]', self.workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", self.workflow)
+        self.assertNotIn('types: [ready_for_review]', self.workflow)
+        self.assertIn("github.event_name == 'workflow_dispatch'", self.workflow)
         self.assertIn('retries: 0', self.workflow)
         self.assertIn('cancel-in-progress: false', self.workflow)
 

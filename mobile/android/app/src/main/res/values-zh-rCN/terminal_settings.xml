@@ -1,0 +1,16 @@
+<resources>
+    <string name="terminal_font_and_size">字体与大小</string>
+    <string name="terminal_font_size_value">字号 · %1$d sp</string>
+    <string name="terminal_system_font">系统等宽字体</string>
+    <string name="terminal_cursor">光标</string>
+    <string name="terminal_cursor_shape">光标样式</string>
+    <string name="terminal_cursor_block">方块</string>
+    <string name="terminal_cursor_bar">竖线</string>
+    <string name="terminal_cursor_underline">下划线</string>
+    <string name="terminal_cursor_blink">光标闪烁</string>
+    <string name="terminal_cursor_hint">应用于本地和 SSH 终端。终端程序仍可隐藏光标；终端不活动时暂停闪烁。</string>
+    <string name="terminal_gestures">手势</string>
+    <string name="terminal_pinch_zoom">双指捏合调整字号</string>
+    <string name="terminal_pinch_hint">双指捏合可调整终端字号，并保存到后续会话。单指滑动可滚动，长按可选择文字。</string>
+    <string name="terminal_solid_background">主题纯色背景</string>
+</resources>

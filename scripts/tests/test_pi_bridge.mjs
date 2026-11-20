@@ -8,7 +8,7 @@ import { test, after } from 'node:test';
 import { spawnSync } from 'node:child_process';
 
 const root = new URL('../../', import.meta.url);
-const bridgeSource = new URL('nebula_app/src/ai_hook/bridges.rs', root);
+const bridgeSource = new URL('pebrel_app/src/ai_hook/bridges.rs', root);
 const bridgePath = readFileSync(bridgeSource, 'utf8').match(/PI_EXTENSION_TS: &str = include_str!\("([^"]+)"\)/)?.[1];
 assert.ok(bridgePath, 'test must execute the production PI_EXTENSION_TS asset');
 const embedded = readFileSync(new URL(bridgePath, bridgeSource), 'utf8');
@@ -104,6 +104,24 @@ test('stale or corrupt file cannot replace direct native identity', () => {
     writeFileSync(file, content);
     assert.deepEqual(bridge.sessionFor(context(undefined, file)), {});
   }
+});
+
+test('OMP accepts its optional title slot before a matching native header', async () => {
+  const source = embedded.replace('const SOURCE: string = "pi";', 'const SOURCE: string = "omp";');
+  const js = stripTypeScriptTypes(source + '\nexport { sessionFor };');
+  const omp = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
+  const file = join(directory, 'omp session.jsonl');
+  const slot = { type: 'title', v: 1, title: '测试', updatedAt: '2026-11-19T00:00:00Z', pad: '' };
+  slot.pad = ' '.repeat(255 - Buffer.byteLength(JSON.stringify(slot)));
+  const header = JSON.stringify({ type: 'session', id: 'conversation' });
+  writeFileSync(file, JSON.stringify(slot) + '\n' + header + '\n');
+  assert.deepEqual(omp.sessionFor(context('conversation', file)), {
+    session_id: 'conversation', session_file: file,
+  });
+  assert.deepEqual(omp.sessionFor(context('other', file)), { session_id: 'other' });
+  assert.deepEqual(bridge.sessionFor(context('conversation', file)), { session_id: 'conversation' });
+  writeFileSync(file, '{"type":"message"}\n' + header + '\n');
+  assert.deepEqual(omp.sessionFor(context(undefined, file)), {});
 });
 
 test('a retryable failed attempt must not report successful completion', async () => {

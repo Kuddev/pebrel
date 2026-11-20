@@ -1,0 +1,18 @@
+<resources>
+    <string name="voice_hold">Hold to speak; tap for the voice model</string>
+    <string name="voice_finish">Finish and transcribe</string>
+    <string name="voice_transcribing">Transcribing on this phone…</string>
+    <string name="voice_release_cancel">Release to cancel</string>
+    <string name="voice_release_finish">Release to transcribe</string>
+    <string name="voice_slide_cancel">Slide up to cancel · Text goes into the draft</string>
+    <string name="voice_elapsed">%1$d / 60 seconds</string>
+    <string name="voice_model_description">Multilingual local recognition, including Chinese and English. Model: 148 MB. No automatic downloads. Audio stays on this phone; recognition never runs a command.</string>
+    <string name="voice_download_progress">Downloading model: %1$d%%</string>
+    <string name="voice_download">Download model · 148 MB</string>
+    <string name="voice_model_ready">Model installed. Hold the microphone to speak. After granting microphone permission, hold again to start.</string>
+    <string name="voice_remove">Delete downloaded model</string>
+    <string name="voice_permission">Microphone access is required. Allow it in app permissions, then hold to speak again.</string>
+    <string name="voice_too_short">Recording was too short. Hold to speak a little longer.</string>
+    <string name="voice_model_failed">Could not download, verify or remove the model. Check the connection and available storage, then try again.</string>
+    <string name="voice_engine_failed">The local speech engine is unavailable in this build.</string>
+</resources>

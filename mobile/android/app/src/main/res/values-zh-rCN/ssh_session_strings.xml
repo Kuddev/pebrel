@@ -1,0 +1,6 @@
+<resources>
+    <string name="ssh_terminal_mode">终端</string>
+    <string name="ssh_persistent_session">持久会话名称</string>
+    <string name="ssh_multiplexer_hint">在 SSH 主机上运行。名称留空使用默认会话；断开只分离客户端，远端进程继续运行。主机需已安装所选的会话管理程序。</string>
+    <string name="ssh_session_name_invalid">名称最多 64 位，使用字母、数字、下划线或短横线；支持句点的会话类型也可使用句点。</string>
+</resources>

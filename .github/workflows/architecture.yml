@@ -72,14 +72,14 @@ jobs:
       - name: Test shared settings without the UI dependency graph
         run: |
           mkdir -p "$RUNNER_TEMP/pebrel-contracts"
-          rustc --test --edition 2024 --crate-name nebula_settings \
-            nebula_settings/src/lib.rs -o "$RUNNER_TEMP/pebrel-contracts/settings"
+          rustc --test --edition 2024 --crate-name pebrel_settings \
+            pebrel_settings/src/lib.rs -o "$RUNNER_TEMP/pebrel-contracts/settings"
           "$RUNNER_TEMP/pebrel-contracts/settings"
       - name: Test the Rust line-budget adapter
         env:
-          CARGO_MANIFEST_DIR: ${{ github.workspace }}/nebula_app
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}/pebrel_app
         run: |
-          rustc --test --edition 2024 nebula_app/tests/file_line_budget.rs \
+          rustc --test --edition 2024 pebrel_app/tests/file_line_budget.rs \
             -o "$RUNNER_TEMP/pebrel-contracts/line-budget"
           "$RUNNER_TEMP/pebrel-contracts/line-budget"
       - name: Test renderer-independent translation and allocation contracts

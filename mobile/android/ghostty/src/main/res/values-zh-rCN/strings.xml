@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="terminal_copied">已复制</string>
+    <string name="terminal_copy_failed">无法复制选中内容</string>
+    <string name="terminal_paste_rejected">粘贴未被接受，请检查连接和输入权限。</string>
+</resources>

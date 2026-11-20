@@ -3,6 +3,9 @@
 Independent macOS runner placement superseded by
 [shared macOS runners](2026-09-27-shared-macos-runners.md).
 
+All-PR platform scheduling superseded by
+[path-based native validation](2026-09-29-path-based-native-validation.md).
+
 ## Status
 
 Implemented for review. The five native check names and two macOS release-check
@@ -107,7 +110,7 @@ doctests/features and failure propagation at each command.
 
 Actionlint 1.7.12 passed for the native workflow. The architecture check passed
 against the PR base without policy/budget changes. Nextest ran all 71
-`nebula-settings` tests successfully on Windows; its discovered test names match
+`pebrel-settings` tests successfully on Windows; its discovered test names match
 Cargo's inventory exactly. Rustfmt and the subset's doctest command also passed
 (that subset has zero doctests). Full native/GPUI execution,
 cache restore/save behavior and cold/warm timing comparisons are validated by

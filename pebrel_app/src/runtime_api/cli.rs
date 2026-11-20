@@ -1,0 +1,996 @@
+//! Runtime control CLI client.
+
+use super::*;
+
+fn client_stream(
+    endpoint: &Endpoint,
+    request: &ApiRequest,
+    timeout: Option<Duration>,
+) -> Result<TcpStream, IoError> {
+    let mut stream = TcpStream::connect_timeout(&endpoint_addr(&endpoint), CONNECT_TIMEOUT)?;
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    serde_json::to_writer(&mut stream, request).map_err(IoError::other)?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    stream.shutdown(Shutdown::Write)?;
+    Ok(stream)
+}
+
+pub(super) fn request_once(
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<ApiResponse, Box<dyn Error>> {
+    let endpoint = read_endpoint()
+        .ok_or_else(|| CliError::new("runtime_unavailable", "no resident Pebrel runtime found"))?;
+    let request = ApiRequest::new(endpoint.token.clone(), method, params);
+    read_response(&endpoint, &request, timeout)
+        .map_err(|error| input_transport_error(method, error))
+}
+
+/// 插件的命令入口使用相同协议，但为响应保留量和整次 I/O 设置独立上限。
+pub(crate) fn request_once_bounded(
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<ApiResponse, ApiError> {
+    let endpoint = read_endpoint()
+        .ok_or_else(|| ApiError::new("runtime_unavailable", "no resident Pebrel runtime found"))?;
+    let request = ApiRequest::new(endpoint.token.clone(), method, params);
+    let mut bytes = serde_json::to_vec(&request)
+        .map_err(|error| ApiError::invalid_params(error.to_string()))?;
+    if bytes.len() > MAX_REQUEST_BYTES {
+        return Err(ApiError::new("request_too_large", "plugin request exceeds 128 KiB"));
+    }
+    bytes.push(b'\n');
+    let response = bounded_exchange(&endpoint, &bytes, timeout)
+        .and_then(|bytes| decode_plugin_response(&request, &bytes));
+    response.map_err(|error| {
+        let error = input_transport_error(method, error);
+        if let Some(error) = error.downcast_ref::<CliError>() {
+            ApiError::new(error.code(), error.message.clone())
+        } else {
+            ApiError::new("runtime_transport", error.to_string())
+        }
+    })
+}
+
+pub(super) fn decode_plugin_response(
+    request: &ApiRequest,
+    bytes: &[u8],
+) -> Result<ApiResponse, Box<dyn Error>> {
+    let response: ApiResponse = serde_json::from_slice(bytes)?;
+    if response.protocol != PROTOCOL_NAME
+        || response.version != PROTOCOL_VERSION
+        || response.id != request.id
+        || (response.ok && (response.result.is_none() || response.error.is_some()))
+        || (!response.ok && (response.error.is_none() || response.result.is_some()))
+    {
+        return Err(CliError::new(
+            "invalid_response",
+            "runtime response identity or envelope mismatch",
+        )
+        .into());
+    }
+    Ok(response)
+}
+
+fn bounded_exchange(
+    endpoint: &Endpoint,
+    request: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    const MAX_RESPONSE: usize = 256 * 1024;
+    let deadline = Instant::now() + timeout;
+    let remaining = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                IoError::new(std::io::ErrorKind::TimedOut, "plugin runtime request timed out")
+            })
+    };
+    let mut stream =
+        TcpStream::connect_timeout(&endpoint_addr(endpoint), remaining()?.min(CONNECT_TIMEOUT))?;
+    let mut pending = request;
+    while !pending.is_empty() {
+        stream.set_write_timeout(Some(remaining()?))?;
+        let written = stream.write(pending)?;
+        if written == 0 {
+            return Err(IoError::new(std::io::ErrorKind::WriteZero, "runtime write stopped").into());
+        }
+        pending = &pending[written..];
+    }
+    // The newline frames the complete request. A fast peer may already have
+    // replied and closed here; shutting down the write half can then fail with
+    // NotConnected on macOS before we read its buffered response.
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        stream.set_read_timeout(Some(remaining()?))?;
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            return Err(CliError::new(
+                "runtime_no_response",
+                "runtime closed before a complete JSON line",
+            )
+            .into());
+        }
+        let newline = buffer[..count].iter().position(|byte| *byte == b'\n');
+        let end = newline.unwrap_or(count);
+        if bytes.len() + end > MAX_RESPONSE {
+            return Err(CliError::new(
+                "runtime_response_too_large",
+                "plugin response exceeds 256 KiB",
+            )
+            .into());
+        }
+        bytes.extend_from_slice(&buffer[..end]);
+        if newline.is_some() {
+            return Ok(bytes);
+        }
+    }
+}
+
+fn read_response(
+    endpoint: &Endpoint,
+    request: &ApiRequest,
+    timeout: Duration,
+) -> Result<ApiResponse, Box<dyn Error>> {
+    let stream = client_stream(&endpoint, &request, Some(timeout))?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    if line.is_empty() {
+        return Err(CliError::new(
+            "runtime_no_response",
+            "runtime closed the connection without a response",
+        )
+        .into());
+    }
+    Ok(serde_json::from_str(&line)?)
+}
+
+fn input_transport_error(method: &str, error: Box<dyn Error>) -> Box<dyn Error> {
+    if matches!(
+        method,
+        "pane.prompt" | "pane.paste" | "agent.prompt" | "agent.paste" | "agent.delegate"
+    ) {
+        CliError::new(
+            "submission_outcome_unknown",
+            format!(
+                "{method} did not return a confirmed response: {error}. Input may already have \
+                 reached the target; read its state and output before retrying."
+            ),
+        )
+        .into()
+    } else {
+        error
+    }
+}
+
+pub(super) fn require_submission_baseline(baseline: Option<u64>) -> Result<u64, CliError> {
+    baseline.filter(|seq| *seq > 0).ok_or_else(|| {
+        CliError::new(
+            "runtime_no_response",
+            "input was accepted but the response has no valid state baseline; completion is \
+             unconfirmed. Read the target before retrying; do not resend automatically.",
+        )
+    })
+}
+
+pub(super) fn print_response(response: &ApiResponse, pretty: bool) -> Result<(), Box<dyn Error>> {
+    write_cli_response(&mut std::io::stdout().lock(), response, pretty)
+}
+
+fn write_cli_response(
+    output: &mut impl Write,
+    response: &ApiResponse,
+    pretty: bool,
+) -> Result<(), Box<dyn Error>> {
+    let mut json = if pretty {
+        serde_json::to_string_pretty(response)?
+    } else {
+        serde_json::to_string(response)?
+    };
+    json.push('\n');
+    write_cli_output(output, json.as_bytes())?;
+    if response.ok {
+        Ok(())
+    } else {
+        let error =
+            response.error.as_ref().map_or("runtime request failed", |error| &error.message);
+        Err(PrintedCliError(error.to_owned()).into())
+    }
+}
+
+fn write_cli_output(output: &mut impl Write, bytes: &[u8]) -> Result<bool, IoError> {
+    match output.write_all(bytes).and_then(|()| output.flush()) {
+        Ok(()) => Ok(true),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::BrokenPipe
+                || (cfg!(windows) && matches!(error.raw_os_error(), Some(109 | 232 | 233))) =>
+        {
+            Ok(false)
+        },
+        Err(error) => Err(error),
+    }
+}
+
+/// CLI adapter. It deliberately speaks the same serialized protocol as any
+/// external client instead of calling Processor helpers in-process.
+pub fn run_cli(options: ControlOptions) -> Result<(), Box<dyn Error>> {
+    let pretty = options.pretty;
+    match run_cli_inner(options) {
+        result @ Ok(_) => result,
+        Err(error) if error.downcast_ref::<PrintedCliError>().is_some() => Err(error),
+        Err(error) => {
+            let code =
+                error.downcast_ref::<CliError>().map_or("cli_transport_error", |error| error.code);
+            let response = ApiResponse::failure("cli", ApiError::new(code, error.to_string()));
+            print_response(&response, pretty)
+        },
+    }
+}
+
+fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
+    if options.timeout_ms == 0 || Duration::from_millis(options.timeout_ms) > MAX_WAIT {
+        return Err(
+            CliError::new("invalid_params", "--timeout-ms must be between 1 and 86400000").into()
+        );
+    }
+    let timeout = Duration::from_millis(options.timeout_ms);
+    match options.command {
+        CliCommand::Describe => {
+            let response = request_once("runtime.describe", json!({}), timeout)?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Snapshot => {
+            let response = request_once("runtime.snapshot", json!({}), timeout)?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Orchestrate { spec, file } => {
+            let source = match (spec, file) {
+                (Some(spec), None) => spec,
+                (None, Some(path)) => std::fs::read_to_string(path)?,
+                _ => {
+                    return Err(CliError::new(
+                        "invalid_params",
+                        "exactly one of --spec or --file is required",
+                    )
+                    .into());
+                },
+            };
+            let params: Value = serde_json::from_str(&source).map_err(|error| {
+                CliError::new(
+                    "invalid_params",
+                    format!("workflow is not valid UTF-8 JSON: {error}"),
+                )
+            })?;
+            let response = request_once(
+                "runtime.orchestrate",
+                params,
+                timeout.saturating_add(Duration::from_secs(1)),
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Agents { window } => {
+            let response = request_once("agents.list", json!({ "window_id": window }), timeout)?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentStart { window, name, kind, cwd, resume_session_id } => {
+            let response = request_once(
+                "agent.start",
+                json!({
+                    "window_id": window,
+                    "name": name,
+                    "kind": kind,
+                    "cwd": cwd,
+                    "resume_session_id": resume_session_id
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentFork {
+            window,
+            source_pane,
+            source_cwd,
+            name,
+            kind,
+            resume_session_id,
+            branch,
+            base,
+            path,
+            allow_dirty_source,
+        } => {
+            let source_cwd = source_cwd.map(agent_api::absolute_cli_path).transpose()?;
+            let path = path.map(agent_api::absolute_cli_path).transpose()?;
+            let response = request_once(
+                "agent.fork",
+                json!({
+                    "window_id": window,
+                    "source_pane_id": source_pane,
+                    "source_cwd": source_cwd,
+                    "name": name,
+                    "kind": kind,
+                    "resume_session_id": resume_session_id,
+                    "branch": branch,
+                    "base": base,
+                    "path": path,
+                    "allow_dirty_source": allow_dirty_source
+                }),
+                timeout.saturating_add(COMMAND_TIMEOUT),
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentGet { agent, generation } => {
+            let response = request_once(
+                "agent.get",
+                json!({ "agent": agent, "generation": generation }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentPrompt { agent, generation, text, no_submit } => {
+            let response = request_once(
+                "agent.prompt",
+                json!({
+                    "agent": agent,
+                    "generation": generation,
+                    "text": text,
+                    "submit": !no_submit
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentPaste { agent, generation, text, no_submit } => {
+            let response = request_once(
+                "agent.paste",
+                json!({
+                    "agent": agent,
+                    "generation": generation,
+                    "text": text,
+                    "submit": !no_submit
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentRead { agent, generation, lines } => {
+            let response = request_once(
+                "agent.read",
+                json!({ "agent": agent, "generation": generation, "lines": lines }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::AgentWait { agent, generation, state, after_seq } => {
+            let response = request_once(
+                "agent.wait",
+                json!({
+                    "agent": agent,
+                    "generation": generation,
+                    "state": wait_state_name(state),
+                    "timeout_ms": timeout.as_millis() as u64,
+                    "after_seq": after_seq
+                }),
+                timeout.saturating_add(Duration::from_secs(1)),
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Subscribe { since } => subscribe_cli(since, timeout),
+        CliCommand::NewWindow => {
+            let response = request_once("window.create", json!({}), timeout)?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::CloseWindow { window } => {
+            let response = request_once("window.close", json!({ "window_id": window }), timeout)?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Focus { window, pane } => {
+            let response = request_once(
+                "window.focus",
+                json!({ "window_id": window, "pane_id": pane }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::NewTab(launch) => {
+            let response = request_once("tab.new", tab_launch_params(launch)?, timeout)?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::CloseTab { window, tab_index } => {
+            let response = request_once(
+                "tab.close",
+                json!({ "window_id": window, "tab_index": tab_index }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::RenameTab { window, tab_index, name } => {
+            let response = request_once(
+                "tab.rename",
+                json!({ "window_id": window, "tab_index": tab_index, "name": name }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::MoveTab { window, tab_index, to_index } => {
+            let response = request_once(
+                "tab.move",
+                json!({
+                    "window_id": window,
+                    "tab_index": tab_index,
+                    "to_index": to_index
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Split { window, pane, direction } => {
+            let direction = match direction {
+                ControlSplitDirection::Right => RuntimeSplitDirection::LeftRight,
+                ControlSplitDirection::Down => RuntimeSplitDirection::TopBottom,
+            };
+            let response = request_once(
+                "pane.split",
+                json!({ "window_id": window, "pane_id": pane, "direction": direction }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::ClosePane { window, pane } => {
+            let response = request_once(
+                "pane.close",
+                json!({ "window_id": window, "pane_id": pane }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::NotifyPane { window, pane, title, message } => {
+            let response = request_once(
+                "pane.notify",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "title": title,
+                    "message": message
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::ZoomPane { window, pane, zoomed } => {
+            let response = request_once(
+                "pane.zoom",
+                json!({ "window_id": window, "pane_id": pane, "zoomed": zoomed }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::ResizePane { window, pane, ratio } => {
+            let response = request_once(
+                "pane.resize",
+                json!({ "window_id": window, "pane_id": pane, "ratio": ratio }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Prompt { window, pane, text, no_submit, wait } => {
+            let response = request_once(
+                "pane.prompt",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "text": text,
+                    "submit": !no_submit
+                }),
+                timeout,
+            )?;
+            if !response.ok || wait.is_none() {
+                return print_response(&response, options.pretty);
+            }
+            // The prompt response carries the snapshot taken immediately after
+            // submission. Using its counter as the baseline is what makes the
+            // follow-up wait mean "settled again", not "already settled".
+            let baseline =
+                require_submission_baseline(pane_state_change_seq(&response, window, pane))?;
+            wait_cli(
+                window,
+                pane,
+                wait.expect("checked above"),
+                Some(baseline),
+                timeout,
+                options.pretty,
+            )
+        },
+        CliCommand::Paste { window, pane, text, no_submit, wait } => {
+            let response = request_once(
+                "pane.paste",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "text": text,
+                    "submit": !no_submit
+                }),
+                timeout,
+            )?;
+            if !response.ok || wait.is_none() {
+                return print_response(&response, options.pretty);
+            }
+            let baseline =
+                require_submission_baseline(pane_state_change_seq(&response, window, pane))?;
+            wait_cli(
+                window,
+                pane,
+                wait.expect("checked above"),
+                Some(baseline),
+                timeout,
+                options.pretty,
+            )
+        },
+        CliCommand::Read { window, pane, lines } => {
+            let response = request_once(
+                "pane.read",
+                json!({ "window_id": window, "pane_id": pane, "lines": lines }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Procs { window, pane } => {
+            let response = request_once(
+                "pane.procs",
+                json!({ "window_id": window, "pane_id": pane }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::SendKey { window, pane, key, shift, alt, control, repeat } => {
+            let response = request_once(
+                "pane.send_key",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "key": key,
+                    "modifiers": {
+                        "shift": shift,
+                        "alt": alt,
+                        "control": control
+                    },
+                    "repeat": repeat
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Run { window, pane, command, no_wait } => {
+            let response = request_once(
+                "pane.run",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "command": command,
+                    "wait": !no_wait,
+                    "timeout_ms": options.timeout_ms
+                }),
+                timeout.saturating_add(Duration::from_secs(1)),
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::ExecPane { window, pane, max_output_bytes, argv } => {
+            let response = request_once(
+                "pane.exec",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "argv": argv,
+                    "timeout_ms": options.timeout_ms,
+                    "max_output_bytes": max_output_bytes
+                }),
+                timeout.saturating_add(Duration::from_secs(2)),
+            )?;
+            print_response(&response, options.pretty)
+        },
+        CliCommand::Wait { window, pane, state, after_seq } => {
+            wait_cli(window, pane, state, after_seq, timeout, options.pretty)
+        },
+    }
+}
+
+pub(super) fn tab_launch_params(
+    launch: crate::cli::TabLaunchOptions,
+) -> Result<Value, Box<dyn Error>> {
+    let mut params = json!({ "window_id": launch.window });
+    if let Some(cwd) = launch.cwd {
+        // The resident may have been started in a different directory.
+        let cwd = crate::cli::repair_context_menu_dir(cwd);
+        let (cwd, host_cwd) = crate::platform::launch_directory::cli_directory(&cwd)?;
+        params["cwd"] = json!(cwd.to_str().ok_or_else(|| {
+            CliError::new("invalid_params", "cwd cannot be represented as a UTF-8 JSON string")
+        })?);
+        if let Some(host_cwd) = host_cwd {
+            params["host_cwd"] = json!(host_cwd.to_str().ok_or_else(|| {
+                CliError::new(
+                    "invalid_params",
+                    "host cwd cannot be represented as a UTF-8 JSON string",
+                )
+            })?);
+        }
+    }
+    if let Some(shell) = launch.shell {
+        params["shell"] = json!(shell);
+    }
+    if !launch.command.is_empty() {
+        params["argv"] = json!(launch.command);
+    }
+    Ok(params)
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn test_tab_launch_params(launch: crate::cli::TabLaunchOptions) -> Value {
+    tab_launch_params(launch).unwrap()
+}
+
+/// Dig a pane's transition counter out of a command response's embedded
+/// snapshot. Returns `None` when the shape is unexpected, which degrades the
+/// follow-up wait to plain state matching rather than failing the command.
+fn pane_state_change_seq(
+    response: &ApiResponse,
+    window_id: Option<u64>,
+    pane_id: u64,
+) -> Option<u64> {
+    let snapshot = response.result.as_ref()?.get("snapshot")?;
+    let snapshot: RuntimeSnapshot = serde_json::from_value(snapshot.clone()).ok()?;
+    snapshot.pane(window_id, pane_id).ok().map(|pane| pane.state_change_seq)
+}
+
+fn wait_cli(
+    window: Option<u64>,
+    pane: u64,
+    state: ControlWaitState,
+    after_seq: Option<u64>,
+    timeout: Duration,
+    pretty: bool,
+) -> Result<(), Box<dyn Error>> {
+    let state = wait_state_name(state);
+    let response = request_once(
+        "pane.wait",
+        json!({
+            "window_id": window,
+            "pane_id": pane,
+            "state": state,
+            "timeout_ms": timeout.as_millis() as u64,
+            "after_seq": after_seq
+        }),
+        timeout.saturating_add(Duration::from_secs(1)),
+    )?;
+    print_response(&response, pretty)
+}
+
+pub(super) fn wait_state_name(state: ControlWaitState) -> &'static str {
+    match state {
+        ControlWaitState::Idle => "idle",
+        ControlWaitState::Running => "running",
+        ControlWaitState::WaitingInput => "waiting_input",
+        ControlWaitState::Attention => "attention",
+        ControlWaitState::Finished => "finished",
+        ControlWaitState::Failed => "failed",
+        ControlWaitState::Settled => "settled",
+    }
+}
+
+fn subscribe_cli(since: Option<u64>, timeout: Duration) -> Result<(), Box<dyn Error>> {
+    let endpoint = read_endpoint()
+        .ok_or_else(|| CliError::new("runtime_unavailable", "no resident Pebrel runtime found"))?;
+    let request = ApiRequest::new(
+        endpoint.token.clone(),
+        "events.subscribe",
+        json!({ "since_revision": since }),
+    );
+    let stream = client_stream(&endpoint, &request, Some(timeout))?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(CliError::new(
+            "runtime_no_response",
+            "runtime closed the subscription without an acknowledgement",
+        )
+        .into());
+    }
+    let mut output = std::io::stdout().lock();
+    if !write_cli_output(&mut output, line.as_bytes())? {
+        return Ok(());
+    }
+    reader.get_mut().set_read_timeout(None)?;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        if !write_cli_output(&mut output, line.as_bytes())? {
+            return Ok(());
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct CliError {
+    code: &'static str,
+    message: String,
+}
+
+impl CliError {
+    pub(super) fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self { code, message: message.into() }
+    }
+
+    pub(super) fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl Error for CliError {}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn tab_launch_rejects_non_utf8_directory_with_structured_error() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(cwd) = crate::platform::launch_directory::test_non_utf8_directory(root.path())
+        else {
+            return;
+        };
+        // Native argv can carry a path that APFS refuses to create. Reject its
+        // encoding at the JSON boundary before any filesystem validation.
+        assert!(cwd.to_str().is_none());
+        let error = tab_launch_params(crate::cli::TabLaunchOptions {
+            window: None,
+            cwd: Some(cwd),
+            shell: None,
+            command: Vec::new(),
+        })
+        .unwrap_err();
+        assert_eq!(error.downcast_ref::<CliError>().unwrap().code(), "invalid_params");
+    }
+
+    #[test]
+    fn tab_launch_host_paths_use_the_caller_directory_for_all_shell_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("./project");
+        let expected = std::path::absolute(&cwd).unwrap();
+        for (shell, command) in [
+            (Some("wsl:Ubuntu".into()), Vec::new()),
+            (None, vec!["wsl".into(), "literal value".into()]),
+            (None, vec!["wsl.exe".into()]),
+        ] {
+            let params = tab_launch_params(crate::cli::TabLaunchOptions {
+                window: None,
+                cwd: Some(cwd.clone()),
+                shell,
+                command,
+            })
+            .unwrap();
+            assert_eq!(params["cwd"], json!(expected));
+        }
+    }
+
+    #[test]
+    fn tab_launch_resolves_the_callers_directory_and_omits_absent_fields() {
+        let options = crate::cli::TabLaunchOptions {
+            window: Some(7),
+            cwd: Some("project space".into()),
+            shell: None,
+            command: vec!["program".into(), "two words".into(), "".into()],
+        };
+        let params = tab_launch_params(options).unwrap();
+        assert_eq!(params["cwd"], json!(std::env::current_dir().unwrap().join("project space")));
+        assert_eq!(params["argv"], json!(["program", "two words", ""]));
+        assert!(params.get("shell").is_none());
+        let options = crate::cli::TabLaunchOptions {
+            window: None,
+            cwd: None,
+            shell: None,
+            command: Vec::new(),
+        };
+        assert_eq!(tab_launch_params(options).unwrap(), json!({"window_id": null}));
+        for (shell, command) in [
+            (Some("wsl:Ubuntu".into()), vec![]),
+            (None, vec!["wsl.exe".into(), "--exec".into(), "sh".into()]),
+        ] {
+            let options = crate::cli::TabLaunchOptions {
+                window: None,
+                cwd: Some("/home/guest/project".into()),
+                shell,
+                command,
+            };
+            assert_eq!(tab_launch_params(options).unwrap()["cwd"], "/home/guest/project");
+        }
+    }
+
+    #[test]
+    fn plugin_response_checks_identity_and_envelope() {
+        let request = ApiRequest::new("fixture".to_owned(), "runtime.describe", json!({}));
+        let response = ApiResponse::success(&request.id, json!({"name":"中文"}));
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            decode_plugin_response(&request, &serde_json::to_vec(&value).unwrap()).unwrap(),
+            response
+        );
+        let null = ApiResponse::success(&request.id, Value::Null);
+        assert_eq!(
+            decode_plugin_response(&request, &serde_json::to_vec(&null).unwrap()).unwrap(),
+            null
+        );
+        let mut missing_result = value.clone();
+        missing_result.as_object_mut().unwrap().remove("result");
+        assert!(
+            decode_plugin_response(&request, &serde_json::to_vec(&missing_result).unwrap())
+                .is_err()
+        );
+        for (key, replacement) in [
+            ("id", json!("other")),
+            ("protocol", json!("other")),
+            ("version", json!(2)),
+            ("ok", json!(false)),
+        ] {
+            let mut invalid = value.clone();
+            invalid[key] = replacement;
+            assert!(
+                decode_plugin_response(&request, &serde_json::to_vec(&invalid).unwrap()).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_exchange_bounds_response_and_requires_complete_line() {
+        for (response, expected_error) in [
+            (b"{\"ok\":true}\n".to_vec(), None),
+            (vec![b'x'; 256 * 1024 + 1], Some("runtime_response_too_large")),
+            (b"{}".to_vec(), Some("runtime_no_response")),
+        ] {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let endpoint = Endpoint {
+                port: listener.local_addr().unwrap().port(),
+                token: "fixture".to_owned(),
+            };
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut request = String::new();
+                BufReader::new(&mut stream).read_line(&mut request).unwrap();
+                assert_eq!(request, "{}\n");
+                // 超额回复的接收方可提前关流；写方无需等待对方接受被丢弃的数据。
+                let _ = stream.write_all(&response);
+            });
+            let result = bounded_exchange(&endpoint, b"{}\n", Duration::from_secs(2));
+            server.join().unwrap();
+            if let Some(code) = expected_error {
+                let error = result.unwrap_err();
+                let response_error = error
+                    .downcast_ref::<CliError>()
+                    .unwrap_or_else(|| panic!("expected {code}, got {error:?}"));
+                assert_eq!(response_error.code(), code);
+            } else {
+                assert_eq!(result.unwrap(), b"{\"ok\":true}");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_submission_missing_or_zero_baseline_cannot_wait_on_old_idle() {
+        for baseline in [None, Some(0)] {
+            let error = require_submission_baseline(baseline).unwrap_err();
+            assert_eq!(error.code(), "runtime_no_response");
+            assert!(error.to_string().contains("do not resend automatically"));
+        }
+        assert_eq!(require_submission_baseline(Some(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn runtime_submission_transport_failure_is_not_a_safe_retry_signal() {
+        for method in ["pane.prompt", "pane.paste", "agent.prompt", "agent.paste", "agent.delegate"]
+        {
+            let error =
+                input_transport_error(method, IoError::from(std::io::ErrorKind::TimedOut).into());
+            assert_eq!(
+                error.downcast_ref::<CliError>().unwrap().code(),
+                "submission_outcome_unknown"
+            );
+            assert!(error.to_string().contains("read its state and output before retrying"));
+        }
+        let error =
+            input_transport_error("pane.read", IoError::from(std::io::ErrorKind::TimedOut).into());
+        assert_eq!(error.downcast_ref::<IoError>().unwrap().kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    struct FailingOutput {
+        error: Option<IoError>,
+        fail_flush: bool,
+    }
+
+    impl Write for FailingOutput {
+        fn write(&mut self, bytes: &[u8]) -> Result<usize, IoError> {
+            if self.fail_flush { Ok(bytes.len()) } else { Err(self.error.take().unwrap()) }
+        }
+
+        fn flush(&mut self) -> Result<(), IoError> {
+            Err(self.error.take().unwrap())
+        }
+    }
+
+    #[test]
+    fn json_output_keeps_compact_and_pretty_response_contracts() {
+        let response = ApiResponse::success("probe", json!({ "tabs": 2 }));
+        for pretty in [false, true] {
+            let mut output = Vec::new();
+            write_cli_response(&mut output, &response, pretty).unwrap();
+            assert_eq!(output.last(), Some(&b'\n'));
+            assert_eq!(serde_json::from_slice::<ApiResponse>(&output).unwrap(), response);
+        }
+    }
+
+    #[test]
+    fn closed_output_on_write_or_flush_ends_without_panicking() {
+        let response = ApiResponse::success("probe", json!({}));
+        for fail_flush in [false, true] {
+            let mut output = FailingOutput {
+                error: Some(IoError::from(std::io::ErrorKind::BrokenPipe)),
+                fail_flush,
+            };
+            write_cli_response(&mut output, &response, false).unwrap();
+        }
+    }
+
+    #[test]
+    fn subscriptions_stop_when_the_output_consumer_disconnects() {
+        let mut output = FailingOutput {
+            error: Some(IoError::from(std::io::ErrorKind::BrokenPipe)),
+            fail_flush: false,
+        };
+        assert!(!write_cli_output(&mut output, b"event\n").unwrap());
+    }
+
+    #[test]
+    fn unrelated_output_errors_are_not_silently_ignored() {
+        let mut output = FailingOutput {
+            error: Some(IoError::from(std::io::ErrorKind::PermissionDenied)),
+            fail_flush: false,
+        };
+        assert_eq!(
+            write_cli_output(&mut output, b"event\n").unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_closing_errors_do_not_trigger_runtime_error_dialogs() {
+        for code in [109, 232, 233] {
+            let mut output =
+                FailingOutput { error: Some(IoError::from_raw_os_error(code)), fail_flush: false };
+            assert!(!write_cli_output(&mut output, b"event\n").unwrap());
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct PrintedCliError(String);
+
+impl fmt::Display for PrintedCliError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for PrintedCliError {}

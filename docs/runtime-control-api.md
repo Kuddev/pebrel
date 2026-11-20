@@ -38,7 +38,7 @@ Pebrel 打开的每个**本地** pane 都带上下面这些变量。pane 里的�
 连接旧版 Nebula 时，可在新变量缺失时使用旧版导出的 `NEBULA_CLI` 与 `NEBULA_PANE_ID`。
 CLI 路径由环境给出，调用方无需根据展示名称猜测文件名。
 
-实现在 `nebula_app/src/agent_env.rs`，两个壳共用同一个 `apply()`。三条设计约束：
+实现在 `pebrel_app/src/agent_env.rs`，两个壳共用同一个 `apply()`。三条设计约束：
 
 1. **只进本地 PTY。** SSH pane 注入的是 `PEBREL_PANE_REMOTE=1`，不给 `PEBREL_CLI`/`PEBREL_BIN_DIR`
    ——远端主机上没有这个二进制，把本机绝对路径送过去只会造出一个"变量有了但永远执行不了"的伪能力，
@@ -58,6 +58,16 @@ CLI 路径由环境给出，调用方无需根据展示名称猜测文件名。
 本身也是发现入口，见下节。
 
 ## CLI
+
+### 独立进程
+
+`pebrel --new-instance` 在新的 GPUI 进程中打开一个全新终端。它支持通常的
+`--working-directory`、`--shell` 和 `-e` 参数，不交给已经运行的实例。
+配置仍然共享；该进程不恢复或自动保存普通工作区，关闭最后一个窗口时退出。
+
+独立进程不替换共享的 `runtime.port`。它的本地终端通过继承的
+`PEBREL_RUNTIME_ENDPOINT` 访问自己的控制面，因此应在对应终端中运行
+`pebrel pane list` 等命令。已有实例及其终端继续使用自己的控制面。
 
 ### 资源 + 动词
 
@@ -84,12 +94,25 @@ pebrel agent read codex --lines 80               # 读它最近打印了什么
 pebrel agent wait codex --after-seq 41           # 等它这一轮结束
 
 pebrel window close 3                            # 关闭空闲窗口
+pebrel tab new --cwd ./project --command claude   # 在新标签中直接启动命令
+pebrel tab new --window 3 --cwd ./project --command claude --resume
 pebrel tab rename 2 tests --window 3             # 按窗口内零基索引重命名 tab
 pebrel tab move 2 0 --window 3                   # 同一窗口内移动 tab
 ```
 
 它们是完整协议的**薄别名**：同一个请求函数、同一套响应信封、同样的 generation 与 `after_seq`
 竞态保护，短的只是命令行，不是语义。
+
+`pebrel tab new` 和 `pebrel ctl new-tab` 共用启动参数：`--cwd`（也可写
+`--working-directory`）、`--shell` 或 `--command`。`--command` 后的全部参数作为
+程序 argv 直接交给本机 PTY，不拼接为 Shell 命令；需要管道等语法时，显式运行
+`--command sh -c '...'` 或相应的 PowerShell 命令。`--shell` 与 `--command` 互斥。
+相对目录按调用 CLI 的进程目录解析。Windows 的 `/home/...` 等路径保留原值和调用端的宿主路径解释，由驻留端解析实际启动程序后选择；默认 WSL 和导入的 WSL profile 也保留 guest 路径。
+
+省略 `--window` 时沿用窗口选择设置：通常选择最近活动的窗口，`use_new` 则新建窗口；
+`--window <id>` 始终指定已有窗口，ID 无效会失败而不新建标签。没有驻留 Runtime 时
+返回 `runtime_unavailable`。成功响应确认标签已创建，并提供 `window_id`、`pane_id`
+和快照，不表示程序已完成；启动错误沿用终端的失败状态与诊断保留机制。
 
 `pane` 与 `agent` 分成两个资源不只是为了好读——它们走的是**不同**的协议方法。Agent 路径带
 generation 绑定（Codex 退出重开后不会把任务投给新会话），pane 路径没有这层保护。用两个资源名把
@@ -174,7 +197,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `window.create` | 创建新窗口 | `cwd?`, `shell?` |
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
-| `tab.new` | 创建标签（默认 Shell，或 `shell` 点名的那个） | `window_id?`, `cwd?`, `shell?` |
+| `tab.new` | 创建标签（默认 Shell、指定 Shell 或直接程序） | `window_id?`, `cwd?`, `host_cwd?`, `shell?`, `argv?` |
 | `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
@@ -182,6 +205,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `pane.close` | 关闭空闲 Pane；忙碌 Pane 返回显式确认错误 | `window_id?`, `pane_id` |
 | `pane.zoom` | 幂等设置 Pane 所在 Tab 的显式缩放状态 | `window_id?`, `pane_id`, `zoomed` |
 | `pane.resize` | 设置目标 Pane 在直接父分屏中的占比 | `window_id?`, `pane_id`, `ratio` |
+| `pane.notify` | 以内建响铃闪烁/声音（遵循 `bell` 设置）和通知中心 toast 提醒用户；不聚焦窗口、不写入终端 | `window_id?`, `pane_id`, `title?`, `message` |
 | `pane.prompt` | 写入一行纯文本，可追加 Enter | `window_id?`, `pane_id`, `text`, `submit` |
 | `pane.paste` | 通过 bracketed paste 写入有界 UTF-8 文本 | `window_id?`, `pane_id`, `text`, `submit` |
 | `pane.read` | 从真实终端 Grid 尾部读取最近逻辑行 | `window_id?`, `pane_id`, `lines` |
@@ -195,17 +219,37 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 任意终端字节注入接口。控制键走 `pane.send_key`：只开放命名键，字母必须配
 `control=true`，`repeat` 上限 64；API 不接受任意 bytes 或 ANSI 字符串。
 
-`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置相同的 id（`pwsh`、`cmd`、
-`wsl:Ubuntu`，或某个 profile 的 settings id），只作用于这一次创建；缺省照旧用设置里的
-默认 Shell。id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
+`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置及 `pebrel --shell` 相同的 id，
+只作用于这一次创建；缺省照旧用设置里的默认 Shell。Windows 上 `powershell` 指
+Windows PowerShell，`pwsh` 指检测到的 PowerShell 7，两者不是别名；其他例子有
+`cmd`、`wsl:Ubuntu`。检测不到的普通 Shell 不会出现在可用 id 中。
+
+导入终端配置的 settings id 来自 `terminal_profiles.json` 中的实际条目，形式为
+`profile:<shell-id>|<profile-id>`，完整 id 区分大小写。它不指 Lua `config.profiles`
+的 `name` 或 `shell_id`：后者表示 Shell 家族，不能创建 CLI 或 Runtime API 别名。
+`config check` 通过只表示配置有效，不表示其中的 `shell_id` 已注册。自定义程序和
+参数的命令行启动方式见 [Lua 配置中的 Shell 选择说明](lua-configuration.md#shell-ids-and-config-profiles)。
+
+id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
 静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
 升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
 需要重启驻留实例。
+
+`tab.new` 的可选 `argv` 使用与 `pane.exec` 相同的参数预算与校验，并与 `shell`
+互斥；它启动的是标签内的交互 PTY 程序。没有 `argv` 的旧请求保持原行为，旧 Runtime
+会拒绝带 `argv` 的请求。客户端不会把失败请求改为默认 Shell 或自动重发启动。
+
+`host_cwd` 是 CLI 为 Windows 歧义路径捕获的绝对宿主路径，提供时须同时有非空 `cwd`。驻留端先解析实际默认 Shell、导入 profile 或直接程序：WSL 使用 `cwd`，其他程序使用 `host_cwd`。旧 Runtime 会拒绝这个附加字段；没有该字段的请求保持原行为。
 
 `pane.paste` 专用于确实需要保留换行的输入：只接受 UTF-8，限制 32 KiB，拒绝 ESC、NUL
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本
 转发。资源 CLI 可从字面文本、`--stdin` 或 `--from-file` 读取，但协议边界始终只接收验证后的
 文本，不接收本地路径或句柄。
+
+Windows 本地 PowerShell 的终端剪贴板操作可委托给当前 PSReadLine 的原生 Paste。
+该能力只用于用户剪贴板操作及其广播接收端，不能作为 Runtime API 目标已开启
+bracketed paste 的证明；`pane.paste` 和 `agent.paste` 仍遵循上述协议校验。
+详见[剪贴板能力边界](../architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
 
 ## 单请求编排
 
@@ -297,8 +341,10 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 
 `pane.exec` 与 `pane.run` 是两种刻意分开的执行语义：它直接接收 argv，不经过 shell 展开，
 在 Pane 当前上报的本地 cwd 中启动独立 non-TTY child，不写入 Grid、history 或交互 shell
-环境。WSL Pane 通过对应 distribution 和 guest cwd 执行；SSH Pane 返回
-`remote_exec_unsupported`。stdout/stderr 始终并行排水，每条默认最多保留 1 MiB、可配置上限
+环境。WSL Pane 通过对应 distribution 和 guest cwd 执行；argv 通过 `--exec` 保留原生参数边界，
+包括参数内部的双引号。当前启动目录模型不接收含 `"` 的 guest cwd，此时返回
+`exec_argument_unsupported`（`details.argument` 为该目录），不会改写后执行。
+SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，每条默认最多保留 1 MiB、可配置上限
 16 MiB；响应的 `stdout`/`stderr` 是直接字符串，`capture` 分别报告 encoding、总字节数、保留
 字节数和截断状态。超时会回收整个子进程树，并保留已捕获输出与 `timed_out: true`。
 
@@ -308,7 +354,8 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 误列为 Agent。Agent 对象包含规范化 `kind`、显示名、hook 上报的可选 `session_id`，以及
 `state_source`：
 
-- `hook`：CLI hook 的生命周期边沿，是最高置信度事实。
+- `osc7501`：GPUI 产品优先读取程序通过 OSC 7501 显式上报的有效状态；`app` 只能识别客户端种类，不能生成会话 ID。Pane/传输故障仍优先显示。
+- `hook`：没有有效 OSC 7501 状态时采用 CLI hook 的生命周期边沿；会话身份、回答和权限请求仍由 hook 管理。
 - `screen`：声明式屏幕规则补偿漏失 hook；`state_rule` 给出命中的规则 id。
 - `process`：只确认进程身份，不能把它提升成“已完成”或“需要批准”的强结论。
 
@@ -316,6 +363,15 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 `RuntimeTaskState` 投影。优先级为失败、attention、等待输入、运行、完成、空闲；
 `RuntimeHub` 再对真正的状态跃迁盖 `state_change_seq`，因此外部客户端不需要自行解析标题或
 终端文本来猜生命周期。
+
+当 `task_state` 为 `attention` 时，Agent 对象还提供可选的 `attention_kind`，用于区分
+工具权限、计划确认、选项问答和自由输入；字段定义以
+[`agent` schema](runtime-api-v1.schema.json#/$defs/agent) 为准。分类来自已接收的结构化
+hook；原生通知沿用解析器已接受的类别。屏幕规则、OSC 7501 或已接受但问题元数据
+缺失、损坏的 hook 返回 `unknown`，不会从提示正文猜测。自由输入需要显式空选项数组；
+选择题需要带有效标签的选项对象。
+请求解决或 pane 失败后省略该字段；旧服务端也可能没有它。此细节不改变 `pane.wait` 的
+状态条件或 `state_change_seq`，也不表示调用者已获准自动回答权限请求。
 
 `pane.read` 直接锁定 pane 的 `Term`，通过 `bounds_to_string` 读取 Grid/scrollback；它不使用
 截图或渲染快照，也不会改变用户的滚动位置、选区和光标。范围固定锚定 buffer 底部，所以用户
@@ -329,10 +385,10 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 SSH pane 只有进入 `Ready` 后允许读取或写入。解析、连接、认证、打开 Shell 或 Failed 阶段会
 返回 `ssh_not_ready`，避免把密码提示和连接错误屏误当成远端 Agent 的正常输出。
 
-默认 GPUI 产品当前只有一个 workspace window，稳定 `window_id` 为 1。该窗口上的
-snapshot/focus/tab.new/pane.split/pane.prompt/pane.read 都操作真实 workspace；GPUI 尚未建立
-第二个拥有独立 hook/runtime 接收器的 workspace，因此 `window.create` 明确返回
-`runtime_unavailable`，不会伪造一个新窗口 id。旧 winit 壳仍支持真实多窗口创建。
+GPUI 的进程级窗口分发器处理 `window.create`，为每个新 workspace 分配稳定的
+`window_id`，并返回首个 Pane 的 ID。Shell/AI 事件通过窗口注册表路由到对应 workspace，
+而不是为每个窗口复制事件接收器。`window.create` 创建可见窗口但不抢前台；显式
+`window.focus` 才激活窗口。旧 winit 壳也保留自己的多窗口创建路径。
 
 ## 等待语义与 `state_change_seq`
 
@@ -396,6 +452,29 @@ Shell/hook 结束事件归位；因此即使命令在 120ms Runtime pump 的两�
 服务端只监听 `127.0.0.1`，发现文件位于 Pebrel 数据目录下的 `runtime.port`，其中包含随机
 token。无 token 的连接会被静默丢弃。该边界用于阻止其他本机用户误调用，不承诺抵御已经
 能读取当前用户文件或注入当前用户进程的攻击者。
+
+### 地址发现与实例生命周期
+
+普通驻留实例为本地 PTY 导出 `PEBREL_RUNTIME_ENDPOINT=resident`。CLI 在每次新调用时读取
+当前 `runtime.port`，因此端口或 token 在驻留实例重启后变化时，终端继承的环境值仍然有效。
+此前，普通 PTY 与隔离实例一样继承固定的端口/token，已存在的 Shell 会一直使用旧地址。
+新标记沿用现有 `WSLENV` 透传与 `PEBREL_CLI` 可执行文件入口，不增加环境变量或后台轮询。
+
+管理员等隔离实例仍导出固定的端口/token，不写共享发现文件。显式填写的端口/token
+（包括旧格式末尾的协议版本号）也保持固定目标；无效的显式值不会回退到其他实例。
+正在托管 Runtime 的进程始终优先使用自己的服务端。`resident` 对应的发现文件缺失或损坏时，
+调用按现有 `runtime_unavailable` 路径失败，不复用缓存地址。
+
+这项变更在发送请求之前选择地址，不自动重发请求，也不重连已经建立的事件订阅。
+传输失败后的输入是否送达仍按 `submission_outcome_unknown` 处理。重新发现 Runtime 不会
+恢复旧的 Window/Pane/Agent 身份；调用方仍需核对当前目标及 generation。
+
+升级前已打开的终端可能仍继承固定的旧值。确认它属于普通驻留实例后，可重新打开终端，
+或在该 Shell 中一次性设置 `$env:PEBREL_RUNTIME_ENDPOINT = 'resident'`（PowerShell）/
+`export PEBREL_RUNTIME_ENDPOINT=resident`（POSIX），使后续 CLI 子进程使用当前发现记录。
+不要把隔离实例的专属地址改为此标记。旧版 CLI 不识别 `resident`，应使用当前 PTY 导出的
+`PEBREL_CLI`。生命周期取舍与验证边界见
+[地址发现决策](../architecture/notes/pebrel_app/runtime_api/2026-10-23-resident-endpoint-lifetime.md)。
 
 旧版 `PING/ATTACH` 文本请求仍由同一服务端接受，保证单实例与会话重新挂载不因协议升级
 失效；新功能只通过版本化 JSON 协议开放。

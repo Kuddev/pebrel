@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="terminal_copied">Copied</string>
+    <string name="terminal_copy_failed">Could not copy the selection</string>
+    <string name="terminal_paste_rejected">Paste was not accepted. Check the connection and input permission.</string>
+</resources>

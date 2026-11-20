@@ -11,10 +11,18 @@ try {
         [BitConverter]::GetBytes([uint32]0x4550).CopyTo($bytes, 64)
         $machine = if ($architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
         [BitConverter]::GetBytes([uint16]$machine).CopyTo($bytes, 68)
-        foreach ($name in @('pebrel.exe', 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
+        foreach ($name in @('pebrel.exe', 'pebrel-cli.exe', 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
             [IO.File]::WriteAllBytes((Join-Path $fixtureRoot $name), $bytes)
         }
         Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture
+        Copy-Item -LiteralPath (Join-Path $fixtureRoot 'pebrel-cli.exe') -Destination (Join-Path $fixtureRoot 'pebrel.com')
+        Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture -CliExecutable 'pebrel.com'
+        [IO.File]::WriteAllBytes((Join-Path $fixtureRoot 'pebrel.com'), [byte[]]@(0, 1, 2))
+        $rejected = $false
+        try { Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $architecture -CliExecutable 'pebrel.com' } catch {
+            $rejected = $_.Exception.Message -match 'Invalid executable header'
+        }
+        if (-not $rejected) { throw 'Invalid console launcher was accepted' }
         $wrong = if ($architecture -eq 'arm64') { 'x64' } else { 'arm64' }
         $rejected = $false
         try { Assert-WindowsPackageArchitecture -Root $fixtureRoot -Architecture $wrong } catch {
@@ -38,5 +46,10 @@ try {
     }
     Write-Output 'windows-package-architecture.tests.ps1: PASS'
 } finally {
-    Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+    $resolvedFixture = (Resolve-Path -LiteralPath $fixtureRoot).Path
+    $expectedPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\pebrel-package-architecture-'
+    if (-not $resolvedFixture.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing cleanup outside the architecture fixture: $resolvedFixture"
+    }
+    Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
 }

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sftp_resuming">Waiting for connection · %1$s transferred</string>
+</resources>
