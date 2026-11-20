@@ -58,3 +58,68 @@ fn command_history_clear_reports_partial_failure_and_preserves_failed_entries() 
     history.clear_at(directory.path()).unwrap();
     assert!(history.pools.is_empty());
 }
+
+#[test]
+fn disabling_persistence_keeps_scoped_suggestions_until_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let scopes =
+        [HistoryScope::Local, HistoryScope::Wsl("ubuntu".into()), HistoryScope::Ssh("box".into())];
+    let mut saved = NebulaHistory::load_at(directory.path(), true);
+    for scope in &scopes {
+        saved.record(scope, "echo saved", "/");
+    }
+    let mut memory = NebulaHistory::load_at(directory.path(), false);
+    for scope in &scopes {
+        let path = directory.path().join(scope.file_name());
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(memory.hint(scope, "echo s"), Some("aved"));
+        memory.record(scope, "echo transient", "/");
+        assert_eq!(memory.hint(scope, "echo t"), Some("ransient"));
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+    let mut resumed = NebulaHistory::load_at(directory.path(), true);
+    for scope in &scopes {
+        assert_eq!(resumed.hint(scope, "echo t"), None);
+        resumed.record(scope, "echo new", "/");
+    }
+    let reloaded = NebulaHistory::load_at(directory.path(), false);
+    for scope in &scopes {
+        assert_eq!(reloaded.hint(scope, "echo n"), Some("ew"));
+        assert_eq!(reloaded.hint(scope, "echo s"), Some("aved"));
+    }
+}
+
+#[test]
+fn memory_only_history_keeps_command_text_out_of_diagnostics() {
+    const CHILD: &str = "PEBREL_TEST_HISTORY_DIAGNOSTICS_CHILD";
+    const MARKER: &str = "echo synthetic-history-marker";
+    if std::env::var_os(CHILD).is_some() {
+        let mut history = NebulaHistory::load();
+        history.record(&HistoryScope::Local, MARKER, "/test");
+        assert!(history.hint(&HistoryScope::Local, "echo synthetic").is_some());
+        return;
+    }
+
+    for mode in ["off", "unreadable", "default"] {
+        let directory = tempfile::tempdir().unwrap();
+        let settings = directory.path().join("pebrel_settings.txt");
+        match mode {
+            "off" => std::fs::write(settings, "command_history_persist=0\n").unwrap(),
+            "unreadable" => std::fs::create_dir(settings).unwrap(),
+            _ => {},
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("memory_only_history_keeps_command_text_out_of_diagnostics")
+            .env(CHILD, "1")
+            .env("PEBREL_CONFIG_DIR", directory.path())
+            .env("PEBREL_DEBUG_LOG", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+        let log = std::fs::read_to_string(directory.path().join("pebrel_debug.log")).unwrap();
+        assert!(log.contains("history_load"), "diagnostics must be active");
+        assert_eq!(log.contains(MARKER), mode == "default");
+        assert_eq!(directory.path().join(LOCAL_HISTORY_FILE).is_file(), mode == "default");
+    }
+}
