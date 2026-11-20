@@ -373,6 +373,23 @@ impl WindowContext {
         Ok(())
     }
 
+    pub(crate) fn runtime_delegate_prompt(
+        &mut self,
+        hub: &crate::runtime_api::RuntimeHub,
+        task_id: &str,
+        target: &crate::runtime_api::RuntimeManagedAgent,
+        text: String,
+    ) -> Result<(), ApiError> {
+        let pane = self
+            .pane(target.pane_id)
+            .ok_or_else(|| ApiError::new("target_not_found", "the target pane no longer exists"))?;
+        let agent = runtime_agent(pane);
+        let state = task_state(&pane.nebula_state);
+        hub.submit_delegation(task_id, target, agent.as_ref(), state, || {
+            self.runtime_prompt(target.pane_id, text, true)
+        })
+    }
+
     pub(crate) fn runtime_prompt(
         &mut self,
         pane_id: u64,
