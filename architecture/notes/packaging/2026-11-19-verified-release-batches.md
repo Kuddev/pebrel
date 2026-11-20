@@ -31,7 +31,7 @@ For example, an entry for a completed fix uses this structure. Use the actual co
 }
 ```
 
-Review establishes that a change fixes a distinct defect, meets the batch scope and has passed its acceptance case. Changes for one defect share one entry. At ten verified entries the branch push starts the existing stable build and publication workflow on that exact commit. The workflow checks the current public baseline again before publishing. A completed release starts a fresh batch based on its tag.
+Review establishes that a change fixes a distinct defect, meets the batch scope and has passed its acceptance case. Changes for one defect share one entry. At ten verified entries the branch push starts the existing stable build and publication workflow on that exact commit. The workflow checks the current public baseline again before publishing. After publication, the workflow opens the next patch branch from the public tag with an empty manifest. The first reviewed backport on that branch supplies the new package version and release notes. A retry preserves work on an existing branch descended from the tag.
 
 ## Rejected alternatives
 
@@ -43,7 +43,7 @@ Maintainers can continue merging work while a release runs. Each eligible batch 
 
 ## Validation
 
-The batch tests exercise nine and ten fixes, duplicate entries, missing evidence, previous-release commits, disconnected history and an already published version. Stable workflow tests cover automatic and manual publication guards.
+The batch tests exercise nine and ten fixes, duplicate entries, missing evidence, previous-release commits, disconnected history and an already published version. Stable workflow tests cover automatic and manual publication guards. Bare-remote tests exercise two successive patch releases, retry after another fix arrives, an unrelated existing branch, an unpublished commit and a dirty checkout.
 
 ## Supersedes
 
