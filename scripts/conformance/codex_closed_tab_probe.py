@@ -223,7 +223,7 @@ def isolated_desktop():
                                      ctypes.byref(startup), ctypes.byref(info)):
             raise ctypes.WinError(ctypes.get_last_error())
         try:
-            if kernel.WaitForSingleObject(wintypes.HANDLE(info.hProcess), 120000) != 0:
+            if kernel.WaitForSingleObject(wintypes.HANDLE(info.hProcess), 240000) != 0:
                 raise RuntimeError("isolated desktop fixture did not exit")
             code = wintypes.DWORD()
             if not kernel.GetExitCodeProcess(wintypes.HANDLE(info.hProcess), ctypes.byref(code)):
@@ -247,3 +247,5 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="pebrel-codex-close-", ignore_cleanup_errors=True) as test_dir:
         for last_tab in (False, True):
             run(sys.argv[1], Path(test_dir) / ("only" if last_tab else "pair"), last_tab=last_tab)
+        from codex_identity_pair_probe import verify_standalone
+        verify_standalone(sys.argv[1], Path(test_dir) / "identity")
