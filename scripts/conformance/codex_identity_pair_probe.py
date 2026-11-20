@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from unittest.mock import patch
 
 from conformance.harness import ConformanceContext, ResolvedApp
@@ -101,6 +102,39 @@ def verify_standalone(executable, root):
             ctx.poll(saved_ids, lambda ids: ids == expected,
                      "the Windows snapshot did not identify both standalone threads", timeout=65)
             print("Both Windows snapshot IDs matched their native Codex threads.", flush=True)
+
+            def tab_and_pane():
+                return {tab["label"]: (tab["tab_id"], tab["panes"][0]["id"])
+                        for tab in ctx.snapshot()["windows"][0]["tabs"]}
+
+            initial = tab_and_pane()
+            active = panes["qa-alpha"]
+            first = expected["qa-alpha"]
+            ctx.prompt("/new", active)
+            thread_pattern = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.I)
+
+            def footer():
+                lines = [line.strip() for line in ctx.read(active)["text"].splitlines() if line.strip()]
+                return next((line for line in reversed(lines[-4:]) if thread_pattern.fullmatch(line)), None)
+
+            ctx.poll(footer, lambda value: value and value != first,
+                     "Codex did not display a fresh thread after /new", timeout=30)
+            ctx.prompt("qa-after-new", active)
+            second = ctx.poll(native_history, lambda rows: "qa-after-new" in rows,
+                              "no native message after /new", timeout=35)["qa-after-new"]
+            assert second != first and footer() == second
+            assert tab_and_pane() == initial
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                observed = saved_ids()
+                if observed.get("qa-alpha") == second and observed.get("qa-bravo") == expected["qa-bravo"]:
+                    break
+                time.sleep(0.3)
+            assert observed.get("qa-bravo") == expected["qa-bravo"]
+            target = observed.get("qa-alpha")
+            outcome = "current" if target == second else ("previous" if target == first else "missing-or-other")
+            print("Windows /new: tab and pane IDs unchanged, native thread changed, persisted target=" + outcome,
+                  flush=True)
     finally:
         ctx.stop(force=True)
         app.close()
