@@ -92,3 +92,25 @@ Each connection sends one UTF-8 JSON request line using protocol
 `nebula.runtime` version 1 and reads one response line. This suite deliberately
 does not use Windows named pipes or Unix-domain sockets because Nebula's actual
 Runtime API transport is loopback TCP on every platform.
+
+## Native AI conversation recovery
+
+On a Linux desktop the offline test opens two native clients in one tab and working directory. It checks the saved IDs against each provider's own transcript. After each of three process restarts, a new user message must reach the same native conversation with that pane's earlier message in its model request. The other pane's marker must be absent. Install the CLI under test on PATH. The runner creates its own provider home, enables that provider's hook and serves model responses on loopback.
+
+```sh
+python3 scripts/conformance/agent_recovery/run.py --app /path/to/pebrel \
+  --agent claude --agent pi --agent omp --agent grok --agent codebuddy
+```
+
+The CodeBuddy case launches `codebuddy` in the upper pane and `cbc` in the lower pane. For headless Linux, run the command under `dbus-run-session -- xvfb-run -a`.
+
+Clients that require a signed-in service can run the conversation test on a dedicated Linux desktop. Sign in to the provider with a test account in a separate test home. The selected provider may bill the test turns. This test starts two fresh chats in a disposable project, asks each to retain a different random word, and checks the native ID reported by Pebrel and a fresh response containing the right word after every restart. The second question omits the word. Check PATH when using `agent`, which is also an entry point of Grok Build.
+
+```sh
+python3 scripts/conformance/agent_recovery/interactive.py --app /path/to/pebrel \
+  --source cursor --test-home /path/to/cursor-test-profile
+python3 scripts/conformance/agent_recovery/interactive.py --app /path/to/pebrel \
+  --source antigravity --test-home /path/to/antigravity-test-profile
+```
+
+The same command accepts any source in [the live test registry](agent_recovery/entries.toml). Missing identity, an unanswered challenge, and a missing executable fail that case. The exhaustive Rust session test separately checks file persistence and supported resume-command selection for every registered source.

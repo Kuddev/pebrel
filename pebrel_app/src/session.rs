@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 use crate::display::color::Rgb;
 
 mod identity;
+#[cfg(test)]
+mod recovery_tests;
 mod window_layout;
 pub(crate) use identity::codex_rollout_id;
 pub use window_layout::WindowLayout;

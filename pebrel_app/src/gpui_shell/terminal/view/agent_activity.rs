@@ -75,6 +75,7 @@ impl TerminalView {
             return false;
         }
         self.agent_activity.apply_hook(event);
+        self.observe_agent_image_lifetime(event, cx);
         if matches!(
             event.kind,
             AiHookKind::SessionStart
@@ -159,6 +160,11 @@ impl TerminalView {
                 crate::notify::Notification::from_ai_hook(event, event.message.clone(), false)
         {
             cx.emit(TerminalViewEvent::Notification(notification));
+        }
+        // An unaddressed native hook can update the focused pane, but cannot
+        // identify a delegated worker. The OSC parser supplies its receiving pane.
+        if event.kind == AiHookKind::TurnDone && event.pane == Some(self.pane_id) {
+            cx.emit(TerminalViewEvent::AiTurnDone(std::sync::Arc::new(event.clone())));
         }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();

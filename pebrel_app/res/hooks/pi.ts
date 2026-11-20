@@ -26,7 +26,7 @@ async function supportsSettled(): Promise<boolean> {
   return false;
 }
 
-// Only provider IDs and the first JSONL metadata line are recovery identities.
+// Only provider IDs and the native session header are recovery identities.
 // A timestamped basename or a process ID cannot be handed to pi --session.
 function sessionFor(ctx: any): { session_id?: string; session_file?: string } {
   let direct: string | undefined;
@@ -39,9 +39,15 @@ function sessionFor(ctx: any): { session_id?: string; session_file?: string } {
       fd = openSync(file, "r");
       const buffer = Buffer.alloc(16384);
       const length = readSync(fd, buffer, 0, buffer.length, 0);
-      const end = buffer.indexOf(10, 0);
-      if (end >= 0 && end < length) {
-        const header = JSON.parse(buffer.subarray(0, end).toString("utf8"));
+      const prefix = buffer.subarray(0, length);
+      const end = prefix.indexOf(10);
+      if (end >= 0) {
+        let header = JSON.parse(prefix.subarray(0, end).toString("utf8"));
+        // OMP 18 writes a fixed-width title record before its session header.
+        if (SOURCE === "omp" && end === 255 && header.type === "title" && header.v === 1) {
+          const next = prefix.indexOf(10, end + 1);
+          if (next > end) header = JSON.parse(prefix.subarray(end + 1, next).toString("utf8"));
+        }
         if (header.type === "session" && typeof header.id === "string" && header.id
             && (!direct || direct === header.id)) {
           return { session_id: header.id, session_file: file };
