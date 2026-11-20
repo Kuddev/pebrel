@@ -22,6 +22,8 @@ use crate::display::color::Rgb;
 
 mod identity;
 mod local_output;
+#[cfg(test)]
+mod recovery_tests;
 mod window_layout;
 pub(crate) use identity::codex_rollout_id;
 pub use window_layout::WindowLayout;
