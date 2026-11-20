@@ -84,12 +84,17 @@ def verify_standalone(executable, root):
             print("Both Codex status rows exactly matched their native threads.", flush=True)
 
             def saved_ids():
-                snap = json.loads(ctx.session_file.read_text(encoding="utf-8"))
+                try:
+                    snap = json.loads(ctx.session_file.read_text(encoding="utf-8"))
+                except PermissionError as error:
+                    if getattr(error, "winerror", None) not in (5, 32, 33):
+                        raise
+                    return {"snapshot_read_error": error.winerror}
                 return {t["custom_name"]: (t.get("layout", {}).get("agent") or {}).get("session_id")
                         for t in snap["tabs"]}
 
             ctx.poll(saved_ids, lambda ids: ids == expected,
-                     "the Windows snapshot did not identify both standalone threads", timeout=30)
+                     "the Windows snapshot did not identify both standalone threads", timeout=65)
             print("Both Windows snapshot IDs matched their native Codex threads.", flush=True)
     finally:
         ctx.stop(force=True)
