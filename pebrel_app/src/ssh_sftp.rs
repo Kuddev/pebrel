@@ -24,7 +24,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::{FileType, OpenFlags};
+use russh_sftp::client::error::Error as SftpClientError;
+use russh_sftp::protocol::{FileType, OpenFlags, StatusCode};
 use tokio::io::AsyncWriteExt;
 
 use transaction::FileStamp;
@@ -1032,6 +1033,42 @@ pub(crate) fn upload_clipboard_image_on_pane(
     on_finished: impl FnOnce(Result<String, String>) + Send + 'static,
 ) {
     upload_clipboard_image_using(async move { connection.open_sftp().await }, png, on_finished);
+}
+
+pub(crate) fn remove_clipboard_images_on_pane(
+    connection: crate::ssh_session::PaneConnection,
+    paths: Vec<String>,
+    on_finished: impl FnOnce(Vec<String>) + Send + 'static,
+) {
+    let Ok(runtime) = crate::ssh_session::runtime() else {
+        on_finished(paths);
+        return;
+    };
+    runtime.spawn(async move {
+        let mut failed = Vec::new();
+        let mut remaining = paths.into_iter();
+        let removed = tokio::time::timeout(Duration::from_secs(30), async {
+            let sftp = connection.open_sftp().await?;
+            while let Some(path) = remaining.as_slice().first() {
+                if let Err(error) = sftp.remove_file(path.as_str()).await
+                    && !matches!(&error, SftpClientError::Status(status)
+                        if status.status_code == StatusCode::NoSuchFile)
+                {
+                    log::debug!("Could not remove a temporary SSH clipboard image: {error}");
+                    failed.extend(remaining.next());
+                } else {
+                    remaining.next();
+                }
+            }
+            Ok::<(), SftpError>(())
+        })
+        .await;
+        if !matches!(removed, Ok(Ok(()))) {
+            log::debug!("Could not open the original SSH connection to remove clipboard images");
+        }
+        failed.extend(remaining);
+        on_finished(failed);
+    });
 }
 
 fn upload_clipboard_image_using(

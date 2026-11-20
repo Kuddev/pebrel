@@ -349,9 +349,11 @@ impl NebulaWorkspace {
         let mut current_bindings = Vec::new();
         for (combo, action) in raw {
             let Some(action) = crate::display::keymap::parse_action(&action) else { continue };
-            if crate::display::keymap::parse_combo(&combo).is_none() {
+            let Some(combo) = crate::display::keymap::parse_combo(&combo)
+                .and_then(|(mods, key)| crate::display::keymap::canonical_combo(mods, &key))
+            else {
                 continue;
-            }
+            };
             // Terminal strings have one scoped binding; workspace actions also
             // need the root binding so they can override less-specific defaults.
             for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
