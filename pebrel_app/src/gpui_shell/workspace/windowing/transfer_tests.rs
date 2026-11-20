@@ -115,6 +115,7 @@ fn moving_one_of_two_tabs_preserves_source_and_identity(cx: &mut TestAppContext)
 #[gpui::test]
 fn busy_tab_confirmation_tracks_its_target_across_removal(cx: &mut TestAppContext) {
     initialize_test(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
     for removed in [0, 1] {
         let (entry, workspace, survivor) = cx.update(|cx| {
             let (id, workspace) = open_test_window(cx, 3);
@@ -137,14 +138,12 @@ fn busy_tab_confirmation_tracks_its_target_across_removal(cx: &mut TestAppContex
             (entry, workspace, survivor)
         });
         cx.run_until_parked();
-        cx.update(|cx| {
-            entry
-                .handle
-                .update(cx, |_, window, cx| {
-                    window.dispatch_action(Box::new(gpui_component::dialog::ConfirmDialog), cx);
-                })
-                .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(entry.handle, cx);
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
         });
+        let confirm = visual.debug_bounds("confirm-dialog-ok").expect("close confirmation");
+        visual.simulate_click(confirm.center(), gpui::Modifiers::default());
         cx.run_until_parked();
         cx.update(|cx| {
             let workspace = workspace.read(cx);
