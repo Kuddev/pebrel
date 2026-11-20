@@ -827,6 +827,16 @@ impl TerminalView {
                 {
                     return;
                 }
+                // OMP redraws each user message with OSC 133;B, C, D;0. Its
+                // native session-end hook and local process probe own CLI exit.
+                if exit_code == Some(0)
+                    && self.running_program.as_deref() == Some("omp")
+                    && self.agent_activity.hook_seen()
+                    && self.suggest.suggest_env.is_this_machine()
+                    && self.session.as_ref().is_some_and(|session| session.shell_pid != 0)
+                {
+                    return;
+                }
                 self.finish_foreground_command(exit_code, cx);
             },
             TermEvent::Notify(body) => {

@@ -6,6 +6,17 @@ run-name: >-
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      previous_tag:
+        required: true
+        type: string
+      publish:
+        required: true
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
@@ -82,7 +93,7 @@ jobs:
             echo "requested version $REQUESTED_VERSION does not match Cargo package version $version" >&2
             exit 1
           fi
-          if [[ "$EVENT_NAME" == push && "$REF_NAME" != "v$version" ]]; then
+          if [[ "$EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag && "$REF_NAME" != "v$version" ]]; then
             echo "release tag $REF_NAME does not match Cargo package version $version" >&2
             exit 1
           fi
@@ -118,6 +129,7 @@ jobs:
           python3 scripts/check_platform_cfg.py
           python3 -m unittest \
             scripts.tests.test_stable_release \
+            scripts.tests.test_release_batch \
             scripts.tests.test_android_release \
             scripts.tests.test_ci_native_tests \
             scripts.tests.test_preview_release \
@@ -705,7 +717,7 @@ jobs:
       ${{ !cancelled() && !inputs.windows_only &&
           needs.prepare.result == 'success' && needs.native-tests.result == 'success' &&
           needs.aggregate.result == 'success' &&
-          (github.event_name == 'push' || inputs.publish == true) }}
+          ((github.event_name == 'push' && github.ref_type == 'tag') || inputs.publish == true) }}
     needs: [prepare, native-tests, aggregate]
     runs-on: ubuntu-22.04
     permissions:
@@ -723,6 +735,11 @@ jobs:
         with:
           name: Pebrel-v${{ needs.prepare.outputs.version }}
           path: release-dist
+      - name: Confirm the previous stable release for the automatic batch
+        if: inputs.previous_tag != ''
+        env:
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+        run: test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$PREVIOUS_TAG"
       - name: Create public stable Release
         run: |
           tag="v$PACKAGE_VERSION"

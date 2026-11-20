@@ -1,3 +1,5 @@
+pub(crate) mod instance;
+
 /// Surface a pre-logger failure for a GUI launch; the caller also returns it on stderr.
 pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
     #[cfg(windows)]
