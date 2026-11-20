@@ -54,7 +54,7 @@ def verify_standalone(executable, root):
     # Give both launches the same fixture-local Codex installation and profile.
     codex = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
     (ctx.work_dir / "codex.cmd").write_text(
-        f'@echo off\nsetlocal\nset "CODEX_HOME={home}"\n"{codex}" %*\nexit /b %errorlevel%\n',
+        f'@echo off\nsetlocal\nset "CODEX_HOME={home}"\n"{codex}" --no-daemon %*\nexit /b %errorlevel%\n',
         encoding="utf-8", newline="\r\n",
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), LocalModel)
@@ -91,7 +91,7 @@ def verify_standalone(executable, root):
 
             for name, pane in panes.items():
                 ctx.poll(lambda: ctx.read(pane)["text"].strip(), bool, "missing command prompt")
-                ctx.prompt(f"codex --no-daemon {name}", pane)
+                ctx.prompt(f"codex {name}", pane)
                 ctx.poll(native_history, lambda rows: name in rows,
                          "Codex did not record the test prompt in a native thread", timeout=35)
             history = native_history()
