@@ -15,11 +15,12 @@ fn expected_resume(kind: AgentKind, id: &str) -> Option<String> {
         Pi => format!("pi --session {id}"),
         Antigravity => format!("agy --conversation {id}"),
         Grok => format!("grok --resume {id}"),
+        CodeBuddy => format!("codebuddy --resume {id}"),
         OhMyPi => format!("omp --resume {id}"),
         Kimi => format!("kimi --session {id}"),
         CommandCode => format!("command-code --resume {id}"),
         Aider | Goose | Droid | Auggie | Hermes | Vibe | Qwen | Cline | Devin | Kiro | Kilo
-        | Qoder | Maki | Trae | CodeBuddy => return None,
+        | Qoder | Maki | Trae => return None,
     })
 }
 
