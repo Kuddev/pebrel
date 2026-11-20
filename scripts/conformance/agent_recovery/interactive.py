@@ -11,7 +11,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from conformance.agent_recovery.run import live_id, panes, prepare_split, runtime_pane, saved_id, shell_environment
+from conformance.agent_recovery.run import live_id, panes, prepare_split, runtime_pane, saved_id, shell_environment, wait_for_editor
 from conformance.harness import ConformanceContext, ResolvedApp
 
 
@@ -34,6 +34,7 @@ def check_agent(ctx, agent, commands, rounds, timeout):
             status = row.get("agent") or {}
             return status.get("kind") == agent and row.get("task_state") in ("idle", "finished", "waiting_input")
         ctx.poll(ready, bool, f"{agent} is not ready for a user turn", timeout=timeout)
+        wait_for_editor(ctx, pane, agent)
         prefix = token()
         secret = secrets[index]
         prompt = (f"Our test word is {secret}. Keep it in this conversation only. Do not use tools. "
@@ -52,6 +53,7 @@ def check_agent(ctx, agent, commands, rounds, timeout):
             prefix = token()
             ctx.poll(lambda: live_id(ctx, pane, agent) == ids[index], bool,
                      "provider did not acknowledge the same ID", timeout=timeout)
+            wait_for_editor(ctx, pane, agent)
             ctx.prompt(f"Without tools, recall our test word. Reply with {prefix}, a slash, "
                        "and that word joined with no spaces.", pane)
             ctx.poll(lambda: f"{prefix}/{secrets[index]}" in ctx.read(pane)["text"], bool,

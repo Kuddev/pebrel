@@ -76,6 +76,13 @@ def saved_id(ctx, side, source):
         return None
 
 
+def wait_for_editor(ctx, pane, agent):
+    if agent == "claude":
+        # SessionStart can arrive while the grid still shows the shell command.
+        ctx.poll(lambda: any(row.strip() == "❯" for row in ctx.read(pane)["text"].splitlines()[-8:]),
+                 bool, "Claude did not display its empty composer", timeout=45)
+
+
 def accept_project_prompt(ctx, pane, agent):
     if agent not in ("grok", "codebuddy"):
         return
@@ -127,6 +134,7 @@ def run_agent(agent, executable, rounds):
                 return (runtime_pane(ctx, pane).get("agent") or {}).get("kind") == agent
             ctx.poll(running, bool, f"{agent} did not start", timeout=30)
             accept_project_prompt(ctx, pane, agent)
+            wait_for_editor(ctx, pane, agent)
             if agent not in ("pi", "omp"):
                 ctx.prompt(first[index], pane)
             ctx.poll(lambda: any(first[index] in turn for turn in model.turns), bool,
@@ -141,6 +149,7 @@ def run_agent(agent, executable, rounds):
             for index, pane in enumerate(panes(ctx)):
                 ctx.poll(lambda: live_id(ctx, pane, agent) == expected[index], bool,
                          f"{agent} did not acknowledge its saved ID in {sides[index]}", timeout=45)
+                wait_for_editor(ctx, pane, agent)
                 after = marker()
                 ctx.prompt(after, pane)
                 turns = ctx.poll(lambda: [turn for turn in model.turns if after in turn], bool,
