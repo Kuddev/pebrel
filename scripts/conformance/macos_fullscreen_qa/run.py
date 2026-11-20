@@ -17,7 +17,7 @@ assert text.count(tail)==1
 shell.write_text(text.replace(tail,tail[:-1]+'    #[cfg(target_os = "macos")]\n    crate::platform::window_chrome::exercise_fullscreen(cx);\n}'))
 for name,adapter in (("parent",baseline),("candidate",candidate)):
     source.write_bytes(adapter+b'\n'+probe)
-    subprocess.run(["cargo","build","--locked","--profile","ci","-p","pebrel","--bin","pebrel","--features","gpui-shell"],check=True)
+    subprocess.run(["cargo","build","--config",".github/ci-profile.toml","--locked","--profile","ci","-p","pebrel","--bin","pebrel","--features","gpui-shell"],check=True)
     root=Path(os.environ["RUNNER_TEMP"])/"fullscreen-evidence"/name
     root.mkdir(parents=True)
     config=root/"config";config.mkdir()
