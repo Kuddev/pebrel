@@ -18,6 +18,11 @@ pub(super) fn claude_style(source: &str) -> bool {
 const TURN_RESULT_MAX_CHARS: usize = 4_000;
 static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// First sequence a freshly received hook can have at this point.
+pub(crate) fn next_receive_sequence() -> u64 {
+    RECEIVE_SEQUENCE.load(Ordering::Relaxed)
+}
+
 /// Parse one pipe message: a `nebula-hook/1 source=<s> pane=<n>` header line,
 /// then the hook's raw JSON payload verbatim (the helper never re-encodes;
 /// all JSON work happens here, off the turn's hot path).
