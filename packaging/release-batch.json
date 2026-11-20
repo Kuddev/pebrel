@@ -45,6 +45,21 @@
       "id": "wsl-menu-installation-move",
       "commit": "0f6116efa0d945fc9b7ebc0b335463d99e23ac61",
       "verification": "The Windows x64 Inno Setup upgrade fixture changed the installation directory, migrated project-owned WSL menu commands and retained user-edited verbs. https://github.com/Kuddev/pebrel/actions/runs/44518468245/job/135540580177"
+    },
+    {
+      "id": "stale-sftp-channel",
+      "commit": "7c9748703a0a3f67612432573cd3883b735efe9a",
+      "verification": "The stable SSH fixtures reconnected a refusing pooled connection, retried clipboard setup on the original pane, and reopened a lost directory listing while preserving permission errors. https://github.com/Kuddev/pebrel/actions/runs/44692180661/job/136140662137"
+    },
+    {
+      "id": "codex-resume-missing-id",
+      "commit": "0cc810942bb7af8e269d11ed3a38a71192b315d1",
+      "verification": "The GPUI restore test opened the Codex picker at the shell prompt for a source-only saved tab and kept recovery pending. https://github.com/Kuddev/pebrel/actions/runs/44692180661/job/136140662137"
+    },
+    {
+      "id": "confirmed-tab-identity",
+      "commit": "417a97efc9048cc98549c5fd2d893c73ad9cb7b7",
+      "verification": "In the GPUI close dialog, removing the preceding tab preserved focus and confirmation closed the original busy tab, leaving its neighbor open. https://github.com/Kuddev/pebrel/actions/runs/44692180661/job/136140662137"
     }
   ]
 }

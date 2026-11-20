@@ -4,7 +4,7 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.6.1 - Unreleased
+## 2.6.1 - 2026-11-20
 
 - `Pebrel-v2.6.1-android-universal-preview.apk`: `PENDING FINAL BUILD`
 - `Pebrel-v2.6.1-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
@@ -32,6 +32,10 @@ macOS, Linux, and Android downloads are Preview builds.
 - Fixed local OMP conversations losing their session on restart. On Windows with PowerShell 7, reopening Pebrel restores the same conversation after a normal close or forced exit. Addresses [#1027](https://github.com/Kuddev/pebrel/issues/1027).
 - Fixed Windows terminal tabs losing their previous output when waking from sleep. Addresses [#992](https://github.com/Kuddev/pebrel/issues/992).
 - Fixed Windows ignoring the `esc` alias when configured as the shortcut to minimize the window.
+- Fixed Windows upgrades leaving the WSL context menu pointed at the previous installation directory.
+- Fixed SFTP browsing after a cached channel closes. SSH image paste now retries a temporary channel refusal once before starting the upload.
+- Fixed reopening Pebrel to an idle shell when automatic Codex recovery is enabled and a saved tab has no thread ID. The tab now opens the Codex conversation picker.
+- Fixed a close confirmation acting on the wrong tab or split when its position changed while the dialog was open.
 
 ### 中文
 
@@ -47,6 +51,10 @@ macOS、Linux 和 Android 下载为预览版。
 - 修复本地 OMP 对话在重启后丢失会话的问题。在 Windows 的 PowerShell 7 中，正常关窗或强制退出后重新打开 Pebrel 均可恢复原对话。对应 [#1027](https://github.com/Kuddev/pebrel/issues/1027)。
 - 修复 Windows 终端标签休眠唤醒后丢失原有滚动历史的问题。对应 [#992](https://github.com/Kuddev/pebrel/issues/992)。
 - 修复 Windows 在配置文件中使用 `esc` 绑定最小化窗口时，按 Esc 键无效的问题。
+- 修复 Windows 更改安装目录升级后，WSL 右键菜单仍指向旧目录的问题。
+- 修复缓存通道关闭后 SFTP 目录无法浏览的问题。向 SSH 标签粘贴图片时，若服务器临时拒绝打开通道，会在开始上传前重试一次。
+- 修复已开启 Codex 自动恢复、但标签缺少对话 ID 时，重开 Pebrel 只看到空闲 Shell 的问题。现在会在原标签打开 Codex 对话选择器。
+- 修复关闭确认框打开期间标签或分屏位置变化后，确认操作会关错目标的问题。
 
 ### Contributors
 
