@@ -1228,6 +1228,7 @@ pub fn win32_string<S: AsRef<OsStr> + ?Sized>(value: &S) -> Vec<u16> {
 #[cfg(test)]
 mod test {
     mod bash_input;
+    mod provider_listing;
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -1304,15 +1305,6 @@ mod test {
             !NEBULA_PROMPT_PS1.contains("NEBULA|$loc|$branch"),
             "the display-only tilde path must not leak into cwd consumers"
         );
-    }
-
-    #[test]
-    fn builtin_ls_aliases_can_be_opted_out() {
-        let gate = NEBULA_PROMPT_PS1
-            .find("if (Get-NebulaBoolSetting 'builtin_ls' $true) {")
-            .expect("builtin_ls gate");
-        let alias = NEBULA_PROMPT_PS1.find("Set-Alias -Name ls ").expect("ls alias");
-        assert!(gate < alias, "the ls/ll/dir aliases must sit behind the builtin_ls gate");
     }
 
     #[test]
@@ -1467,25 +1459,6 @@ $env:PEBREL_CONFIG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) 'pebrel-ps-
 $env:NEBULA_CONFIG_DIR = $env:PEBREL_CONFIG_DIR
 function global:Set-PSReadLineOption { }
 "#;
-
-    #[test]
-    fn powershell_ls_retains_nonfilesystem_provider_objects() {
-        let checks = r#"
-$ErrorActionPreference = 'Stop'
-$env:PEBREL_LIST_FIXTURE = 'provider-value'
-if ((Get-Alias ls).Definition -ne 'Nebula-List') { throw 'ls integration not active' }
-$entry = ls Env: | Where-Object Name -eq 'PEBREL_LIST_FIXTURE'
-if ($entry.Value -ne 'provider-value') { throw 'Environment object lost' }
-Push-Location Alias:
-try {
-    if ((ls ls) -isnot [System.Management.Automation.AliasInfo]) { throw 'Alias object lost' }
-} finally { Pop-Location }
-if ((ls $PSCommandPath) -notmatch 'rw-r--r--') { throw 'File listing lost its formatting' }
-"#;
-        for executable in ["powershell", "pwsh"] {
-            run_powershell_case(executable, PS_PRELUDE, checks);
-        }
-    }
 
     #[test]
     fn powershell_reports_cwd_before_the_next_command_on_the_same_line() {
