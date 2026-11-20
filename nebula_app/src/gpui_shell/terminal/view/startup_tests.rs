@@ -1421,6 +1421,29 @@ fn cold_resume_preserves_codex_id_with_a_legacy_native_file(cx: &mut TestAppCont
     });
 }
 
+#[gpui::test]
+fn codex_snapshot_without_an_id_queues_the_native_picker_at_the_shell_prompt(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let saved = crate::session::AgentSession {
+            source: "codex".into(),
+            session_id: None,
+            session_file: None,
+        };
+        view.restore_agent(saved.clone(), cx);
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        view.process_event(Event::Wakeup, cx);
+        assert!(receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"codex resume")
+        }));
+        assert!(view.recovery_pending());
+        assert_eq!(view.session_agent(), Some(saved));
+    });
+}
+
 fn submit_codex_restore(
     view: &mut TerminalView,
     receiver: &Receiver<Msg>,
