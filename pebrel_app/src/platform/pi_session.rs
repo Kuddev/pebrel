@@ -1,4 +1,4 @@
-//! Resolve native Pi recovery targets in their original execution environment.
+//! Resolve native Pi and OMP recovery targets in their original execution environment.
 //! Reads only metadata headers; ambiguous or missing targets never select a chat.
 use std::io::{BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
@@ -42,13 +42,42 @@ fn header_id(header: &str) -> Option<String> {
 }
 
 fn read_header(path: &Path) -> Option<String> {
-    let input = std::fs::File::open(path).ok()?.take(MAX_HEADER);
+    read_file_header(std::fs::File::open(path).ok()?, false)
+}
+
+fn read_file_header(file: std::fs::File, omp: bool) -> Option<String> {
+    let mut input = std::io::BufReader::new(file.take(MAX_HEADER));
     let mut header = String::new();
-    std::io::BufReader::new(input).read_line(&mut header).ok()?;
+    let first = input.read_line(&mut header).ok()?;
+    if omp && first == 256 {
+        let record: serde_json::Value = serde_json::from_str(&header).ok()?;
+        if record["type"] == "title" && record["v"] == 1 {
+            header.clear();
+            let next = input.read_line(&mut header).ok()?;
+            if (first + next) as u64 >= MAX_HEADER {
+                return None;
+            }
+        }
+    }
     if header.len() as u64 >= MAX_HEADER {
         return None;
     }
     header_id(&header)
+}
+
+fn verified_omp_file(saved: &AgentSession) -> Option<&str> {
+    let expected = native_id(saved.session_id.as_deref()?)?;
+    let file = saved
+        .session_file
+        .as_deref()
+        .filter(|path| crate::session::valid_native_session_file(path))?;
+    let path = Path::new(file).canonicalize().ok()?;
+    let input = super::regular_file::open_regular_under_root(
+        path.parent()?,
+        &[path.file_name()?.to_str()?],
+    )
+    .ok()?;
+    (read_file_header(input, true)?.as_str() == expected).then_some(file)
 }
 
 fn resolve_in(root: &Path, saved: &AgentSession) -> Result<AgentSession, ResolveError> {
@@ -115,6 +144,16 @@ pub(crate) fn resolve(
     context: Option<&crate::runtime_exec::PaneExecContext>,
     cwd: &str,
 ) -> Result<AgentSession, ResolveError> {
+    if saved.source == "omp" {
+        let mut target = saved.clone();
+        target.session_file = match context {
+            Some(context) if context.wsl_distribution().is_none() => {
+                verified_omp_file(saved).map(str::to_owned)
+            },
+            _ => None,
+        };
+        return Ok(target);
+    }
     if let Some(context) = context.filter(|context| context.wsl_distribution().is_some()) {
         return resolve_guest(saved, context, cwd);
     }
