@@ -137,6 +137,12 @@ impl gpui::RenderOnce for TabIconSlot {
     }
 }
 
+/// 提权标记要同时成立三件事：用户没关掉开关、本进程已提权、该 pane 继承同一
+/// 主机令牌。测试进程无法真实提权，所以三项都从参数注入才能验到关掉开关这一路。
+fn shows_administrator_badge(enabled: bool, elevated: bool, inherits_host_token: bool) -> bool {
+    enabled && elevated && inherits_host_token
+}
+
 impl NebulaWorkspace {
     /// 完整标签文本。**不在这里截断**：可见宽度是布局问题，字符数上限会在
     /// 窄侧栏下漏出、在宽侧栏下白扔字符。截断由 `render_sidebar` 按实测
@@ -173,8 +179,11 @@ impl NebulaWorkspace {
         let title = self.tab_title(ix, cx);
         let tab = &self.tabs[ix];
         let view = tab.focused_view().map(|entity| entity.read(cx));
-        let local_administrator = crate::platform::elevation::is_elevated().unwrap_or(false)
-            && view.is_some_and(TerminalView::inherits_windows_host_token);
+        let local_administrator = shows_administrator_badge(
+            crate::gpui_shell::config::administrator_shield(cx),
+            crate::platform::elevation::is_elevated().unwrap_or(false),
+            view.is_some_and(TerminalView::inherits_windows_host_token),
+        );
         let pane_count = match tab {
             WorkspaceTab::Terminal { panes, .. } => panes.len(),
             _ => 0,

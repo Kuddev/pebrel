@@ -102,6 +102,13 @@ impl SettingsPane {
                 self.runtime.tab_close_visible,
                 cx,
             ))
+            .child(self.switch_row(
+                "administrator_shield",
+                language.text(crate::i18n::Message::SettingsAppearanceShowAdministratorShield),
+                help("administrator_shield", language),
+                self.runtime.administrator_shield,
+                cx,
+            ))
             .child(self.select_row(
                 "language",
                 language.text(crate::i18n::Message::CommonLanguage),
