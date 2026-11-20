@@ -77,3 +77,19 @@ fn registered_clis_keep_native_ids_in_their_own_split_across_saves() {
         }
     }
 }
+
+#[test]
+fn live_recovery_cases_cover_the_registered_cli_entry_points() {
+    use std::collections::BTreeMap;
+    let cases: BTreeMap<String, Vec<String>> =
+        toml::from_str(include_str!("../../../scripts/conformance/agent_recovery/entries.toml"))
+            .unwrap();
+    assert_eq!(cases.len(), AgentKind::ALL.len());
+    for kind in AgentKind::ALL {
+        let commands = &cases[kind.slug()];
+        assert!((1..=2).contains(&commands.len()), "{kind:?}");
+        for command in commands {
+            assert_eq!(AgentKind::parse_command(command), Some(kind), "{command}");
+        }
+    }
+}
