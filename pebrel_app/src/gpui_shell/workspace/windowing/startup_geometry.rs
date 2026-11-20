@@ -266,6 +266,8 @@ pub(super) fn regular_options(
         }),
         window_min_size: Some(size(px(760.0), px(540.0)).min(&bounds.size)),
         titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+        window_decorations: (cx.compositor_name() == "Wayland")
+            .then_some(gpui::WindowDecorations::Client),
         app_id: Some(crate::platform::window_chrome::application_id("pebrel")),
         window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
         focus,

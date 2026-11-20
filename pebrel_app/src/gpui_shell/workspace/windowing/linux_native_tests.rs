@@ -70,6 +70,11 @@ fn native_linux_silent_start_close_and_restore_keep_the_same_session() {
                     crate::platform::window_chrome::native_test_window_id(window).unwrap()
                 })
                 .unwrap();
+            let options = startup_geometry::regular_options(1, true, 200.0, cx);
+            assert_eq!(
+                options.window_decorations,
+                (backend == "wayland").then_some(gpui::WindowDecorations::Client)
+            );
             std::fs::write(
                 output.join("window.json"),
                 serde_json::to_vec(&json!({"backend":backend,"id":id})).unwrap(),
@@ -106,6 +111,12 @@ fn native_linux_silent_start_close_and_restore_keep_the_same_session() {
                         assert_eq!(pane_entities(workspace.read(cx)), panes);
                         window.refresh();
                         window.draw(cx).clear(cx);
+                        if backend == "wayland" {
+                            assert!(matches!(
+                                window.window_decorations(),
+                                gpui::Decorations::Client { .. }
+                            ));
+                        }
                         let title = window.debug_bounds_for_selector("workspace-titlebar").unwrap();
                         // 固定组件的关闭按钮宽 34 px；使用真实标题栏布局，避免窗口边框偏移。
                         let position = point(title.right() - px(17.0), title.center().y);
