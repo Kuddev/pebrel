@@ -106,10 +106,13 @@ def run(executable, root):
         created = ctx.api("tab.new", {"window_id": ctx.window_id, "shell": "cmd"})
         ctx.pane_id = created["action"]["pane_id"]
         ctx.api("tab.rename", {"window_id": ctx.window_id, "tab_index": 1, "name": "closed-codex"})
-        ctx.poll(lambda: ctx.read(lines=15)["text"], lambda text: ">" in text,
-                 "cmd did not display its prompt in the target pane", timeout=25)
+        target = {"window_id": ctx.window_id, "pane_id": ctx.pane_id}
+        def processes():
+            return [row.get("executable", "") for row in ctx.api("pane.procs", target)["processes"]]
+        ctx.poll(processes, lambda names: any(Path(name).name.lower() == "cmd.exe" for name in names),
+                 "cmd did not start in the target pane", timeout=25)
         binary = Path(os.environ["PEBREL_QA_CODEX_BIN"]).resolve(strict=True)
-        ctx.prompt(f'"{binary}"')
+        ctx.api("pane.run", {**target, "command": f'"{binary}"'})
         def running():
             rows = ctx.api("agents.list", {}).get("agents", [])
             return next((row["agent"] for row in rows if row["pane_id"] == ctx.pane_id
@@ -120,7 +123,7 @@ def run(executable, root):
         try:
             ctx.poll(codex_process, bool, "The Windows pane did not run the released Codex executable", timeout=25)
         except Exception:
-            print("Test terminal:", ctx.read(lines=15)["text"][-900:])
+            print("Test processes:", processes(), "Test terminal:", ctx.read(lines=250)["text"][-900:])
             raise
         agent = running() or {}
         print("Codex process present. Agent recognized:", bool(agent),
