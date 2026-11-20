@@ -1457,6 +1457,11 @@ impl RuntimeHub {
         }
     }
 
+    pub(crate) fn has_delegation_work(&self) -> bool {
+        let state = self.lock();
+        !state.pending_delegations.is_empty() || !state.pending_delegation_callbacks.is_empty()
+    }
+
     pub(crate) fn has_pending_delegation_callbacks(&self) -> bool {
         !self.lock().pending_delegation_callbacks.is_empty()
     }
