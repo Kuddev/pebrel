@@ -640,10 +640,10 @@ impl TerminalView {
             _ => None,
         };
         if let Some(observation) = observation {
-            eprintln!(
+            crate::gpui_shell::try_write_stderr(format_args!(
                 "QA-OMP {observation} running={} program={:?} committed={:?}",
                 self.command_running, self.running_program, self.suggest.last_committed
-            );
+            ));
         }
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
         // Both shell metadata channels update completion and directory history.

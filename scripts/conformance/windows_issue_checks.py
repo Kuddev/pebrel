@@ -35,7 +35,7 @@ def cursor(ctx):
             width = grid()[0]
             value = "长路径目录/" * (width // 9 + 2) + "END"
             # Put the editable string at the end, avoiding any cursor travel through shell syntax.
-            ctx.paste("Set-Content -NoNewline -Encoding utf8 cjk-result '" + value + "'", submit=False)
+            ctx.prompt("Set-Content -NoNewline -Encoding utf8 cjk-result '" + value + "'", submit=False)
             ctx.poll(lambda: ctx.read()["text"].replace("\n", ""), lambda text: "END" in text, "input missing")
             for _ in range(3):
                 ctx.send_key("left")
@@ -54,7 +54,7 @@ def cursor(ctx):
             print("Columns and cursor before/after:", before[:2], after[:2], flush=True)
             if not resize:
                 assert before == after, "fixed-width terminal grid or cursor changed"
-            ctx.paste("界", submit=False)
+            ctx.prompt("界", submit=False)
             ctx.send_key("enter")
             output = ctx.work_dir / "cjk-result"
             expected = value[:-2] + "界" + value[-2:]
@@ -108,6 +108,6 @@ if __name__ == "__main__":
             print("Fixture pane:", ctx.read()["text"][-1600:], flush=True)
             for log in ctx.artifact_dir.glob("pebrel-*.log"):
                 rows = log.read_text(encoding="utf-8", errors="replace").splitlines()
-                for row in [r for r in rows if r.startswith("QA-OMP " )][-80:]:
+                for row in [r for r in rows if r.startswith("QA-OMP ")][-80:]:
                     print(row, flush=True)
             raise
