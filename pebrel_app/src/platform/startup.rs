@@ -1,3 +1,5 @@
+pub(crate) mod instance;
+
 /// Surface a pre-logger failure for a GUI launch; the caller also returns it on stderr.
 pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
     #[cfg(windows)]
@@ -110,46 +112,14 @@ pub(crate) fn start_hidden(
 /// The installer and Settings manage the same per-user Startup shortcut.
 pub(crate) fn launch_at_login() -> bool {
     #[cfg(windows)]
-    return startup_shortcut().is_ok_and(|path| path.is_file());
+    return startup_directory().is_ok_and(|directory| directory.join("Pebrel.lnk").is_file());
     #[cfg(unix)]
     return login::entry_path().is_ok_and(|path| path.is_file());
 }
 
 pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
     #[cfg(windows)]
-    {
-        use windows::Win32::System::Com::{
-            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-            CoUninitialize, IPersistFile,
-        };
-        use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-        use windows::core::{HSTRING, Interface};
-
-        let path = startup_shortcut()?;
-        if !enabled {
-            return match std::fs::remove_file(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                result => result,
-            };
-        }
-        let executable = std::env::current_exe()?;
-        // SAFETY: COM calls stay on this thread; interfaces are dropped before
-        // balancing the successful initialization, including on save errors.
-        unsafe {
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(std::io::Error::other)?;
-            let result = (|| -> windows::core::Result<()> {
-                let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-                link.SetPath(&HSTRING::from(executable.as_os_str()))?;
-                link.SetArguments(&HSTRING::from(LOGIN_STARTUP_ARGUMENTS))?;
-                if let Some(home) = super::dirs::home_dir() {
-                    link.SetWorkingDirectory(&HSTRING::from(home.as_os_str()))?;
-                }
-                link.cast::<IPersistFile>()?.Save(&HSTRING::from(path.as_os_str()), true)
-            })();
-            CoUninitialize();
-            result.map_err(std::io::Error::other)
-        }
-    }
+    return set_startup_shortcut(&startup_directory()?, enabled);
     #[cfg(unix)]
     {
         login::set_enabled(enabled)
@@ -157,23 +127,73 @@ pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-fn startup_shortcut() -> std::io::Result<std::path::PathBuf> {
+fn set_startup_shortcut(directory: &std::path::Path, enabled: bool) -> std::io::Result<()> {
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize, IPersistFile,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::{HSTRING, Interface};
+
+    let path = directory.join("Pebrel.lnk");
+    if !enabled {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        };
+    }
+    let executable = std::env::current_exe()?;
+    std::fs::create_dir_all(directory)?;
+    // SAFETY: COM calls stay on this thread; interfaces are dropped before
+    // balancing the successful initialization, including on save errors.
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(std::io::Error::other)?;
+        let result = (|| -> windows::core::Result<()> {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(&HSTRING::from(executable.as_os_str()))?;
+            link.SetArguments(&HSTRING::from(LOGIN_STARTUP_ARGUMENTS))?;
+            if let Some(home) = super::dirs::home_dir() {
+                link.SetWorkingDirectory(&HSTRING::from(home.as_os_str()))?;
+            }
+            link.cast::<IPersistFile>()?.Save(&HSTRING::from(path.as_os_str()), true)
+        })();
+        CoUninitialize();
+        result.map_err(std::io::Error::other)
+    }
+}
+
+#[cfg(windows)]
+fn startup_directory() -> std::io::Result<std::path::PathBuf> {
     use std::os::windows::ffi::OsStringExt;
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Startup, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    use windows::Win32::UI::Shell::{FOLDERID_Startup, KF_FLAG_DONT_VERIFY, SHGetKnownFolderPath};
 
     // SAFETY: the known-folder buffer is copied before its COM allocation is freed.
     unsafe {
-        let path = SHGetKnownFolderPath(&FOLDERID_Startup, KF_FLAG_DEFAULT, None)
+        let path = SHGetKnownFolderPath(&FOLDERID_Startup, KF_FLAG_DONT_VERIFY, None)
             .map_err(std::io::Error::other)?;
         let directory = std::ffi::OsString::from_wide(path.as_wide());
         CoTaskMemFree(Some(path.0.cast()));
-        Ok(std::path::PathBuf::from(directory).join("Pebrel.lnk"))
+        Ok(std::path::PathBuf::from(directory))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn startup_shortcut_handles_a_missing_startup_directory() {
+        let profile = tempfile::tempdir().unwrap();
+        let directory = profile.path().join("Programs").join("Startup");
+        let link = directory.join("Pebrel.lnk");
+        super::set_startup_shortcut(&directory, false).unwrap();
+        assert!(!directory.exists());
+        super::set_startup_shortcut(&directory, true).unwrap();
+        assert!(std::fs::metadata(&link).unwrap().len() > 0);
+        super::set_startup_shortcut(&directory, false).unwrap();
+        assert!(!link.exists());
+    }
+
     #[test]
     fn wsl_handover_does_not_reclassify_an_inherited_host_directory_as_explicit() {
         use pebrel_settings::{RawSettings, RuntimeSettings};

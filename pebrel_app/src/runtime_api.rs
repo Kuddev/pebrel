@@ -237,6 +237,16 @@ pub enum RuntimeTaskState {
     Failed,
 }
 
+impl RuntimeTaskState {
+    fn ensure_delegation_ready(self) -> Result<(), ApiError> {
+        match self {
+            Self::Idle | Self::Finished => Ok(()),
+            _ => Err(ApiError::new("target_busy", "the target Agent has an unfinished turn")
+                .details(json!({"task_state": self}))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAgentStateSource {
@@ -318,6 +328,7 @@ pub struct RuntimeDelegationReceipt {
 struct PendingDelegation {
     receipt: RuntimeDelegationReceipt,
     target_name: String,
+    first_hook_sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1180,7 +1191,7 @@ impl RuntimeHub {
         target: &RuntimeManagedAgent,
     ) -> Result<RuntimeDelegationReceipt, ApiError> {
         let mut state = self.lock();
-        let (origin_window_id, origin_agent, target_session_id) = {
+        let (origin_window_id, origin_agent, target_session_id, target_state) = {
             let snapshot = state.current.as_ref().ok_or_else(|| {
                 ApiError::new(
                     "runtime_unavailable",
@@ -1199,7 +1210,7 @@ impl RuntimeHub {
                 .session_id
                 .clone()
                 .or_else(|| target_pane.agent.as_ref().and_then(|agent| agent.session_id.clone()));
-            (origin_window_id, origin_agent, target_session_id)
+            (origin_window_id, origin_agent, target_session_id, target_pane.task_state)
         };
         if origin_pane_id == target.pane_id {
             return Err(ApiError::invalid_params("an Agent cannot delegate a task to itself"));
@@ -1219,6 +1230,7 @@ impl RuntimeHub {
                 format!("agent {:?} already has an in-flight delegated task", target.name),
             ));
         }
+        target_state.ensure_delegation_ready()?;
         if state.pending_delegations.len() >= MAX_PENDING_DELEGATIONS {
             return Err(ApiError::new(
                 "delegation_capacity",
@@ -1250,13 +1262,75 @@ impl RuntimeHub {
         };
         state.pending_delegations.insert(
             task_id,
-            PendingDelegation { receipt: receipt.clone(), target_name: target.name.clone() },
+            PendingDelegation {
+                receipt: receipt.clone(),
+                target_name: target.name.clone(),
+                first_hook_sequence: None,
+            },
         );
         Ok(receipt)
     }
 
-    pub(crate) fn cancel_delegation(&self, task_id: &str) {
-        self.lock().pending_delegations.remove(task_id);
+    pub(crate) fn cancel_unsubmitted_delegation(&self, task_id: &str) {
+        let mut state = self.lock();
+        if state
+            .pending_delegations
+            .get(task_id)
+            .is_some_and(|task| task.first_hook_sequence.is_none())
+        {
+            state.pending_delegations.remove(task_id);
+        }
+    }
+
+    /// Called on the UI thread with the live pane state. A timeout can cancel a
+    /// queued write. Once writing starts the task still owns its completion.
+    pub(crate) fn submit_delegation(
+        &self,
+        task_id: &str,
+        managed: &RuntimeManagedAgent,
+        actual: Option<&RuntimeAgent>,
+        readiness: RuntimeTaskState,
+        write: impl FnOnce() -> Result<(), ApiError>,
+    ) -> Result<(), ApiError> {
+        readiness.ensure_delegation_ready()?;
+        {
+            let mut state = self.lock();
+            let pending = state
+                .pending_delegations
+                .get_mut(task_id)
+                .filter(|task| {
+                    let target = &task.receipt.target;
+                    task.first_hook_sequence.is_none()
+                        && target.agent_id.as_deref() == Some(managed.agent_id.as_str())
+                        && target.generation == Some(managed.generation)
+                        && target.pane_id == managed.pane_id
+                })
+                .ok_or_else(|| {
+                    ApiError::new(
+                        "delegation_not_pending",
+                        "the delegated prompt is no longer pending",
+                    )
+                })?;
+            let target = &pending.receipt.target;
+            if !actual.is_some_and(|agent| {
+                agent.kind == target.kind
+                    && target
+                        .session_id
+                        .as_ref()
+                        .is_none_or(|session| agent.session_id.as_ref() == Some(session))
+            }) {
+                return Err(ApiError::new(
+                    "agent_identity_mismatch",
+                    "the target pane now contains a different Agent session",
+                ));
+            }
+            pending.first_hook_sequence = Some(crate::ai_hook::next_receive_sequence());
+        }
+        let result = write();
+        if result.is_err() {
+            self.lock().pending_delegations.remove(task_id);
+        }
+        result
     }
 
     /// Convert a provider TurnDone edge into a callback exactly once. The
@@ -1282,7 +1356,8 @@ impl RuntimeHub {
                 .session_id
                 .as_deref()
                 .is_none_or(|expected| event.session_id.as_deref() == Some(expected));
-            (target.pane_id == target_pane_id
+            (pending.first_hook_sequence.is_some_and(|first| event.received_sequence >= first)
+                && target.pane_id == target_pane_id
                 && same_managed_agent
                 && same_provider
                 && same_session)
@@ -1297,8 +1372,11 @@ impl RuntimeHub {
             _ => "completed",
         };
         let result = event
-            .message
-            .as_deref()
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.source())
+            .map(|text| text.as_ref())
+            .or(event.message.as_deref())
             .map(|message| truncate_chars(message, MAX_DELEGATION_RESULT_CHARS))
             .unwrap_or_else(|| "No structured final message was provided; inspect the target pane if details are needed.".to_owned());
         let result =
@@ -1377,6 +1455,11 @@ impl RuntimeHub {
         {
             state.pending_delegation_callbacks.push_back(callback);
         }
+    }
+
+    pub(crate) fn has_delegation_work(&self) -> bool {
+        let state = self.lock();
+        !state.pending_delegations.is_empty() || !state.pending_delegation_callbacks.is_empty()
     }
 
     pub(crate) fn has_pending_delegation_callbacks(&self) -> bool {

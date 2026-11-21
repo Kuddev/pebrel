@@ -241,6 +241,79 @@ fn shell_metadata_cannot_replace_a_hook_owned_agent_identity(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn omp_message_redraw_keeps_its_session_until_the_process_exits(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.session.as_mut().unwrap().shell_pid = 4242;
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        let wire = br#"nebula-hook/1 source=omp pane=42
+{"kind":"session-start","session_id":"omp-message-redraw"}"#;
+        let mut event = crate::ai_hook::parse_remote_envelope(wire, Some(42)).unwrap();
+        event.agent_pid = Some(100);
+        assert!(view.handle_ai_hook(&event, cx));
+        view.on_command_start(cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: true },
+            cx,
+        );
+        assert_eq!(view.ai_session.as_ref().unwrap().session_id, "omp-message-redraw");
+        assert!(view.agent_activity.hook_seen());
+
+        let gone = crate::process_tree::ActivityEvidence {
+            agent: None,
+            primary_present: Some(false),
+            child_present: false,
+            busy: false,
+        };
+        view.apply_activity_evidence(view.command_started, 4242, Some(100), Ok(gone), cx);
+        assert!(view.ai_session.is_none());
+        assert!(view.running_program.is_none());
+        assert!(!view.agent_activity.hook_seen());
+
+        view.on_command_start(cx);
+        let wire = br#"nebula-hook/1 source=omp pane=42
+{"kind":"session-start","session_id":"omp-real-error"}"#;
+        let next = crate::ai_hook::parse_remote_envelope(wire, Some(42)).unwrap();
+        assert!(view.handle_ai_hook(&next, cx));
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(1), empty_prompt_zone: false },
+            cx,
+        );
+        assert!(view.ai_session.is_none());
+        assert!(view.last_command_failed);
+    });
+}
+
+#[gpui::test]
+fn hookless_omp_keeps_its_task_title_until_shell_completion(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.session.as_mut().unwrap().shell_pid = 4242;
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.process_event(TermEvent::CwdReport("/tmp/ddlclock".into()), cx);
+        view.suggest.last_committed = "omp".into();
+        view.on_command_start(cx);
+        view.process_event(TermEvent::Title("π > title fixture".into()), cx);
+        let title = view.tab_label(cx);
+        assert!(title.contains("title fixture"));
+        view.suggest.last_committed = "a message typed into OMP".into();
+        view.process_event(TermEvent::CommandStart, cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: true },
+            cx,
+        );
+        assert_eq!(view.tab_label(cx), title);
+        assert_eq!(view.running_program.as_deref(), Some("omp"));
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+            cx,
+        );
+        assert!(view.running_program.is_none());
+        assert_eq!(view.tab_label(cx), "ddlclock");
+    });
+}
+
+#[gpui::test]
 fn command_end_clears_progress_and_stale_agent_state(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
@@ -249,7 +322,10 @@ fn command_end_clears_progress_and_stale_agent_state(cx: &mut TestAppContext) {
             view.on_command_start(cx);
             view.process_event(TermEvent::Progress { state: 3, value: None }, cx);
             assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-            view.process_event(TermEvent::CommandDone { exit_code: Some(code) }, cx);
+            view.process_event(
+                TermEvent::CommandDone { exit_code: Some(code), empty_prompt_zone: false },
+                cx,
+            );
             screen(view, "◦ Working (1s • esc to interrupt)\n› Ask Codex to do anything");
             view.refresh_agent_screen_state(cx);
             assert_eq!(view.progress, crate::taskbar::TaskProgress::None);
@@ -426,6 +502,27 @@ fn ssh_shell_prompt_return_clears_a_command_without_a_done_marker(cx: &mut TestA
     });
 }
 
+#[gpui::test]
+fn ssh_clock_prompt_clears_codex_identity_after_exit_without_hooks(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.ssh_destination = Some("dev@fixture".into());
+        view.suggest.suggest_env =
+            crate::display::SuggestEnv::Ssh { destination: "dev@fixture".into() };
+        view.suggest.last_committed = "codex".into();
+        view.suggest.pending_command_prompt = Some("[08:19:10] dev@fixture:~$".into());
+        view.on_command_start(cx);
+        assert_eq!(view.runtime_agent().unwrap().kind, "codex");
+        screen(view, "[08:19:12] dev@other:~$ ");
+        view.refresh_agent_screen_state(cx);
+        assert!(view.runtime_agent().is_some());
+        screen(view, "[08:19:13] dev@fixture:~$ ");
+        view.refresh_agent_screen_state(cx);
+        assert!(view.runtime_agent().is_none());
+        assert_eq!(view.sidebar_activity(), SidebarActivity::Idle);
+    });
+}
+
 /// SSH pane 里 agent 的两个会话周期：退出后再次启动，新 CLI 进程的
 /// SessionStart 必须重新建立身份（图标/状态/摘要的输入），无论上一个会话的
 /// 收尾事件是否完整到达（SessionEnd 在 bridge 通道上有真实丢失路径）。
@@ -448,7 +545,10 @@ fn ssh_agent_second_launch_reestablishes_identity(cx: &mut TestAppContext) {
         assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
 
         // ---- 退出：SessionEnd 丢失（bridge 忙/超时），只剩 133;D 收尾 ----
-        view.process_event(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+            cx,
+        );
         assert_eq!(view.running_program, None, "command boundary clears identity");
 
         // ---- 会话 2：新 CLI 进程（process 换新、序号从 1 重来）----
