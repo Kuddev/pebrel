@@ -415,6 +415,7 @@ impl TerminalView {
             command_running: false,
             recent_output: crate::recent_output::RecentOutput::default(),
             recent_output_restore_closed: false,
+            reveal_recent_output_on_restore: true,
             restored_viewport_offset: None,
             recent_output_enabled: cx
                 .try_global::<Settings>()
