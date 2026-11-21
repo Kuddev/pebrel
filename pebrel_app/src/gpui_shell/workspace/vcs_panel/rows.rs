@@ -1,6 +1,8 @@
 //! Construct only the Git/SVN rows requested by the virtual list.
+
 use super::list_model::{RowOps, VcsRow};
 use super::*;
+use crate::gpui_shell::theme::selected_glass;
 
 impl NebulaWorkspace {
     pub(super) fn render_vcs_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -223,8 +225,10 @@ impl NebulaWorkspace {
                     .gap_2()
                     .items_center()
                     .rounded_md()
-                    .when(selected_row, |row| row.bg(selected_bg))
-                    .hover(|row| row.bg(hover))
+                    .when(selected_row, |row| selected_glass(row.bg(selected_bg), cx))
+                    .when(!selected_row || !cx.theme().is_dark(), |row| {
+                        row.hover(|row| row.bg(hover))
+                    })
                     .child(
                         div()
                             .w(px(14.0))

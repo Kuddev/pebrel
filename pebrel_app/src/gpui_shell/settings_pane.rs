@@ -18,9 +18,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
     InteractiveElement as _, IntoElement, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseMoveEvent, ParentElement as _, Render, RenderImage, Rgba as GpuiRgba, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, anchored, deferred,
-    div, img, px,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, RenderImage,
+    Rgba as GpuiRgba, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Task, Window, anchored, deferred, div, img, px,
 };
 use gpui_component::input::InputEvent;
 use gpui_component::select::{SelectEvent, SelectItem};
@@ -87,6 +87,7 @@ mod theme_transfer;
 mod theme_transfer_view;
 
 use localization::*;
+pub(super) use navigation::SETTINGS_NAV_WIDTH;
 use navigation::*;
 use shell_picker::*;
 pub(super) use status::SshStatus;
@@ -100,6 +101,7 @@ pub enum SettingsPaneEvent {
     Close,
     Changed,
     BackupRestored,
+    WallpaperPreview,
     /// 导入 Profile 已落盘；Tab 的 Shell 面板若正打开，需要重建候选快照。
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。
@@ -170,6 +172,10 @@ pub struct SettingsPane {
     pub(super) theme_foreground_picker: theme_foreground::ThemeForegroundState,
     opacity_slider: Entity<SliderState>,
     wallpaper_opacity_slider: Entity<SliderState>,
+    wallpaper_peek: bool,
+    wallpaper_peek_changed: bool,
+    appearance_expanded: bool,
+    appearance_section: Option<AppearanceSection>,
     scroll_speed_slider: Entity<SliderState>,
     scroll_speed_focus: FocusHandle,
     pub(super) proxy_url_input: Entity<InputState>,
@@ -548,11 +554,36 @@ impl SettingsPane {
             return;
         }
         self.runtime.background_image_opacity = opacity;
+        super::wallpaper::set_image_opacity_live(opacity, cx);
         cx.notify();
+        if self.wallpaper_peek {
+            self.wallpaper_peek_changed = true;
+        } else {
+            self.persist_wallpaper_opacity(cx);
+        }
+    }
+
+    fn persist_wallpaper_opacity(&mut self, cx: &mut Context<Self>) {
+        let opacity = self.runtime.background_image_opacity;
         self.schedule_slider_persist(
             vec![("background_image_opacity", format!("{opacity:.2}"))],
             cx,
         );
+    }
+
+    pub(super) fn wallpaper_peeking(&self) -> bool {
+        self.wallpaper_peek && self.active_section == 1
+    }
+
+    pub(super) fn set_wallpaper_peek(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.wallpaper_peek != active {
+            self.wallpaper_peek = active;
+            if !active && std::mem::take(&mut self.wallpaper_peek_changed) {
+                self.persist_wallpaper_opacity(cx);
+            }
+            cx.emit(SettingsPaneEvent::WallpaperPreview);
+            cx.notify();
+        }
     }
 
     /// `Change` 同时覆盖鼠标拖动和键盘调整，因此统一用 debounce 延后落盘：
@@ -1048,7 +1079,26 @@ impl SettingsPane {
                 .w(px(220.0))
                 .items_center()
                 .gap_3()
-                .child(div().flex_1().min_w_0().child(Slider::new(state)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .when(
+                            state == &self.wallpaper_opacity_slider && cx.theme().is_dark(),
+                            |slider| {
+                                slider.capture_any_mouse_down(cx.listener(
+                                    |this, event: &MouseDownEvent, _, cx| {
+                                        if event.button == MouseButton::Left
+                                            && super::wallpaper::wallpaper_available_for_preview(cx)
+                                        {
+                                            this.set_wallpaper_peek(true, cx);
+                                        }
+                                    },
+                                ))
+                            },
+                        )
+                        .child(Slider::new(state)),
+                )
                 .child(div()
                         .w(px(48.0))
                         .flex_shrink_0()
@@ -1565,8 +1615,10 @@ impl SettingsPane {
         let foreground = theme.foreground;
         let hover_bg = crate::gpui_shell::theme::settings_hover_bg(cx, false);
         let hairline = crate::gpui_shell::theme::settings_hairline(cx);
+        let glass = crate::gpui_shell::theme::selection_glass(cx);
         // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
-        let mut nav = v_flex()
+        let nav = v_flex()
+            .debug_selector(|| "settings-sidebar".to_owned())
             .w(px(SETTINGS_NAV_WIDTH))
             .h_full()
             .flex_shrink_0()
@@ -1576,8 +1628,8 @@ impl SettingsPane {
             .gap(px(2.0))
             .text_sm()
             .line_height(px(20.0))
-            .border_r_1()
-            .border_color(hairline)
+            .opacity(if self.wallpaper_peeking() { 0.16 } else { 1.0 })
+            .when(!theme.is_dark(), |nav| nav.border_r_1().border_color(hairline))
             .child(
                 div()
                     .id("settings-back")
@@ -1598,15 +1650,20 @@ impl SettingsPane {
             )
             .child(self.render_nav_search(window, cx));
         let searching = !self.settings_search_input.read(cx).value().trim().is_empty();
+        let mut items = v_flex().w_full().gap(px(2.0));
         let mut previous_group = None;
         for ix in self.matching_settings_sections(cx) {
             let group = NAV_GROUPS.iter().position(|(_, sections)| sections.contains(&ix));
             if !searching && previous_group.is_some() && previous_group != group {
-                nav = nav.child(div().h(px(10.0)).flex_shrink_0());
+                items = items.child(div().h(px(10.0)).flex_shrink_0());
             }
             previous_group = group;
+            if ix == 1 && !searching {
+                items = items.child(self.appearance_navigation(glass, cx));
+                continue;
+            }
             let active = ix == self.active_section;
-            nav = nav.child(
+            items = items.child(
                 div()
                     .id(("settings-nav", ix))
                     .debug_selector(move || format!("settings-nav-{ix}"))
@@ -1619,9 +1676,18 @@ impl SettingsPane {
                     .gap(px(10.0))
                     .rounded_md()
                     .cursor_pointer()
-                    // 底色和墨色表达选中，避免中文导航因字重匹配而突然变粗。
-                    .font_weight(gpui::FontWeight::NORMAL)
-                    .when(active, |item| item.bg(active_bg).text_color(active_fg))
+                    // 选中态同时改变底色、墨色和字重，余光扫过也能确认当前位置。
+                    .font_weight(if active {
+                        gpui::FontWeight::MEDIUM
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
+                    .when_some(glass, |item, glass| {
+                        if active { glass.apply(item) } else { glass.reserve(item) }
+                    })
+                    .when(active, |item| {
+                        item.text_color(active_fg).when(glass.is_none(), |item| item.bg(active_bg))
+                    })
                     .when(!active, |item| item.text_color(muted).hover(|s| s.bg(hover_bg)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_section = ix;
@@ -1638,7 +1704,7 @@ impl SettingsPane {
                     .child(section_label(ix, language)),
             );
         }
-        nav.child(div().flex_1().min_h(px(24.0)))
+        nav.child(div().flex_1().min_h_0().overflow_y_scrollbar().child(items))
             .child(
                 Button::new("settings-restore-defaults")
                     .icon(IconName::Undo2)
@@ -1687,11 +1753,22 @@ impl Render for SettingsPane {
         let mobile_page = self.active_section == MOBILE_SECTION;
         let form_page = matches!(self.active_section, 1 | 2 | 5 | 6 | 8);
         let has_cards = form_page || mobile_page || self.active_section == 9;
+        let peeking = self.wallpaper_peeking();
 
         div()
             .size_full()
             .font(crate::gpui_shell::typography::ui_font(cx))
             .track_focus(&self.focus_handle)
+            .when(peeking, |root| {
+                root.capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    if event.button == MouseButton::Left {
+                        this.set_wallpaper_peek(false, cx);
+                    }
+                }))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.set_wallpaper_peek(false, cx);
+                }))
+            })
             // 旧壳 `input/chrome.rs` 的合同是页面任何左键先撤销捕获。
             // 行自身会 stop_propagation 并完成「同行取消 / 他行转移」；其它
             // 控件的 mouse_down 仍先取得自己的焦点，这里只清状态，不抢焦点，
@@ -1736,7 +1813,9 @@ impl Render for SettingsPane {
                     .flex_1()
                     .min_w_0()
                     .h_full()
+                    .debug_selector(|| "settings-content".to_owned())
                     .when(has_cards, |pane| pane.bg(crate::gpui_shell::theme::settings_canvas_tint(cx)))
+                    .opacity(if peeking { 0.16 } else { 1.0 })
                     .child(
                         v_flex()
                             .flex_1()
