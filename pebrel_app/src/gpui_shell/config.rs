@@ -80,6 +80,7 @@ pub struct Settings {
     pub notification_duration: pebrel_settings::NotificationDuration,
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
+    pub show_tab_status: bool,
     /// Use the working directory or SSH destination as the automatic tab title.
     pub static_tab_titles: bool,
     pub tab_reveal: pebrel_settings::TabRevealName,
@@ -306,6 +307,7 @@ impl Settings {
             ai_toasts: runtime.ai_toasts,
             notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
+            show_tab_status: runtime.show_tab_status,
             static_tab_titles: runtime.static_tab_titles,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,

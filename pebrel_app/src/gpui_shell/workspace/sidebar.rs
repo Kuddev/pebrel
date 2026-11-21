@@ -559,6 +559,7 @@ impl NebulaWorkspace {
                                     .inset_0()
                                     .justify_end()
                                     .items_center()
+                                    .debug_selector(move || format!("sidebar-tab-status-{ix}"))
                                     .group_hover(hover_group.clone(), |item| item.invisible())
                                     .child(if matches!(activity, SidebarActivity::Idle) {
                                         status
@@ -580,6 +581,9 @@ impl NebulaWorkspace {
                                 .when(tab_close_visible, |slot| {
                                         slot.child(Self::tab_status_icon(
                                             Button::new(("close-tab", ix))
+                                                .debug_selector(move || {
+                                                    format!("close-sidebar-tab-{ix}")
+                                                })
                                                 .icon(IconName::Close)
                                                 .ghost()
                                                 .xsmall()
