@@ -1170,6 +1170,7 @@ pub struct ThemeCardGeometry {
 
 /// 旧壳默认快速终端热键。
 pub const DEFAULT_QUICK_TERMINAL_HOTKEY: &str = "ctrl+`";
+pub const DEFAULT_BACKGROUND_IMAGE_OPACITY: f32 = 0.38;
 pub const DEFAULT_SIDEBAR_WIDTH: f32 = 230.0;
 pub const MIN_SIDEBAR_WIDTH: f32 = 170.0;
 pub const MAX_SIDEBAR_WIDTH: f32 = 420.0;
@@ -1324,7 +1325,7 @@ impl RuntimeSettings {
             background_image_opacity: raw
                 .f32("background_image_opacity")
                 .map(|o| o.clamp(0.0, 1.0))
-                .unwrap_or(0.38),
+                .unwrap_or(DEFAULT_BACKGROUND_IMAGE_OPACITY),
             background_image_fit: raw.value("background_image_fit").map(str::to_owned),
             background_image_alignment: raw.value("background_image_alignment").map(str::to_owned),
             background_image_cover_chrome: raw

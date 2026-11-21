@@ -82,9 +82,119 @@ pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
 }
 
 // 导航使用组件的小字号，与搜索菜单一致；尺寸是逻辑像素，由窗口统一处理 DPI。
-pub(super) const SETTINGS_NAV_WIDTH: f32 = 248.0;
+pub(in crate::gpui_shell) const SETTINGS_NAV_WIDTH: f32 = 248.0;
 pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 34.0;
 pub(super) const SETTINGS_NAV_ICON_SIZE: f32 = 16.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AppearanceSection {
+    Theme,
+    Terminal,
+    Cursor,
+    Interface,
+    Background,
+}
+
+impl AppearanceSection {
+    const ALL: [Self; 5] =
+        [Self::Theme, Self::Terminal, Self::Cursor, Self::Interface, Self::Background];
+
+    pub(super) fn label(self, language: crate::display::UiLanguage) -> &'static str {
+        use crate::i18n::Message;
+        language.text(match self {
+            Self::Theme => Message::CommonTheme,
+            Self::Terminal => Message::SettingsAppearanceTerminalAppearance,
+            Self::Cursor => Message::CommonCursor,
+            Self::Interface => Message::ThemeEditorPreviewInterface,
+            Self::Background => Message::SettingsAppearanceCustomBackground,
+        })
+    }
+}
+
+impl SettingsPane {
+    pub(super) fn show_appearance_section(&self, section: AppearanceSection, cx: &App) -> bool {
+        self.appearance_section.is_none_or(|shown| shown == section)
+            || !self.settings_search_input.read(cx).value().trim().is_empty()
+    }
+
+    pub(super) fn appearance_navigation(
+        &self,
+        glass: Option<crate::gpui_shell::theme::GlassSurface>,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let open = self.appearance_expanded;
+        let active = self.active_section == 1;
+        let theme = cx.theme();
+        let parent_selected = active && (!open || self.appearance_section.is_none());
+        let parent = Button::new("settings-appearance-toggle")
+            .debug_selector(|| "settings-nav-1".to_owned())
+            .w_full()
+            .h(px(SETTINGS_NAV_ROW_HEIGHT))
+            .ghost()
+            .selected(parent_selected)
+            .toggled(open)
+            .label(section_label(1, language))
+            .icon(IconName::Palette)
+            .justify_start()
+            .relative()
+            .text_color(if parent_selected { theme.foreground } else { theme.muted_foreground })
+            .child(
+                h_flex().absolute().right_2().top_0().bottom_0().items_center().child(
+                    Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
+                        .xsmall(),
+                ),
+            )
+            .when_some(glass.filter(|_| parent_selected), |button, glass| glass.apply(button))
+            .on_click(cx.listener(|pane, _, _, cx| {
+                pane.appearance_expanded = pane.active_section != 1 || !pane.appearance_expanded;
+                pane.active_section = 1;
+                pane.about_sponsor_open = false;
+                cx.notify();
+            }));
+
+        v_flex().mx_1().gap_1().child(parent).when(open, |group| {
+            group.child(
+                v_flex()
+                    .ml(px(16.0))
+                    .pl(px(9.0))
+                    .gap(px(2.0))
+                    .border_l_1()
+                    .border_color(crate::gpui_shell::theme::settings_hairline(cx))
+                    .children(AppearanceSection::ALL.into_iter().enumerate().map(
+                        |(index, section)| {
+                            let selected = active && self.appearance_section == Some(section);
+                            Button::new(("settings-appearance-child", index))
+                                .debug_selector(move || {
+                                    format!("settings-appearance-child-{index}")
+                                })
+                                .label(section.label(language))
+                                .w_full()
+                                .h(px(28.0))
+                                .small()
+                                .justify_start()
+                                .ghost()
+                                .selected(selected)
+                                .text_color(if selected {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                })
+                                .when_some(glass.filter(|_| selected), |button, glass| {
+                                    glass.apply(button)
+                                })
+                                .on_click(cx.listener(move |pane, _, _, cx| {
+                                    pane.active_section = 1;
+                                    pane.appearance_section = Some(section);
+                                    pane.about_sponsor_open = false;
+                                    cx.notify();
+                                }))
+                        },
+                    )),
+            )
+        })
+    }
+}
 
 // 正文分组与表单继续沿用现有几何节奏。
 pub(super) const SETTINGS_GROUP_GAP: f32 = 32.0;
