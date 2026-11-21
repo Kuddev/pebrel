@@ -80,6 +80,8 @@ enum Mode {
     Integration,
     RejectIntegration,
     BrokenPosixQuoting,
+    #[cfg(unix)]
+    NoAssetExecTty,
     RejectSftp,
     HangSftp,
     AcceptSftp,
@@ -121,6 +123,20 @@ impl server::Handler for Loopback {
             return session.channel_failure(channel);
         }
         if command == resume::probe_command().as_bytes() {
+            #[cfg(unix)]
+            if self.mode == Mode::NoAssetExecTty {
+                let result = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(std::str::from_utf8(command).unwrap())
+                    .output()?;
+                session.channel_success(channel)?;
+                if !result.stdout.is_empty() {
+                    session.data(channel, result.stdout)?;
+                }
+                session.exit_status_request(channel, result.status.code().unwrap() as u32)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
             if matches!(self.mode, Mode::Integration | Mode::RejectIntegration) {
                 session.channel_success(channel)?;
                 session.data(channel, resume::PROBE_REPLY)?;
@@ -734,6 +750,23 @@ fn a_host_with_sh_but_incompatible_exec_quoting_opens_its_ordinary_shell() {
         let (channel, _) =
             open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
         assert!(channel.identity_input.is_none(), "unsupported startup must not run POSIX code");
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
+        ));
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn gateway_with_a_frontend_pty_and_piped_asset_exec_opens_an_interactive_shell() {
+    check(async {
+        let fixture = Fixture::new(Mode::NoAssetExecTty).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        assert!(channel.identity_input.is_none());
         assert!(channel.pending.iter().any(
             |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
         ));
