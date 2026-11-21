@@ -55,7 +55,11 @@ pub enum Event {
 
     /// OSC 133;D — the command finished. `exit_code` comes from Nebula's own
     /// shell integration (`133;D;<code>`); bare third-party `133;D` is `None`.
-    CommandDone { exit_code: Option<i32> },
+    CommandDone {
+        exit_code: Option<i32>,
+        /// OSC 133 B, C and D;0 arrived consecutively with no command text or output.
+        empty_prompt_zone: bool,
+    },
 
     /// OSC 1337 `SetUserVar` — a shell-integration variable (assistant
     /// queries and future channels).
@@ -144,7 +148,7 @@ impl Debug for Event {
                 placement.id
             ),
             Event::CommandStart => write!(f, "CommandStart"),
-            Event::CommandDone { exit_code } => write!(f, "CommandDone({exit_code:?})"),
+            Event::CommandDone { exit_code, .. } => write!(f, "CommandDone({exit_code:?})"),
             Event::UserVar { name, value } => {
                 write!(f, "UserVar({name}, {} chars)", value.chars().count())
             },
