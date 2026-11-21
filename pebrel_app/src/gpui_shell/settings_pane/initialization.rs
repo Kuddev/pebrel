@@ -2,6 +2,12 @@ use super::*;
 
 impl SettingsPane {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe_window_activation(window, |pane, window, cx| {
+            if !window.is_window_active() {
+                pane.set_wallpaper_peek(false, cx);
+            }
+        })
+        .detach();
         let runtime = RuntimeSettings::load();
         let language = crate::gpui_shell::config::ui_language(cx);
         let mut selects: Vec<(&'static str, SharedSelect, &'static [&'static str])> = Vec::new();
@@ -717,6 +723,10 @@ impl SettingsPane {
             theme_foreground_picker: theme_foreground::ThemeForegroundState::new(cx),
             opacity_slider,
             wallpaper_opacity_slider,
+            wallpaper_peek: false,
+            wallpaper_peek_changed: false,
+            appearance_expanded: true,
+            appearance_section: None,
             scroll_speed_slider,
             scroll_speed_focus,
             proxy_url_input,

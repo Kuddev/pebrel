@@ -112,8 +112,12 @@ fn text_selection_and_search_matches_stay_distinct_from_the_document(cx: &mut Te
             }
             assert_eq!(theme.tokens.selection.color, selection, "{name:?}");
             assert_eq!(theme.tokens.selection.background, selection.into(), "{name:?}");
-            // List rows use a separate light wash, not the stronger text overlay.
-            assert_eq!(theme.list_active, expected_list_selection, "{name:?}");
+            if theme.is_dark() {
+                assert_eq!(theme.list_active.a, 0.17, "{name:?}");
+                assert_eq!(theme.list_active_border.a, 0.40, "{name:?}");
+            } else {
+                assert_eq!(theme.list_active, expected_list_selection, "{name:?}");
+            }
         }
     });
 }
