@@ -19,7 +19,7 @@ process.stdin.on("end", () => {
     try { payload = JSON.parse(bytes.toString("utf8")); } catch {}
     const info = { event: process.argv[2], bytes: bytes.length,
         pane: Boolean(process.env.PEBREL_PANE_ID || process.env.NEBULA_PANE_ID),
-        pipe: Boolean(process.env.PEBREL_HOOK_PIPE || process.env.NEBULA_HOOK_PIPE),
+        pipe: Boolean(process.env.PEBREL_NOTIFY_PIPE || process.env.NEBULA_NOTIFY_PIPE),
         sessionId: Boolean(payload?.session_id || payload?.sessionId) };
     fs.appendFileSync(process.argv[3], JSON.stringify(info) + "\n");
 });
