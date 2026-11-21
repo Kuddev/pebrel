@@ -141,6 +141,7 @@ impl TerminalView {
 
     /// 把回滚位置落到 `target`（滚动条拖拽的落点提交）。
     pub(super) fn scroll_to_offset(&mut self, target: usize, current: usize) {
+        self.reveal_recent_output_on_restore = false;
         self.restored_viewport_offset = None;
         if let Some(session) = &self.session
             && self.native_results.scroll_to(target, &mut session.term.lock())
@@ -1107,6 +1108,7 @@ impl TerminalView {
             }
             session.notifier.notify(bytes);
         } else if !application_only {
+            self.reveal_recent_output_on_restore = false;
             self.restored_viewport_offset = None;
             let (offset, history) = self
                 .native_results

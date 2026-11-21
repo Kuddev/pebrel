@@ -66,16 +66,20 @@ impl TerminalView {
         if term.mode().contains(TermMode::ALT_SCREEN) {
             return Ok(false);
         }
+        let reveal = self.reveal_recent_output_on_restore
+            && term.grid().display_offset() == 0
+            && !term.mode().contains(TermMode::VI);
         recent.restore(term.grid_mut())?;
         // 恢复内容位于主屏之前；只移动视口，不改 ConPTY 的绝对光标坐标。
         // 新输出逐步占用主屏下方空行，输入不能提前隐藏恢复内容。
-        let grid = term.grid();
-        use pebrel_terminal::grid::Dimensions;
-        let room = grid.screen_lines().saturating_sub(grid.cursor.point.line.0 as usize + 1);
-        let offset = room.min(grid.history_size());
-        term.scroll_display(pebrel_terminal::grid::Scroll::Bottom);
-        term.scroll_display(pebrel_terminal::grid::Scroll::Delta(offset as i32));
-        self.restored_viewport_offset = (offset > 0).then_some(offset);
+        if reveal {
+            let grid = term.grid();
+            use pebrel_terminal::grid::Dimensions;
+            let room = grid.screen_lines().saturating_sub(grid.cursor.point.line.0 as usize + 1);
+            let offset = room.min(grid.history_size());
+            term.scroll_display(pebrel_terminal::grid::Scroll::Delta(offset as i32));
+            self.restored_viewport_offset = (offset > 0).then_some(offset);
+        }
         self.recent_output = recent;
         self.recent_output_restore_closed = true;
         drop(term);
