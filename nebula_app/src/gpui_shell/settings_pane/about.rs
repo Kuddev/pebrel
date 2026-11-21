@@ -79,6 +79,7 @@ impl SettingsPane {
         let warning = theme.warning;
         let danger = theme.danger;
         let base_px = self.font_size_px(cx);
+        let dark = theme.is_dark();
         let description = language.format(
             crate::i18n::Message::SettingsAboutGpuAcceleratedTerminal,
             &[("platform", desktop_platform_name())],
