@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+mod agent_resume;
+pub use agent_resume::{AGENT_RESUME_SETTINGS, AgentResumeArgs};
 mod config_defaults;
 pub use config_defaults::{UiValueKind, install_config_defaults, ui_value_kind};
 mod agent_hooks;
@@ -660,32 +662,7 @@ impl CompletionStyleName {
 }
 
 #[cfg(test)]
-mod completion_mode_tests {
-    use super::*;
-
-    #[test]
-    fn modes_round_trip_preserve_other_settings_and_reset_to_inline() {
-        for mode in CompletionStyleName::ALL {
-            let input = "accept=right\nunknown=keep\ncompletion_style=inline\n";
-            let saved = apply_updates(input, &[("completion_style", mode.settings_value().into())]);
-            assert_eq!(
-                RuntimeSettings::from_raw(&RawSettings::from_text(&saved)).completion_style,
-                mode
-            );
-            assert!(saved.contains("unknown=keep"));
-            assert!(saved.contains("accept=right"));
-            assert_eq!(CompletionStyleName::from_settings(mode.settings_value()), Some(mode));
-        }
-        assert_eq!(CompletionStyleName::Hybrid.cycle(), CompletionStyleName::Inline);
-        assert_eq!(CompletionStyleName::from_settings("ghost"), Some(CompletionStyleName::Inline));
-        assert_eq!(CompletionStyleName::from_settings("list"), Some(CompletionStyleName::Popup));
-        assert_eq!(
-            RuntimeSettings::from_raw(&RawSettings::from_text("completion_style=invalid"))
-                .completion_style,
-            CompletionStyleName::Inline
-        );
-    }
-}
+mod completion_mode_tests;
 
 /// 标签栏位置。这里只提供产品当前支持的两种布局，避免把设置扩成未实现的
 /// 通用停靠系统。
@@ -1095,6 +1072,8 @@ pub struct RuntimeSettings {
     pub silent_start: bool,
     pub restore_session: bool,
     pub resume_ai: bool,
+    /// JSON argument arrays interpreted only by the application shell adapter.
+    pub agent_resume_args: AgentResumeArgs,
     /// 常驻系统托盘图标。
     pub tray: bool,
     pub blur: BlurModeName,
@@ -1302,6 +1281,7 @@ impl RuntimeSettings {
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
+            agent_resume_args: AgentResumeArgs::from_raw(raw),
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
             opacity,

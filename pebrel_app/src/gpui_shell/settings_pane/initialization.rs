@@ -670,12 +670,13 @@ impl SettingsPane {
             });
         subscriptions.push(cx.intercept_keystrokes(font_size_interceptor));
 
+        let agents = agents::AgentSettingsState::new(&runtime, window, &mut subscriptions, cx);
         Self {
             focus_handle: cx.focus_handle(),
             runtime,
             launch_at_login: crate::platform::startup::launch_at_login(),
             active_section: 1,
-            agents: agents::AgentSettingsState::new(cx),
+            agents,
             mobile: mobile::MobileState::new(window, cx),
             plugins: plugins::PluginsState::new(),
             appearance_picker: None,
