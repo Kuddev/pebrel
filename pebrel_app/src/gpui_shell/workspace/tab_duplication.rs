@@ -117,6 +117,19 @@ impl<'a> PaneOrigin<'a> {
     }
 }
 
+pub(super) fn split_launch(
+    view: &crate::gpui_shell::terminal::view::TerminalView,
+    cx: &gpui::App,
+) -> crate::gpui_shell::terminal::view::TerminalLaunch {
+    let (launch, cwd) =
+        copy_launch(view.session_launch.clone(), CopyKind::Split, PaneOrigin::of(view));
+    let launch = match launch {
+        LaunchSession::Default => super::shell_launch::configured_at(cx, cwd.as_deref()),
+        launch => launch,
+    };
+    NebulaWorkspace::terminal_launch_from_session(&launch, cwd)
+}
+
 /// The guest cwd travels through `--cd` only when the copy enters the origin
 /// pane's guest as the same user; otherwise the copy gets the host directory.
 pub(super) fn copy_launch(

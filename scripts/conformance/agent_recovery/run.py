@@ -81,6 +81,49 @@ def wait_for_editor(ctx, pane, agent):
         # SessionStart can arrive while the grid still shows the shell command.
         ctx.poll(lambda: any(row.strip() == "❯" for row in ctx.read(pane)["text"].splitlines()[-8:]),
                  bool, "Claude did not display its empty composer", timeout=45)
+    elif agent == "codebuddy":
+        def ready():
+            lines = ctx.read(pane)["text"].splitlines()[-8:]
+            return any(line.strip() == ">" for line in lines) and any(
+                "for shortcuts" in line for line in lines
+            )
+
+        ctx.poll(ready, bool, "CodeBuddy editor is not ready", timeout=30)
+
+
+def submit_turn(ctx, pane, agent, text):
+    if agent != "codebuddy":
+        ctx.prompt(text, pane)
+        return
+    ctx.paste(text, pane, submit=False)
+
+    def composer_contains_turn():
+        lines = ctx.read(pane)["text"].splitlines()[-8:]
+        return any(line.strip() == "> " + text for line in lines)
+
+    ctx.poll(composer_contains_turn, bool, "CodeBuddy did not display the input before submission")
+    ctx.send_key("enter", pane)
+
+
+def codebuddy_project_prompt(ctx, screen):
+    return (f"> 1. trust folder only ({ctx.work_dir.name.lower()})" in screen
+            and "enter to confirm" in screen)
+
+
+def confirm_codebuddy_restore(ctx, targets, expected):
+    accepted = set()
+
+    def confirmed():
+        ids = [live_id(ctx, pane, "codebuddy") for pane in targets]
+        for pane, session, target_id in zip(targets, ids, expected):
+            if session == target_id or pane in accepted:
+                continue
+            if codebuddy_project_prompt(ctx, ctx.read(pane)["text"].lower()):
+                ctx.send_key("enter", pane)
+                accepted.add(pane)
+        return ids
+
+    ctx.poll(confirmed, lambda ids: ids == expected, "CodeBuddy did not restore both native IDs", timeout=60)
 
 
 def accept_project_prompt(ctx, pane, agent):
@@ -94,7 +137,7 @@ def accept_project_prompt(ctx, pane, agent):
         if "yes, proceed" in screen and "contents of this directory" in screen:
             ctx.prompt("y", pane, submit=False)
             return
-        if "trust parent folder" in screen and "enter to confirm" in screen:
+        if agent == "codebuddy" and codebuddy_project_prompt(ctx, screen):
             ctx.send_key("enter", pane)
             return
         if "for shortcuts" in screen or "ctrl+" in screen:
@@ -136,7 +179,7 @@ def run_agent(agent, executable, rounds):
             accept_project_prompt(ctx, pane, agent)
             wait_for_editor(ctx, pane, agent)
             if agent not in ("pi", "omp"):
-                ctx.prompt(first[index], pane)
+                submit_turn(ctx, pane, agent, first[index])
             ctx.poll(lambda: any(first[index] in turn for turn in model.turns), bool,
                      f"{agent} initial turn did not reach the local model", timeout=40)
             def initial_id():
@@ -146,12 +189,15 @@ def run_agent(agent, executable, rounds):
         assert expected[0] != expected[1]
         for round_index in range(rounds):
             ctx.restart()
-            for index, pane in enumerate(panes(ctx)):
+            targets = panes(ctx)
+            if agent == "codebuddy":
+                confirm_codebuddy_restore(ctx, targets, expected)
+            for index, pane in enumerate(targets):
                 ctx.poll(lambda: live_id(ctx, pane, agent) == expected[index], bool,
                          f"{agent} did not acknowledge its saved ID in {sides[index]}", timeout=45)
                 wait_for_editor(ctx, pane, agent)
                 after = marker()
-                ctx.prompt(after, pane)
+                submit_turn(ctx, pane, agent, after)
                 turns = ctx.poll(lambda: [turn for turn in model.turns if after in turn], bool,
                                  f"{agent} did not submit the restored turn in {sides[index]}", timeout=40)
                 assert any(first[index] in turn and first[1-index] not in turn for turn in turns), (
