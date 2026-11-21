@@ -1,5 +1,7 @@
 //! Visible command rows, shared by folder contents and global search.
+
 use super::*;
+use crate::gpui_shell::theme::selected_glass;
 use gpui::AnyElement;
 
 impl NebulaWorkspace {
@@ -85,7 +87,7 @@ impl NebulaWorkspace {
             .when(list_scrollable, |row| row.pr(px(18.0)))
             .rounded(px(radius::CONTROL))
             .cursor_pointer()
-            .when(selected, |row| row.bg(selected_bg))
+            .when(selected, |row| selected_glass(row.bg(selected_bg), cx))
             .when(!selected, |row| row.group_hover(hover_group.clone(), |row| row.bg(hover_bg)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.command_manager_selection.cursor = index;

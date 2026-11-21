@@ -859,7 +859,7 @@ pub(super) fn nebula_settings_load(config: &UiConfig) -> NebulaRuntimeSettings {
         opacity: config.window_opacity(),
         background: None,
         background_image: None,
-        background_image_opacity: 0.38,
+        background_image_opacity: nebula_settings::DEFAULT_BACKGROUND_IMAGE_OPACITY,
         background_image_fit: BackgroundImageFit::default(),
         background_image_alignment: BackgroundImageAlignment::default(),
         background_image_cover_chrome: false,

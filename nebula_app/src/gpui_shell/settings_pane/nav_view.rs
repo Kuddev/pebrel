@@ -39,6 +39,7 @@ impl SettingsPane {
             .min_h_0()
             .flex_shrink_0()
             .bg(background)
+            .opacity(if self.wallpaper_peeking() { 0.16 } else { 1.0 })
             .px(px(NAV_PAD_X))
             .pt(px(12.0))
             .pb(px(8.0))
@@ -107,7 +108,9 @@ impl SettingsPane {
             let children = if searching { &[][..] } else { nav_children(ix) };
             let selected = ix == self.active_section;
             // 有子项的大类在展开后由子项承担“选中”，大类自身只加深文字。
-            let raised_row = selected && children.is_empty();
+            let expanded =
+                selected && !children.is_empty() && self.collapsed_nav_section != Some(ix);
+            let raised_row = selected && !expanded;
             sections = sections.child(
                 div()
                     .id(("settings-nav", ix))
@@ -123,14 +126,25 @@ impl SettingsPane {
                     // 底色和墨色表达选中，避免中文导航因字重匹配而突然变粗。
                     .font_weight(gpui::FontWeight::NORMAL)
                     .when(raised_row, |item| {
-                        item.bg(raised).shadow(raised_shadow.clone()).text_color(foreground)
+                        if let Some(glass) = crate::gpui_shell::theme::selection_glass(cx) {
+                            glass.apply(item.text_color(foreground))
+                        } else {
+                            item.bg(raised).shadow(raised_shadow.clone()).text_color(foreground)
+                        }
                     })
                     .when(selected && !raised_row, |item| {
                         item.text_color(foreground).hover(|s| s.bg(hover_bg))
                     })
                     .when(!selected, |item| item.text_color(muted).hover(|s| s.bg(hover_bg)))
+                    .when(!children.is_empty(), |item| item.aria_expanded(expanded))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let children = nav_children(ix);
+                        if !searching && !children.is_empty() && this.active_section == ix {
+                            this.collapsed_nav_section = expanded.then_some(ix);
+                            cx.notify();
+                            return;
+                        }
+                        this.collapsed_nav_section = None;
                         if this.active_section != ix || this.visible_nav_child(cx).is_none() {
                             this.active_nav_child = children.first().copied();
                         }
@@ -148,13 +162,13 @@ impl SettingsPane {
                     .child(div().flex_1().min_w_0().child(section_label(ix, language)))
                     .when(!children.is_empty(), |item| {
                         item.child(
-                            Icon::new(if selected { IconName::ChevronDown } else { IconName::ChevronRight })
+                            Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                                 .size(px(12.0))
                                 .text_color(faint),
                         )
                     }),
             );
-            if selected && !children.is_empty() {
+            if expanded {
                 sections = sections.child(self.render_nav_children(
                     ix,
                     children,
@@ -244,7 +258,10 @@ impl SettingsPane {
                     .cursor_pointer()
                     .font_weight(gpui::FontWeight::NORMAL)
                     .text_color(if selected { foreground } else { muted })
-                    .when(selected, |item| {
+                    .when(selected && cx.theme().is_dark(), |item| {
+                        crate::gpui_shell::theme::selected_glass(item, cx)
+                    })
+                    .when(selected && !cx.theme().is_dark(), |item| {
                         item.bg(hover_bg).child(
                             div()
                                 .absolute()

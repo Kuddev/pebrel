@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::wallpaper::workspace_strip::WorkspaceStrip;
 use crate::{
     gpui_shell::{settings_pane::SETTINGS_NAV_WIDTH, widgets::toolbar_button},
     i18n::Message,
@@ -20,16 +21,25 @@ pub(super) fn effective_title_bar_height(
 /// Prepaint records the actual pane column before any titlebar paint runs. Keep
 /// this cell for the workspace lifetime, so resizing and panel animations do not
 /// allocate a new shared slot or duplicate the body's layout calculations.
-#[derive(Clone, Default)]
-pub(super) struct TitleBarBackground(Rc<std::cell::Cell<Option<Bounds<Pixels>>>>);
+#[derive(Clone)]
+pub(super) struct WindowBackdrop {
+    pane: Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    pub(super) wallpaper: Entity<WorkspaceStrip>,
+}
 
-impl TitleBarBackground {
+impl WindowBackdrop {
+    pub(super) fn new(cx: &mut Context<NebulaWorkspace>) -> Self {
+        let wallpaper = cx.new(WorkspaceStrip::new);
+        cx.observe(&wallpaper, |_, _, cx| cx.notify()).detach();
+        Self { pane: Rc::default(), wallpaper }
+    }
+
     pub(super) fn record_pane(&self, bounds: Bounds<Pixels>) {
-        self.0.set(Some(bounds));
+        self.pane.set(Some(bounds));
     }
 
     fn element(&self, top_tabs: bool) -> gpui::Canvas<()> {
-        let pane_bounds = self.0.clone();
+        let pane_bounds = self.pane.clone();
         canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
@@ -203,7 +213,7 @@ impl NebulaWorkspace {
 
         title_bar_frame()
             .debug_selector(|| "workspace-titlebar".to_owned())
-            .when(!settings_active, |title| title.child(self.titlebar_background.element(top_tabs)))
+            .when(!settings_active, |title| title.child(self.window_backdrop.element(top_tabs)))
             .when(settings_active, |title| {
                 let (sidebar_bg, content_bg) =
                     crate::gpui_shell::theme::settings_surface_colors(cx);
@@ -220,13 +230,15 @@ impl NebulaWorkspace {
                                 .flex_shrink_0()
                                 .bg(sidebar_bg),
                         )
-                        .child(
-                            div()
-                                .debug_selector(|| "settings-titlebar-divider".to_owned())
-                                .w(px(1.0))
-                                .flex_shrink_0()
-                                .bg(hairline),
-                        )
+                        .when(!cx.theme().is_dark(), |title| {
+                            title.child(
+                                div()
+                                    .debug_selector(|| "settings-titlebar-divider".to_owned())
+                                    .w(px(1.0))
+                                    .flex_shrink_0()
+                                    .bg(hairline),
+                            )
+                        })
                         .child(div().flex_1().min_w_0().bg(content_bg).when(!top_tabs, |title| {
                             title
                                 .flex()

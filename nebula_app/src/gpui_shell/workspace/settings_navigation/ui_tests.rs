@@ -97,19 +97,41 @@ fn settings_sidebar_is_flush_with_the_titlebar_and_gear_closes_the_page(cx: &mut
         assert_eq!(sidebar.left(), title.left());
         assert_eq!(sidebar.top(), title.bottom());
         assert_eq!(sidebar.right(), title.right());
-        let divider = cx.debug_bounds("settings-nav-divider").unwrap();
-        let title_divider = cx.debug_bounds("settings-titlebar-divider").unwrap();
-        assert_eq!(title_divider.left(), divider.left());
-        assert_eq!(title_divider.right(), divider.right());
-        assert_eq!(sidebar.right(), divider.left());
-        assert_eq!(divider.right(), content.left());
         assert_eq!(sidebar.bottom(), content.bottom());
+        if let Some(divider) = cx.debug_bounds("settings-sidebar-divider") {
+            assert_eq!(divider.top(), title.top());
+            assert_eq!(divider.right(), content.left());
+            assert_eq!(divider.bottom(), content.bottom());
+            assert_eq!(divider.size.width, px(1.0));
+        } else {
+            let divider = cx.debug_bounds("settings-nav-divider").unwrap();
+            let title_divider = cx.debug_bounds("settings-titlebar-divider").unwrap();
+            assert_eq!(title_divider.left(), divider.left());
+            assert_eq!(title_divider.right(), divider.right());
+            assert_eq!(sidebar.right(), divider.left());
+            assert_eq!(divider.right(), content.left());
+        }
     }
     let gear = tab_bounds("open-settings", &mut cx);
     cx.simulate_click(gpui::point(gear.right() - px(2.0), gear.center().y), Modifiers::default());
     assert!(!workspace.read_with(&cx, |workspace, _| workspace.settings_open));
     click_tab("open-settings", &mut cx);
     assert!(workspace.read_with(&cx, |workspace, _| workspace.settings_open));
+}
+
+#[gpui::test]
+fn clicking_settings_parent_collapses_and_reopens_its_children(cx: &mut TestAppContext) {
+    let (_directory, _, mut cx) = open_workspace(1, cx);
+    click_tab("settings-nav-1", &mut cx);
+    let child = "settings-nav-child-1-0";
+    if cx.debug_bounds(child).is_none() {
+        click_tab("settings-nav-1", &mut cx);
+    }
+    assert!(cx.debug_bounds(child).is_some());
+    click_tab("settings-nav-1", &mut cx);
+    assert!(cx.debug_bounds(child).is_none());
+    click_tab("settings-nav-1", &mut cx);
+    assert!(cx.debug_bounds(child).is_some());
 }
 
 #[gpui::test]

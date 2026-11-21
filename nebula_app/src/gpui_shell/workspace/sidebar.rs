@@ -214,6 +214,7 @@ impl NebulaWorkspace {
         // “它就是右边那块”；不再用强调色水洗。
         let active_bg = crate::gpui_shell::theme::raised_fill(cx);
         let active_shadow = crate::gpui_shell::theme::raised_shadow(cx);
+        let glass = crate::gpui_shell::theme::selection_glass(cx);
         let (active_fg, idle_title, shell_ink) = crate::gpui_shell::theme::tab_text_colors(cx);
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
@@ -378,7 +379,11 @@ impl NebulaWorkspace {
                 .font_weight(FontWeight::NORMAL)
                 .cursor_pointer()
                 .when(active, |item| {
-                    item.bg(active_bg).shadow(active_shadow.clone()).text_color(active_fg)
+                    if let Some(glass) = glass {
+                        glass.apply(item.text_color(active_fg))
+                    } else {
+                        item.bg(active_bg).shadow(active_shadow.clone()).text_color(active_fg)
+                    }
                 })
                 .when(!active && !dragged, |item| {
                     item.text_color(idle_title).hover(|style| style.bg(hover_bg))
