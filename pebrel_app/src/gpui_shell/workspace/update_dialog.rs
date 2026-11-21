@@ -74,7 +74,7 @@ fn start_update_download(
     cx: &mut App,
 ) {
     let Some(asset) = result.asset().cloned() else {
-        cx.open_url(result.manual_download_url());
+        cx.open_url(&result.manual_download_url());
         return;
     };
     let job = match crate::update_download::begin(&asset) {
@@ -416,7 +416,7 @@ pub(crate) fn open_update_dialog(
             .child(body)
             .on_ok(move |_, window, cx| {
                 let Some(asset) = action_result.asset() else {
-                    cx.open_url(action_result.manual_download_url());
+                    cx.open_url(&action_result.manual_download_url());
                     return true;
                 };
                 match crate::update_download::status(asset) {
@@ -435,7 +435,7 @@ pub(crate) fn open_update_dialog(
                         false
                     },
                     _ => {
-                        cx.open_url(action_result.manual_download_url());
+                        cx.open_url(&action_result.manual_download_url());
                         true
                     },
                 }
