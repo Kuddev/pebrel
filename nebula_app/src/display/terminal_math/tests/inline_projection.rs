@@ -315,3 +315,28 @@ fn expanded_inline_formula_clamps_to_slack_without_dropping_suffix_before_barrie
         "table separator must stay aligned"
     );
 }
+
+#[test]
+fn prose_with_numbers_unrelated_rows_and_formula_operators_keeps_reflow_unbounded() {
+    let grid = TextGrid::from_rows(&[
+        "unrelated preamble with single spaces aligned before almost every word",
+        r"state $S_t$, GPU in 1 ms updates all 4096 words cleanly.",
+        r"let $a_1$ hold when $x + y = z$ and $u_t$ converges.",
+        "          $$E = mc^2$$",
+        "    - nested markdown bullet item",
+    ]);
+    let overlays = scan_grid_with_hints(&grid);
+    assert_eq!(overlays.len(), 5);
+    assert_eq!(overlays[0].reflow_limit, None);
+    assert_eq!(overlays[1].reflow_limit, None);
+    assert_eq!(overlays[2].reflow_limit, None);
+    assert_eq!(overlays[3].reflow_limit, None);
+}
+
+#[test]
+fn multi_row_table_still_finds_padded_column_through_single_space_separator_row() {
+    let grid = TextGrid::from_rows(&["Name    Value", "------- -----", r"\(x^2\) col"]);
+    let overlays = scan_grid_with_hints(&grid);
+    assert_eq!(overlays.len(), 1);
+    assert_eq!(overlays[0].reflow_limit, Some(8));
+}

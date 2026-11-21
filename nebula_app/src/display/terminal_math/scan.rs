@@ -599,7 +599,7 @@ pub(crate) fn scan_visible<T>(
                     }
                     let limit = overlay.reflow_limit.unwrap_or(grid.columns);
                     if filter_reasoning_style
-                        && !has_reflowable_prose(&grid, grid_row, span.end, limit)
+                        && !has_reflowable_prose(&grid, grid_row, span.start, span.end, limit)
                     {
                         overlay.reflow_limit = Some(span.end);
                     }
@@ -681,7 +681,7 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
 
     if let Some(span) = overlay.inline_span() {
         if let Some((_, grid_row)) = grid.inline_rows(span) {
-            overlay.reflow_limit = reflow_barrier(grid, grid_row, span.end);
+            overlay.reflow_limit = reflow_barrier(grid, grid_row, span.start, span.end);
             overlay.reflow_content_end = overlay
                 .reflow_limit
                 .map(|limit| suffix_content_end(grid, grid_row, span.end, limit));
@@ -693,7 +693,7 @@ pub(super) fn apply_layout_hints(overlay: &mut FormulaOverlay, grid: &TextGrid) 
 /// (`|`, Unicode box-drawing `U+2500..=U+259F`), multi-column padding
 /// ($\ge 2$ consecutive spaces before later content), and borderless fixed
 /// columns keep their grid columns.
-fn reflow_barrier(grid: &TextGrid, row: usize, from: usize) -> Option<usize> {
+fn reflow_barrier(grid: &TextGrid, row: usize, formula_start: usize, from: usize) -> Option<usize> {
     let cells = grid.rows.get(row)?;
     let start = from.min(cells.len());
     let mut run_start = None;
@@ -714,8 +714,7 @@ fn reflow_barrier(grid: &TextGrid, row: usize, from: usize) -> Option<usize> {
         } else {
             if space_run >= 2
                 || (space_run == 1
-                    && (is_aligned_column_stop(grid, row, column)
-                        || !token_has_prose_or_math(cells, column)))
+                    && is_aligned_column_stop(grid, row, formula_start, from, column))
             {
                 return Some(column);
             }
@@ -726,28 +725,246 @@ fn reflow_barrier(grid: &TextGrid, row: usize, from: usize) -> Option<usize> {
     None
 }
 
-fn is_aligned_column_stop(grid: &TextGrid, row: usize, column: usize) -> bool {
-    if column < 2 {
+fn is_non_blank_text(cell: Option<char>) -> bool {
+    cell.is_some_and(|ch| ch != ' ' && ch != OBJECT)
+}
+
+fn is_column_border_char(cell: Option<char>) -> bool {
+    cell.is_some_and(|ch| ch == '|' || ('\u{2500}'..='\u{259f}').contains(&ch))
+}
+
+fn is_prose_sentence_punctuation(character: char) -> bool {
+    matches!(
+        character,
+        '.' | ',' | '?' | '!' | ';' | ':' | '。' | '，' | '、' | '；' | '：' | '？' | '！'
+    )
+}
+
+fn is_reflowable_suffix_char(character: char) -> bool {
+    character.is_alphabetic()
+        || is_prose_sentence_punctuation(character)
+        || matches!(
+            character,
+            '$' | '\\'
+                | '='
+                | '+'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '\''
+                | '"'
+                | '（'
+                | '）'
+                | '【'
+                | '】'
+                | '《'
+                | '》'
+                | '「'
+                | '」'
+                | '『'
+                | '』'
+                | '“'
+                | '”'
+                | '‘'
+                | '’'
+                | '…'
+                | '—'
+                | '–'
+        )
+}
+
+fn has_column_boundary(cells: &[Option<char>], column: usize) -> bool {
+    column >= 2
+        && column < cells.len()
+        && is_non_blank_text(cells[column])
+        && (cells[column - 1] == Some(' ') || is_column_border_char(cells[column - 1]))
+}
+
+fn starts_with_display_math_or_markdown_prefix(cells: &[Option<char>]) -> bool {
+    let mut chars = [None; 6];
+    let mut count = 0usize;
+    for ch in cells.iter().flatten().copied() {
+        if count == chars.len() {
+            break;
+        }
+        chars[count] = Some(ch);
+        count += 1;
+    }
+    match (chars[0], chars[1]) {
+        (Some('$'), Some('$')) | (Some('\\'), Some('[' | ']')) => true,
+        (Some('-' | '*' | '+' | '•' | '>'), Some(' ')) => true,
+        _ => {
+            let digits = chars[..count]
+                .iter()
+                .take_while(|ch| ch.is_some_and(|c| c.is_ascii_digit()))
+                .count();
+            (1..=3).contains(&digits)
+                && matches!(chars.get(digits).copied().flatten(), Some('.' | ')'))
+                && chars.get(digits + 1).copied().flatten() == Some(' ')
+        },
+    }
+}
+
+fn has_padded_column_start(cells: &[Option<char>], column: usize) -> bool {
+    if !has_column_boundary(cells, column) {
         return false;
     }
-    grid.viewport.clone().any(|other_row| {
-        let other_cells = &grid.rows[other_row];
-        other_row != row
-            && column < other_cells.len()
-            && other_cells[column].is_some_and(|ch| ch != ' ' && ch != OBJECT)
-            && other_cells[column - 1] == Some(' ')
-    })
+    if is_column_border_char(cells[column - 1])
+        || (cells[column - 1] == Some(' ') && is_column_border_char(cells[column - 2]))
+    {
+        return true;
+    }
+    if cells[column - 1] != Some(' ') || cells[column - 2] != Some(' ') {
+        return false;
+    }
+    let leading_only = cells[..column].iter().all(|cell| *cell == Some(' '));
+    !(leading_only && starts_with_display_math_or_markdown_prefix(&cells[column..]))
 }
 
-fn token_has_prose_or_math(cells: &[Option<char>], start: usize) -> bool {
-    cells[start..]
-        .iter()
-        .take_while(|cell| !matches!(cell, Some(' ' | '|' | '\u{2500}'..='\u{259f}' | OBJECT)))
+fn has_aligned_padded_column_in_run(grid: &TextGrid, row: usize, column: usize) -> bool {
+    for other_cells in grid.rows[grid.viewport.start..row].iter().rev() {
+        if !has_column_boundary(other_cells, column) {
+            break;
+        }
+        if has_padded_column_start(other_cells, column) {
+            return true;
+        }
+    }
+    for other_cells in &grid.rows[row + 1..grid.viewport.end] {
+        if !has_column_boundary(other_cells, column) {
+            break;
+        }
+        if has_padded_column_start(other_cells, column) {
+            return true;
+        }
+    }
+    false
+}
+
+fn starts_table_cell_before(cells: &[Option<char>], pos: usize) -> bool {
+    if pos == 0 {
+        return true;
+    }
+    let prefix = &cells[..pos.min(cells.len())];
+    if prefix.iter().all(|cell| *cell == Some(' ')) {
+        return true;
+    }
+    let last = prefix[prefix.len() - 1];
+    if is_column_border_char(last) {
+        return true;
+    }
+    prefix.len() >= 2
+        && last == Some(' ')
+        && (prefix[prefix.len() - 2] == Some(' ')
+            || is_column_border_char(prefix[prefix.len() - 2]))
+}
+
+fn has_single_unbroken_left_cell(cells: &[Option<char>], column: usize) -> bool {
+    if column < 2 || column >= cells.len() || cells[column - 1] != Some(' ') {
+        return false;
+    }
+    let mut start = column - 1;
+    while start > 0 {
+        let cell = cells[start - 1];
+        if cell.is_none() || (is_non_blank_text(cell) && !is_column_border_char(cell)) {
+            if let Some(ch) = cell
+                && is_prose_sentence_punctuation(ch)
+            {
+                return false;
+            }
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    start < column - 1 && starts_table_cell_before(cells, start)
+}
+
+fn has_single_short_table_cell(tail: &[Option<char>]) -> bool {
+    const MAX_SINGLE_SPACE_TABLE_CELL_WIDTH: usize = 12;
+    let mut width = 0usize;
+    for &cell in tail {
+        if cell.is_none() || (is_non_blank_text(cell) && !is_column_border_char(cell)) {
+            if let Some(ch) = cell
+                && (matches!(ch, '$' | '\\') || is_prose_sentence_punctuation(ch))
+            {
+                return false;
+            }
+            width += 1;
+            if width > MAX_SINGLE_SPACE_TABLE_CELL_WIDTH {
+                return false;
+            }
+        } else {
+            break;
+        }
+    }
+    if width == 0 {
+        return false;
+    }
+    let rest = &tail[width..];
+    if rest.iter().all(|cell| *cell == Some(' ')) {
+        return true;
+    }
+    rest.first().is_some_and(|cell| is_column_border_char(*cell))
+        || (rest.len() >= 2
+            && rest[0] == Some(' ')
+            && (rest[1] == Some(' ') || is_column_border_char(rest[1])))
+}
+
+fn matches_adjacent_single_space_table(
+    grid: &TextGrid,
+    row: usize,
+    formula_start: usize,
+    from: usize,
+    column: usize,
+) -> bool {
+    let cells = &grid.rows[row];
+    if !starts_table_cell_before(cells, formula_start)
+        || cells[from..column - 1].iter().any(|cell| *cell == Some(' '))
+        || !has_single_short_table_cell(&cells[column..])
+    {
+        return false;
+    }
+    [row.checked_sub(1), row.checked_add(1)]
+        .into_iter()
         .flatten()
-        .any(|&character| character.is_alphabetic() || matches!(character, '$' | '\\'))
+        .filter(|other_row| grid.viewport.contains(other_row))
+        .filter_map(|other_row| grid.rows.get(other_row))
+        .any(|other_cells| {
+            has_single_unbroken_left_cell(other_cells, column)
+                && has_single_short_table_cell(&other_cells[column..])
+        })
 }
 
-fn has_reflowable_prose(grid: &TextGrid, row: usize, from: usize, limit: usize) -> bool {
+fn is_aligned_column_stop(
+    grid: &TextGrid,
+    row: usize,
+    formula_start: usize,
+    from: usize,
+    column: usize,
+) -> bool {
+    if column < 2 || row >= grid.rows.len() {
+        return false;
+    }
+    let cells = &grid.rows[row];
+    if column >= cells.len() || cells[column - 1] != Some(' ') || !is_non_blank_text(cells[column])
+    {
+        return false;
+    }
+    has_aligned_padded_column_in_run(grid, row, column)
+        || matches_adjacent_single_space_table(grid, row, formula_start, from, column)
+}
+
+fn has_reflowable_prose(
+    grid: &TextGrid,
+    row: usize,
+    formula_start: usize,
+    from: usize,
+    limit: usize,
+) -> bool {
     let Some(cells) = grid.rows.get(row) else {
         return false;
     };
@@ -762,10 +979,10 @@ fn has_reflowable_prose(grid: &TextGrid, row: usize, from: usize, limit: usize) 
         return false;
     }
     let token_start = start + leading_spaces;
-    if leading_spaces == 1 && is_aligned_column_stop(grid, row, token_start) {
+    if leading_spaces == 1 && is_aligned_column_stop(grid, row, formula_start, from, token_start) {
         return false;
     }
-    token_has_prose_or_math(&cells[..end], token_start)
+    slice[leading_spaces..].iter().flatten().any(|&character| is_reflowable_suffix_char(character))
 }
 
 fn suffix_content_end(grid: &TextGrid, row: usize, from: usize, limit: usize) -> usize {

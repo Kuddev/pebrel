@@ -1527,4 +1527,78 @@ mod tests {
             (second_column, 5, 3)
         );
     }
+
+    #[test]
+    fn alt_screen_compacts_mixed_prose_with_numbers_punctuation_and_unrelated_rows() {
+        let (columns, rows) = (140, 8);
+        let lines = [
+            "prefix word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14",
+            r"状态 \(S_t\)，GPU 可以在 1 毫秒内把全部 4096 个词的历史压缩。",
+            r"通过动态衰减矩阵 \(\text{diag}(w_t) - \hat{\kappa}_t^\top (a_t \odot \hat{\kappa}_t)\)，让 \(w_t, a_t\) 依赖 \(v_{t-1}\) ?",
+            r"When \(x^2\), then \(y^2\).",
+            "                      $$E = mc^2$$",
+            "        - nested list item",
+            r"结论是 \(z^2\)。",
+        ];
+        let mut term =
+            Term::new(Config::default(), &TestSize { cols: columns, rows }, VoidListener);
+        let mut parser: nebula_terminal::vte::ansi::Processor =
+            nebula_terminal::vte::ansi::Processor::new();
+        let mut payload = String::from("\x1b[?1049h");
+        for line in lines {
+            payload.push_str(line);
+            payload.push_str("\r\n");
+        }
+        parser.advance(&mut term, payload.as_bytes());
+
+        let mut overlay = MathOverlay::default();
+        let frame = plan(&mut overlay, &term, columns, rows);
+        assert_eq!(frame.formulas.len(), 8);
+
+        let display_width =
+            |s: &str| s.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum::<usize>();
+
+        // Row 1: comma, CJK prose, "1", and "4096" all shift left by the same delta.
+        let comma_col = display_width(lines[1].split("，").next().unwrap());
+        let comma_visual = frame.project_cell(1, comma_col, columns).unwrap();
+        let row1_shift = comma_col - comma_visual;
+        assert!(row1_shift > 0, "expected inline compaction on row 1");
+        let after_4096_col = display_width(lines[1].split("4096").next().unwrap()) + 4;
+        assert_eq!(
+            frame.project_cell(1, after_4096_col, columns),
+            Some(after_4096_col - row1_shift),
+            "numbers and later prose on row 1 must stay continuously compacted"
+        );
+
+        // Row 2: all three inline formulas + trailing " ?" stay continuously compacted.
+        let row2_comma = display_width(lines[2].split("，让").next().unwrap());
+        let row2_first_shift = row2_comma - frame.project_cell(2, row2_comma, columns).unwrap();
+        let after_second_col = display_width(lines[2].split(" 依赖").next().unwrap());
+        let row2_second_shift =
+            after_second_col - frame.project_cell(2, after_second_col, columns).unwrap();
+        assert!(row2_second_shift > row2_first_shift, "second formula on row 2 must add shift");
+        let qmark_col = display_width(lines[2]) - 1;
+        let qmark_visual = frame.project_cell(2, qmark_col, columns).unwrap();
+        assert!(
+            qmark_col - qmark_visual > row2_second_shift,
+            "all three inline formulas and trailing '?' on row 2 must compound their shifts"
+        );
+
+        // Row 3: ", then" and trailing "." after the second formula stay compacted.
+        let dot_col = lines[3].chars().count() - 1;
+        let comma3_col = lines[3].find(',').unwrap();
+        let shift3_after_first = comma3_col - frame.project_cell(3, comma3_col, columns).unwrap();
+        let dot_visual = frame.project_cell(3, dot_col, columns).unwrap();
+        assert!(
+            dot_col - dot_visual > shift3_after_first,
+            "trailing period after second inline formula must compact with the formula"
+        );
+
+        // Row 6: trailing CJK period right after an inline formula stays compacted.
+        let cn_dot_col = display_width(lines[6]) - 2;
+        assert!(
+            frame.project_cell(6, cn_dot_col, columns).unwrap() < cn_dot_col,
+            "trailing CJK period after inline formula must compact with the formula"
+        );
+    }
 }
