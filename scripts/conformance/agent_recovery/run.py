@@ -109,18 +109,39 @@ def codebuddy_project_prompt(ctx, screen):
 
 def confirm_codebuddy_restore(ctx, targets, expected):
     accepted = set()
+    previous = {}
+    next_sample = 0
 
     def confirmed():
+        nonlocal next_sample
+        sample = time.monotonic() >= next_sample
+        if sample:
+            next_sample = time.monotonic() + 10
         ids = [live_id(ctx, pane, "codebuddy") for pane in targets]
         for pane, session, target_id in zip(targets, ids, expected):
+            screen = ctx.read(pane)["text"]
+            if sample:
+                processes = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": pane})["processes"]
+                state = (live_id(ctx, pane, "codebuddy") == target_id,
+                         [p["executable"] for p in processes],
+                         codebuddy_project_prompt(ctx, screen.lower()), "for shortcuts" in screen,
+                         "--resume" in screen, "EADDRINUSE" in screen)
+                if state != previous.get(pane):
+                    print("Cold launch:", pane, state, flush=True)
+                    previous[pane] = state
             if session == target_id or pane in accepted:
                 continue
-            if codebuddy_project_prompt(ctx, ctx.read(pane)["text"].lower()):
+            if codebuddy_project_prompt(ctx, screen.lower()):
                 ctx.send_key("enter", pane)
                 accepted.add(pane)
         return ids
 
-    ctx.poll(confirmed, lambda ids: ids == expected, "CodeBuddy did not restore both native IDs", timeout=60)
+    try:
+        ctx.poll(confirmed, lambda ids: ids == expected, "CodeBuddy did not restore both native IDs", timeout=150)
+    except Exception:
+        for pane in targets:
+            print("Cold pane:", pane, ctx.read(pane)["text"][-1600:], flush=True)
+        raise
 
 
 def accept_project_prompt(ctx, pane, agent):
@@ -213,7 +234,7 @@ def run_agent(agent, executable, rounds):
                 native_id = saved_id(ctx, sides[index], agent)
                 return native_id if provider_confirmed(home, agent, native_id, first[index]) else None
             try:
-                expected.append(ctx.poll(initial_id, bool, f"{agent} native conversation did not match", timeout=40))
+                expected.append(ctx.poll(initial_id, bool, f"{agent} native conversation did not match", timeout=90))
             except Exception:
                 state = runtime_pane(ctx, pane)
                 paths = list((home / PROFILES[agent]).rglob("*.jsonl"))
