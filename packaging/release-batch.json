@@ -30,6 +30,26 @@
       "id": "codex-standalone-thread-switch",
       "commit": "700ddbf32f47e00c8f0cd27fddf0a75cf299fbf1",
       "verification": "The stable native suite verified replacement of the previous pane-owned rollout and rejection of ambiguous or foreign IDs. https://github.com/Kuddev/pebrel/actions/runs/44715077885/job/136216628772"
+    },
+    {
+      "id": "issue-1063",
+      "commit": "c4135eac8d9601ec0a4da1ca4cd2babae0bd5914",
+      "verification": "PowerShell 7.6.8 returned Environment, Alias and Variable provider objects intact; ordinary files and directories retained their linked display. https://github.com/Kuddev/pebrel/actions/runs/44730305689"
+    },
+    {
+      "id": "issue-1052",
+      "commit": "1eda92711b5ddcdaecefeb98bc3e28b74ec7eb34",
+      "verification": "PSReadLine selected and replaced text in each direction from the middle of a line. The GPUI test also covered selection before the first shell report. https://github.com/Kuddev/pebrel/actions/runs/44731295032"
+    },
+    {
+      "id": "issue-1044",
+      "commit": "a7856ea104d1446b54378abdf5c09132b69fc08f",
+      "verification": "With the Breeze decoration installed, KWin acknowledged server decorations for 2.6.1 and client decorations for the fixed window. https://github.com/Kuddev/pebrel/actions/runs/44854925518"
+    },
+    {
+      "id": "issue-1074",
+      "commit": "f27914a88a60c3a2d37825d9d9024a18a236ed60",
+      "verification": "On Windows Server 2022, each of four consecutive splits from Niubash and cmd ran the imported niu.exe. The published 2.6.1 launched powershell.exe in all four. https://github.com/Kuddev/pebrel/actions/runs/44860084940"
     }
   ]
 }
