@@ -55,6 +55,11 @@
       "id": "issue-1024",
       "commit": "c9f0f1ee3982c5969ae7810607d3d4585fa649f4",
       "verification": "In two native macOS fullscreen cycles, 2.6.1 kept the toolbar visible in full screen. The fixed window hid the toolbar in both cycles and restored it on both exits. https://github.com/Kuddev/pebrel/actions/runs/44860884232"
+    },
+    {
+      "id": "codebuddy-split-resume",
+      "commit": "b70b54747ec61cdb19a121d352d62f81d8fdbca5",
+      "verification": "Two same-directory panes opened through codebuddy and cbc kept separate native IDs and continued each original transcript through eight Linux cold restarts and two more on Windows with only the installed hooks. https://github.com/Kuddev/pebrel/pull/1075 https://github.com/Kuddev/pebrel/actions/runs/44867131556"
     }
   ]
 }
