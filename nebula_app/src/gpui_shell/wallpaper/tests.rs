@@ -92,14 +92,18 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
         update_wallpaper(&rt, 1.0, BlurModeName::None, cx);
         let effects = cx.global::<VisualEffects>();
         assert!(effects.loading);
-        assert!(effects.wallpaper.as_ref().unwrap().image.is_none());
+        assert!(effects.wallpaper.as_ref().unwrap().images.is_none());
+        assert!(!settings_wallpaper_visible(cx));
         assert_eq!(chrome_surface_opacity(cx), 1.0);
     });
     cx.run_until_parked();
-    let original = cx.update(|cx| {
+    let (sharp, blurred) = cx.update(|cx| {
         assert!(!cx.global::<VisualEffects>().loading);
         assert_eq!(chrome_surface_opacity(cx), 0.78);
-        cx.global::<VisualEffects>().wallpaper.as_ref().unwrap().image.clone().unwrap()
+        assert!(settings_wallpaper_visible(cx));
+        let wp = cx.global::<VisualEffects>().wallpaper.as_ref().unwrap();
+        let images = wp.images.as_ref().unwrap();
+        (images.sharp.clone(), images.blurred.clone())
     });
     rt.background_image_opacity = 0.75;
     rt.background_image_fit = Some("contain".into());
@@ -109,25 +113,31 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
     cx.update(|cx| {
         let effects = cx.global::<VisualEffects>();
         let wp = effects.wallpaper.as_ref().unwrap();
-        assert!(Arc::ptr_eq(&original, wp.image.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(&sharp, &wp.images.as_ref().unwrap().sharp));
+        assert!(Arc::ptr_eq(&blurred, &wp.images.as_ref().unwrap().blurred));
         assert_eq!(effects.layout.opacity, 0.75);
         assert_eq!(effects.layout.fit, BackgroundImageFit::Uniform);
         assert_eq!(chrome_surface_opacity(cx), 0.78);
         for width in 800..1000 {
             let bounds = Bounds::new(point(px(100.0), px(30.0)), size(px(width as f32), px(600.0)));
             let _ = image_bounds(wp, effects.layout, bounds, 1.5);
-            assert!(Arc::ptr_eq(&original, wp.image.as_ref().unwrap()));
+            assert!(Arc::ptr_eq(&sharp, &wp.images.as_ref().unwrap().sharp));
+            assert!(Arc::ptr_eq(&blurred, &wp.images.as_ref().unwrap().blurred));
         }
         rt.background_image_opacity = 0.0;
         update_wallpaper(&rt, 0.8, BlurModeName::None, cx);
+        assert!(!settings_wallpaper_visible(cx));
         assert_eq!(chrome_surface_opacity(cx), 0.78);
         set_opacity_live(0.4, cx);
         assert_eq!(chrome_surface_opacity(cx), 0.4);
         rt.background_image_cover_chrome = false;
+        rt.background_image_opacity = 0.75;
         update_wallpaper(&rt, 0.8, BlurModeName::None, cx);
+        assert!(settings_wallpaper_visible(cx));
         assert_eq!(chrome_surface_opacity(cx), 0.8);
         update_wallpaper(&settings(None), 0.8, BlurModeName::None, cx);
         assert_eq!(chrome_surface_opacity(cx), 0.8);
+        assert!(!settings_wallpaper_visible(cx));
     });
 }
 
@@ -146,7 +156,10 @@ fn latest_request_wins_and_clearing_during_decode_cannot_restore_an_image(cx: &m
     cx.update(|cx| {
         let wp = cx.global::<VisualEffects>().wallpaper.as_ref().unwrap();
         assert_eq!(wp.path, last);
-        assert_eq!(&wp.image.as_ref().unwrap().as_bytes(0).unwrap()[..4], &[255, 0, 0, 255]);
+        let images = wp.images.as_ref().unwrap();
+        for image in [&images.sharp, &images.blurred] {
+            assert_eq!(&image.as_bytes(0).unwrap()[..4], &[255, 0, 0, 255]);
+        }
         update_wallpaper(
             &settings(Some(directory.path().join("missing.png"))),
             1.0,
@@ -164,7 +177,7 @@ fn latest_request_wins_and_clearing_during_decode_cannot_restore_an_image(cx: &m
 
 #[test]
 fn card_and_chrome_share_the_window_anchor_and_preserve_native_physical_size() {
-    let wp = Wallpaper { path: PathBuf::new(), image: None, stamp: None, width: 800, height: 400 };
+    let wp = Wallpaper { path: PathBuf::new(), images: None, stamp: None, width: 800, height: 400 };
     let mut layout = WallpaperLayout {
         fit: BackgroundImageFit::UniformToFill,
         alignment: BackgroundImageAlignment::Center,

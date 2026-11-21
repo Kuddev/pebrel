@@ -14,7 +14,12 @@ const NAV_PAD_X: f32 = 8.0;
 const NAV_SCROLLBAR_WIDTH: f32 = 16.0;
 
 impl SettingsPane {
-    pub(super) fn render_nav(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_nav(
+        &self,
+        background: Hsla,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         use gpui::IntoElement as _;
         let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
@@ -26,18 +31,14 @@ impl SettingsPane {
         let raised = crate::gpui_shell::theme::raised_fill(cx);
         let raised_shadow = crate::gpui_shell::theme::raised_shadow(cx);
         let guide = crate::gpui_shell::theme::settings_hairline(cx);
-        let radius = crate::gpui_shell::theme::card_radius(cx);
-        // Keep navigation text on the theme panel color over any desktop or wallpaper.
-        let background = crate::gpui_shell::theme::settings_panel_bg(cx)
-            .blend(crate::gpui_shell::theme::settings_canvas_tint(cx));
         // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
         let nav = v_flex()
+            .debug_selector(|| "settings-sidebar".into())
             .w(px(SETTINGS_NAV_WIDTH))
             .h_full()
             .min_h_0()
             .flex_shrink_0()
             .bg(background)
-            .rounded_l(radius)
             .px(px(NAV_PAD_X))
             .pt(px(12.0))
             .pb(px(8.0))

@@ -67,10 +67,12 @@ impl Render for NebulaWorkspace {
         let settings_content = settings_active
             || matches!(self.tabs.get(self.active), Some(WorkspaceTab::Settings { .. }));
         let content_background = if settings_content {
-            crate::gpui_shell::theme::settings_content_bg(cx)
+            gpui::transparent_black()
         } else {
             crate::gpui_shell::theme::card_content_bg(cx)
         };
+        let settings_wallpaper =
+            settings_content && crate::gpui_shell::wallpaper::settings_wallpaper_visible(cx);
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
         let reader_focus = self.reader_focus_active(cx);
         // dock 预览：被拖 tab 悬于终端区时高亮目标半区（松手即挂到那侧）。
@@ -87,9 +89,13 @@ impl Render for NebulaWorkspace {
             .size_full()
             .flex()
             .flex_col()
-            // 旧壳每个像素只画一次：整窗先透明清屏，再分别画标题栏、侧栏、
-            // 卡外壳与卡底。根节点不能再铺一张半透明底。
-            .bg(gpui::transparent_black())
+            // Settings uses a solid base below its translucent surfaces. In the
+            // workspace each panel owns its own alpha over the native backdrop.
+            .bg(if settings_wallpaper {
+                crate::gpui_shell::theme::settings_panel_bg(cx)
+            } else {
+                gpui::transparent_black()
+            })
             .font(crate::gpui_shell::typography::ui_font(cx))
             .text_color(cx.theme().foreground)
             .can_drop({
@@ -260,12 +266,18 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &OpenQuickJump, window, cx| {
                 this.open_quick_jump_palette(window, cx);
             }))
-            .child(
-                // 用户显式配置的背景图画在 chrome 之下；系统 Mica/Aero/Acrylic
-                // 位于整个 GPUI 内容层下方，由 DWM 合成，不能在这里读取壁纸仿画。
-                // 拓展模式只在此绘图，壳/卡衬底在其上保留原有文字对比度。
-                crate::gpui_shell::wallpaper::window_layer(cx),
-            )
+            .child(crate::gpui_shell::wallpaper::window_layer(settings_wallpaper, cx))
+            .when(settings_wallpaper, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(54.0))
+                        .bg(crate::gpui_shell::theme::settings_wallpaper_header_fade(cx)),
+                )
+            })
             .child(
                 self.render_window_title_bar(
                     settings_active,
@@ -283,7 +295,9 @@ impl Render for NebulaWorkspace {
                     .when(!top_tabs && !settings_active && !reader_focus, |row| {
                         row.child(self.render_sidebar_slot(cx))
                     })
-                    .child(
+                    .child(if settings_active {
+                        div().flex_1().min_w_0().children(content).into_any_element()
+                    } else {
                         // 终端卡（一体化外壳）：唯一的结构分界。圆角、卡缝、投影、
                         // 竖线四项全部来自 `PaneCardStyle`（主题默认叠用户覆盖），
                         // 所以「浮起的圆角卡」和「铺满到窗口边 + 一条竖线」是同一
@@ -335,12 +349,12 @@ impl Render for NebulaWorkspace {
                                     card.shadow(vec![crate::gpui_shell::theme::card_shadow(cx)])
                                 })
                                 .overflow_hidden()
-                                .child(
+                                .when(!settings_content, |card| card.child(
                                     // 壁纸层（卡底色之上、内容之下，覆盖整卡含
                                     // 内边距带）：卡模式按卡定位；拓展模式由
                                     // 窗口底层统一绘图，此处不覆盖原有衬底。
                                     crate::gpui_shell::wallpaper::card_layer(cx),
-                                )
+                                ))
                                 .children(content),
                         )
                             .child(
@@ -355,9 +369,10 @@ impl Render for NebulaWorkspace {
                                 )
                                 .absolute()
                                 .inset_0(),
-                            ),
-                    )
-                    .when(!reader_focus, |row| {
+                            )
+                            .into_any_element()
+                    })
+                    .when(!settings_active && !reader_focus, |row| {
                         row.child(self.render_side_panel_slot(window, cx))
                     }),
             )
