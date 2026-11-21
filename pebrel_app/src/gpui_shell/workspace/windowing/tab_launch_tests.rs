@@ -209,6 +209,46 @@ fn imported_profile(
 }
 
 #[gpui::test]
+fn splits_resolve_the_imported_default_from_a_host_shell(cx: &mut TestAppContext) {
+    if isolated("splits_resolve_the_imported_default_from_a_host_shell") {
+        return;
+    }
+    let profile =
+        imported_profile(&crate::platform::profile_test_isolation::root(), "imported.exe");
+    let mut store = crate::terminal_profiles::TerminalProfiles::default();
+    store.upsert(profile.clone()).unwrap();
+    store.save().unwrap();
+    initialize_test(cx);
+    cx.update(|cx| {
+        let (window_id, workspace) = open_test_window(cx, 1);
+        let mut settings =
+            crate::gpui_shell::config::Settings::load(pebrel_settings::ThemeName::Nord);
+        settings.shell_id = Some(format!("profile:custom|{}", profile.id));
+        cx.set_global(settings);
+        for direction in ["left_right", "top_bottom"] {
+            let command = RuntimeCommand::test_request(
+                "pane.split",
+                json!({"window_id": window_id, "direction": direction}),
+            )
+            .unwrap();
+            let (dispatch, reply) = RuntimeDispatch::test(command);
+            dispatch_runtime(dispatch, cx);
+            reply.try_recv().unwrap().unwrap();
+            let workspace = workspace.read(cx);
+            let view = workspace.tabs[workspace.active].focused_view().unwrap().read(cx);
+            let crate::session::LaunchSession::Profile { command, args, profile_id, .. } =
+                &view.session_launch
+            else {
+                panic!("the split lost the imported default shell");
+            };
+            assert_eq!(command, profile.command.to_str().unwrap());
+            assert_eq!(args, &profile.args);
+            assert_eq!(profile_id.as_deref(), Some(profile.id.as_str()));
+        }
+    });
+}
+
+#[gpui::test]
 fn cli_directory_is_interpreted_by_the_residents_default_or_imported_program(
     cx: &mut TestAppContext,
 ) {
