@@ -53,8 +53,16 @@ impl TerminalView {
         )
     }
 
+    pub(super) fn local_omp_foreground(&self) -> bool {
+        self.running_program.as_deref() == Some("omp")
+            && self.suggest.suggest_env.is_this_machine()
+            && self.session.as_ref().is_some_and(|session| session.shell_pid != 0)
+    }
+
     pub(super) fn on_command_start(&mut self, cx: &mut Context<Self>) {
-        if !self.agent_activity.hook_seen() {
+        // A C marker in OMP's message redraw belongs to the existing foreground command.
+        if !(self.agent_activity.hook_seen() || self.command_running && self.local_omp_foreground())
+        {
             self.answers.begin_command();
             // Shell capture covers wrappers/WSL until a hook owns the session.
             // A late OSC 133;C must not replace an already identified Agent.

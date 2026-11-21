@@ -70,7 +70,9 @@ def native_match(agent, file, rows, session_id, marker):
     for row in rows:
         if agent in ("claude", "codebuddy") and row.get("sessionId") != session_id:
             continue
-        message = row.get("message") or row
+        # CodeBuddy stores the assistant's role and content at the top level;
+        # its nested message contains token usage.
+        message = row if agent == "codebuddy" else (row.get("message") or row)
         role = message.get("role") or row.get("type")
         content = message.get("content")
         if role == "user":

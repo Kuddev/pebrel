@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed for the local session recovery fix in #1027.
+Implemented for local session recovery (#1027) and hookless task titles (#1029).
 
 ## Context
 
@@ -12,9 +12,11 @@ OMP 18.22.2 marks each rendered user message as a terminal prompt zone. The end 
 
 On Windows x64 a new OMP conversation wrote its user message and assistant reply to its native transcript. Pebrel accepted the session-start hook, then cleared its foreground identity in the command-completion handler while PowerShell and OMP were both still running. Autosave lost the session. The same sequence occurred while displaying a restored message. [Windows trace](https://github.com/Kuddev/pebrel/actions/runs/44487591689)
 
+InstaBox reproduced #1029 on 2.6.0 and 2.6.1 with hooks disabled. The native OMP title still contained the task after a reply, while the workspace tab showed only the directory. The OMP message renderer appends consecutive OSC 133 B, C and D;0 markers.
+
 ## Decision
 
-While a local OMP process owns the pane through its hook, leave its session intact on the successful completion marker. The existing session-end hook or background process-tree reconciliation handles exit. A nonzero shell exit still records failure immediately.
+The terminal records whether a successful completion immediately followed the empty B/C/D sequence used by OMP. In a local OMP pane, that sequence preserves the active command and its title with or without hooks. A separate shell completion retains its exit code.
 
 ## Rejected alternatives
 

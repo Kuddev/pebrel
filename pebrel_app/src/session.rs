@@ -119,8 +119,7 @@ pub(crate) fn valid_native_session_file(path: &str) -> bool {
 
 impl AgentSession {
     /// 恢复时敲进 shell 的命令行；无法安全构造（未知来源、异形 id、codex
-    /// 缺 id）时返回 `None`，宁可只恢复布局也不上屏可疑字节。命令形状与
-    /// `ai_sessions::AiSession::resume_command`（手动恢复面板）保持一致。
+    /// 缺 id）时返回 `None`，只恢复布局。
     pub fn resume_command(&self) -> Option<String> {
         let agent = crate::ai_agents::AgentKind::parse(&self.source)?;
         if agent == crate::ai_agents::AgentKind::Codex
@@ -130,6 +129,10 @@ impl AgentSession {
         }
         match self.session_id.as_deref() {
             Some(id) if agent == crate::ai_agents::AgentKind::Pi && id.starts_with("pid-") => None,
+            // Concurrent interactive restores otherwise contend for CodeBuddy's saved web port.
+            Some(id) if agent == crate::ai_agents::AgentKind::CodeBuddy => {
+                agent.resume_command(id).map(|command| format!("{command} --port 0"))
+            },
             Some(id) => agent.resume_command(id),
             // claude 无 id（hook 未装、OSC 认出的启动）：`--continue` 恢复
             // 当前目录最近一次对话——pane 的 cwd 已经先被恢复，语义正好。
