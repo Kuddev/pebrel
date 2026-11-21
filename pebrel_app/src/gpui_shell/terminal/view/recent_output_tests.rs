@@ -470,3 +470,40 @@ fn runtime_submission_records_echo_only_after_barrier(cx: &mut TestAppContext) {
         assert!(restored_text(view).contains("echo runtime"));
     });
 }
+
+#[gpui::test]
+fn late_archive_preserves_the_live_output_selected_with_the_scrollbar(cx: &mut TestAppContext) {
+    use pebrel_terminal::grid::Dimensions;
+
+    let (source, window, _) = open(cx);
+    let records = source.update(window, |view, cx| {
+        prompt(view, "echo archived");
+        view.commit_line(cx);
+        feed(view, b"\r\narchived\r\n");
+        prompt(view, "");
+        view.finish_foreground_command(Some(0), cx);
+        view.recent_output_snapshot()
+    });
+    assert!(!records.is_empty());
+    let (target, window, _) = open(cx);
+    target.update(window, |view, cx| {
+        let rows = view.session.as_ref().unwrap().term.lock().screen_lines();
+        for index in 0..rows + 12 {
+            feed(view, format!("startup line {index}\r\n").as_bytes());
+        }
+        fn first_visible_line(view: &TerminalView) -> String {
+            let term = view.session.as_ref().unwrap().term.lock();
+            let origin = term.viewport_origin_for(term.screen_lines());
+            term.bounds_to_string(
+                TermPoint::new(origin, Column(0)),
+                TermPoint::new(origin, Column(term.columns() - 1)),
+            )
+        }
+
+        view.scroll_to_offset(7, 0);
+        let reading = first_visible_line(view);
+        assert!(reading.contains("startup line"), "{reading:?}");
+        view.restore_recent_output(records, cx).unwrap();
+        assert_eq!(first_visible_line(view), reading);
+    });
+}
