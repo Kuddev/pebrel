@@ -13,17 +13,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Download the released Windows package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download v2.6.1 -R Kuddev/pebrel -p '*windows-x64.zip' -D "$env:RUNNER_TEMP/published"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Observe the published icon before and after the Explorer restart
-        run: python scripts/conformance/tray_restart_probe.py "$env:RUNNER_TEMP/published/*windows-x64.zip" baseline
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
@@ -36,10 +29,13 @@ jobs:
             target/release
           revision: dependencies-v1
           save-if: "false"
-      - name: Build the single-fix candidate on 2.6.1
+      - name: Build 2.6.1 with the Explorer registration readout
         run: |
           ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
-          cargo build --locked --config .github/ci-profile.toml --profile ci -p nebula --bin pebrel --features gpui-shell
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Observe the restored shell icon and its menu after the Explorer restart
+          python scripts/conformance/build_tray_probe.py baseline
+      - name: Verify Explorer forgets the baseline icon
+        run: python scripts/conformance/tray_restart_probe.py target/ci/pebrel.exe baseline
+      - name: Build the candidate with the identical registration readout
+        run: python scripts/conformance/build_tray_probe.py candidate
+      - name: Verify Explorer acknowledges the restored candidate icon and the tray menu opens
         run: python scripts/conformance/tray_restart_probe.py target/ci/pebrel.exe candidate

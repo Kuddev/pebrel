@@ -52,16 +52,16 @@ def is_elevated(pid):
         api.kernel.CloseHandle(process)
 
 
-def shell_icon(desktop):
-    bar = desktop.user.FindWindowW("Shell_TrayWnd", None)
-    overflow = desktop.user.FindWindowW("NotifyIconOverflowWindow", None)
-    if overflow and not desktop.user.IsWindowVisible(overflow):
-        overflow = None
-    result = json.loads(subprocess.check_output(
-        ["powershell.exe", "-NoProfile", "-File", str(Path(__file__).with_name("windows_notification_area.ps1")),
-         str(bar or 0), str(overflow or 0)], timeout=15, text=True, errors="replace"))
-    print("Shell notification area:", result, flush=True)
-    return result if "Width" in result else None
+def registered(desktop, hwnd):
+    reply = ctypes.c_size_t()
+    received = desktop.user.SendMessageTimeoutW(hwnd, 0x804E, 0, 0, 2, 3000, ctypes.byref(reply))
+    if not received or not reply.value & 8:
+        raise RuntimeError(f"No reply from the tested tray thread: {received}, {reply.value}")
+    diagnostic = (bool(reply.value & 4), bool(reply.value & 2), bool(reply.value & 1))
+    if getattr(desktop, "last_probe", None) != diagnostic:
+        print("Tray enabled / app added / Explorer recognizes the icon:", diagnostic, flush=True)
+        desktop.last_probe = diagnostic
+    return diagnostic[-1]
 
 
 
@@ -81,12 +81,12 @@ class Desktop:
         self.shell = ctypes.WinDLL("shell32", use_last_error=True)
         self.enum_callback = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
         for library, name, result, args in (
-            (self.user, "IsWindowVisible", wt.BOOL, [wt.HWND]),
             (self.user, "FindWindowW", wt.HWND, [wt.LPCWSTR, wt.LPCWSTR]),
             (self.user, "FindWindowExW", wt.HWND, [wt.HWND, wt.HWND, wt.LPCWSTR, wt.LPCWSTR]),
             (self.user, "EnumWindows", wt.BOOL, [self.enum_callback, wt.LPARAM]),
             (self.user, "GetWindowThreadProcessId", wt.DWORD, [wt.HWND, ctypes.POINTER(wt.DWORD)]),
             (self.user, "GetClassNameW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int]),
+            (self.user, "SendMessageTimeoutW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM, wt.UINT, wt.UINT, ctypes.POINTER(ctypes.c_size_t)]),
             (self.user, "PostMessageW", wt.BOOL, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]),
             (self.user, "GetGUIThreadInfo", wt.BOOL, [wt.DWORD, ctypes.POINTER(GuiThreadInfo)]),
             (self.shell, "Shell_NotifyIconGetRect", ctypes.c_long, [ctypes.POINTER(NotifyIconId), ctypes.POINTER(wt.RECT)]),
@@ -193,7 +193,7 @@ def worker(executable, root, candidate):
             raise RuntimeError("The test product must run as an ordinary user")
         hwnd = wait_for("the Runtime process's tray HWND", lambda: desktop.tray_window(pid), 30)
         try:
-            before = wait_for("the initial registered icon", lambda: shell_icon(desktop), 45)
+            before = wait_for("the initial registered icon", lambda: registered(desktop, hwnd), 45)
         except RuntimeError:
             desktop.icon_rect(hwnd, diagnose=True)
             raise
@@ -204,13 +204,13 @@ def worker(executable, root, candidate):
             raise RuntimeError("Explorer did not restart")
         print("Replacement notification-area PID:", replacement, flush=True)
         if candidate:
-            after = wait_for("the restored icon", lambda: shell_icon(desktop), 45)
+            after = wait_for("the restored icon", lambda: registered(desktop, hwnd), 45)
             desktop.verify_tray_menu(hwnd)
             print("Restored icon and opened the same process's tray menu:", after, flush=True)
         else:
             until = time.monotonic() + 15
             while time.monotonic() < until:
-                if shell_icon(desktop):
+                if registered(desktop, hwnd):
                     raise RuntimeError("The published baseline recovered its icon")
                 time.sleep(0.3)
             print("The published baseline lost its previously registered icon.", flush=True)
