@@ -80,7 +80,6 @@ enum Mode {
     Integration,
     RejectIntegration,
     BrokenPosixQuoting,
-    #[cfg(unix)]
     NoAssetExecTty,
     RejectSftp,
     HangSftp,
@@ -97,6 +96,7 @@ struct Loopback {
     window_changes: mpsc::UnboundedSender<WindowSize>,
     channels: Vec<Channel<server::Msg>>,
     scripts: std::collections::HashMap<ChannelId, Vec<u8>>,
+    last_pty: Option<ChannelId>,
 }
 
 impl server::Handler for Loopback {
@@ -123,17 +123,10 @@ impl server::Handler for Loopback {
             return session.channel_failure(channel);
         }
         if command == resume::probe_command().as_bytes() {
-            #[cfg(unix)]
             if self.mode == Mode::NoAssetExecTty {
-                let result = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(std::str::from_utf8(command).unwrap())
-                    .output()?;
+                assert_eq!(self.last_pty, Some(channel), "probe must use its own accepted PTY");
                 session.channel_success(channel)?;
-                if !result.stdout.is_empty() {
-                    session.data(channel, result.stdout)?;
-                }
-                session.exit_status_request(channel, result.status.code().unwrap() as u32)?;
+                session.exit_status_request(channel, 1)?;
                 session.eof(channel)?;
                 return session.close(channel);
             }
@@ -295,6 +288,7 @@ impl server::Handler for Loopback {
         _modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.last_pty = Some(channel);
         if self.mode == Mode::RejectPty {
             session.channel_failure(channel)
         } else {
@@ -659,6 +653,7 @@ impl Fixture {
                 stream.set_nodelay(true).unwrap();
                 let handler = Loopback {
                     mode,
+                    last_pty: None,
                     hang: first && mode == Mode::HangFirstConnection,
                     reject_channel: first
                         && matches!(
@@ -758,7 +753,6 @@ fn a_host_with_sh_but_incompatible_exec_quoting_opens_its_ordinary_shell() {
     });
 }
 
-#[cfg(unix)]
 #[test]
 fn gateway_with_a_frontend_pty_and_piped_asset_exec_opens_an_interactive_shell() {
     check(async {

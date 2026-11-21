@@ -40,8 +40,8 @@ through pipes gets its interactive shell entry point.
 ## Validation
 
 The startup test runs the probe with pipes and a real PTY. The loopback test
-accepts Pebrel's frontend PTY request and runs the probe in a shell with piped
-descriptors. It checks that the ordinary SSH shell's welcome message arrives.
+checks that the probe uses its requested PTY, reports that the asset terminal
+check failed, and sends a welcome message through the ordinary SSH shell.
 [Startup tests](../../../../pebrel_app/src/ssh_session/resume/tests/startup.rs)
 and [channel tests](../../../../pebrel_app/src/ssh_session/lifecycle/tests.rs).
 
