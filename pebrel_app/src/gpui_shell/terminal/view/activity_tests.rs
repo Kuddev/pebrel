@@ -252,7 +252,10 @@ fn omp_message_redraw_keeps_its_session_until_the_process_exits(cx: &mut TestApp
         event.agent_pid = Some(100);
         assert!(view.handle_ai_hook(&event, cx));
         view.on_command_start(cx);
-        view.process_event(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: true },
+            cx,
+        );
         assert_eq!(view.ai_session.as_ref().unwrap().session_id, "omp-message-redraw");
         assert!(view.agent_activity.hook_seen());
 
@@ -272,9 +275,41 @@ fn omp_message_redraw_keeps_its_session_until_the_process_exits(cx: &mut TestApp
 {"kind":"session-start","session_id":"omp-real-error"}"#;
         let next = crate::ai_hook::parse_remote_envelope(wire, Some(42)).unwrap();
         assert!(view.handle_ai_hook(&next, cx));
-        view.process_event(TermEvent::CommandDone { exit_code: Some(1) }, cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(1), empty_prompt_zone: false },
+            cx,
+        );
         assert!(view.ai_session.is_none());
         assert!(view.last_command_failed);
+    });
+}
+
+#[gpui::test]
+fn hookless_omp_keeps_its_task_title_until_shell_completion(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.session.as_mut().unwrap().shell_pid = 4242;
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.process_event(TermEvent::CwdReport("/tmp/ddlclock".into()), cx);
+        view.suggest.last_committed = "omp".into();
+        view.on_command_start(cx);
+        view.process_event(TermEvent::Title("π > title fixture".into()), cx);
+        let title = view.tab_label(cx);
+        assert!(title.contains("title fixture"));
+        view.suggest.last_committed = "a message typed into OMP".into();
+        view.process_event(TermEvent::CommandStart, cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: true },
+            cx,
+        );
+        assert_eq!(view.tab_label(cx), title);
+        assert_eq!(view.running_program.as_deref(), Some("omp"));
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+            cx,
+        );
+        assert!(view.running_program.is_none());
+        assert_eq!(view.tab_label(cx), "ddlclock");
     });
 }
 
@@ -287,7 +322,10 @@ fn command_end_clears_progress_and_stale_agent_state(cx: &mut TestAppContext) {
             view.on_command_start(cx);
             view.process_event(TermEvent::Progress { state: 3, value: None }, cx);
             assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-            view.process_event(TermEvent::CommandDone { exit_code: Some(code) }, cx);
+            view.process_event(
+                TermEvent::CommandDone { exit_code: Some(code), empty_prompt_zone: false },
+                cx,
+            );
             screen(view, "◦ Working (1s • esc to interrupt)\n› Ask Codex to do anything");
             view.refresh_agent_screen_state(cx);
             assert_eq!(view.progress, crate::taskbar::TaskProgress::None);
@@ -507,7 +545,10 @@ fn ssh_agent_second_launch_reestablishes_identity(cx: &mut TestAppContext) {
         assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
 
         // ---- 退出：SessionEnd 丢失（bridge 忙/超时），只剩 133;D 收尾 ----
-        view.process_event(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(
+            TermEvent::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+            cx,
+        );
         assert_eq!(view.running_program, None, "command boundary clears identity");
 
         // ---- 会话 2：新 CLI 进程（process 换新、序号从 1 重来）----

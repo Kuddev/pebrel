@@ -258,7 +258,7 @@ mod tests {
             sender.send(Event::AiHookEnvelope(format!("working:{id}").into_bytes()));
             sender.send(Event::AiHookEnvelope(format!("attention:{id}").into_bytes()));
             sender.send(Event::AiHookEnvelope(format!("done:{id}").into_bytes()));
-            sender.send(Event::CommandDone { exit_code: Some(0) });
+            sender.send(Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false });
         }
         for (id, (sender, receiver)) in sessions.iter_mut().enumerate() {
             assert!(matches!(receiver.try_recv().unwrap(), Event::CommandStart));
@@ -271,7 +271,7 @@ mod tests {
             }
             assert!(matches!(
                 receiver.try_recv().unwrap(),
-                Event::CommandDone { exit_code: Some(0) }
+                Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false }
             ));
             assert!(receiver.try_recv().is_err());
             sender.send(Event::Wakeup);
