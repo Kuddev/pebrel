@@ -16,7 +16,7 @@ impl Render for NebulaWorkspace {
         // 终端卡几何取一次，布局与壳色带共用同一个实例——两处各取一次也算
         // 「各写一份」，主题在这一帧中途换掉就会出现半旧半新的卡缝。
         let card_style = crate::gpui_shell::theme::PaneCardStyle::current(cx);
-        let titlebar_background = self.titlebar_background.clone();
+        let window_backdrop = self.window_backdrop.clone();
         let draw_file_divider = self.side_panel.open;
         let sidebar_logo_target_px =
             (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
@@ -67,8 +67,21 @@ impl Render for NebulaWorkspace {
         } else {
             crate::gpui_shell::theme::card_content_bg(cx)
         };
+        let wallpaper_peek = settings_active
+            && self
+                .settings_surface
+                .as_ref()
+                .is_some_and(|(pane, _)| pane.read(cx).wallpaper_peeking());
         let top_tabs = self.tabs_position == pebrel_settings::TabsPositionName::Top;
         let reader_focus = self.reader_focus_active(cx);
+        let sidebar_collapsed =
+            self.settings_restore_sidebar_collapsed.unwrap_or(self.sidebar_collapsed);
+        let wallpaper_sidebar =
+            (!top_tabs && !reader_focus && !sidebar_collapsed).then_some(self.sidebar_width);
+        let workspace_strip = self
+            .window_backdrop
+            .wallpaper
+            .update(cx, |strip, cx| strip.configure(wallpaper_sidebar, window, cx));
         // dock 预览：被拖 tab 悬于终端区时高亮目标半区（松手即挂到那侧）。
         let dock_preview = self
             .tab_drag
@@ -83,6 +96,7 @@ impl Render for NebulaWorkspace {
             .size_full()
             .flex()
             .flex_col()
+            .relative()
             // 旧壳每个像素只画一次：整窗先透明清屏，再分别画标题栏、侧栏、
             // 卡外壳与卡底。根节点不能再铺一张半透明底。
             .bg(gpui::transparent_black())
@@ -256,12 +270,11 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &OpenQuickJump, window, cx| {
                 this.open_quick_jump_palette(window, cx);
             }))
-            .child(
-                // 用户显式配置的背景图画在 chrome 之下；系统 Mica/Aero/Acrylic
-                // 位于整个 GPUI 内容层下方，由 DWM 合成，不能在这里读取壁纸仿画。
-                // 拓展模式只在此绘图，壳/卡衬底在其上保留原有文字对比度。
-                crate::gpui_shell::wallpaper::window_layer(cx),
-            )
+            .child(if wallpaper_peek {
+                crate::gpui_shell::wallpaper::peek_layer(workspace_strip.clone(), cx).into_any_element()
+            } else {
+                crate::gpui_shell::wallpaper::window_layer(workspace_strip.clone(), cx).into_any_element()
+            })
             .child(
                 self.render_window_title_bar(
                     settings_active,
@@ -279,7 +292,9 @@ impl Render for NebulaWorkspace {
                     .when(!top_tabs && !settings_active && !reader_focus, |row| {
                         row.child(self.render_sidebar_slot(window, cx))
                     })
-                    .child(
+                    .child(if settings_active {
+                        div().flex_1().min_w_0().children(content)
+                    } else {
                         // 终端卡（一体化外壳）：唯一的结构分界。圆角、卡缝、投影、
                         // 竖线四项全部来自 `PaneCardStyle`（主题默认叠用户覆盖），
                         // 所以「浮起的圆角卡」和「铺满到窗口边 + 一条竖线」是同一
@@ -295,7 +310,7 @@ impl Render for NebulaWorkspace {
                             .relative()
                             .child(
                                 gpui::canvas(
-                                    move |bounds, _, _| titlebar_background.record_pane(bounds),
+                                    move |bounds, _, _| window_backdrop.record_pane(bounds),
                                     |bounds, _, window, cx| {
                                         // 卡缝、圆角、竖线全部读同一份 style 真源：
                                         // 布局的 padding 与这里的壳色带必须逐边对上，
@@ -335,7 +350,7 @@ impl Render for NebulaWorkspace {
                                     // 壁纸层（卡底色之上、内容之下，覆盖整卡含
                                     // 内边距带）：卡模式按卡定位；拓展模式由
                                     // 窗口底层统一绘图，此处不覆盖原有衬底。
-                                    crate::gpui_shell::wallpaper::card_layer(cx),
+                                    crate::gpui_shell::wallpaper::card_layer(workspace_strip, cx),
                                 )
                                 .children(content),
                         )
@@ -351,12 +366,24 @@ impl Render for NebulaWorkspace {
                                 )
                                 .absolute()
                                 .inset_0(),
-                            ),
-                    )
-                    .when(!reader_focus, |row| {
+                            )
+                    })
+                    .when(!settings_active && !reader_focus, |row| {
                         row.child(self.render_side_panel_slot(window, cx))
                     }),
             )
+            .when(settings_active && cx.theme().is_dark(), |root| {
+                root.child(
+                    div()
+                        .debug_selector(|| "settings-sidebar-divider".to_owned())
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(crate::gpui_shell::settings_pane::SETTINGS_NAV_WIDTH - 1.0))
+                        .w(px(1.0))
+                        .bg(gpui::white().opacity(if wallpaper_peek { 0.012 } else { 0.075 })),
+                )
+            })
             .when_some(dock_preview, |root, (x, y, w, h)| {
                 root.child(
                     div()

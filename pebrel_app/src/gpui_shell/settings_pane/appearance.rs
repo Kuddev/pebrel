@@ -245,7 +245,13 @@ impl SettingsPane {
                 ),
             );
         let settings = self.appearance_advanced_settings(window, cx);
-        v_flex().w_full().gap(px(GROUP_GAP)).child(selectors).child(settings)
+        v_flex()
+            .w_full()
+            .gap(px(GROUP_GAP))
+            .children(
+                self.show_appearance_section(AppearanceSection::Theme, cx).then_some(selectors),
+            )
+            .child(settings)
     }
 }
 

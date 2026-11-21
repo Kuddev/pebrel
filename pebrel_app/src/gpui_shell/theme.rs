@@ -1,7 +1,9 @@
 mod transition;
 pub(crate) use transition::ThemeTransition;
 
-use gpui::{App, Bounds, Hsla, Pixels, Rgba as GpuiRgba, Window, fill, hsla, point, px, size};
+use gpui::{
+    App, Bounds, Hsla, Pixels, Rgba as GpuiRgba, Styled, Window, fill, hsla, point, px, size,
+};
 use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
 
 use crate::display::color::Rgb;
@@ -679,6 +681,87 @@ fn soften(c: crate::display::color::Rgb, keep: f32) -> crate::display::color::Rg
     crate::display::color::Rgb::new(pull(c.r), pull(c.g), pull(c.b))
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct GlassSurface {
+    fill: Hsla,
+    border: Hsla,
+    sheen: Hsla,
+}
+
+impl GlassSurface {
+    fn selection(accent: Hsla) -> Self {
+        let sheen = accent.blend(gpui::white().opacity(0.76)).opacity(0.18);
+        Self { fill: accent.opacity(0.17), border: accent.opacity(0.40), sheen }
+    }
+
+    pub(super) fn apply<E: Styled>(self, element: E) -> E {
+        element.border_1().border_color(self.border).bg(self.background(0.045))
+    }
+
+    pub(super) fn reserve<E: Styled>(self, element: E) -> E {
+        element.border_1().border_color(gpui::transparent_black())
+    }
+
+    fn background(self, edge: f32) -> gpui::Background {
+        gpui::linear_gradient(
+            180.0,
+            gpui::linear_color_stop(glass_over(self.fill, self.sheen), 0.0),
+            gpui::linear_color_stop(self.fill, edge),
+        )
+    }
+}
+
+fn glass_over(base: Hsla, sheen: Hsla) -> Hsla {
+    let mut base = GpuiRgba::from(base);
+    let sheen = GpuiRgba::from(sheen);
+    let alpha = base.a * (1.0 - sheen.a) + sheen.a;
+    let mix = |a, b| (a * base.a * (1.0 - sheen.a) + b * sheen.a) / alpha;
+    base = GpuiRgba {
+        r: mix(base.r, sheen.r),
+        g: mix(base.g, sheen.g),
+        b: mix(base.b, sheen.b),
+        a: alpha,
+    };
+    base.into()
+}
+
+pub(super) fn selection_glass(cx: &App) -> Option<GlassSurface> {
+    let theme = cx.theme();
+    theme.is_dark().then(|| GlassSurface::selection(theme.primary))
+}
+
+pub(super) fn selected_glass<E: Styled>(element: E, cx: &App) -> E {
+    if let Some(glass) = selection_glass(cx) { glass.apply(element) } else { element }
+}
+
+pub(super) fn settings_segment_glass(cx: &App) -> Option<GlassSurface> {
+    cx.theme().is_dark().then(|| {
+        let white = gpui::white();
+        GlassSurface {
+            fill: white.opacity(0.13),
+            border: white.opacity(0.10),
+            sheen: white.opacity(0.18),
+        }
+    })
+}
+
+pub(super) fn settings_card(element: gpui::Div, cx: &App) -> gpui::Div {
+    let skin = resolved_skin(cx);
+    if skin.is_light {
+        return element;
+    }
+    let mut fill = solid(skin.panel);
+    let backdrop = crate::gpui_shell::wallpaper::wallpaper_available_for_preview(cx);
+    fill.l += (1.0 - fill.l) * 0.035;
+    fill.a = if backdrop { 0.50 } else { 1.0 };
+    let glass = GlassSurface {
+        fill,
+        border: gpui::white().opacity(0.10),
+        sheen: GlassSurface::selection(ink(skin.accent)).sheen,
+    };
+    element.rounded(px(12.0)).border_1().border_color(glass.border).bg(glass.background(0.009))
+}
+
 fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     let (ui_font_family, ui_font_size) = cx
         .try_global::<crate::gpui_shell::config::Settings>()
@@ -704,13 +787,13 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
 
     // 悬停 / 选中水洗。
     let hover = wash(sk.hover);
-    let selected = wash(sk.accent_soft);
-    let list_selected = selected;
+    let glass = GlassSurface::selection(ink(sk.accent));
+    let selected = if sk.is_light { wash(sk.accent_soft) } else { glass.fill };
     theme.accent = hover;
     theme.accent_foreground = ink(sk.ink_strong);
     theme.list_hover = ink(sk.ink).opacity(if sk.is_light { 0.06 } else { 0.08 });
-    theme.list_active = ink(sk.accent).opacity(0.08);
-    theme.list_active_border = transparent;
+    theme.list_active = if sk.is_light { ink(sk.accent).opacity(0.08) } else { glass.fill };
+    theme.list_active_border = if sk.is_light { transparent } else { glass.border };
     theme.sidebar_foreground = ink(sk.ink);
     theme.sidebar_accent = selected;
     theme.sidebar_accent_foreground = ink(sk.ink_strong);
@@ -737,7 +820,7 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     ));
     theme.secondary = wash(sk.surface);
     theme.secondary_hover = hover;
-    theme.secondary_active = list_selected;
+    theme.secondary_active = selected;
     theme.secondary_foreground = ink(sk.ink);
 
     // 语义三色。

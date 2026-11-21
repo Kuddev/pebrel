@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::theme::selected_glass;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
@@ -470,7 +471,7 @@ impl NebulaWorkspace {
                 .tooltip(move |window, cx| {
                     gpui_component::tooltip::Tooltip::new(row_tooltip.clone()).build(window, cx)
                 })
-                .when(selected, |row| row.bg(selected_bg))
+                .when(selected, |row| selected_glass(row.bg(selected_bg), cx))
                 .when(!selected, |row| row.group_hover(hover_group.clone(), |row| row.bg(hover_bg)))
                 .when_some(icon_slot, |row, icon| row.child(icon))
                 .child(
