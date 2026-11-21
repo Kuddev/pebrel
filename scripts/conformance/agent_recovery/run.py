@@ -127,7 +127,7 @@ def accept_project_prompt(ctx, pane, agent):
         return
     # Only the disposable project is approved. Wait for the native prompt or
     # an input footer if a sibling has already trusted this directory.
-    deadline = time.monotonic() + 12
+    deadline = time.monotonic() + (75 if agent == "codebuddy" else 12)
     while time.monotonic() < deadline:
         screen = ctx.read(pane)["text"].lower()
         if "yes, proceed" in screen and "contents of this directory" in screen:
@@ -156,6 +156,12 @@ def run_agent(agent, executable, rounds):
         model = cleanup.enter_context(local_model())
         env = shell_environment(home)
         env.update(configure(agent, home, ctx.work_dir, f"http://127.0.0.1:{model.server_port}"))
+        if agent == "codebuddy":
+            git_bash = Path(env["ProgramFiles"]) / "Git" / "bin" / "bash.exe"
+            assert git_bash.is_file(), git_bash
+            env["CODEBUDDY_CODE_GIT_BASH_PATH"] = str(git_bash)
+            env["CODEBUDDY_STARTUP_PROFILE"] = "1"
+            env.pop("CI", None)
         cleanup.enter_context(patch.dict(os.environ, env, clear=True))
         cleanup.callback(ctx.stop, force=True)
         ctx.start(explicit_working_directory=False)
@@ -180,6 +186,11 @@ def run_agent(agent, executable, rounds):
                 ctx.poll(lambda: (runtime_pane(ctx, pane).get("agent") or {}).get("kind"),
                          lambda kind: kind == agent, f"{agent} was not recognized", timeout=45)
             except Exception:
+                for profile in ctx.work_dir.glob("Startup.*.json"):
+                    if profile.stat().st_size:
+                        data = json.loads(profile.read_text(encoding="utf-8"))
+                        print("CLI startup:", {k: data.get(k) for k in ("until", "reason", "bundle", "milestones")}, flush=True)
+                        print("CLI phases:", [(s["phase"], s["status"]) for s in data["spans"][-8:]], flush=True)
                 processes = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": pane})
                 print("Fixture processes:", [(p["depth"], p["executable"]) for p in processes["processes"]], flush=True)
                 state = runtime_pane(ctx, pane)
