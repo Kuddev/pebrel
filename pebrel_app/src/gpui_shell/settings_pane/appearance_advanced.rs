@@ -192,10 +192,17 @@ impl SettingsPane {
         v_flex()
             .w_full()
             .gap(px(GROUP_GAP))
-            .child(terminal)
-            .child(cursor)
-            .child(interface)
-            .child(custom_background)
+            .children(
+                self.show_appearance_section(AppearanceSection::Terminal, cx).then_some(terminal),
+            )
+            .children(self.show_appearance_section(AppearanceSection::Cursor, cx).then_some(cursor))
+            .children(
+                self.show_appearance_section(AppearanceSection::Interface, cx).then_some(interface),
+            )
+            .children(
+                self.show_appearance_section(AppearanceSection::Background, cx)
+                    .then_some(custom_background),
+            )
     }
 
     pub(super) fn custom_effect_settings(

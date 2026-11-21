@@ -8,6 +8,8 @@ use std::time::SystemTime;
 
 use image::{DynamicImage, ImageDecoder, ImageError, ImageReader, RgbaImage};
 
+use super::optics::{self, StripGeometry};
+
 // These bound the resources owned by this loader, not the entire process or a
 // decoder's undocumented scratch space. One job runs at a time across windows.
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -81,6 +83,20 @@ pub(super) fn load_preview(request: Request) -> Result<Option<LoadedImage>, Load
         return Ok(None);
     }
     Ok(Some(loaded))
+}
+
+pub(super) fn prepare_strip(
+    bytes: &[u8],
+    dimensions: (u32, u32),
+    geometry: StripGeometry,
+    tint: [u8; 3],
+    cancelled: impl Fn() -> bool,
+) -> Option<RgbaImage> {
+    let _preparation = PREPARATION.lock().unwrap_or_else(|error| error.into_inner());
+    if cancelled() {
+        return None;
+    }
+    optics::workspace_strip(bytes, dimensions, geometry, tint, cancelled)
 }
 
 fn load_inner(request: Request) -> Result<Option<LoadedImage>, LoadError> {
