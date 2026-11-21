@@ -112,7 +112,8 @@ if __name__ == "__main__":
         shell_ready(ctx)
         if sys.argv[1] == "omp-ready":
             ctx.poll(lambda: ctx.read()["text"].rstrip().splitlines()[-1:],
-                     lambda lines: bool(lines and re.search(r"ddlclock>\s*$", lines[-1], re.I)),
+                     lambda lines: bool(lines and (lines[-1].strip() == "❯" or
+                                                   re.search(r"ddlclock>\s*$", lines[-1], re.I))),
                      "PowerShell has not redrawn its input prompt", timeout=15)
         try:
             if sys.argv[1] == "cursor":
