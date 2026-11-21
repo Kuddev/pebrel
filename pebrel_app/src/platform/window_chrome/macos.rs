@@ -2,9 +2,12 @@
 
 use super::TitleBarLayout;
 use gpui::Window;
-use objc2::{MainThreadOnly, rc::Retained};
-use objc2_app_kit::{NSToolbar, NSView, NSWindow, NSWindowButton, NSWindowToolbarStyle};
-use objc2_foundation::{NSRect, ns_string};
+use objc2::{MainThreadOnly, define_class, msg_send, rc::Retained, sel};
+use objc2_app_kit::{
+    NSToolbar, NSView, NSWindow, NSWindowButton, NSWindowDidEnterFullScreenNotification,
+    NSWindowDidExitFullScreenNotification, NSWindowToolbarStyle,
+};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, NSRect, ns_string};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 fn native_window(window: &Window) -> Option<Retained<NSWindow>> {
@@ -15,16 +18,59 @@ fn native_window(window: &Window) -> Option<Retained<NSWindow>> {
     view.window()
 }
 
+define_class!(
+    #[unsafe(super(NSToolbar, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct PebrelWindowControlsToolbar;
+
+    impl PebrelWindowControlsToolbar {
+        #[unsafe(method(pebrelWindowDidEnterFullScreen:))]
+        fn did_enter_full_screen(&self, notification: &NSNotification) {
+            // AppKit draws the empty Unified toolbar in a separate full-screen
+            // overlay. Transparency on the main window alone cannot remove it.
+            self.setVisible(false);
+            if let Some(window) = notification.object().and_then(|object| object.downcast::<NSWindow>().ok()) {
+                // GPUI 4f2c269f turns transparency off before the transition.
+                window.setTitlebarAppearsTransparent(true);
+            }
+        }
+
+        #[unsafe(method(pebrelWindowDidExitFullScreen:))]
+        fn did_exit_full_screen(&self, _notification: &NSNotification) {
+            self.setVisible(true);
+        }
+    }
+);
+
 pub(super) fn configure(window: &Window) {
     let Some(native) = native_window(window) else { return };
-    let toolbar = NSToolbar::initWithIdentifier(
-        NSToolbar::alloc(native.mtm()),
-        ns_string!("pebrel-window-controls"),
-    );
-    // An empty native toolbar supplies the system's current window-control
-    // treatment. AppKit retains it; GPUI continues to render the app controls.
+    // SAFETY: initWithIdentifier: is NSToolbar's designated initializer and
+    // PebrelWindowControlsToolbar adds no instance state or initializer.
+    let toolbar: Retained<PebrelWindowControlsToolbar> = unsafe {
+        msg_send![PebrelWindowControlsToolbar::alloc(native.mtm()), initWithIdentifier: ns_string!("pebrel-window-controls")]
+    };
     native.setToolbarStyle(NSWindowToolbarStyle::Unified);
     native.setToolbar(Some(&toolbar));
+
+    // AppKit retains the toolbar for this window. Selector observers are weak
+    // (macOS 10.11+); the observer is not kept alive after the window closes.
+    let center = NSNotificationCenter::defaultCenter();
+    // SAFETY: the selectors above accept one NSNotification. The object filter
+    // limits delivery to AppKit's main-thread transitions of this exact window.
+    unsafe {
+        center.addObserver_selector_name_object(
+            &toolbar,
+            sel!(pebrelWindowDidEnterFullScreen:),
+            Some(NSWindowDidEnterFullScreenNotification),
+            Some(&native),
+        );
+        center.addObserver_selector_name_object(
+            &toolbar,
+            sel!(pebrelWindowDidExitFullScreen:),
+            Some(NSWindowDidExitFullScreenNotification),
+            Some(&native),
+        );
+    }
 }
 
 pub(super) fn layout(window: &Window) -> TitleBarLayout {

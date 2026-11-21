@@ -40,6 +40,8 @@ class NativeTranscriptTest(unittest.TestCase):
                                  "sessionId": wanted, "message": {"role": "assistant", "content": reply}}
                 else:
                     assistant = {"type": "assistant", "role": "assistant", "content": reply, "sessionId": wanted}
+                if provider == "codebuddy":
+                    assistant.update(type="message", status="completed", message={"usage": {"output_tokens": 5}})
                 content += json.dumps(assistant) + "\n"
                 path.write_text(content, encoding="utf-8")
                 self.assertTrue(provider_confirmed(home, provider, wanted, marker))
