@@ -139,6 +139,7 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
         let active_fg = theme.sidebar_accent_foreground;
+        let glass = crate::gpui_shell::theme::selection_glass(cx);
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
@@ -299,7 +300,10 @@ impl NebulaWorkspace {
                     // TitleBar 的父层是 WindowControlArea::Drag；tab 必须自己
                     // 占住普通鼠标命中区，滚轮仍交给外层标签滚动容器。
                     .block_mouse_except_scroll()
-                    .when(active, |item| item.bg(active_bg).text_color(active_fg))
+                    .when(active, |item| {
+                        let item = item.text_color(active_fg);
+                        if let Some(glass) = glass { glass.apply(item) } else { item.bg(active_bg) }
+                    })
                     .when(!active && !dragged, |item| {
                         item.text_color(muted).hover(|style| style.bg(hover_bg))
                     })
@@ -719,6 +723,9 @@ impl NebulaWorkspace {
                         )
                             .debug_selector(|| "command-manager-toggle".into())
                             .selected(self.command_manager_open)
+                            .when(self.command_manager_open, |button| {
+                                crate::gpui_shell::theme::selected_glass(button, cx)
+                            })
                             .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
