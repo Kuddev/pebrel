@@ -98,6 +98,9 @@ fn settings_sidebar_is_flush_with_the_titlebar_and_gear_closes_the_page(cx: &mut
         assert_eq!(sidebar.top(), title.bottom());
         assert_eq!(sidebar.right(), title.right());
         let divider = cx.debug_bounds("settings-nav-divider").unwrap();
+        let title_divider = cx.debug_bounds("settings-titlebar-divider").unwrap();
+        assert_eq!(title_divider.left(), divider.left());
+        assert_eq!(title_divider.right(), divider.right());
         assert_eq!(sidebar.right(), divider.left());
         assert_eq!(divider.right(), content.left());
         assert_eq!(sidebar.bottom(), content.bottom());

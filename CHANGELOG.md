@@ -40,6 +40,10 @@ macOS, Linux, and Android downloads are Preview builds.
 - Fixed the tab title reverting to the folder name while OMP was displaying its reply.
 - Fixed SSH direct login through JumpServer (KoKo) hanging before the asset shell opened. [#1078](https://github.com/Kuddev/pebrel/issues/1078)
 
+#### Improved
+
+- Improved the Settings background by blurring the configured wallpaper behind the sidebar and content and fading it at the top of the window.
+
 ### 中文
 
 macOS、Linux 和 Android 下载为预览版。
@@ -61,6 +65,10 @@ macOS、Linux 和 Android 下载为预览版。
 - 修复 Windows 和 Linux 上重启后多个 CodeBuddy 分屏争用同一本地端口的问题。同一目录下的各窗格可以分别恢复原来的对话。
 - 修复 OMP 显示回复时，标签标题变回所在文件夹名称的问题。
 - 修复通过 JumpServer（KoKo）直连 SSH 资产时，登录后卡住、无法进入远端 shell 的问题。[#1078](https://github.com/Kuddev/pebrel/issues/1078)
+
+#### 改进
+
+- 改进设置页背景。设置壁纸后，侧栏和正文会显示同一张模糊壁纸，顶部平滑渐隐。
 
 ### Contributors
 

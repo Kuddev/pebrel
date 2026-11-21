@@ -218,9 +218,14 @@ impl NebulaWorkspace {
                                 .debug_selector(|| "settings-sidebar-titlebar".to_owned())
                                 .w(px(SETTINGS_NAV_WIDTH))
                                 .flex_shrink_0()
-                                .bg(sidebar_bg)
-                                .border_r_1()
-                                .border_color(hairline),
+                                .bg(sidebar_bg),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "settings-titlebar-divider".to_owned())
+                                .w(px(1.0))
+                                .flex_shrink_0()
+                                .bg(hairline),
                         )
                         .child(div().flex_1().min_w_0().bg(content_bg).when(!top_tabs, |title| {
                             title
