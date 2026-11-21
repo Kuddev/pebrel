@@ -179,6 +179,7 @@ impl NebulaWorkspace {
         let faint = crate::gpui_shell::theme::faint_ink(cx);
         let active_bg = theme.sidebar_accent;
         let active_fg = theme.sidebar_accent_foreground;
+        let glass = crate::gpui_shell::theme::selection_glass(cx);
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
@@ -356,7 +357,10 @@ impl NebulaWorkspace {
                 // tab chrome 使用终端 Regular face，所有子文本从这里继承常规字重。
                 .font_weight(FontWeight::NORMAL)
                 .cursor_pointer()
-                .when(active, |item| item.bg(active_bg).text_color(active_fg))
+                .when(active, |item| {
+                    let item = item.text_color(active_fg);
+                    if let Some(glass) = glass { glass.apply(item) } else { item.bg(active_bg) }
+                })
                 .when(!active && !dragged, |item| {
                     item.text_color(muted).hover(|style| style.bg(hover_bg))
                 })

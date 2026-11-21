@@ -3,6 +3,8 @@
 //! 几何与密度以旧 OpenGL 壳的 `display::side_panel::panel_layout`
 //! （side_panel.rs:1695）和它的行水洗（同文件 2712-2800）为基准，不自创数字。
 
+use crate::gpui_shell::theme::selected_glass;
+
 use crate::display::side_panel::PanelNotice;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -294,8 +296,8 @@ impl NebulaWorkspace {
                 .border_1()
                 .border_color(gpui::transparent_black())
                 .text_color(fg)
-                .when(selected, |item| item.bg(selected_bg).border_color(selected_ring))
-                .hover(|item| item.bg(hover))
+                .when(selected, |item| selected_glass(item.bg(selected_bg).border_color(selected_ring), cx))
+                .when(!selected || !cx.theme().is_dark(), |item| item.hover(|item| item.bg(hover)))
                 .when(!is_dir && crate::platform::file_preview::supports(&preview_path), |item| {
                     item.tooltip(move |_, cx| {
                         cx.new(|cx| crate::gpui_shell::file_preview::FilePreview::new(preview_path.clone(), cx)).into()
