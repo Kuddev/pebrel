@@ -388,6 +388,9 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .selected(broadcast)
+                            .when(broadcast, |button| {
+                                crate::gpui_shell::theme::selected_glass(button, cx)
+                            })
                             .tooltip(if broadcast {
                                 language.text(Message::WorkspacePaneStopBroadcastInput)
                             } else {
@@ -415,6 +418,9 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .selected(zoomed)
+                            .when(zoomed, |button| {
+                                crate::gpui_shell::theme::selected_glass(button, cx)
+                            })
                             .tooltip(if zoomed {
                                 language.text(Message::WorkspacePaneRestoreLayout)
                             } else {

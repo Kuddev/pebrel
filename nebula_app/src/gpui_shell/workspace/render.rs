@@ -16,7 +16,7 @@ impl Render for NebulaWorkspace {
         // 终端卡几何取一次，布局与壳色带共用同一个实例——两处各取一次也算
         // 「各写一份」，主题在这一帧中途换掉就会出现半旧半新的卡缝。
         let card_style = crate::gpui_shell::theme::PaneCardStyle::current(cx);
-        let titlebar_background = self.titlebar_background.clone();
+        let window_backdrop = self.window_backdrop.clone();
         let draw_file_divider = self.side_panel.open;
         self.dismiss_hidden_sidebar_group_menu(window, cx);
         self.cancel_hidden_split_drag(cx);
@@ -71,10 +71,23 @@ impl Render for NebulaWorkspace {
         } else {
             crate::gpui_shell::theme::card_content_bg(cx)
         };
+        let wallpaper_peek = settings_active
+            && self
+                .settings_surface
+                .as_ref()
+                .is_some_and(|(pane, _)| pane.read(cx).wallpaper_peeking());
         let settings_wallpaper =
             settings_content && crate::gpui_shell::wallpaper::settings_wallpaper_visible(cx);
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
         let reader_focus = self.reader_focus_active(cx);
+        let sidebar_collapsed =
+            self.settings_restore_sidebar_collapsed.unwrap_or(self.sidebar_collapsed);
+        let wallpaper_sidebar =
+            (!top_tabs && !reader_focus && !sidebar_collapsed).then_some(self.sidebar_width);
+        let workspace_strip = self
+            .window_backdrop
+            .wallpaper
+            .update(cx, |strip, cx| strip.configure(wallpaper_sidebar, window, cx));
         // dock 预览：被拖 tab 悬于终端区时高亮目标半区（松手即挂到那侧）。
         let dock_preview = self
             .tab_drag
@@ -266,8 +279,12 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &OpenQuickJump, window, cx| {
                 this.open_quick_jump_palette(window, cx);
             }))
-            .child(crate::gpui_shell::wallpaper::window_layer(settings_wallpaper, cx))
-            .when(settings_wallpaper, |root| {
+            .child(if wallpaper_peek {
+                crate::gpui_shell::wallpaper::peek_layer(workspace_strip.clone(), cx).into_any_element()
+            } else {
+                crate::gpui_shell::wallpaper::window_layer(settings_wallpaper, workspace_strip.clone(), cx).into_any_element()
+            })
+            .when(settings_wallpaper && !wallpaper_peek, |root| {
                 root.child(
                     div()
                         .absolute()
@@ -313,7 +330,7 @@ impl Render for NebulaWorkspace {
                             .relative()
                             .child(
                                 gpui::canvas(
-                                    move |bounds, _, _| titlebar_background.record_pane(bounds),
+                                    move |bounds, _, _| window_backdrop.record_pane(bounds),
                                     |bounds, _, window, cx| {
                                         // 卡缝、圆角、竖线全部读同一份 style 真源：
                                         // 布局的 padding 与这里的壳色带必须逐边对上，
@@ -353,7 +370,7 @@ impl Render for NebulaWorkspace {
                                     // 壁纸层（卡底色之上、内容之下，覆盖整卡含
                                     // 内边距带）：卡模式按卡定位；拓展模式由
                                     // 窗口底层统一绘图，此处不覆盖原有衬底。
-                                    crate::gpui_shell::wallpaper::card_layer(cx),
+                                    crate::gpui_shell::wallpaper::card_layer(workspace_strip, cx),
                                 ))
                                 .children(content),
                         )
@@ -376,6 +393,18 @@ impl Render for NebulaWorkspace {
                         row.child(self.render_side_panel_slot(window, cx))
                     }),
             )
+            .when(settings_active && cx.theme().is_dark(), |root| {
+                root.child(
+                    div()
+                        .debug_selector(|| "settings-sidebar-divider".to_owned())
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(crate::gpui_shell::settings_pane::SETTINGS_NAV_WIDTH - 1.0))
+                        .w(px(1.0))
+                        .bg(gpui::white().opacity(if wallpaper_peek { 0.012 } else { 0.075 })),
+                )
+            })
             .when_some(dock_preview, |root, (x, y, w, h)| {
                 root.child(
                     div()

@@ -173,7 +173,14 @@ impl RenderOnce for SegmentedRow {
                 let selector = id.clone();
                 animate_indicator(
                     self.id.clone(),
-                    self.indicator.id(id).debug_selector(move || selector.to_string()).absolute(),
+                    self.indicator
+                        .when_some(
+                            crate::gpui_shell::theme::settings_segment_glass(cx),
+                            |surface, glass| glass.apply(surface.shadow(Vec::new())),
+                        )
+                        .id(id)
+                        .debug_selector(move || selector.to_string())
+                        .absolute(),
                     left,
                     Some([width, top, height]),
                     window,
