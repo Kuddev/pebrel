@@ -1539,7 +1539,7 @@ impl SettingsPane {
             1 => self.section_appearance(window, cx),
             2 => self.section_profiles(window, cx),
             3 => self.section_providers(window, cx),
-            4 => self.section_ssh(window, cx),
+            4 => self.section_ssh(cx),
             5 => self.section_network(cx),
             6 => self.section_interaction(cx),
             7 => self.section_keymap(cx),
@@ -1747,7 +1747,7 @@ impl Render for SettingsPane {
                             .when(!form_page && !application_page, |content| {
                                 content.pt(px(28.0)).pb(px(30.0))
                             })
-                            .when(mobile_page || self.active_section == 3, |content| content.p_0())
+                            .when(self.active_section == 3, |content| content.p_0())
                             .overflow_y_scrollbar()
                             // Scrollable wraps the content in a block; the full-width flex
                             // column keeps cards aligned when the window is resized.
@@ -1767,7 +1767,7 @@ impl Render for SettingsPane {
                                                     .pt(px(design::CONTENT_PAD_TOP))
                                                     .pb(px(design::CONTENT_PAD_BOTTOM))
                                             })
-                                            .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION | PLUGINS_SECTION), |content| {
+                                            .when(self.active_section == PLUGINS_SECTION, |content| {
                                                 content.items_center()
                                             })
                                             .when(application_page, |content| content.max_w(px(960.0)))
