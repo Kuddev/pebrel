@@ -2933,7 +2933,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                             run.phase = crate::runtime_api::RuntimeRunPhase::Started;
                         }
                     },
-                    TerminalEvent::CommandDone { exit_code } => {
+                    TerminalEvent::CommandDone { exit_code, .. } => {
                         // 新 PTY 初始化提示符也可能先发一个 CommandDone。Runtime
                         // 提交 barrier 尚未冲刷时，它不能结束当前请求。
                         if self.ctx.nebula_state.runtime_submit_barrier.is_some() {
