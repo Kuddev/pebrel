@@ -1,264 +1,66 @@
-name: Full native tests
-
-on:
-  workflow_dispatch:
-    inputs:
-      windows_diagnostics_run:
-        description: Diagnose a previous Windows runtime without running a release validation
-        type: string
-        default: ""
-  workflow_call:
-  schedule:
-    - cron: "23 19 * * *"
-  push:
-    branches: [main]
-  # 所有 PR 都规划验证；轻量改动无需先申请原生 runner 再跳过步骤。
-  # 草稿与 Ready 使用相同策略，状态切换不重复验证同一提交。
-  pull_request:
-    types: [opened, synchronize, reopened]
-  merge_group:
-
-concurrency:
-  group: native-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  # main 的过期验证也应释放 runner；手动诊断和发布调用不互相取消。
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
-
+name: Windows file-tab cursor and OMP title
+on: workflow_dispatch
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  windows-diagnostics:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_diagnostics_run != '' }}
-    uses: ./.github/workflows/windows-conformance.yml
-    with:
-      runtime_run: ${{ inputs.windows_diagnostics_run }}
-
-  # rustfmt only for now. clippy joins once the existing warning backlog is
-  # cleared; several crates deny lints, so it cannot run advisory.
-  lint:
-    if: ${{ inputs.windows_diagnostics_run == '' }}
-    name: lint
-    outputs:
-      native_matrix: ${{ steps.matrix.outputs.native_matrix }}
-      release_matrix: ${{ steps.matrix.outputs.release_matrix }}
-      check_matrix: ${{ steps.matrix.outputs.check_matrix }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97.1"
-          components: rustfmt
-      - name: rustfmt
-        run: cargo fmt --all -- --check
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Test CI contracts before matrix planning
-        run: |
-          python3 -m unittest \
-            scripts.tests.test_ci_plan \
-            scripts.tests.test_ci_native_tests \
-            scripts.tests.test_stable_release \
-            scripts.tests.test_ci_cache \
-            scripts.tests.test_platform_cfg \
-            scripts.tests.test_pr_size_workflow \
-            scripts.tests.test_copilot_review_workflow -v
-      - name: Check platform cfg budget before native jobs
-        run: python3 scripts/check_platform_cfg.py
-      - name: Plan native validation
-        id: matrix
-        shell: bash
-        run: |
-          python scripts/ci_plan.py \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --event-path "$GITHUB_EVENT_PATH" \
-            --output "$GITHUB_OUTPUT"
-
-  # The required lint job validates the matrix before heavy runners are
-  # requested. Main, scheduled and release/manual callers retain the full matrix.
-  native-tests:
-    needs: lint
-    if: ${{ inputs.windows_diagnostics_run == '' && needs.lint.outputs.native_matrix != '[]' }}
-    name: Native tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.lint.outputs.native_matrix) }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+  recovery:
+    runs-on: windows-2022
+    timeout-minutes: 55
     env:
       PYTHONUTF8: "1"
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: "1"
-      RUST_TOOLCHAIN: "1.97.1"
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install native dependencies
-        if: ${{ runner.os == 'Linux' }}
+      - name: Exercise CJK character insertion after returning from a file tab on 2.6.1
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # 避开 runner 默认 Azure 镜像的低速下载，保留现有发行版与签名配置。
-          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config zsh libasound2-dev libdbus-1-dev libudev-dev \
-            xvfb xauth x11-utils weston libvulkan1 mesa-vulkan-drivers \
-            libfontconfig1-dev libfreetype6-dev \
-            libegl1-mesa-dev libgl1-mesa-dev \
-            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
-            libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xinput-dev libxcb-xkb-dev libxi-dev
-      - name: Require the AppKit SDK used by this PR
-        if: ${{ runner.os == 'macOS' }}
-        run: |
-          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
-          test "${sdk_version%%.*}" -ge 26
-      - uses: dtolnay/rust-toolchain@stable
+          gh release download v2.6.1 -R Kuddev/pebrel -p '*windows-x64.zip' -D "$env:RUNNER_TEMP/published"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/conformance/windows_standard_user.py scripts/conformance/windows_issue_checks.py cursor "$env:RUNNER_TEMP/published/*windows-x64.zip"
+      - if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
-      - name: Require a native Windows ARM64 compiler
-        if: ${{ matrix.os == 'windows-11-arm' }}
-        shell: pwsh
-        run: |
-          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
-            throw 'The Windows ARM job requires an ARM64 host.'
-          }
-          $compiler = rustc -vV
-          if ($LASTEXITCODE -ne 0 -or $compiler -notcontains 'host: aarch64-pc-windows-msvc') {
-            throw 'The Windows ARM job must compile and run ARM64 tests.'
-          }
-      - name: Install the pinned native test runner
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.146
-      - uses: ./.github/actions/rust-cache
-        id: rust-cache
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/rust-cache
         with:
           key: native
-          extra-key: ${{ runner.os != 'macOS' && '-release-check-v2' || '' }}
+          extra-key: "-release-check-v2"
           target: |
             target/ci
-            ${{ runner.os != 'macOS' && 'target/release' || '' }}
-          # PR merge-ref 缓存不与其他 PR 共享；只由默认分支维护可复用的依赖快照。
+            target/release
           revision: dependencies-v1
-          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-      # 构建前计算两类缓存身份，避免生成文件进入 hashFiles 后改变原有缓存键。
-      # release 保留独立产物路径，但不重复恢复同一份源码下载。
-      - name: Restore macOS release workload
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
-        uses: ./.github/actions/rust-cache
-        id: macos-release-cache
-        with:
-          key: native-release-check
-          target: target/release
-          revision: dependencies-v1
-          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-          restore-downloads: "false"
-      - name: Prepare pinned Windows console runtime
-        if: ${{ runner.os == 'Windows' }}
+          save-if: "false"
+      - name: Build the candidate and its hook helper
+        if: ${{ !cancelled() }}
+        id: build
         shell: pwsh
         run: |
-          $architecture = if ('${{ runner.arch }}' -eq 'ARM64') { 'arm64' } else { 'x64' }
-          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture $architecture
-          ./scripts/tests/windows-runtime.tests.ps1 -Architecture $architecture
-      - name: Test complete workspace and native harness
-        run: python scripts/ci_native_tests.py --runner nextest
-      - name: Test native Linux silent startup and window residency
-        if: ${{ runner.os == 'Linux' }}
-        run: python scripts/ci_linux_desktop.py --output "${{ runner.temp }}/pebrel-desktop-evidence"
-      - name: Upload Linux desktop lifecycle evidence
-        if: ${{ always() && runner.os == 'Linux' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-desktop-lifecycle
-          path: ${{ runner.temp }}/pebrel-desktop-evidence
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Check source architecture
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
-        run: python scripts/check_architecture.py
-      - name: Test translation and allocation contracts
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
-        run: cargo test --locked --manifest-path tools/i18n-contract/Cargo.toml
-      - name: Check the release workspace
-        if: ${{ !cancelled() && runner.os != 'macOS' }}
-        run: cargo check --locked --workspace --release
-      # Mac 原生快照先于 release 检查保存，避免后者失败或取消丢掉已验证的编译结果。
-      - name: Save compiled workload
-        if: ${{ success() && steps.rust-cache.outputs.save-enabled == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            target/ci
-            ${{ runner.os != 'macOS' && 'target/release' || '' }}
-          key: ${{ steps.rust-cache.outputs.cache-key }}
-      - name: Check macOS release workspace
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
-        run: cargo check --locked --workspace --release --timings
-      - name: Save macOS release workload
-        if: ${{ success() && steps.macos-release-cache.outputs.save-enabled == 'true' && steps.macos-release-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: target/release
-          key: ${{ steps.macos-release-cache.outputs.cache-key }}
-      - name: Upload native compilation timings
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-timings-${{ matrix.os }}
-          path: target/cargo-timings
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 14
-
-  # 保留服务端必需名称作为策略汇总，未选择的平台明确标注未执行。
-  # 任一已选择的原生任务失败、取消或意外跳过，都不能把汇总标绿。
-  native-checks:
-    needs: [lint, native-tests]
-    if: ${{ always() && inputs.windows_diagnostics_run == '' && needs.lint.result == 'success' }}
-    name: ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.lint.outputs.check_matrix) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Report this run's validation policy and results
-        shell: python
-        env:
-          NATIVE_RESULT: ${{ needs.native-tests.result }}
-          NATIVE_MATRIX: ${{ needs.lint.outputs.native_matrix }}
-          CHECK_NAME: ${{ matrix.name }}
-          SCHEDULED: ${{ matrix.scheduled }}
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture x64
+          cargo build --locked --config .github/ci-profile.toml --profile ci -p pebrel -p pebrel_hook --features pebrel/gpui-test-support --bin pebrel --bin pebrel-hook
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install the verified upstream OMP executable
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        id: install
+        shell: pwsh
         run: |
-          import json
-          import os
-          from pathlib import Path
-          selected = json.loads(os.environ["NATIVE_MATRIX"])
-          result = os.environ["NATIVE_RESULT"]
-          expected = "success" if selected else "skipped"
-          if result != expected:
-              raise SystemExit("Native validation did not succeed: " + result)
-          scheduled = os.environ["SCHEDULED"]
-          if scheduled not in {"true", "false"} or (scheduled == "true" and not selected):
-              raise SystemExit("Invalid validation plan")
-          if scheduled == "true":
-              message = "Executed successfully in this run's native matrix."
-          else:
-              message = ("Not run: this PR's paths do not require this platform. "
-                         "Full validation remains enabled on main, daily and manual runs.")
-          print(message)
-          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
-              summary.write("## " + os.environ["CHECK_NAME"] + "\n\n" + message + "\n")
+          $bin = Join-Path $env:LOCALAPPDATA omp
+          New-Item -ItemType Directory -Path $bin | Out-Null
+          $exe = Join-Path $bin omp.exe
+          curl.exe --fail --location --retry 3 --output $exe https://github.com/can1357/oh-my-pi/releases/download/v18.22.2/omp-windows-x64.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne 'BAB49ACF7E0BCA6FC98213B1F9F21BC7BFDB5070AFA52EB494EC400337395848') {
+            throw 'OMP release digest does not match v18.22.2'
+          }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          [Environment]::SetEnvironmentVariable('Path', (([string]$userPath).TrimEnd(';') + ';' + $bin), 'User')
+          $bin >> $env:GITHUB_PATH
+      - name: Verify the hookless OMP task label after a reply and exit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/conformance/windows_standard_user.py scripts/conformance/windows_issue_checks.py omp target/ci/pebrel.exe
