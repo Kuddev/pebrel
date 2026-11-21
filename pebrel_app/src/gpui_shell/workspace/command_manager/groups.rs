@@ -1,5 +1,7 @@
 //! Command organization UI; persistence remains in `saved_commands`.
 
+use crate::gpui_shell::theme::selected_glass;
+
 use super::*;
 use crate::i18n::Message;
 use crate::saved_commands::BUILTIN_GROUP_ID;
@@ -243,7 +245,7 @@ impl NebulaWorkspace {
             .cursor_pointer()
             .role(gpui::Role::Button)
             .aria_label(name.clone())
-            .when(selected, |row| row.bg(active))
+            .when(selected, |row| selected_glass(row.bg(active), cx))
             .when(!selected, |row| row.hover(move |row| row.bg(hover)))
             .active(move |row| row.bg(active))
             .drag_over::<CommandDrag>(move |row, _, _, _| row.bg(active))

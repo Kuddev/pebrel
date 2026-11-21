@@ -729,3 +729,36 @@ mod shell_row_geometry {
         );
     }
 }
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn appearance_parent_collapses_and_the_child_opens_its_settings(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    cx.run_until_parked();
+    let parent = cx.debug_bounds("settings-appearance-toggle").unwrap().center();
+    assert!(cx.debug_bounds("settings-appearance-child-1").is_some());
+    cx.simulate_click(parent, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("settings-appearance-child-1").is_none());
+    cx.simulate_click(parent, gpui::Modifiers::default());
+    cx.run_until_parked();
+    let terminal = cx.debug_bounds("settings-appearance-child-1").unwrap().center();
+    cx.simulate_click(terminal, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.appearance_section),
+        Some(AppearanceSection::Terminal)
+    );
+    assert!(cx.debug_bounds("font-family-cjk-input").is_some());
+}
