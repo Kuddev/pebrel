@@ -28,7 +28,7 @@ use crate::gpui_shell::settings_pane::{SettingsPane, SettingsPaneEvent, SshStatu
 use crate::gpui_shell::widgets::NebulaButton;
 
 mod advanced;
-mod editor;
+pub(super) mod editor;
 pub(super) mod library;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod serial_tests;

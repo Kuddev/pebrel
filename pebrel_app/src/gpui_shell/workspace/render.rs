@@ -449,6 +449,7 @@ impl Render for NebulaWorkspace {
             .when(self.command_palette_open, |root| {
                 root.child(self.render_command_palette(window, cx))
             })
+            .when_some(self.render_ssh_quick_add(window, cx), |root, layer| root.child(layer))
             .when(self.command_manager_open, |root| {
                 root.child(self.render_command_manager(window, cx))
             })
