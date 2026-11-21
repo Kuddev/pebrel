@@ -631,6 +631,20 @@ impl TerminalView {
     }
 
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
+        let observation = match &event {
+            TermEvent::Title(title) => Some(format!("title {title:?}")),
+            TermEvent::CommandStart => Some("command start".to_owned()),
+            TermEvent::CommandDone { exit_code, empty_prompt_zone } => {
+                Some(format!("command done {exit_code:?} empty={empty_prompt_zone}"))
+            },
+            _ => None,
+        };
+        if let Some(observation) = observation {
+            eprintln!(
+                "QA-OMP {observation} running={} program={:?} committed={:?}",
+                self.command_running, self.running_program, self.suggest.last_committed
+            );
+        }
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
         // Both shell metadata channels update completion and directory history.
         if cwd_changed

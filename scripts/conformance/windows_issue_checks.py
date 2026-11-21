@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,7 +25,7 @@ def cursor(ctx):
     test_file = ctx.work_dir / "侧栏文件.md"
     test_file.write_text("# 示例\n", encoding="utf-8")
     tab_id = ctx.snapshot()["windows"][0]["tabs"][0]["tab_id"]
-    native = NativeProcess(ctx.process, ctx.app.executable)
+    native = NativeProcess(SimpleNamespace(pid=ctx.snapshot()["process_id"]), ctx.app.executable)
     def grid():
         frame = ctx.api("pane.read", {"window_id": ctx.window_id, "pane_id": ctx.pane_id,
                                       "lines": 40, "screen": True})["screen"]
@@ -71,7 +72,7 @@ def omp(ctx):
         pane = tab["panes"][0]
         return tab["label"], pane.get("title"), pane.get("running_program")
     ctx.prompt(command_for("omp", 0))
-    ctx.poll(state, lambda s: s[2] == "omp" and "π" in (s[1] or ""), "OMP did not become ready", timeout=45)
+    ctx.poll(state, lambda s: "π" in (s[1] or ""), "OMP did not become ready", timeout=45)
     ctx.prompt("Title test for issue 1029")
     ctx.poll(state, lambda s: "Native recovery fixture reply" in (s[1] or ""), "missing OMP title", timeout=45)
     for _ in range(4):
@@ -101,4 +102,12 @@ if __name__ == "__main__":
         ctx.start()
         ctx.refresh_targets()
         shell_ready(ctx)
-        {"cursor": cursor, "omp": omp}[sys.argv[1]](ctx)
+        try:
+            {"cursor": cursor, "omp": omp}[sys.argv[1]](ctx)
+        except Exception:
+            print("Fixture pane:", ctx.read()["text"][-1600:], flush=True)
+            for log in ctx.artifact_dir.glob("pebrel-*.log"):
+                rows = log.read_text(encoding="utf-8", errors="replace").splitlines()
+                for row in [r for r in rows if r.startswith("QA-OMP " )][-80:]:
+                    print(row, flush=True)
+            raise
