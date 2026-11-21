@@ -60,6 +60,11 @@
       "id": "codebuddy-split-resume",
       "commit": "b70b54747ec61cdb19a121d352d62f81d8fdbca5",
       "verification": "Two same-directory panes opened through codebuddy and cbc kept separate native IDs and continued each original transcript through eight Linux cold restarts and two more on Windows with only the installed hooks. https://github.com/Kuddev/pebrel/pull/1075 https://github.com/Kuddev/pebrel/actions/runs/44867131556"
+    },
+    {
+      "id": "issue-1078",
+      "commit": "b4e4d668d6adb27e42b7b2e882d113294b545a10",
+      "verification": "On an isolated JumpServer/KoKo 4.10.19 deployment, the published 2.6.1 Linux client could not run a command on the SSH asset. Two cold starts of the patched stable desktop each ran pwd and tty on that asset, returning /config and /dev/pts/0. https://github.com/Kuddev/pebrel/pull/1079"
     }
   ]
 }
