@@ -15,6 +15,7 @@ const MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_IMAGE_EDGE: u32 = 2048;
 const MAX_PREVIEW_EDGE: u32 = 512;
+const MAX_BLUR_EDGE: u32 = 512;
 static PREPARATION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +44,11 @@ pub(super) struct LoadedImage {
     pub stamp: FileStamp,
 }
 
+pub(super) struct LoadedWallpaper {
+    pub source: LoadedImage,
+    pub blurred: RgbaImage,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum LoadError {
     TooLarge,
@@ -60,30 +66,74 @@ impl From<ImageError> for LoadError {
     }
 }
 
-pub(super) fn load(request: Request) -> Result<Option<LoadedImage>, LoadError> {
+pub(super) fn load(request: Request) -> Result<Option<LoadedWallpaper>, LoadError> {
     let _preparation = PREPARATION.lock().unwrap_or_else(|error| error.into_inner());
-    load_inner(request)
+    let Some(source) = load_inner(&request)? else { return Ok(None) };
+    if request.cancelled() {
+        return Ok(None);
+    }
+    let blurred = blur_wallpaper(&source.pixels);
+    Ok((!request.cancelled()).then_some(LoadedWallpaper { source, blurred }))
 }
 
 pub(super) fn load_preview(request: Request) -> Result<Option<LoadedImage>, LoadError> {
     let _preparation = PREPARATION.lock().unwrap_or_else(|error| error.into_inner());
-    let generation = request.generation.clone();
-    let version = request.version;
-    let Some(mut loaded) = load_inner(request)? else { return Ok(None) };
-    if generation.load(Ordering::Acquire) != version {
+    let Some(mut loaded) = load_inner(&request)? else { return Ok(None) };
+    if request.cancelled() {
         return Ok(None);
     }
     if loaded.pixels.width() > MAX_PREVIEW_EDGE || loaded.pixels.height() > MAX_PREVIEW_EDGE {
         loaded.pixels =
             image::imageops::thumbnail(&loaded.pixels, MAX_PREVIEW_EDGE, MAX_PREVIEW_EDGE);
     }
-    if generation.load(Ordering::Acquire) != version {
-        return Ok(None);
-    }
-    Ok(Some(loaded))
+    Ok((!request.cancelled()).then_some(loaded))
 }
 
-fn load_inner(request: Request) -> Result<Option<LoadedImage>, LoadError> {
+fn blur_wallpaper(pixels: &RgbaImage) -> RgbaImage {
+    use image::imageops::{fast_blur, thumbnail};
+
+    let has_alpha = pixels.pixels().any(|pixel| pixel[3] < 255);
+    let (width, height) = pixels.dimensions();
+    let edge = width.max(height);
+    let downsample = |image: &RgbaImage| {
+        if edge <= MAX_BLUR_EDGE {
+            image.clone()
+        } else {
+            let scaled = |length: u32| ((length * MAX_BLUR_EDGE + edge / 2) / edge).max(1);
+            thumbnail(image, scaled(width), scaled(height))
+        }
+    };
+    let reduced = if has_alpha {
+        // Interpolate color in premultiplied form so invisible pixels do not tint visible edges.
+        let mut premultiplied = pixels.clone();
+        for pixel in premultiplied.pixels_mut() {
+            let alpha = u16::from(pixel[3]);
+            for channel in &mut pixel.0[..3] {
+                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+            }
+        }
+        downsample(&premultiplied)
+    } else {
+        downsample(pixels)
+    };
+
+    // The prototype uses 18 px over a 1240 px window. Scale the kernel to the texture.
+    let sigma = (18.0 / 1240.0) * reduced.width().max(reduced.height()) as f32;
+    let mut blurred = fast_blur(&reduced, sigma);
+    if has_alpha {
+        for pixel in blurred.pixels_mut() {
+            let alpha = u16::from(pixel[3]);
+            if alpha != 0 {
+                for channel in &mut pixel.0[..3] {
+                    *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+                }
+            }
+        }
+    }
+    blurred
+}
+
+fn load_inner(request: &Request) -> Result<Option<LoadedImage>, LoadError> {
     if request.cancelled() {
         return Ok(None);
     }
@@ -215,13 +265,29 @@ mod tests {
         let path = dir.path().join("wallpaper.png");
         RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 128])).save(&path).unwrap();
         let loaded = load(request(path.clone())).unwrap().unwrap();
-        assert_eq!(loaded.pixels.get_pixel(0, 0).0, [30, 20, 10, 128]);
+        assert_eq!(loaded.source.pixels.get_pixel(0, 0).0, [30, 20, 10, 128]);
         let mut cached = request(path.clone());
-        cached.cached = Some(loaded.stamp);
+        cached.cached = Some(loaded.source.stamp);
         assert!(load(cached).unwrap().is_none());
         let mut stale = request(path);
         stale.version = 0;
         assert!(load(stale).unwrap().is_none());
+    }
+
+    #[test]
+    fn settings_blur_softens_edges_without_importing_hidden_color() {
+        let image = RgbaImage::from_fn(1024, 512, |x, _| {
+            if x < 512 { image::Rgba([180, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 0]) }
+        });
+        let blurred = blur_wallpaper(&image);
+        assert_eq!(blurred.dimensions(), (512, 256));
+        assert_eq!(blurred.get_pixel(200, 128).0, [180, 0, 0, 255]);
+        assert_eq!(blurred.get_pixel(310, 128)[3], 0);
+        let edge = blurred.get_pixel(255, 128);
+        assert!((80..=180).contains(&edge[3]));
+        assert!((175..=185).contains(&edge[0]));
+        assert_eq!(edge[2], 0);
+        assert_eq!(blur_wallpaper(&RgbaImage::new(1, 2048)).dimensions(), (1, 512));
     }
 
     #[test]

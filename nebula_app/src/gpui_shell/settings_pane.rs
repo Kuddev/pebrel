@@ -88,6 +88,7 @@ mod theme_transfer;
 mod theme_transfer_view;
 
 use localization::*;
+pub(super) use navigation::SETTINGS_NAV_WIDTH;
 use navigation::*;
 use shell_picker::*;
 pub(super) use status::SshStatus;
@@ -1553,7 +1554,8 @@ impl Focusable for SettingsPane {
 impl Render for SettingsPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
-        let nav = self.render_nav(window, cx);
+        let (sidebar_bg, content_bg) = crate::gpui_shell::theme::settings_surface_colors(cx);
+        let nav = self.render_nav(sidebar_bg, window, cx);
         let content = self.section_content(window, cx);
         // 设置页复用 UI 西文与本机中文回退，终端字体不参与表单排版。
         let base_px = self.font_size_px(cx);
@@ -1571,7 +1573,6 @@ impl Render for SettingsPane {
         let application_page = self.active_section == 0;
         let mobile_page = self.active_section == MOBILE_SECTION;
         let form_page = matches!(self.active_section, 1 | 2 | 5 | 6 | 8);
-        let has_cards = form_page || mobile_page || self.active_section == 9;
 
         div()
             .size_full()
@@ -1608,7 +1609,6 @@ impl Render for SettingsPane {
                 ))
             })
             // 背景和圆角归 workspace 卡容器；此处再次铺底会叠加不透明度。
-            .rounded(crate::gpui_shell::theme::card_radius(cx))
             .text_color(cx.theme().foreground)
             // 正文继承主字号；导航和搜索使用组件小字号，说明与徽标单独缩小。
             .text_size(px(base_px))
@@ -1629,7 +1629,8 @@ impl Render for SettingsPane {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .when(has_cards, |pane| pane.bg(crate::gpui_shell::theme::settings_canvas_tint(cx)))
+                    .debug_selector(|| "settings-content".into())
+                    .bg(content_bg)
                     .child(
                         v_flex()
                             .flex_1()

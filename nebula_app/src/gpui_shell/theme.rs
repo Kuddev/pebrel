@@ -422,6 +422,57 @@ pub fn settings_panel_bg(cx: &App) -> Hsla {
     solid(resolved_skin(cx).panel)
 }
 
+pub(super) fn settings_surface_colors(cx: &App) -> (Hsla, Hsla) {
+    let skin = resolved_skin(cx);
+    let has_wallpaper = crate::gpui_shell::wallpaper::settings_wallpaper_visible(cx);
+    let (mut sidebar, mut content) =
+        settings_surfaces(solid(skin.panel), skin.is_light, has_wallpaper);
+    if !has_wallpaper {
+        content.a = settings_content_bg(cx).a;
+        sidebar.a = content.a;
+    }
+    (sidebar, content)
+}
+
+fn settings_surfaces(mut content: Hsla, is_light: bool, has_wallpaper: bool) -> (Hsla, Hsla) {
+    // Match the prototype's roughly 8/255 (dark) and 9/255 (light) difference
+    // on Nord while preserving the tint of the active theme, including custom ones.
+    content.l = content.l.max(0.04);
+    let mut sidebar = content;
+    sidebar.l *= if is_light { 0.96 } else { 0.84 };
+    if has_wallpaper {
+        if is_light {
+            // Keep the light sidebar milky and let more of the image show through the body.
+            sidebar.l += (1.0 - sidebar.l) * 0.60;
+            sidebar.a = 0.68;
+            content.a = 0.44;
+        } else {
+            sidebar.l *= 0.68;
+            content.l *= 0.78;
+            sidebar.a = 0.54;
+            content.a = 0.54;
+        }
+    }
+    (sidebar, content)
+}
+
+pub(super) fn settings_wallpaper_header_fade(cx: &App) -> gpui::Background {
+    let skin = resolved_skin(cx);
+    let mut tint = solid(skin.panel);
+    if skin.is_light {
+        tint.l += (1.0 - tint.l) * 0.32;
+        tint.a = 0.78;
+    } else {
+        tint.l *= 0.40;
+        tint.a = 0.50;
+    }
+    gpui::linear_gradient(
+        180.0,
+        gpui::linear_color_stop(tint, 0.0),
+        gpui::linear_color_stop(tint.opacity(0.0), 1.0),
+    )
+}
+
 /// Terminal completion colors are derived from the active Nebula skin. The
 /// popup used to switch between two hard-coded black/white palettes, which
 /// made custom themes look as if a foreign window had been pasted on top.
@@ -952,6 +1003,38 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
 mod tests {
     use super::{PaneCardStyle, resolve_theme_name, theme_card_persist_updates};
     use nebula_settings::{RawSettings, RuntimeSettings, ThemeName};
+
+    #[test]
+    fn settings_surfaces_follow_the_reference_across_builtin_themes() {
+        use super::settings_surfaces;
+        use gpui::{Hsla, Rgba, black, white};
+
+        for theme in ThemeName::BUILTIN {
+            let palette = theme.fresh_palette().unwrap();
+            let [r, g, b] = palette.surface;
+            let panel: Hsla = gpui::rgb(u32::from_be_bytes([0, r, g, b])).into();
+            let (sidebar, content) = settings_surfaces(panel, palette.is_light, false);
+            assert!(sidebar.l < content.l, "{theme:?}");
+            assert_eq!((sidebar.a, content.a), (1.0, 1.0));
+
+            let (sidebar, content) = settings_surfaces(panel, palette.is_light, true);
+            let (veil, alpha) = if palette.is_light { (black(), 0.42) } else { (white(), 0.56) };
+            let backdrop = panel.blend(veil.opacity(alpha));
+            let luma = |color| {
+                let color: Rgba = backdrop.blend(color).into();
+                0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+            };
+            if palette.is_light {
+                assert!(luma(sidebar) > luma(content), "{theme:?}");
+            } else {
+                assert!(luma(sidebar) < luma(content), "{theme:?}");
+            }
+            assert_eq!(
+                (sidebar.a, content.a),
+                if palette.is_light { (0.68, 0.44) } else { (0.54, 0.54) }
+            );
+        }
+    }
 
     #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
