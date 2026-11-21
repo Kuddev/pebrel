@@ -1250,12 +1250,7 @@ impl NebulaWorkspace {
         };
         let (cols, rows, launch) = {
             let view = anchor.view.read(cx);
-            let (launch, cwd) = tab_duplication::copy_launch(
-                view.session_launch.clone(),
-                tab_duplication::CopyKind::Split,
-                tab_duplication::PaneOrigin::of(view),
-            );
-            let launch = Self::terminal_launch_from_session(&launch, cwd);
+            let launch = tab_duplication::split_launch(view, cx);
             (view.grid_cols() as u16, view.grid_rows() as u16, launch)
         };
         let grid = match direction {

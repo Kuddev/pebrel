@@ -819,7 +819,7 @@ impl TerminalView {
             // 退出码接到「上一条命令失败」的未读徽章上（⚠ 三角）；`Some(0)` 与
             // `None`（没带退出码的 133;D）都算过关。记在下面那道 barrier 之后：
             // 属于上一轮/初始化的那个边沿不能改写徽章。
-            TermEvent::CommandDone { exit_code } => {
+            TermEvent::CommandDone { exit_code, empty_prompt_zone } => {
                 // 新 PTY 初始化提示符也可能先发一个 CommandDone。Runtime
                 // 文本还在等待回显 barrier 时，这个边沿属于上一轮/初始化，
                 // 不能清掉尚未发送的 Enter 或把新请求提前投影成 idle。
@@ -829,14 +829,8 @@ impl TerminalView {
                 {
                     return;
                 }
-                // OMP redraws each user message with OSC 133;B, C, D;0. Its
-                // native session-end hook and local process probe own CLI exit.
-                if exit_code == Some(0)
-                    && self.running_program.as_deref() == Some("omp")
-                    && self.agent_activity.hook_seen()
-                    && self.suggest.suggest_env.is_this_machine()
-                    && self.session.as_ref().is_some_and(|session| session.shell_pid != 0)
-                {
+                // OMP emits a successful command boundary when it paints a user message.
+                if empty_prompt_zone && self.local_omp_foreground() {
                     return;
                 }
                 self.finish_foreground_command(exit_code, cx);
