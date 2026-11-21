@@ -13,7 +13,6 @@ from unittest.mock import patch
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from conformance.agent_recovery import windows_hook_check
 from conformance.agent_recovery.model import local_model
 from conformance.agent_recovery.providers import PROFILES, command_for, configure, provider_confirmed
 from conformance.harness import ConformanceContext, ResolvedApp
@@ -185,15 +184,10 @@ def run_agent(agent, executable, rounds):
             assert git_bash.is_file(), git_bash
             env.pop("CODEBUDDY_CONFIG_DIR", None)
             env["CODEBUDDY_CODE_GIT_BASH_PATH"] = str(git_bash)
-            env["CODEBUDDY_STARTUP_PROFILE"] = "1"
-            env["PEBREL_HOOK_LOG"] = str(home / "helper-outcomes.jsonl")
             env.pop("CI", None)
         cleanup.enter_context(patch.dict(os.environ, env, clear=True))
         cleanup.callback(ctx.stop, force=True)
         ctx.start(explicit_working_directory=False)
-        if agent == "codebuddy":
-            windows_hook_check.attach(ctx, home)
-            cleanup.callback(windows_hook_check.results, home)
         first = [marker(), marker()]
         expected = []
         sides = ("first", "second")
@@ -215,11 +209,6 @@ def run_agent(agent, executable, rounds):
                 print("Before first message:", entry, runtime_pane(ctx, pane).get("running_program"),
                       (runtime_pane(ctx, pane).get("agent") or {}).get("kind"), flush=True)
             except Exception:
-                for profile in ctx.work_dir.glob("Startup.*.json"):
-                    if profile.stat().st_size:
-                        data = json.loads(profile.read_text(encoding="utf-8"))
-                        print("CLI startup:", {k: data.get(k) for k in ("until", "reason", "bundle", "milestones")}, flush=True)
-                        print("CLI phases:", [(s["phase"], s["status"]) for s in data["spans"][-8:]], flush=True)
                 processes = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": pane})
                 print("Fixture processes:", [(p["depth"], p["executable"]) for p in processes["processes"]], flush=True)
                 state = runtime_pane(ctx, pane)
