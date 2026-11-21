@@ -149,7 +149,9 @@ def run_agent(agent, executable, rounds):
             raise RuntimeError(f"{binary} is missing from PATH")
     with ExitStack() as cleanup:
         test = Path(cleanup.enter_context(TemporaryDirectory(prefix="pebrel-native-recovery-", ignore_cleanup_errors=True)))
-        home = test / "home"
+        home = Path(os.environ["USERPROFILE"]) if agent == "codebuddy" else test / "home"
+        if agent == "codebuddy" and (home / PROFILES[agent]).exists():
+            raise RuntimeError("The hosted runner already has a CodeBuddy profile")
         app = ResolvedApp(executable)
         cleanup.callback(app.close)
         ctx = ConformanceContext(app, "windows-x86_64", test / "config", test / "project", test / "artifacts")
@@ -160,6 +162,7 @@ def run_agent(agent, executable, rounds):
         if agent == "codebuddy":
             git_bash = Path(os.environ["ProgramFiles"]) / "Git" / "bin" / "bash.exe"
             assert git_bash.is_file(), git_bash
+            env.pop("CODEBUDDY_CONFIG_DIR", None)
             env["CODEBUDDY_CODE_GIT_BASH_PATH"] = str(git_bash)
             env["CODEBUDDY_STARTUP_PROFILE"] = "1"
             env["PEBREL_HOOK_LOG"] = str(home / "helper-outcomes.jsonl")
