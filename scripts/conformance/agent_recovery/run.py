@@ -183,8 +183,8 @@ def run_agent(agent, executable, rounds):
             try:
                 accept_project_prompt(ctx, pane, agent)
                 wait_for_editor(ctx, pane, agent)
-                ctx.poll(lambda: (runtime_pane(ctx, pane).get("agent") or {}).get("kind"),
-                         lambda kind: kind == agent, f"{agent} was not recognized", timeout=45)
+                print("Before first message:", entry, runtime_pane(ctx, pane).get("running_program"),
+                      (runtime_pane(ctx, pane).get("agent") or {}).get("kind"), flush=True)
             except Exception:
                 for profile in ctx.work_dir.glob("Startup.*.json"):
                     if profile.stat().st_size:
@@ -204,7 +204,18 @@ def run_agent(agent, executable, rounds):
             def initial_id():
                 native_id = saved_id(ctx, sides[index], agent)
                 return native_id if provider_confirmed(home, agent, native_id, first[index]) else None
-            expected.append(ctx.poll(initial_id, bool, f"{agent} native conversation did not match", timeout=40))
+            try:
+                expected.append(ctx.poll(initial_id, bool, f"{agent} native conversation did not match", timeout=40))
+            except Exception:
+                state = runtime_pane(ctx, pane)
+                paths = list((home / PROFILES[agent]).rglob("*.jsonl"))
+                print("After first message:", state.get("running_program"), state.get("agent"),
+                      "saved", saved_id(ctx, sides[index], agent), "transcripts", len(paths), flush=True)
+                hook_path = home / PROFILES[agent] / "settings.json"
+                if hook_path.exists():
+                    hooks = json.loads(hook_path.read_text(encoding="utf-8-sig")).get("hooks", {})
+                    print("Installed hook events:", sorted(hooks), flush=True)
+                raise
         assert expected[0] != expected[1]
         for round_index in range(rounds):
             ctx.restart()
