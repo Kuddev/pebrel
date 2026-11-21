@@ -157,7 +157,7 @@ def run_agent(agent, executable, rounds):
         env = shell_environment(home)
         env.update(configure(agent, home, ctx.work_dir, f"http://127.0.0.1:{model.server_port}"))
         if agent == "codebuddy":
-            git_bash = Path(env["ProgramFiles"]) / "Git" / "bin" / "bash.exe"
+            git_bash = Path(os.environ["ProgramFiles"]) / "Git" / "bin" / "bash.exe"
             assert git_bash.is_file(), git_bash
             env["CODEBUDDY_CODE_GIT_BASH_PATH"] = str(git_bash)
             env["CODEBUDDY_STARTUP_PROFILE"] = "1"
