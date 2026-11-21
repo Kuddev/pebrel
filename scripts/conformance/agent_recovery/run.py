@@ -13,6 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from conformance.agent_recovery import windows_hook_check
 from conformance.agent_recovery.model import local_model
 from conformance.agent_recovery.providers import PROFILES, command_for, configure, provider_confirmed
 from conformance.harness import ConformanceContext, ResolvedApp
@@ -161,10 +162,14 @@ def run_agent(agent, executable, rounds):
             assert git_bash.is_file(), git_bash
             env["CODEBUDDY_CODE_GIT_BASH_PATH"] = str(git_bash)
             env["CODEBUDDY_STARTUP_PROFILE"] = "1"
+            env["PEBREL_HOOK_LOG"] = str(home / "helper-outcomes.jsonl")
             env.pop("CI", None)
         cleanup.enter_context(patch.dict(os.environ, env, clear=True))
         cleanup.callback(ctx.stop, force=True)
         ctx.start(explicit_working_directory=False)
+        if agent == "codebuddy":
+            windows_hook_check.attach(ctx, home)
+            cleanup.callback(windows_hook_check.results, home)
         first = [marker(), marker()]
         expected = []
         sides = ("first", "second")
