@@ -186,6 +186,9 @@ fn conpty_cursor_probe(_pid: u32) -> Option<ConhostCursor> {
 pub struct StreamProcessor {
     parser: ansi::Processor<SyncTimeout>,
     cwd_sniffer: crate::osc_cwd::CwdSniffer,
+    input_offset: u64,
+    adjacent_start_at: Option<u64>,
+    adjacent_done_at: Option<u64>,
     zmodem: crate::zmodem::ZmodemSniffer,
     window_size: Option<WindowSize>,
     remote_hook_token: Option<String>,
@@ -256,6 +259,8 @@ impl StreamProcessor {
         event_proxy: &U,
         bytes: &[u8],
     ) -> usize {
+        let chunk_start = self.input_offset;
+        self.input_offset += bytes.len() as u64;
         let osc_events = self.cwd_sniffer.feed(bytes);
         let zmodem = self.zmodem.feed(bytes);
         let mut advanced = 0;
@@ -303,6 +308,9 @@ impl StreamProcessor {
                 },
                 OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
                 OscEvent::CommandStart => {
+                    let end = chunk_start + offset as u64;
+                    self.adjacent_done_at = (self.adjacent_start_at.take() == Some(end))
+                        .then_some(end + b"\x1b]133;D;0\x07".len() as u64);
                     terminal.acknowledge_program_status_results();
                     self.command_capture.start(terminal, self.parser.sync_bytes_count() == 0);
                     terminal.reading_shell_marker(b'C', None, self.parser.sync_bytes_count() == 0);
@@ -323,7 +331,12 @@ impl StreamProcessor {
                         self.parser.sync_bytes_count() == 0,
                     );
                     terminal.nebula_end_prompt();
-                    event_proxy.send_event(Event::CommandDone { exit_code })
+                    // The minimum-length B, C, D;0 suffix has no intervening input or output.
+                    // Absolute PTY offsets keep the evidence intact across read boundaries.
+                    let empty_prompt_zone = self.adjacent_done_at.take()
+                        == Some(chunk_start + offset as u64)
+                        && exit_code == Some(0);
+                    event_proxy.send_event(Event::CommandDone { exit_code, empty_prompt_zone })
                 },
                 OscEvent::UserVar { name, value } => {
                     self.command_capture.report(&name, &value, event_proxy);
@@ -358,6 +371,8 @@ impl StreamProcessor {
                     terminal.nebula_add_prompt_mark();
                 },
                 OscEvent::PromptInput => {
+                    self.adjacent_start_at =
+                        Some(chunk_start + offset as u64 + b"\x1b]133;C\x07".len() as u64);
                     terminal.reading_shell_marker(b'B', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_mark_prompt_input();
                 },
@@ -1522,6 +1537,28 @@ mod tests {
                     assert!(events.is_empty());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn empty_prompt_zone_requires_adjacent_markers_across_reads() {
+        #[derive(Clone, Default)]
+        struct Listener(Arc<std::sync::Mutex<Vec<bool>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                if let Event::CommandDone { empty_prompt_zone, .. } = event {
+                    self.0.lock().unwrap().push(empty_prompt_zone);
+                }
+            }
+        }
+        let bytes = b"\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07\x1b]133;D;0\x07\x1b]133;B\x07x\x1b]133;C\x07\x1b]133;D;0\x07\x1b]133;B\x07\x1b]133;C\x07x\x1b]133;D;0\x07";
+        for split in 0..=bytes.len() {
+            let listener = Listener::default();
+            let mut term = Term::new(Config::default(), &TermSize::new(40, 8), listener.clone());
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut term, &listener, &bytes[..split]);
+            stream.feed(&mut term, &listener, &bytes[split..]);
+            assert_eq!(*listener.0.lock().unwrap(), [true, false, false, false], "split {split}");
         }
     }
 

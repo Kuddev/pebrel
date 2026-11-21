@@ -233,19 +233,40 @@ mod tests {
         });
         let workspace = workspace.unwrap();
         window.simulate_resize(gpui::size(px(1200.0), px(800.0)));
-        for position in
-            [pebrel_settings::TabsPositionName::Sidebar, pebrel_settings::TabsPositionName::Top]
-        {
-            window.update(|window, cx| {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.tabs_position = position;
-                    cx.notify();
-                });
-                window.draw(cx).clear(cx);
-            });
-            let find = window.debug_bounds("terminal-find").unwrap();
-            let commands = window.debug_bounds("command-manager-toggle").unwrap();
-            assert!(find.right() < commands.left(), "{position:?}");
+        for mode in [gpui_component::ThemeMode::Dark, gpui_component::ThemeMode::Light] {
+            for position in
+                [pebrel_settings::TabsPositionName::Sidebar, pebrel_settings::TabsPositionName::Top]
+            {
+                for fullscreen in [false, true, false, true, false] {
+                    window.update(|window, cx| {
+                        if window.is_fullscreen() != fullscreen {
+                            window.toggle_fullscreen();
+                        }
+                        gpui_component::Theme::change(mode, Some(window), cx);
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.tabs_position = position;
+                            cx.notify();
+                        });
+                        window.draw(cx).clear(cx);
+                    });
+                    // The app's controls must keep their row in full screen.
+                    // TestWindow cannot verify the AppKit overlay's transparency.
+                    let title = window.debug_bounds("workspace-titlebar").unwrap();
+                    let find = window.debug_bounds("terminal-find").unwrap();
+                    let commands = window.debug_bounds("command-manager-toggle").unwrap();
+                    assert!(find.right() < commands.left(), "{position:?}, {fullscreen}");
+                    assert!(find.top() >= title.top() && find.bottom() <= title.bottom());
+                    assert!(commands.top() >= title.top() && commands.bottom() <= title.bottom());
+                    let expected_height = if crate::platform::Platform::current()
+                        == crate::platform::Platform::MacOS
+                    {
+                        52.0
+                    } else {
+                        48.0
+                    };
+                    assert_eq!(title.size.height, px(expected_height));
+                }
+            }
         }
     }
 
