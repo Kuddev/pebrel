@@ -34,6 +34,7 @@ macOS, Linux, and Android downloads are Preview builds.
 - Fixed Shift+Home and Shift+End scrolling the terminal when selecting text at a local PowerShell prompt. Addresses [#1052](https://github.com/Kuddev/pebrel/issues/1052).
 - Fixed a second title bar appearing above Pebrel on KDE Wayland. Addresses [#1044](https://github.com/Kuddev/pebrel/issues/1044).
 - Fixed split panes falling back to Windows PowerShell when the default shell was an imported profile such as Niubash. Addresses [#1074](https://github.com/Kuddev/pebrel/issues/1074).
+- Fixed inline formulas leaving gaps before numbers or punctuation in full-screen terminal text. Padded table columns keep their alignment.
 
 ### 中文
 
@@ -51,16 +52,19 @@ macOS、Linux 和 Android 下载为预览版。
 - 修复在本地 PowerShell 输入行按 Shift+Home 或 Shift+End 选中文字时，终端滚动到顶部或底部的问题。 对应 [#1052](https://github.com/Kuddev/pebrel/issues/1052)。
 - 修复 KDE Wayland 上 Pebrel 窗口顶部出现双标题栏的问题。 对应 [#1044](https://github.com/Kuddev/pebrel/issues/1044)。
 - 修复将 Niubash 等导入配置设为默认 Shell 后，新分屏仍回退到 Windows PowerShell 的问题。 对应 [#1074](https://github.com/Kuddev/pebrel/issues/1074)。
+- 修复全屏终端中行内公式与后面的数字或标点之间出现多余空白的问题，并保留表格列对齐。
 
 ### Contributors
 
 <p>
   <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
   <a href="https://github.com/yjjheizhu"><img src="https://avatars.githubusercontent.com/u/86939240?v=4&amp;s=96" width="48" height="48" alt="yjjheizhu" title="yjjheizhu" /></a>
+  <a href="https://github.com/whitoud"><img src="https://avatars.githubusercontent.com/u/54259693?v=4&amp;s=96" width="48" height="48" alt="whitoud" title="whitoud" /></a>
 </p>
 
 - [@Kuddev](https://github.com/Kuddev)
 - [@yjjheizhu](https://github.com/yjjheizhu)
+- [@whitoud](https://github.com/whitoud)
 
 ## 2.6.1 - 2026-11-20
 
