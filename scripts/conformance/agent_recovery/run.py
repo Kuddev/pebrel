@@ -3,6 +3,7 @@ import argparse
 from contextlib import ExitStack
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -166,17 +167,25 @@ def run_agent(agent, executable, rounds):
             command = command_for(agent, index)
             if agent in ("pi", "omp"):
                 command += " " + first[index]
-            ctx.prompt(command, pane)
-            # A source-only live status identifies the TUI before any ID exists.
-            def running():
-                return (runtime_pane(ctx, pane).get("agent") or {}).get("kind") == agent
+            entry = command.split()[0]
+            ctx.prompt("Write-Output ('PEBREL-SHIM-' + (Get-Command " + entry + ").Name)", pane)
+            ctx.wait_for_line(re.compile(r"PEBREL-SHIM-\S+\.(?:ps1|cmd|exe)", re.I), pane)
+            ctx.prompt(command, pane, submit=False)
+            ctx.poll(lambda: ctx.read(pane)["text"].rstrip().endswith(command), bool,
+                     "PowerShell did not echo the complete launch command")
+            ctx.send_key("enter", pane)
             try:
-                ctx.poll(running, bool, f"{agent} did not start", timeout=45)
+                accept_project_prompt(ctx, pane, agent)
+                wait_for_editor(ctx, pane, agent)
+                ctx.poll(lambda: (runtime_pane(ctx, pane).get("agent") or {}).get("kind"),
+                         lambda kind: kind == agent, f"{agent} was not recognized", timeout=45)
             except Exception:
+                processes = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": pane})
+                print("Fixture processes:", [(p["depth"], p["executable"]) for p in processes["processes"]], flush=True)
+                state = runtime_pane(ctx, pane)
+                print("Fixture foreground:", state.get("running_program"), state.get("title"), flush=True)
                 print("Fixture screen:", ctx.read(pane)["text"][-2200:], flush=True)
                 raise
-            accept_project_prompt(ctx, pane, agent)
-            wait_for_editor(ctx, pane, agent)
             if agent not in ("pi", "omp"):
                 submit_turn(ctx, pane, agent, first[index])
             ctx.poll(lambda: any(first[index] in turn for turn in model.turns), bool,
