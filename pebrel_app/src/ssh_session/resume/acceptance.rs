@@ -64,7 +64,8 @@ fn isolated_openssh_reconnect_preserves_pooled_pane_targets() {
             let key = russh::keys::load_secret_key(root.join("client"), None).unwrap();
             assert!(transport.authenticate_publickey(user, russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), None)).await.unwrap().success());
             let session = Arc::new(transport);
-            assert!(supported(&session).await);
+            let size = pebrel_terminal::event::WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 };
+            assert!(supported(&session, size).await);
             let (mut first, identity_a) = open(&session, Some("exec /bin/sh"), None).await;
             let (mut second, identity_b) = open(&session, Some("exec /bin/sh"), None).await;
             assert_ne!(identity_a.lock().unwrap().as_ref().unwrap().tty, identity_b.lock().unwrap().as_ref().unwrap().tty);

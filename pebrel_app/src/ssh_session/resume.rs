@@ -138,13 +138,23 @@ fn posix(script: &str) -> String {
 pub(super) const PROBE_REPLY: &str = "PEBREL_POSIX_2:'\"$\\ spaced";
 
 pub(super) fn probe_command() -> String {
-    // Finding sh does not establish how the SSH server's outer shell passes
-    // nested quotes. Exercise the same quoting and expansion as startup.
-    posix(&format!("pebrel_probe={}; printf '%s' \"$pebrel_probe\"", quote(PROBE_REPLY)))
+    // Some gateways acknowledge the outer PTY but run exec commands on the
+    // asset without one. Check the target descriptors as well as shell quoting.
+    posix(&format!(
+        "test -t 0 && test -t 1 || exit 1; pebrel_probe={}; printf '%s' \"$pebrel_probe\"",
+        quote(PROBE_REPLY)
+    ))
 }
 
-pub(super) async fn supported(session: &SharedSession) -> bool {
-    query(session, &probe_command()).await.as_deref() == Some(PROBE_REPLY)
+pub(super) async fn supported(
+    session: &SharedSession,
+    size: pebrel_terminal::event::WindowSize,
+) -> bool {
+    let probe = async {
+        let channel = super::lifecycle::open_pty(session, size).await?;
+        exec::capture_private_on_channel(channel, &probe_command(), &[], 8192).await
+    };
+    matches!(tokio::time::timeout(BUDGET, probe).await, Ok(Ok(reply)) if reply == PROBE_REPLY.as_bytes())
 }
 
 pub(super) fn startup(
