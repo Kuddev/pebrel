@@ -362,6 +362,7 @@ impl SettingsPane {
         let muted = cx.theme().muted_foreground;
         let hover_bg = cx.theme().list_hover;
         let selected_bg = cx.theme().list_active;
+        let glass = crate::gpui_shell::theme::selection_glass(cx);
         let warning = cx.theme().warning;
         let border = cx.theme().border;
         let families = self.configured_font_families(cx);
@@ -411,6 +412,7 @@ impl SettingsPane {
                     .items_center()
                     .rounded_md()
                     .bg(selected_bg)
+                    .when_some(glass, |row, glass| glass.apply(row))
                     .child(
                         div()
                             .w(px(16.0))
