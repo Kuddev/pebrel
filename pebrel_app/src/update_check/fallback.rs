@@ -78,7 +78,12 @@ fn release_from_uri(uri: &str) -> Option<LatestRelease> {
     // Official stable releases use major.minor.patch. Reject login pages,
     // arbitrary tags, extra path/query/fragment components and preview tags.
     let version = super::stable_version_from_tag(tag)?;
-    Some(LatestRelease { version: version.to_owned(), asset: None, portable_zip_url: None })
+    Some(LatestRelease {
+        version: version.to_owned(),
+        asset: None,
+        portable_zip_url: None,
+        body: None,
+    })
 }
 
 #[cfg(test)]
