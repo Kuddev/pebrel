@@ -13,30 +13,22 @@ pub(super) struct SessionPersistence {
     latest: Option<Session>,
     saved: Option<Session>,
     quitting: bool,
-    isolated: bool,
 }
 
 impl Default for SessionPersistence {
     fn default() -> Self {
-        Self {
-            latest: None,
-            saved: None,
-            quitting: false,
-            isolated: crate::platform::elevation::requires_isolation(),
-        }
+        Self { latest: None, saved: None, quitting: false }
     }
 }
 
 impl SessionPersistence {
-    #[cfg(test)]
-    pub(super) fn ordinary_for_test() -> Self {
-        Self { isolated: false, ..Self::default() }
-    }
-
     pub(super) fn update_windows(&self) -> std::io::Result<Vec<Session>> {
-        // 管理员只在显式更新事务中落盘；commit 会在授权安装前持久保存这份内存快照。
-        (if self.isolated { &self.latest } else { &self.saved })
+        // The workspace snapshot is user-visible state, not a control-plane resource:
+        // prefer the persisted snapshot and fall back to the in-memory one so the
+        // update handoff sees a complete workspace even before the first write.
+        self.saved
             .clone()
+            .or_else(|| self.latest.clone())
             .ok_or_else(|| std::io::Error::other("No durable workspace snapshot"))?
             .into_update_windows()
     }
@@ -98,15 +90,13 @@ impl SessionPersistence {
         }
         // A failed final write is cancellable: windows stay live and subsequent
         // checkpoints must still be able to save newly confirmed identities.
-        if self.isolated {
-            // 未预约更新时只记忆当前会话，绝不写入普通会话文件或开启常规管理员恢复。
-            if !crate::update_download::handoff::checkpoint_scheduled(&session)? {
-                self.quitting |= reason == SaveReason::Quit && !system_ending;
-                return Ok(());
-            }
-        } else {
-            write(&session)?;
+        // An elevated instance with an armed update still hands the workspace to the
+        // update transaction's own snapshot file, but that snapshot must not replace
+        // the workspace snapshot: every instance takes the same write path below.
+        if crate::platform::elevation::is_elevated().unwrap_or(false) {
+            crate::update_download::handoff::checkpoint_scheduled(&session)?;
         }
+        write(&session)?;
         self.saved = Some(session);
         self.quitting |= reason == SaveReason::Quit && !system_ending;
         Ok(())
@@ -122,27 +112,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn isolated_windows_never_write_shared_session_storage() {
-        let mut state = SessionPersistence { isolated: true, ..SessionPersistence::default() };
-        for reason in [
-            SaveReason::Checkpoint,
-            SaveReason::TabsClosed,
-            SaveReason::WindowClose,
-            SaveReason::Quit,
-        ] {
-            let _ = state.save_with(Some(sample_session()), reason, |_| {
-                panic!("privileged session reached shared storage")
-            });
-        }
-        assert!(state.saved.is_none(), "ordinary privileged launches do not persist a workspace");
-        assert_eq!(state.update_windows().unwrap()[0].tabs, sample_session().tabs);
+    fn elevated_launches_use_the_same_session_storage() {
+        // Elevation is not an input to the workspace snapshot: the constructor the
+        // app actually uses must persist.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.json");
+        let expected = sample_session();
+        let mut state = SessionPersistence::default();
+        save_to(&mut state, &path, Some(expected.clone()), SaveReason::Checkpoint);
+        let restored = crate::session::load_from(&path).unwrap();
+        assert_eq!(restored.tabs, expected.tabs);
     }
     use crate::session::{AgentSession, LayoutSession, TabSession};
 
     fn ordinary_window() -> SessionPersistence {
-        // Hosted Windows runners can be elevated. These tests exercise ordinary
-        // window persistence; privileged isolation has its own negative test.
-        SessionPersistence::ordinary_for_test()
+        // Elevation does not change how the snapshot is read or written; these
+        // tests use the same constructor as application startup.
+        SessionPersistence::default()
     }
 
     fn sample_session() -> Session {

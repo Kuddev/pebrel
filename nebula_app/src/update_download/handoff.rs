@@ -383,7 +383,7 @@ fn validate_windows(windows: &[Session]) -> Result<(), String> {
     Ok(())
 }
 
-/// Only an explicitly armed administrator update persists privileged session state.
+/// Only an explicitly armed administrator update writes the update-transaction snapshot.
 pub(crate) fn checkpoint_scheduled(session: &Session) -> io::Result<bool> {
     if !SCHEDULED_IN_THIS_PROCESS.load(Ordering::Acquire) {
         return Ok(false);

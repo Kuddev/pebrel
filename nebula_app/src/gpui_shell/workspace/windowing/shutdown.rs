@@ -113,7 +113,7 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                 return;
             }
             if let Some(prepared) = prepared.as_mut() {
-                // 提交持久保存包括活跃窗口顺序的快照；管理员不经过普通共享会话文件。
+                // 提交持久保存包括活跃窗口顺序的快照；会话快照对提权实例同样有效。
                 let result = cx
                     .global::<WindowRegistry>()
                     .session_persistence
