@@ -110,12 +110,18 @@ if __name__ == "__main__":
         ctx.start()
         ctx.refresh_targets()
         shell_ready(ctx)
+        if sys.argv[1] == "omp-ready":
+            ctx.poll(lambda: ctx.read()["text"].rstrip().splitlines()[-1:],
+                     lambda lines: bool(lines and re.search(r"ddlclock>\s*$", lines[-1], re.I)),
+                     "PowerShell has not redrawn its input prompt", timeout=15)
         try:
             if sys.argv[1] == "cursor":
                 cursor(ctx)
             else:
                 omp(ctx, published=sys.argv[1] == "omp-published")
         except Exception:
+            result = ctx.api("pane.procs", {"window_id": ctx.window_id, "pane_id": ctx.pane_id})
+            print("Fixture processes:", [(p["depth"], p["executable"]) for p in result["processes"]], flush=True)
             print("Fixture pane:", ctx.read()["text"][-1600:], flush=True)
             for log in ctx.artifact_dir.glob("pebrel-*.log"):
                 rows = log.read_text(encoding="utf-8", errors="replace").splitlines()

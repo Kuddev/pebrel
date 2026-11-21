@@ -1,4 +1,4 @@
-name: Windows file-tab cursor and OMP title
+name: Windows OMP title across prompt timings
 on: workflow_dispatch
 permissions:
   contents: read
@@ -16,13 +16,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Exercise CJK character insertion after returning from a file tab on 2.6.1
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download v2.6.1 -R Kuddev/pebrel -p '*windows-x64.zip' -D "$env:RUNNER_TEMP/published"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python scripts/conformance/windows_standard_user.py scripts/conformance/windows_issue_checks.py cursor "$env:RUNNER_TEMP/published/*windows-x64.zip"
       - if: ${{ !cancelled() }}
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -61,9 +54,13 @@ jobs:
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           [Environment]::SetEnvironmentVariable('Path', (([string]$userPath).TrimEnd(';') + ';' + $bin), 'User')
           $bin >> $env:GITHUB_PATH
-      - name: Record the published package's hookless OMP title
+      - name: Exercise OMP immediately after output and after the visible PowerShell prompt
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: python scripts/conformance/windows_standard_user.py scripts/conformance/windows_issue_checks.py omp-published "$env:RUNNER_TEMP/published/*windows-x64.zip"
-      - name: Verify the hookless OMP task label after a reply and exit
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: python scripts/conformance/windows_standard_user.py scripts/conformance/windows_issue_checks.py omp target/ci/pebrel.exe
+        run: |
+          $failures = 0
+          foreach ($mode in @('omp', 'omp-ready', 'omp', 'omp-ready', 'omp', 'omp-ready')) {
+            Write-Host "Cold start mode $mode"
+            python scripts/conformance/windows_standard_user.py scripts/conformance/windows_issue_checks.py $mode target/ci/pebrel.exe
+            if ($LASTEXITCODE) { $failures++ }
+          }
+          if ($failures) { throw "$failures OMP cold starts failed" }
