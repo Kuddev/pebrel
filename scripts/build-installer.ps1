@@ -21,7 +21,8 @@ param(
     [switch] $ValidateOnly,
     [string] $OutputDirectory,
     [string] $TargetDirectory,
-    [string] $InnoCompiler
+    [string] $InnoCompiler,
+    [string] $ContextMenuPackage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,6 +70,10 @@ $requiredFiles = @(
     (Join-Path $targetRoot 'pebrel-hook.exe'),
     (Join-Path $targetRoot 'conpty.dll'),
     (Join-Path $targetRoot 'OpenConsole.exe'),
+    (Join-Path $targetRoot 'context-menu/pebrel_context_menu.dll'),
+    (Join-Path $targetRoot 'context-menu/pebrel-context-menu-setup.exe'),
+    (Join-Path $targetRoot 'context-menu/AppxManifest.xml'),
+    (Join-Path $targetRoot 'context-menu/assets/logo.png'),
     (Join-Path $repo 'README.md'),
     (Join-Path $repo 'README.zh-CN.md'),
     (Join-Path $repo 'CHANGELOG.md'),
@@ -90,7 +95,7 @@ if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
 }
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'build-windows-product.ps1') -Configuration $Configuration -TargetDirectory $cargoTargetRoot
+    & (Join-Path $PSScriptRoot 'build-windows-product.ps1') -Configuration $Configuration -TargetDirectory $cargoTargetRoot -ContextMenu -ContextMenuPackage $ContextMenuPackage
 }
 
 $missing = @($requiredFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
@@ -100,7 +105,12 @@ if ($missing.Count -ne 0) {
 
 $packagedExe = Join-Path $targetRoot 'pebrel.exe'
 . (Join-Path $PSScriptRoot 'windows-package-architecture.ps1')
-Assert-WindowsPackageArchitecture -Root $targetRoot -Architecture $Architecture
+Assert-WindowsPackageArchitecture -Root $targetRoot -Architecture $Architecture -ContextMenu
+[xml] $contextManifest = [IO.File]::ReadAllText((Join-Path $targetRoot 'context-menu/AppxManifest.xml'))
+if ($contextManifest.Package.Identity.Version -ne $numericVersion -or
+    $contextManifest.Package.Identity.ProcessorArchitecture -ne $Architecture) {
+    throw 'Context-menu manifest version or architecture does not match the installer'
+}
 if ($PackageBrand -eq 'Pebrel' -and (Get-Item -LiteralPath $packagedExe).VersionInfo.ProductName -ne 'Pebrel') {
     throw 'Pebrel packages require a freshly built Pebrel executable, not renamed Nebula binaries.'
 }
@@ -112,6 +122,10 @@ if (-not $AllowStale) {
         'pebrel-completions', 'pebrel_gpui', 'pebrel_settings', 'pebrel_split'
     ) | ForEach-Object { Join-Path $repo $_ }
     $sourceScopes = @(
+        @{ Binary = (Join-Path $targetRoot 'context-menu/pebrel_context_menu.dll'); Roots = @(
+            (Join-Path $repo 'tools/windows-context-menu'), (Join-Path $repo 'scripts/installer.iss')) },
+        @{ Binary = (Join-Path $targetRoot 'context-menu/pebrel-context-menu-setup.exe'); Roots = @(
+            (Join-Path $repo 'tools/windows-context-menu'), (Join-Path $repo 'scripts/installer.iss')) },
         @{ Binary = (Join-Path $targetRoot 'pebrel-cli.exe'); Roots = $memberDirs + @((Join-Path $repo 'Cargo.toml')) },
         @{ Binary = $packagedExe; Roots = $memberDirs + @(
             (Join-Path $repo 'Cargo.toml'), (Join-Path $repo '..\gpui-component-fork\crates')) },
