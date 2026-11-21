@@ -128,7 +128,7 @@ impl SettingsPane {
         let theme = cx.theme();
         let parent_selected = active && (!open || self.appearance_section.is_none());
         let parent = Button::new("settings-appearance-toggle")
-            .debug_selector(|| "settings-appearance-toggle".to_owned())
+            .debug_selector(|| "settings-nav-1".to_owned())
             .w_full()
             .h(px(SETTINGS_NAV_ROW_HEIGHT))
             .ghost()
@@ -147,7 +147,9 @@ impl SettingsPane {
             )
             .when_some(glass.filter(|_| parent_selected), |button, glass| glass.apply(button))
             .on_click(cx.listener(|pane, _, _, cx| {
-                pane.appearance_expanded = !pane.appearance_expanded;
+                pane.appearance_expanded = pane.active_section != 1 || !pane.appearance_expanded;
+                pane.active_section = 1;
+                pane.about_sponsor_open = false;
                 cx.notify();
             }));
 
