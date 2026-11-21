@@ -34,7 +34,7 @@ fn workspace() -> Session {
 fn checkpoint() -> (SessionPersistence, Session, Reset) {
     set_pending(false);
     let expected = workspace();
-    let mut state = SessionPersistence::ordinary_for_test();
+    let mut state = SessionPersistence::default();
     state.save_with(Some(expected.clone()), SaveReason::Checkpoint, |_| Ok(())).unwrap();
     (state, expected, Reset)
 }
@@ -134,7 +134,7 @@ fn repeated_system_notifications_do_not_recapture_partial_state_or_rewrite() {
 #[test]
 fn system_shutdown_without_a_checkpoint_keeps_the_first_nonempty_snapshot() {
     let _reset = Reset;
-    let mut state = SessionPersistence::ordinary_for_test();
+    let mut state = SessionPersistence::default();
     set_pending(true);
     state.save_with(None, SaveReason::Quit, |_| panic!("no snapshot exists")).unwrap();
     let expected = workspace();
@@ -169,7 +169,7 @@ fn pi_explicitly_exited_before_the_system_notification_is_not_revived() {
 #[test]
 fn an_empty_startup_during_system_shutdown_never_erases_storage() {
     let _reset = Reset;
-    let mut state = SessionPersistence::ordinary_for_test();
+    let mut state = SessionPersistence::default();
     set_pending(true);
     state
         .save_with(Some(Session::new(0, vec![])), SaveReason::WindowClose, |_| {
@@ -180,20 +180,45 @@ fn an_empty_startup_during_system_shutdown_never_erases_storage() {
 }
 
 #[test]
-fn system_shutdown_does_not_bypass_administrator_isolation() {
+fn an_elevated_session_writes_the_snapshot_on_every_reason() {
     let _reset = Reset;
-    let mut state = SessionPersistence::ordinary_for_test();
-    state.isolated = true;
+    set_pending(false);
     let expected = workspace();
-    state
-        .save_with(Some(expected.clone()), SaveReason::Checkpoint, |_| panic!("shared storage"))
-        .unwrap();
-    set_pending(true);
-    state
-        .save_with(Some(Session::new(0, vec![])), SaveReason::WindowClose, |_| {
-            panic!("shared storage")
+    // Same constructor as application startup: elevation is not an input to the
+    // workspace snapshot, so an elevated process persists like any other.
+    for reason in [
+        SaveReason::Checkpoint,
+        SaveReason::TabsClosed,
+        SaveReason::WindowClose,
+        SaveReason::Quit,
+    ] {
+        let mut state = SessionPersistence::default();
+        let mut wrote = 0;
+        state
+            .save_with(Some(expected.clone()), reason, |session| {
+                assert_eq!(session.tabs.len(), expected.tabs.len());
+                wrote += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(wrote, 1, "save reason {reason:?} must reach shared storage");
+    }
+}
+
+#[test]
+fn scheduled_update_reads_the_workspace_before_the_first_write() {
+    let _reset = Reset;
+    set_pending(false);
+    // The handoff still needs a complete workspace even when nothing has been
+    // written yet, which is the case right after a failed checkpoint.
+    let mut state = SessionPersistence::default();
+    let expected = workspace();
+    let _ = state
+        .save_with(Some(expected.clone()), SaveReason::Checkpoint, |_| {
+            Err(std::io::Error::other("storage is unavailable right now"))
         })
-        .unwrap();
-    assert!(state.saved.is_none());
-    assert_eq!(state.latest.as_ref().unwrap().tabs, expected.tabs);
+        .ok();
+    let windows = state.update_windows().expect("the checkpoint still holds the workspace");
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].tabs.len(), expected.tabs.len());
 }
