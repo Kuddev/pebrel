@@ -27,11 +27,13 @@ use image::{Frame, RgbaImage};
 mod animated;
 mod budgets;
 mod image_loader;
+mod optics;
 mod tab_bar;
 pub(crate) use tab_bar::{tab_bar_material_is_custom, tab_bar_surface_opacity};
 pub(crate) mod preview;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
+pub(super) mod workspace_strip;
 use pebrel_settings::BlurModeName;
 
 use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit, wallpaper_rect};
@@ -357,6 +359,20 @@ fn underlay_composition(surface: f32, wallpaper: f32) -> (f32, f32) {
     (surface_alpha, layer.min(1.0))
 }
 
+pub(super) fn wallpaper_available_for_preview(cx: &App) -> bool {
+    cx.try_global::<VisualEffects>().is_some_and(|effects| {
+        effects.layout.opacity > 0.0
+            && effects.wallpaper.as_ref().is_some_and(|wp| wp.image.is_some())
+    })
+}
+
+pub(super) fn set_image_opacity_live(opacity: f32, cx: &mut App) {
+    if cx.try_global::<VisualEffects>().is_some_and(|effects| !effects.kind.is_animated()) {
+        cx.global_mut::<VisualEffects>().layout.opacity = opacity;
+        cx.refresh_windows();
+    }
+}
+
 /// 开窗参数用。GPUI 通用层在窗口创建时就会把这个值下发到平台层
 /// （`gpui::Window::new` → `platform_window.set_background_appearance`）。
 /// Mica / Mica Alt 因此从首帧就走平台原生 backdrop，不再先挂一层普通透明背景。
@@ -570,28 +586,65 @@ pub fn paint_glass_overlay(bounds: Bounds<Pixels>, window: &mut Window, cx: &App
     });
 }
 
-/// Card-only wallpaper sits above the card background. Extended wallpaper sits
-/// below the shell/card surfaces, preserving the original visible scrim.
-/// Both modes reuse one image; opacity and layout never rebake its pixels.
-pub fn card_layer(cx: &App) -> impl IntoElement {
-    layer(false, cx)
+/// Preserve the usual extended-wallpaper scrim through the default setting,
+/// then reveal the same fitted image above the terminal surface toward 100%.
+pub(super) fn card_layer(strip: Option<(Pixels, Arc<RenderImage>)>, cx: &App) -> impl IntoElement {
+    layer(WallpaperLayer::Card, strip, cx)
 }
 
-pub fn window_layer(cx: &App) -> impl IntoElement {
-    layer(true, cx)
+pub(super) fn window_layer(
+    strip: Option<(Pixels, Arc<RenderImage>)>,
+    cx: &App,
+) -> impl IntoElement {
+    layer(WallpaperLayer::Window, strip, cx)
 }
 
-fn layer(under_chrome: bool, cx: &App) -> impl IntoElement {
-    let opacity = cx.try_global::<VisualEffects>().map_or(1.0, |effects| effects.layout.opacity);
+pub(super) fn peek_layer(strip: Option<(Pixels, Arc<RenderImage>)>, cx: &App) -> impl IntoElement {
+    layer(WallpaperLayer::Preview, strip, cx)
+}
+
+#[derive(Clone, Copy)]
+enum WallpaperLayer {
+    Card,
+    Window,
+    Preview,
+}
+
+fn layer(
+    layer: WallpaperLayer,
+    strip: Option<(Pixels, Arc<RenderImage>)>,
+    cx: &App,
+) -> impl IntoElement {
+    let effects = cx.try_global::<VisualEffects>();
+    let opacity = effects.map_or(1.0, |effects| effects.layout.opacity);
+    let extended_static =
+        effects.is_some_and(|effects| effects.layout.cover_chrome && !effects.kind.is_animated());
+    let opacity = match layer {
+        WallpaperLayer::Card if extended_static => extended_card_reveal(opacity),
+        WallpaperLayer::Preview if extended_static => {
+            let underlay = opacity * (1.0 - chrome_surface_opacity(cx));
+            underlay + (1.0 - underlay) * extended_card_reveal(opacity)
+        },
+        _ => opacity,
+    };
     // Canvas's style.paint does not apply element opacity in pinned GPUI;
     // Div owns that scope for its child, without baking alpha into the image.
     div().absolute().inset_0().opacity(opacity).child(
         gpui::canvas(
             |_, _, _| (),
-            move |bounds, _, window, cx| paint_wallpaper(bounds, under_chrome, window, cx),
+            move |bounds, _, window, cx| {
+                if opacity > 0.0 {
+                    paint_wallpaper(bounds, layer, strip, window, cx);
+                }
+            },
         )
         .size_full(),
     )
+}
+
+fn extended_card_reveal(opacity: f32) -> f32 {
+    let baseline = pebrel_settings::DEFAULT_BACKGROUND_IMAGE_OPACITY;
+    ((opacity - baseline) / (1.0 - baseline)).clamp(0.0, 1.0)
 }
 
 fn image_bounds(
@@ -614,32 +667,78 @@ fn image_bounds(
     )
 }
 
-fn paint_wallpaper(bounds: Bounds<Pixels>, under_chrome: bool, window: &mut Window, cx: &mut App) {
+fn paint_wallpaper(
+    bounds: Bounds<Pixels>,
+    layer: WallpaperLayer,
+    strip: Option<(Pixels, Arc<RenderImage>)>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let Some(effects) = cx.try_global::<VisualEffects>() else { return };
     let layout = effects.layout;
-    // In the previous CPU crop path an offset card produced an empty overlay
-    // (negative crop offsets cast to u32). Repainting the source here would
-    // remove the visible scrim. Preserve that appearance directly, without
-    // retaining the broken crop arithmetic or an empty card-sized bitmap.
-    if layout.opacity <= 0.0 || under_chrome != layout.cover_chrome {
+    if layout.opacity <= 0.0 {
         return;
     }
-    if animated::paint(bounds, under_chrome, layout, window, cx) {
+    let under_chrome = matches!(layer, WallpaperLayer::Window);
+    if matches!(layer, WallpaperLayer::Window) && !layout.cover_chrome {
+        return;
+    }
+    if effects.kind.is_animated() {
+        if !matches!(layer, WallpaperLayer::Preview) && under_chrome == layout.cover_chrome {
+            animated::paint(bounds, under_chrome, layout, window, cx);
+        }
         return;
     }
     let effects = cx.global::<VisualEffects>();
     let Some(wp) = effects.wallpaper.as_ref() else { return };
     let Some(image) = wp.image.as_ref() else { return };
+    let radius = if matches!(layer, WallpaperLayer::Card) {
+        crate::gpui_shell::theme::card_radius(cx)
+    } else {
+        px(0.0)
+    };
     let anchor = if layout.cover_chrome {
         Bounds::new(point(px(0.0), px(0.0)), window.viewport_size())
     } else {
         bounds
     };
     let image_bounds = image_bounds(wp, layout, anchor, window.scale_factor().max(0.5));
-    let radius = if under_chrome { px(0.0) } else { crate::gpui_shell::theme::card_radius(cx) };
     let corners = image_corners(bounds, image_bounds, radius);
-    if let Err(error) = window.paint_image(bounds, image_bounds, corners, image.clone(), 0, false) {
+    let paint_sharp = |window: &mut Window| {
+        window.paint_image(bounds, image_bounds, corners, image.clone(), 0, false)
+    };
+    let result = if let Some((width, strip)) = strip {
+        let strip_rect = Bounds::new(anchor.origin, size(width, anchor.size.height));
+        let strip_corners = image_corners(bounds, strip_rect, radius);
+        let right = Bounds::from_corners(
+            point(bounds.left().max(strip_rect.right()), bounds.top()),
+            bounds.bottom_right(),
+        );
+        window.paint_image(bounds, strip_rect, strip_corners, strip, 0, false).and_then(|()| {
+            if right.size.width > px(0.0) {
+                window.with_content_mask(Some(ContentMask { bounds: right }), paint_sharp)
+            } else {
+                Ok(())
+            }
+        })
+    } else {
+        paint_sharp(window)
+    };
+    if let Err(error) = result {
         log::warn!("background image paint failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod opacity_tests {
+    use super::*;
+
+    #[test]
+    fn extended_wallpaper_keeps_its_default_scrim_and_reveals_the_original_at_full_opacity() {
+        assert_eq!(extended_card_reveal(0.0), 0.0);
+        assert_eq!(extended_card_reveal(pebrel_settings::DEFAULT_BACKGROUND_IMAGE_OPACITY), 0.0);
+        assert!((extended_card_reveal(0.69) - 0.5).abs() < 1e-6);
+        assert_eq!(extended_card_reveal(1.0), 1.0);
     }
 }
 
