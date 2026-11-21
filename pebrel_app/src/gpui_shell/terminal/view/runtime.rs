@@ -189,6 +189,7 @@ impl TerminalView {
         exit_code: Option<i32>,
         cx: &mut Context<Self>,
     ) {
+        self.finish_recent_output();
         if self.command_running || self.running_program.is_some() {
             self.retire_command_images(cx);
         }
@@ -1275,6 +1276,10 @@ impl TerminalView {
             self.term_mode(),
         );
         self.pending_runtime_submit = None;
+        // 运行徽章在 echo 前已置位；只有启动前捕获的 shell 提示符允许记录。
+        if self.suggest.pending_command_prompt.is_some() && self.runtime_agent().is_none() {
+            self.begin_recent_output();
+        }
         self.write_input(submit_bytes, cx);
     }
 }

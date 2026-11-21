@@ -223,6 +223,7 @@ impl NebulaWorkspace {
             color: meta.color,
             launch: meta.launch,
             active_pane: tree.leaves().iter().position(|id| id == focused).unwrap_or(0),
+            output_refs: Vec::new(),
             layout: Some(layout),
         };
         if self.settings_open {
