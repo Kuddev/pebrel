@@ -7,10 +7,6 @@ fn vanished_target_or_attach_failure_runs_default_shell_and_cwd_is_never_input()
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
-    let probe = Command::new("sh").args(["-c", &probe_command()]).output().unwrap();
-    assert!(probe.status.success());
-    assert_eq!(probe.stdout, PROBE_REPLY.as_bytes());
-
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("client's executable");
     std::fs::write(&binary, "#!/bin/sh\ncase \"$2\" in\ndisplay-message) printf '100:200\\n';;\nselect-window|select-pane) exit ${REJECT_SELECTION:-0};;\nattach-session) printf 'ATTACH_FAILED\\n'; exit 1;;\n*) exit 1;;\nesac\n").unwrap();
@@ -64,8 +60,31 @@ fn startup_reports_a_named_terminal_and_sends_no_marker_without_one() {
         },
         0
     );
-    let _controller = unsafe { File::from_raw_fd(controller) };
+    let mut controller = unsafe { File::from_raw_fd(controller) };
     let terminal = unsafe { File::from_raw_fd(terminal) };
+    let probe = probe_command();
+    let output = Command::new("sh").args(["-c", &probe]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let piped_output = Command::new("sh")
+        .args(["-c", &probe])
+        .stdin(terminal.try_clone().unwrap())
+        .output()
+        .unwrap();
+    assert!(!piped_output.status.success());
+    let status = Command::new("sh")
+        .args(["-c", &probe])
+        .stdin(terminal.try_clone().unwrap())
+        .stdout(terminal.try_clone().unwrap())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let mut ready = libc::pollfd { fd: controller.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    assert_eq!(unsafe { libc::poll(&mut ready, 1, 1000) }, 1);
+    let mut reply = [0; 128];
+    let count = std::io::Read::read(&mut controller, &mut reply).unwrap();
+    assert_eq!(&reply[..count], PROBE_REPLY.as_bytes());
+
     let mut name = [0; 1024];
     assert_eq!(unsafe { libc::ttyname_r(terminal.as_raw_fd(), name.as_mut_ptr(), name.len()) }, 0);
     let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str().unwrap().to_owned();
