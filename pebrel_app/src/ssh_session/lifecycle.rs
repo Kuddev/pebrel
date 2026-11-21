@@ -396,22 +396,10 @@ async fn open_shell_channel(
     target: Option<&ResumeTarget>,
 ) -> Result<(ShellChannel, String), SessionError> {
     let hook_token = super::remote_hook_token()?;
-    let posix = resume::supported(session).await;
+    let posix = resume::supported(session, size).await;
     let integration =
         if posix { super::integration::prepare(session, &hook_token).await } else { None };
-    let mut channel = own_channel(session.channel_open_session().await?);
-    channel
-        .request_pty(
-            true,
-            "xterm-256color",
-            u32::from(size.num_cols),
-            u32::from(size.num_lines),
-            u32::from(size.cell_width) * u32::from(size.num_cols),
-            u32::from(size.cell_height) * u32::from(size.num_lines),
-            &[],
-        )
-        .await?;
-    wait_request_success(&mut channel, "PTY").await?;
+    let mut channel = open_pty(session, size).await?;
     if posix {
         let command = resume::startup(
             &hook_token,
@@ -429,19 +417,7 @@ async fn open_shell_channel(
             Err(error) => {
                 log::debug!("SSH integrated shell rejected; opening ordinary shell: {error}");
                 channel.finish().await?;
-                channel = own_channel(session.channel_open_session().await?);
-                channel
-                    .request_pty(
-                        true,
-                        "xterm-256color",
-                        u32::from(size.num_cols),
-                        u32::from(size.num_lines),
-                        u32::from(size.cell_width) * u32::from(size.num_cols),
-                        u32::from(size.cell_height) * u32::from(size.num_lines),
-                        &[],
-                    )
-                    .await?;
-                wait_request_success(&mut channel, "PTY").await?;
+                channel = open_pty(session, size).await?;
             },
         }
     }
@@ -453,6 +429,26 @@ async fn open_shell_channel(
         channel.data_bytes(command).await?;
     }
     Ok((channel, hook_token))
+}
+
+pub(super) async fn open_pty(
+    session: &SharedSession,
+    size: WindowSize,
+) -> Result<ShellChannel, SessionError> {
+    let mut channel = own_channel(session.channel_open_session().await?);
+    channel
+        .request_pty(
+            true,
+            "xterm-256color",
+            u32::from(size.num_cols),
+            u32::from(size.num_lines),
+            u32::from(size.cell_width) * u32::from(size.num_cols),
+            u32::from(size.cell_height) * u32::from(size.num_lines),
+            &[],
+        )
+        .await?;
+    wait_request_success(&mut channel, "PTY").await?;
+    Ok(channel)
 }
 
 pub(super) async fn wait_request_success(

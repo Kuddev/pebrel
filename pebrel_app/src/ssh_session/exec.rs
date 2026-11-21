@@ -16,7 +16,15 @@ pub(super) async fn capture_private_input(
     input: &[u8],
     limit: usize,
 ) -> Result<Vec<u8>, SessionError> {
-    let mut channel = lifecycle::own_channel(channel);
+    capture_private_on_channel(lifecycle::own_channel(channel), command, input, limit).await
+}
+
+pub(super) async fn capture_private_on_channel(
+    mut channel: lifecycle::ShellChannel,
+    command: &str,
+    input: &[u8],
+    limit: usize,
+) -> Result<Vec<u8>, SessionError> {
     channel.exec(true, command).await?;
     let mut stdout = Vec::new();
     let mut exit = None;
