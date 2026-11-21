@@ -215,9 +215,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = Options::new();
     #[cfg(feature = "gpui-shell")]
     platform::startup::instance::initialize(options.new_instance);
-    if let Err(error) = pebrel_settings::migrate_legacy_data() {
-        platform::startup::report_error(&error, options.subcommands.is_none());
-        return Err(error.into());
+    let startup = platform::startup::prepare_data(&options).and_then(|launch| {
+        use platform::startup::Launch;
+        match launch {
+            Launch::Installed => pebrel_settings::migrate_legacy_data().map(|_| true),
+            Launch::Portable => Ok(true),
+            Launch::Quit => Ok(false),
+        }
+    });
+    match startup {
+        Ok(true) => {},
+        Ok(false) => return Ok(()),
+        Err(error) => {
+            platform::startup::report_error(
+                &error,
+                options.subcommands.is_none() && !options.daemon,
+            );
+            return Err(error.into());
+        },
     }
     #[cfg(windows)]
     panic::attach_handler();
