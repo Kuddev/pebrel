@@ -29,6 +29,7 @@ const RESET_KEYS: &[&str] = &[
     "multiline_paste_confirm",
     "tab_close_visible",
     "static_tab_titles",
+    "administrator_shield",
     "terminal_proxy",
     "refresh_environment",
     "powerline",
@@ -219,6 +220,21 @@ mod tests {
         let restored = default_settings_text(&enabled);
         assert_eq!(restored, original);
         assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).static_tab_titles);
+    }
+
+    #[test]
+    fn administrator_shield_defaults_to_shown_and_round_trips() {
+        for text in ["", "administrator_shield=\n", "administrator_shield=invalid\n"] {
+            assert!(RuntimeSettings::from_raw(&RawSettings::from_text(text)).administrator_shield);
+        }
+        let original = "custom=keep\n";
+        let hidden = crate::apply_updates(original, &[("administrator_shield", "0".into())]);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&hidden)).administrator_shield);
+        let shown = crate::apply_updates(&hidden, &[("administrator_shield", "1".into())]);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&shown)).administrator_shield);
+        let restored = default_settings_text(&hidden);
+        assert_eq!(restored, original);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).administrator_shield);
     }
 
     #[test]

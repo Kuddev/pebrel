@@ -41,6 +41,7 @@ pub fn ui_value_kind(key: &str) -> Option<UiValueKind> {
         | "multiline_paste_confirm"
         | "tab_close_visible"
         | "static_tab_titles"
+        | "administrator_shield"
         | "powerline"
         | "ghost"
         | "prompt_suggestions_enabled"

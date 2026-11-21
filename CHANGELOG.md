@@ -22,6 +22,10 @@ Every release entry is provided in English and Simplified Chinese.
 
 macOS, Linux, and Android downloads are Preview builds.
 
+#### Added
+
+- Added a "Show administrator shield" switch under Appearance so an elevated Windows session can hide the badge in front of the tab name. The switch changes the marker only; the session keeps its rights.
+
 #### Fixed
 
 - Fixed a delegated prompt remaining in the terminal editor when the agent changed keyboard mode before Enter was sent.
@@ -34,6 +38,10 @@ macOS, Linux, and Android downloads are Preview builds.
 ### 中文
 
 macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 外观设置新增“显示管理员盾牌”开关，Windows 提权会话可隐藏标签名前的盾牌标记；开关只影响标记，会话权限不变。
 
 #### 修复
 

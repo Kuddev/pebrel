@@ -133,6 +133,9 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             language.text(crate::i18n::Message::SettingsHelpTabTitlesStayOnTheDirectory),
             Some(language.text(crate::i18n::Message::SettingsHelpTabTitlesHostAndTask)),
         ),
+        "administrator_shield" => {
+            (language.text(crate::i18n::Message::SettingsHelpMarksElevatedWindowsSessions), None)
+        }
         "keep_session" => (
             language.text(crate::i18n::Message::SettingsHelpKeepsTerminalsRunningAfterClosing),
             Some(language.text(crate::i18n::Message::SettingsHelpWhenDisabledClosingTheWindow)),
@@ -193,6 +196,7 @@ mod tests {
             "windowing_behavior",
             "vcs_display",
             "static_tab_titles",
+            "administrator_shield",
             "keep_session",
             "restore_session",
             "resume_ai",

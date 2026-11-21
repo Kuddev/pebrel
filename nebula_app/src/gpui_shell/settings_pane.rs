@@ -783,6 +783,7 @@ impl SettingsPane {
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
             "static_tab_titles" => flag!(static_tab_titles),
+            "administrator_shield" => flag!(administrator_shield),
             "terminal_proxy" => flag!(terminal_proxy),
             "refresh_environment" => flag!(refresh_environment),
             "powerline" => flag!(powerline),
