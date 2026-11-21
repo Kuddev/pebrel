@@ -114,6 +114,7 @@ impl SettingsPane {
         let warning = theme.warning;
         let danger = theme.danger;
         let base_px = self.font_size_px(cx);
+        let dark = theme.is_dark();
         let cached_update = crate::update_download::cached_asset().filter(|asset| {
             !managed
                 && (crate::update_check::is_newer(&asset.version, env!("CARGO_PKG_VERSION"))
@@ -296,7 +297,7 @@ impl SettingsPane {
                 .text_color(muted)
                 .child(title)
         };
-        let update_column = v_flex()
+        let update_column = crate::gpui_shell::theme::settings_card(v_flex(), cx)
             .flex_1()
             .min_w(px(280.0))
             .child(section_title(
@@ -338,7 +339,7 @@ impl SettingsPane {
                 column.child(div().text_color(muted).child(language.text(message)))
             });
         let release_page = crate::update_check::release_page();
-        let actions = v_flex()
+        let actions = crate::gpui_shell::theme::settings_card(v_flex(), cx)
             .flex_1()
             .min_w(px(280.0))
             .child(section_title(
@@ -378,7 +379,7 @@ impl SettingsPane {
                 .w_full()
                 .flex_wrap()
                 .items_start()
-                .gap(px(64.0))
+                .gap(px(if dark { 16.0 } else { 64.0 }))
                 .child(update_column)
                 .child(actions),
         )

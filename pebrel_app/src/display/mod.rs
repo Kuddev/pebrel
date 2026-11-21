@@ -5647,7 +5647,7 @@ impl Display {
         self.nebula_window_opacity = 1.0;
         self.nebula_background = None;
         self.nebula_background_image = None;
-        self.nebula_background_image_opacity = 0.38;
+        self.nebula_background_image_opacity = nebula_settings::DEFAULT_BACKGROUND_IMAGE_OPACITY;
         self.nebula_background_image_fit = BackgroundImageFit::default();
         self.nebula_background_image_alignment = BackgroundImageAlignment::default();
         self.nebula_background_image_cover_chrome = false;

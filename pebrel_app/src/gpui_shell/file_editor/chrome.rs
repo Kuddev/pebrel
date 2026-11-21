@@ -81,6 +81,9 @@ impl TextFileView {
                         .flex_shrink_0()
                         .icon(Icon::new(IconName::PanelRight).size(px(design::ICON_SIZE)))
                         .selected(self.show_details)
+                        .when(self.show_details, |button| {
+                            crate::gpui_shell::theme::selected_glass(button, cx)
+                        })
                         .tooltip(language.text(Message::EditorDetailsToggle))
                         .on_click(cx.listener(|this, _, _, cx| {
                             if this.details_hosted {
