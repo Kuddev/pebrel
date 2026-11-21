@@ -5,6 +5,33 @@ import re
 import subprocess
 import time
 
+def committed_mode(trace):
+    """Find the decoration state applied by the first acknowledged surface configure."""
+    match = re.search(r"xdg_surface[#@](\d+)\.get_toplevel\(new id xdg_toplevel[#@](\d+)\)", trace)
+    if not match:
+        return None
+    surface, toplevel = match.groups()
+    decoration = re.search(
+        rf"get_toplevel_decoration\(new id zxdg_toplevel_decoration_v1[#@](\d+), xdg_toplevel[#@]{toplevel}\)",
+        trace[match.end():],
+    )
+    if not decoration:
+        return None
+    obj = rf"zxdg_toplevel_decoration_v1[#@]{decoration[1]}"
+    request = re.search(obj + r"\.set_mode\((\d+)\)", trace)
+    if not request:
+        return None
+    after_request = trace[request.end():]
+    configure = re.search(rf"xdg_surface[#@]{surface}\.configure\((\d+)\)", after_request)
+    if not configure:
+        return None
+    updates = re.findall(obj + r"\.configure\((\d+)\)", after_request[:configure.start()])
+    ack = rf"xdg_surface[#@]{surface}\.ack_configure\({configure[1]}\)"
+    if updates and re.search(ack, after_request[configure.end():]):
+        return int(request[1]), int(updates[-1])
+    return None
+
+
 root=Path(os.environ["RUNNER_TEMP"])
 qa=root/"kwin-qa";qa.mkdir()
 runtime=qa/"runtime";runtime.mkdir(mode=0o700)
@@ -28,13 +55,11 @@ with (qa/"kwin.log").open("w") as log:
                 try:
                     for _ in range(120):
                         trace=output.read_text(errors="replace")
-                        request=re.search(r"zxdg_toplevel_decoration_v1[#@](\d+)\.set_mode\((\d+)\)",trace)
-                        if request:
-                            reply=re.search(r"zxdg_toplevel_decoration_v1[#@]"+request[1]+r"\.configure\((\d+)\)",trace[request.end():])
-                            if reply:
-                                print(name,"request",request[2],"reply",reply[1],flush=True)
-                                assert [int(request[2]),int(reply[1])]==[mode,mode]
-                                break
+                        negotiated = committed_mode(trace)
+                        if negotiated is not None:
+                            print(name, "request", negotiated[0], "committed", negotiated[1], flush=True)
+                            assert negotiated == (mode, mode), (name, negotiated)
+                            break
                         if app.poll() is not None: raise RuntimeError(name+" quit before negotiation")
                         time.sleep(.25)
                     else: raise RuntimeError(name+" did not negotiate a decoration")

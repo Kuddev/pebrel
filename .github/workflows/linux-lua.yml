@@ -47,7 +47,7 @@ jobs:
           path: ${{ runner.temp }}/pebrel
           retention-days: 7
       - name: Install KWin
-        run: sudo apt-get install -y --no-install-recommends kwin-wayland dbus-x11
+        run: sudo apt-get install -y --no-install-recommends kwin-wayland kwin-style-breeze dbus-x11
       - name: Compare published and candidate decorations in KWin
         env:
           GH_TOKEN: ${{ github.token }}
