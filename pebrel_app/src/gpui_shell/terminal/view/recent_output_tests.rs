@@ -503,7 +503,8 @@ fn late_archive_preserves_the_live_output_selected_with_the_scrollbar(cx: &mut T
         view.scroll_to_offset(7, 0);
         let reading = first_visible_line(view);
         assert!(reading.contains("startup line"), "{reading:?}");
-        view.restore_recent_output(records, cx).unwrap();
+        assert!(view.restore_recent_output(records, cx).unwrap());
         assert_eq!(first_visible_line(view), reading);
+        assert!(restored_text(view).contains("archived"));
     });
 }

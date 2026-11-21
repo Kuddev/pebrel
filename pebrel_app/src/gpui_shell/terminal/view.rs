@@ -358,6 +358,7 @@ pub struct TerminalView {
     recent_output: crate::recent_output::RecentOutput,
     recent_output_restore_closed: bool,
     recent_output_enabled: bool,
+    reveal_recent_output_on_restore: bool,
     restored_viewport_offset: Option<usize>,
     /// 进程树给出的反证：`command_running` 为真、但 shell 树下只剩交互式
     /// shell 与 console plumbing 时置位，转圈据此熄灭（issue #42）。判据与
