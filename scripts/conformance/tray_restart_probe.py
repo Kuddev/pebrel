@@ -193,7 +193,16 @@ def worker(executable, root, candidate):
             raise RuntimeError("The test product must run as an ordinary user")
         hwnd = wait_for("the Runtime process's tray HWND", lambda: desktop.tray_window(pid), 30)
         try:
-            before = wait_for("the initial registered icon", lambda: registered(desktop, hwnd), 45)
+            # An ephemeral desktop can report TrayNotifyWnd before Explorer accepts registrations.
+            # Reapply the current setting only to establish the user's starting state. After the
+            # real restart the observer never requests a registration.
+            def initial_icon():
+                if registered(desktop, hwnd):
+                    return True
+                desktop.user.PostMessageW(hwnd, 0x8003, 0, 0)
+                time.sleep(1)
+                return False
+            before = wait_for("the initial registered icon", initial_icon, 60)
         except RuntimeError:
             desktop.icon_rect(hwnd, diagnose=True)
             raise
