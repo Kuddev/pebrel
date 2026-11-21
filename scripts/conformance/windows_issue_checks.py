@@ -66,20 +66,28 @@ def cursor(ctx):
         native.close()
 
 
-def omp(ctx):
+def omp(ctx, *, published=False):
     def state():
         tab = ctx.snapshot()["windows"][0]["tabs"][0]
         pane = tab["panes"][0]
         return tab["label"], pane.get("title"), pane.get("running_program")
     ctx.prompt(command_for("omp", 0))
     ctx.poll(state, lambda s: "π" in (s[1] or ""), "OMP did not become ready", timeout=45)
+    idle = []
+    for _ in range(5):
+        time.sleep(.5)
+        idle.append(state())
+    print("Initial OMP title:", idle, flush=True)
     ctx.prompt("Title test for issue 1029")
     ctx.poll(state, lambda s: "Native recovery fixture reply" in (s[1] or ""), "missing OMP title", timeout=45)
     for _ in range(4):
         time.sleep(.5)
         label, title, process = state()
         print("After reply:", label, title, process, flush=True)
-        assert label == title and process == "omp", "task label lost after redraw"
+        if not published:
+            assert label == title and process == "omp", "task label lost after redraw"
+    if not published:
+        assert all(label == title and "π" in title for label, title, _ in idle), "initial OMP title lost"
     ctx.send_key("d", control=True)
     ctx.poll(state, lambda s: s[0] == ctx.work_dir.name and s[2] is None, "label after OMP exit", timeout=20)
 
@@ -95,7 +103,7 @@ if __name__ == "__main__":
         ctx.prepare()
         with (ctx.config_dir / "pebrel_settings.txt").open("a", encoding="utf-8") as settings:
             settings.write("shell=pwsh\nai_hooks_omp=0\n")
-        if sys.argv[1] == "omp":
+        if sys.argv[1].startswith("omp"):
             model = stack.enter_context(local_model())
             os.environ.update(configure("omp", root / "home", ctx.work_dir, f"http://127.0.0.1:{model.server_port}"))
         stack.callback(ctx.stop, force=True)
@@ -103,7 +111,10 @@ if __name__ == "__main__":
         ctx.refresh_targets()
         shell_ready(ctx)
         try:
-            {"cursor": cursor, "omp": omp}[sys.argv[1]](ctx)
+            if sys.argv[1] == "cursor":
+                cursor(ctx)
+            else:
+                omp(ctx, published=sys.argv[1] == "omp-published")
         except Exception:
             print("Fixture pane:", ctx.read()["text"][-1600:], flush=True)
             for log in ctx.artifact_dir.glob("pebrel-*.log"):
