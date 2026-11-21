@@ -7625,15 +7625,7 @@ impl Display {
         );
         let math_coverage =
             terminal_math::CoverageMask::build(&terminal_math_overlays, &prepared_math);
-        // A normal shell line may reflow its suffix around a compact formula.
-        // Full-screen TUIs own fixed grid geometry (sidebars, cards, status
-        // bands), so moving every cell after an inline formula would also move
-        // those ANSI backgrounds and tear the interface into coloured blocks.
-        pane_state.terminal_math.update_projection(
-            &terminal_math_overlays,
-            &prepared_math,
-            !alt_screen,
-        );
+        pane_state.terminal_math.update_projection(&terminal_math_overlays, &prepared_math, true);
         let frame_images = inline_image::capture(
             &terminal,
             &mut pane_state.inline_images,
