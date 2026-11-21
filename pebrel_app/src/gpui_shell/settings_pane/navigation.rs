@@ -82,7 +82,7 @@ pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
 }
 
 // 导航使用组件的小字号，与搜索菜单一致；尺寸是逻辑像素，由窗口统一处理 DPI。
-pub(super) const SETTINGS_NAV_WIDTH: f32 = 248.0;
+pub(in crate::gpui_shell) const SETTINGS_NAV_WIDTH: f32 = 248.0;
 pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 34.0;
 pub(super) const SETTINGS_NAV_ICON_SIZE: f32 = 16.0;
 

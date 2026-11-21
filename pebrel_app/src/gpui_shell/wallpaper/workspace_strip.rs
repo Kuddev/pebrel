@@ -49,9 +49,7 @@ impl WorkspaceStrip {
     }
 
     fn retire(&mut self, cx: &mut App) {
-        if let Some(image) = self.image.take() {
-            retire_images([image], cx);
-        }
+        retire_image(self.image.take(), cx);
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {

@@ -87,6 +87,7 @@ mod theme_transfer;
 mod theme_transfer_view;
 
 use localization::*;
+pub(super) use navigation::SETTINGS_NAV_WIDTH;
 use navigation::*;
 use shell_picker::*;
 pub(super) use status::SshStatus;
