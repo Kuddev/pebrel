@@ -34,6 +34,7 @@ class ShellSession:
 
         self.master, slave = pty.openpty()
         self.output = b""
+        self.pending = b""
         self.process = subprocess.Popen(
             [program, *args], stdin=slave, stdout=slave, stderr=slave, cwd=home,
             env={"PATH": os.environ["PATH"], "HOME": str(home), "TERM": "xterm-256color",
@@ -45,19 +46,26 @@ class ShellSession:
         os.close(slave)
 
     def wait(self, marker: bytes) -> bytes:
-        collected = b""
+        collected = self.pending
+        self.pending = b""
         deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
+        while marker not in collected and time.monotonic() < deadline:
             if select.select([self.master], [], [], 0.1)[0]:
                 try:
-                    block = os.read(self.master, 65536)
+                    collected += os.read(self.master, 65536)
                 except OSError:
                     break
-                collected += block
-                self.output += block
-                if marker in collected:
-                    return collected
-        raise AssertionError(f"shell never emitted {marker!r}: {self.output!r}")
+        self.output += collected
+        if marker not in collected:
+            raise AssertionError(f"shell never emitted {marker!r}: {self.output!r}")
+        # A PTY read often coalesces this command's sentinel with the precmd
+        # markers of the *following* prompt. Attribute exactly up to the first
+        # sentinel to this window and keep the remainder for the next one, so a
+        # per-window assertion (e.g. "the rebind revoked the advertisement")
+        # cannot lose its markers to the previous command's read.
+        index = collected.index(marker) + len(marker)
+        self.pending = collected[index:]
+        return collected[:index]
 
     def command(self, command: str, marker: bytes) -> bytes:
         os.write(self.master, command.encode("utf-8") + b"\n")

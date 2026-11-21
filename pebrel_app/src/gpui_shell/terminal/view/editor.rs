@@ -204,6 +204,14 @@ impl TerminalView {
             if queued == Some(self.prompt_input_epoch) {
                 self.query_completion_editor(cx);
             }
+        } else if name == "pebrel_editor_redraw" {
+            // 与 ready 分开的能力声明：只有当前 shell 的 token 才被认领；
+            // ready 到达而 redraw 缺席（旧集成、键被占用）时保持 None。
+            if self.suggest.completion_context.owns_current(value) {
+                self.editor_redraw_owner = Some(value.to_owned());
+            } else {
+                self.editor_redraw_owner = None;
+            }
         } else if name == "pebrel_editor" {
             let owner = value.split('\n').next().unwrap_or_default();
             if !self.suggest.completion_context.owns_current(owner) {
@@ -230,6 +238,28 @@ impl TerminalView {
         let key = gpui::Keystroke::parse("ctrl-shift-f12").unwrap();
         super::super::keymap::encode(&key, &self.term_mode())
             .unwrap_or_else(|| b"\x1b[24;6~".to_vec())
+    }
+
+    /// 提示符重绘字节：`pebrel_editor_redraw` 声明的 shell 集成自有键
+    /// （completion.sh 的 `\e[46~` → readline/zle 原生 clear-screen，
+    /// completion.ps1 的 Ctrl+Shift+F9 → PSReadLine ClearScreen）。redraw
+    /// 是独立于查询能力（`pebrel_editor_ready`）的显式声明：2.5.3 旧集成
+    /// 只报 query、不装 redraw 键，只看 ready 会把键发进未绑定它的活动
+    /// shell；用户占用 redraw 键时声明整体缺席，query/补全/指针照常。
+    /// 未声明返回 None，调用方退回应用侧光标归顶——绝不退回键盘字节
+    /// （^L 会执行 shell 里用户对 Ctrl+L 的任意重绑定）。
+    pub(super) fn editor_clear_bytes(&self) -> Option<Vec<u8>> {
+        let owner = self.editor_redraw_owner.as_deref()?;
+        if !self.suggest.completion_context.owns_current(owner) {
+            return None;
+        }
+        if owner.starts_with("pwsh:") {
+            let key = gpui::Keystroke::parse("ctrl-shift-f9").unwrap();
+            super::super::keymap::encode(&key, &self.term_mode())
+                .or_else(|| Some(b"\x1b[20;6~".to_vec()))
+        } else {
+            Some(b"\x1b[46~".to_vec())
+        }
     }
 
     pub(super) fn query_completion_editor(&mut self, cx: &mut Context<Self>) -> bool {
