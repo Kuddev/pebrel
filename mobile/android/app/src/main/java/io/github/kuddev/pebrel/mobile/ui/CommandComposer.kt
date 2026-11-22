@@ -1,7 +1,8 @@
 package io.github.kuddev.pebrel.mobile.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -16,9 +17,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +56,7 @@ fun CommandComposer(
     shortcutsEnabled: Boolean = enabled,
     extraShortcuts: List<String> = emptyList(),
     customKeys: Boolean = onDirect != null,
+    conversation: Boolean = false,
     send: suspend (String) -> Boolean,
 ) {
     val drafts by repository.drafts.collectAsStateWithLifecycle()
@@ -166,16 +169,20 @@ fun CommandComposer(
                         (coordinates.positionInWindow().y.toInt() - topInset).coerceAtLeast(0).toDp()
                     } - 8.dp
                 }) {
+                    val editorShape = if (conversation) MaterialTheme.shapes.large else RoundedCornerShape(26.dp)
+                    // The accent outline confirms where typing goes; it fades rather than snapping.
+                    val outline by animateColorAsState(if (editorFocused && enabled) colors.primary else Color.Transparent,
+                        motion.tweenOrSnap(140), label = "composer-focus")
                     Column(
                         Modifier.fillMaxWidth().testTag("composer-editor")
                             .animateContentSize(motion.contentSizeSpec())
-                            .clip(RoundedCornerShape(26.dp))
-                            .background(colors.surfaceVariant.copy(alpha = .42f))
+                            .glass(editorShape, GlassTier.Heavy, if (conversation) GlassLift.Floating else GlassLift.Raised)
+                            .border(2.dp, outline, editorShape)
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
                         Box(
                             Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp, max = if (editorExpanded) 208.dp else 96.dp),
+                                .heightIn(min = 56.dp, max = if (editorExpanded) 208.dp else 96.dp),
                         ) {
                             BasicTextField(
                                 value = draft,
@@ -190,15 +197,16 @@ fun CommandComposer(
                                     color = colors.onSurface,
                                     fontSize = 15.sp,
                                     lineHeight = 21.sp,
-                                    fontFamily = LocalTerminalFont.current,
+                                    fontFamily = if (conversation) FontFamily.Default else LocalTerminalFont.current,
                                 ),
                                 cursorBrush = SolidColor(colors.primary),
                                 keyboardOptions = KeyboardOptions(
-                                    capitalization = KeyboardCapitalization.None,
+                                    capitalization = if (conversation) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
                                     autoCorrectEnabled = false,
                                 ),
                                 decorationBox = { inner ->
-                                    if (draft.isEmpty()) HelperText(stringResource(R.string.composer_placeholder))
+                                    if (draft.isEmpty()) Text(stringResource(if (conversation) R.string.chat_compose else R.string.composer_placeholder),
+                                        style = MaterialTheme.typography.bodyLarge, color = glassPalette().textTertiary)
                                     inner()
                                 },
                             )

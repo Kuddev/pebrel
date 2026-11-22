@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pebrel.com"><img src="https://img.shields.io/badge/Website-pebrel.com-2f81f7?style=flat-square&logo=googlechrome&logoColor=white" alt="Website: pebrel.com" /></a>
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
   <a href="https://atomgit.com/kettys/pebrel"><img src="https://atomgit.com/kettys/pebrel/star/badge.svg" alt="AtomGitStars" /></a>
   <a href="https://hub.xerj.org/contributors/Kuddev"><img src="https://hub.xerj.org/contributors/Kuddev/badge.svg" alt="XERJ Corpus Hub contributor" /></a>
@@ -28,7 +29,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
 </p>
 
 ---
@@ -59,17 +60,6 @@
       <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">Visit AIAPI</a></p>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="240">
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
-    </td>
-    <td>
-      <p><strong>One entry point for accessing and managing the world's leading AI models</strong></p>
-      <p>Thanks to Sidrune AI for sponsoring this project! Sidrune AI serves individual developers, technical teams and enterprises with a unified API for accessing and managing the world's leading AI models. Dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices.</p>
-      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">Visit and sign up now</a> to receive $3 in API credit.</p>
-    </td>
-  </tr>
 </table>
 
 For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
@@ -79,11 +69,11 @@ For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](ma
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-04.jpg"><img src="extra/community/wechat-group-2026-11-04.jpg" alt="QR code for the Pebrel WeChat group, valid before November 4, 2026" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="QR code for the Pebrel WeChat group, valid before November 24, 2026" width="300" /></a>
 </p>
 
 <p align="center">
-  Scan with WeChat to join. Valid before November 4, 2026. Click the image to view full size.
+  Scan with WeChat to join. Valid before November 24, 2026. Click the image to view full size.
 </p>
 
 ## One Workspace
@@ -120,13 +110,13 @@ each agent's activity, and read its output without leaving the application.
   Restoring defaults updates existing windows without restarting. Runtime overrides
   replace their previous rules, avoiding the stale disabled bindings from the append-only
   path; the saved configuration format is unchanged. See the
-  [shortcut ownership decision](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
+  [shortcut ownership decision](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
 - Local Windows PowerShell prompts can keep multiline clipboard paste in
   PSReadLine for review: Enter submits it, and one Undo removes the whole paste.
   This requires active shell integration and no user binding on its managed paste shortcut.
   PSReadLine normalizes CRLF and expands tabs to four spaces; other editors retain
   their negotiated paste or existing confirmation behavior. See the
-  [clipboard paste contract](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md).
+  [clipboard paste contract](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md).
 
 ### Intelligent Completion
 
@@ -146,6 +136,12 @@ character at a time with the built-in Powerline prompt.
 Choose **Inline** (Tab accepts the suggestion), **List** (Tab accepts the selected
 candidate), or **Hybrid** (→ accepts the inline suggestion; Tab opens the list)
 in Settings.
+
+When Pebrel can query the pane's filesystem, file arguments to `nvim`, `code`, and
+`cat` use its current directory; history only ranks the discovered candidates.
+To choose among several files, select **Hybrid**: Tab opens the
+list, subsequent Tab presses cycle candidates, and Enter inserts the selection
+without running the command. Right arrow accepts the inline suggestion directly.
 
 <details>
 <summary>How history completion differs</summary>
@@ -185,8 +181,11 @@ discover candidates from the current environment without matching prior commands
   selected language; Copy source preserves the complete original answer. See
   [reader language behavior](docs/answer-reader-language.md).
 - Clipboard images are saved as PNG files and their paths inserted into local,
-  WSL, or SSH sessions. Inline terminal images require the CLI to emit the supported
-  OSC 1337 protocol; image attachment previews depend on the CLI itself.
+  WSL, or SSH sessions. Each pane can retain up to 128 MiB. After the receiving command
+  or agent turn finishes, Pebrel keeps its files for at least two more minutes. Closing
+  a pane removes its local temporary images. Inline terminal images require CLI output using OSC 1337,
+  Kitty protocol (direct RGB/RGBA), or Sixel (7-bit DCS); image attachment previews
+  depend on the CLI itself.
 
 <p align="center">
   <img src="docs/screenshots/ai-sidebar.png" alt="AI activity sidebar" width="300" />
@@ -288,7 +287,7 @@ See the [notification duration menu](docs/screenshots/notification-duration.png)
 With the pinned Rust toolchain and the platform dependencies installed:
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 The internal Cargo package is still named `nebula`; the application and command
@@ -304,6 +303,11 @@ Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 Pebrel includes third-party terminal, interface and font components. Their
 provenance, copyright and license notices are preserved in
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
+
+<p>Thanks to <a href="https://molchuan.com/"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="extra/logo/acknowledgement_1molchuan_dark.png">
+  <img alt="1molchuan" src="extra/logo/acknowledgement_1molchuan_light.png" width="120">
+</picture></a> for providing extra support for Pebrel's development.</p>
 
 ## Community
 

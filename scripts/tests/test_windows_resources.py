@@ -16,7 +16,7 @@ class WindowsResourceTests(unittest.TestCase):
         command = [compiler, "-E", "-P", "-x", "c"]
         if gpui:
             command.append("-DNEBULA_GPUI_MANIFEST")
-        command.append(str(ROOT / "nebula_app/windows/nebula.rc"))
+        command.append(str(ROOT / "pebrel_app/windows/nebula.rc"))
         return subprocess.check_output(command, text=True, encoding="utf-8")
 
     def test_gpui_keeps_product_resources_without_a_second_manifest(self):
@@ -33,7 +33,7 @@ class WindowsResourceTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"^1\s+24\s+nebula\.manifest$", resource, re.MULTILINE)), 1)
 
     def test_product_versions_match_the_application_package(self):
-        manifest = tomllib.loads((ROOT / "nebula_app/Cargo.toml").read_text(encoding="utf-8"))
+        manifest = tomllib.loads((ROOT / "pebrel_app/Cargo.toml").read_text(encoding="utf-8"))
         version = manifest["package"]["version"]
         numeric = re.match(r"^\d+\.\d+\.\d+", version).group().replace(".", ",") + ",0"
         for gpui in (False, True):
@@ -47,7 +47,7 @@ class WindowsResourceTests(unittest.TestCase):
                     self.assertEqual(values, [version])
 
     def test_build_script_selects_the_resource_contract(self):
-        source = (ROOT / "nebula_app/build.rs").read_text(encoding="utf-8")
+        source = (ROOT / "pebrel_app/build.rs").read_text(encoding="utf-8")
         self.assertRegex(source, r'if cfg!\(feature = "gpui-shell"\)\s*\{\s*&\["NEBULA_GPUI_MANIFEST"\]')
         self.assertIn('embed_resource::compile("./windows/nebula.rc", defines)', source)
         self.assertIn("cargo:rerun-if-changed=windows/nebula.manifest", source)

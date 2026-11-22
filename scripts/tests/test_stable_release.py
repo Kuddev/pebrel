@@ -79,7 +79,7 @@ class StableReleaseTests(unittest.TestCase):
     def release_job_runs(
         self, workflow: str, job: str, results: dict[str, str], include_android: str,
         *, cancelled: bool = False, windows_only: bool = False,
-        event: str = "workflow_dispatch", publish: bool = False,
+        event: str = "workflow_dispatch", publish: bool = False, ref_type: str = "tag",
     ) -> bool:
         section = workflow.split(f"\n  {job}:\n", 1)[1]
         guard = section.split("if:", 1)[1].split("\n    needs:", 1)[0]
@@ -89,6 +89,7 @@ class StableReleaseTests(unittest.TestCase):
         values = {
             "cancelled()": repr(cancelled), "inputs.windows_only": repr(windows_only),
             "inputs.publish": repr(publish), "github.event_name": repr(event),
+            "github.ref_type": repr(ref_type),
             "needs.prepare.outputs.include_android": repr(include_android),
         }
         values.update({f"needs.{name}.result": repr(value) for name, value in results.items()})
@@ -192,6 +193,8 @@ class StableReleaseTests(unittest.TestCase):
             for status in ("failure", "skipped", "cancelled"):
                 with self.subTest(publication_dependency=job, status=status):
                     self.assertFalse(self.release_job_runs(workflow, "publish", {**verified, job: status}, "false", publish=True))
+        self.assertFalse(self.release_job_runs(workflow, "publish", verified, "false", event="push", ref_type="branch"))
+        self.assertTrue(self.release_job_runs(workflow, "publish", verified, "false", event="push", ref_type="branch", publish=True))
         self.assertFalse(self.release_job_runs(workflow, "publish", verified, "false", publish=True, cancelled=True))
         self.assertFalse(self.release_job_runs(workflow, "publish", verified, "false", publish=True, windows_only=True))
 
@@ -410,6 +413,37 @@ class StableReleaseTests(unittest.TestCase):
             source.write_text(notes().replace("https://github.com/Kuddev", "https://example.invalid"), encoding="utf-8")
             with self.assertRaisesRegex(StableReleaseError, "GitHub links"):
                 validate_notes(source, VERSION)
+
+    def test_new_notes_require_the_category_verb_in_each_english_entry(self) -> None:
+        version = "2.5.0"
+        body = notes().replace(VERSION, version, 1).replace(
+            "### Added\n- A stable package set.",
+            "- Desktop downloads are Preview builds.\n\n"
+            "### Added\n- Added a package set.\n  - Includes a portable ZIP.\n\n"
+            "### Fixed\n- Fixed startup.\n- Fixed file imports.\n\n"
+            "### Improved\n- Improved terminal completion.",
+        ).replace(
+            "- 稳定版安装包集合。",
+            "- 新增安装包集合。\n\n### 修复\n- 修复启动和文件导入。\n\n"
+            "### 改进\n- 改进终端补全。",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "v2.5.0.md"
+            source.write_text(body, encoding="utf-8")
+            self.assertEqual(validate_notes(source, version), body)
+            invalid_entries = (
+                ("Added a package set.", "A package set.", "Added"),
+                ("Fixed file imports.", "Added file imports.", "Fixed"),
+                ("Improved terminal completion.", "Improvedness of completion.", "Improved"),
+            )
+            for before, after, verb in invalid_entries:
+                with self.subTest(verb=verb):
+                    source.write_text(body.replace(before, after), encoding="utf-8")
+                    with self.assertRaisesRegex(StableReleaseError, f"start with {verb}"):
+                        validate_notes(source, version)
+            source.write_text(body.replace("- Improved terminal completion.", ""), encoding="utf-8")
+            with self.assertRaisesRegex(StableReleaseError, "top-level list under Improved"):
+                validate_notes(source, version)
 
     def test_notes_allow_no_pr_contributors_but_keep_section_contracts(self) -> None:
         before, rest = notes().split("## Contributors\n", 1)

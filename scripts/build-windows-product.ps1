@@ -21,9 +21,9 @@ try {
     # The acceptance lab is tested by CI but does not supply a packaged binary.
     $arguments = @(
         'build', '--locked', '--timings',
-        '-p', 'nebula', '--bin', 'pebrel', '--bin', 'pebrel-cli',
-        '-p', 'nebula_hook', '--bin', 'pebrel-hook',
-        '--features', 'nebula/gpui-shell'
+        '-p', 'pebrel', '--bin', 'pebrel', '--bin', 'pebrel-cli',
+        '-p', 'pebrel_hook', '--bin', 'pebrel-hook',
+        '--features', 'pebrel/gpui-shell'
     )
     if ($Configuration -eq 'release') { $arguments += '--release' }
     & cargo @arguments

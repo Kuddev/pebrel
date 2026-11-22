@@ -1,0 +1,547 @@
+//! 更新提示、应用内下载与安装确认弹窗。
+//!
+//! 后台检查先显示右下角通知；详情弹窗负责启动流式下载并展示进度。下载任务
+//! 即使弹窗被遮罩点击关闭也会继续，完成或失败后再以右下角通知召回用户。
+
+use super::*;
+
+use crate::i18n::Message;
+use crate::update_download::DownloadStatus;
+
+const UPDATE_DIALOG_IDLE_HEIGHT: f32 = 250.0;
+const UPDATE_DIALOG_STATUS_HEIGHT: f32 = 280.0;
+
+fn update_dialog_frame(dialog: Dialog, window: &Window, estimated_height: f32, cx: &App) -> Dialog {
+    // 默认 Dialog 继承终端壳的透明背景；更新内容需像设置页一样遮住底层文字。
+    center_modal_dialog(dialog, window, estimated_height)
+        .bg(crate::gpui_shell::theme::settings_panel_bg(cx))
+}
+
+struct UpdateNotification;
+
+/// 自动检查只在右下角提示，不抢终端焦点；默认常驻，也遵循通知时长设置。
+pub(crate) fn show_update_notification(
+    result: crate::update_check::UpdateCheckResult,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let cached_status = result.asset().map(crate::update_download::status);
+    if matches!(cached_status, Some(DownloadStatus::InstallFailed(_))) {
+        show_download_outcome_notification(result, cached_status.unwrap(), window, cx);
+        return;
+    }
+    if pebrel_settings::RuntimeSettings::load().auto_download_updates
+        && result.asset().is_some_and(|asset| asset.sha256.is_some())
+    {
+        start_update_download(result.clone(), window, cx);
+    }
+    let language = workspace_ui_language();
+    let title: SharedString = language.pick("发现新版本", "Update available").into();
+    let message: SharedString = language
+        .format(
+            crate::i18n::Message::CommonUpdateNotice,
+            &[("latest", &result.latest), ("current", &result.current)],
+        )
+        .into();
+    let action_label: SharedString = language.pick("查看更新", "View update").into();
+    let action_result = result.clone();
+    let notification = Notification::warning(message)
+        .id::<UpdateNotification>()
+        .title(title)
+        .w_auto()
+        .min_w(px(300.0))
+        .max_w(px(440.0))
+        .action(move |_, _, cx| {
+            let result = action_result.clone();
+            Button::new("view-nebula-update").label(action_label.clone()).primary().on_click(
+                cx.listener(move |notification, _, window, cx| {
+                    notification.dismiss(window, cx);
+                    open_update_dialog(result.clone(), window, cx);
+                }),
+            )
+        });
+    log::info!(
+        "update-check: showing update notification for v{} (current v{})",
+        result.latest,
+        result.current
+    );
+    crate::gpui_shell::toast::push_notification(window, cx, notification, None);
+}
+
+fn start_update_download(
+    result: crate::update_check::UpdateCheckResult,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(asset) = result.asset().cloned() else {
+        cx.open_url(result.manual_download_url());
+        return;
+    };
+    let job = match crate::update_download::begin(&asset) {
+        Ok(Some(job)) => job,
+        Ok(None) => {
+            cx.refresh_windows();
+            return;
+        },
+        Err(error) => {
+            crate::gpui_shell::toast::toast(window, cx, crate::display::ToastKind::Warning, error);
+            return;
+        },
+    };
+
+    let language = workspace_ui_language();
+    let observation = job.clone();
+    cx.background_executor()
+        .spawn(async move { crate::update_download::run(job, language) })
+        .detach();
+
+    let window_handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            if !observation.is_current() {
+                break;
+            }
+            let status = crate::update_download::status(&asset);
+            let finished = status.is_terminal();
+            let notification_result = result.clone();
+            let _ = window_handle.update(cx, move |_, window, cx| {
+                cx.refresh_windows();
+                if finished {
+                    show_download_outcome_notification(notification_result, status, window, cx);
+                }
+            });
+            if finished {
+                break;
+            }
+        }
+    })
+    .detach();
+    cx.refresh_windows();
+}
+
+fn show_download_outcome_notification(
+    result: crate::update_check::UpdateCheckResult,
+    status: DownloadStatus,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let language = workspace_ui_language();
+    let downloaded_version =
+        result.asset().map_or(result.latest.as_str(), |asset| asset.version.as_str()).to_owned();
+    let (title, message, action, success): (SharedString, SharedString, SharedString, bool) =
+        match status {
+            DownloadStatus::Ready { bytes, .. } => (
+                language.pick("更新已下载", "Update downloaded").into(),
+                match language {
+                    crate::display::UiLanguage::ZhCn => {
+                        format!(
+                            "v{} 安装包已通过 SHA-256 校验（{}）",
+                            downloaded_version,
+                            format_bytes(bytes)
+                        )
+                    },
+                    _ => format!(
+                        "The v{} installer passed SHA-256 verification ({})",
+                        downloaded_version,
+                        format_bytes(bytes)
+                    ),
+                }
+                .into(),
+                language.text(Message::UpdateRestartInstall).into(),
+                true,
+            ),
+            DownloadStatus::Failed(error) => (
+                language.pick("更新下载失败", "Update download failed").into(),
+                error.into(),
+                language.pick("查看详情", "View details").into(),
+                false,
+            ),
+            DownloadStatus::InstallFailed(error) => (
+                language.text(Message::UpdateInstallationFailed).into(),
+                error.into(),
+                language.text(Message::UpdateViewDetails).into(),
+                false,
+            ),
+            _ => return,
+        };
+    let action_result = result.clone();
+    let mut notification =
+        if success { Notification::success(message) } else { Notification::warning(message) };
+    notification = notification
+        .id::<UpdateNotification>()
+        .title(title)
+        .w_auto()
+        .min_w(px(320.0))
+        .max_w(px(460.0))
+        .action(move |_, _, cx| {
+            let result = action_result.clone();
+            Button::new("open-downloaded-nebula-update").label(action.clone()).primary().on_click(
+                cx.listener(move |notification, _, window, cx| {
+                    notification.dismiss(window, cx);
+                    open_update_dialog(result.clone(), window, cx);
+                }),
+            )
+        });
+    crate::gpui_shell::toast::push_notification(window, cx, notification, None);
+}
+
+/// 关闭、Esc 与遮罩点击均走“3 天后提醒”；这正是新 Dialog 的取消合同。
+pub(crate) fn open_update_dialog(
+    result: crate::update_check::UpdateCheckResult,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Err(error) = crate::update_check::mark_prompted(&result.latest) {
+        log::warn!("update-check: failed to record prompt: {error}");
+    }
+
+    let dialog_result = result.clone();
+    window.open_dialog(cx, move |dialog, window, cx| {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let title: SharedString = language.pick("Pebrel 更新", "Pebrel Update").into();
+        let current_label: SharedString = language.pick("当前版本", "Current").into();
+        let latest_label: SharedString = language.pick("最新版本", "Latest").into();
+        let current_version: SharedString = format!("v{}", dialog_result.current).into();
+        let latest_version: SharedString = format!("v{}", dialog_result.latest).into();
+        let later_text: SharedString =
+            language.text(Message::UpdateLater).into();
+        let skip_text: SharedString = language.text(Message::UpdateSkipVersion).into();
+        let muted = cx.theme().muted_foreground;
+        let latest_color = cx.theme().warning;
+        let version_background = cx.theme().muted;
+        let danger = cx.theme().danger;
+        let asset = dialog_result.asset().cloned();
+        let status = asset
+            .as_ref()
+            .map(crate::update_download::status)
+            .unwrap_or(DownloadStatus::Idle);
+        let verified_asset = asset.as_ref().is_some_and(|asset| asset.sha256.is_some());
+        let downloading = matches!(status, DownloadStatus::Downloading { .. });
+        // 居中 helper 需要内容高度估值；按实际渲染态区分，避免统一按 330px
+        // 计算时让较矮的初始弹窗明显偏上。
+        let estimated_height = match &status {
+            DownloadStatus::Idle => UPDATE_DIALOG_IDLE_HEIGHT,
+            DownloadStatus::Downloading { .. }
+            | DownloadStatus::Ready { .. }
+            | DownloadStatus::Failed(_)
+            | DownloadStatus::InstallFailed(_) => UPDATE_DIALOG_STATUS_HEIGHT,
+        };
+
+        let hint: SharedString = match (&status, asset.as_ref()) {
+            (DownloadStatus::Downloading { .. }, _) => language.text(Message::UpdateDownloadingHint).into(),
+            (DownloadStatus::Ready { .. }, _) => language.text(Message::UpdateReadyHint).into(),
+            (DownloadStatus::InstallFailed(_), _) => language.text(Message::UpdateInstallationFailedHint).into(),
+            (DownloadStatus::Failed(_), _) => language
+                .pick(
+                    "下载未完成。可以重试自动下载，或打开发布页手动处理。",
+                    "The download did not complete. Retry it here or use the Releases page.",
+                )
+                .into(),
+            (_, Some(_)) if verified_asset => language
+                .pick(
+                    "Pebrel 将自动下载并校验安装包；校验完成后由你确认安装。",
+                    "Pebrel will download and verify the installer, then wait for your confirmation before installing.",
+                )
+                .into(),
+            _ if dialog_result.is_portable() => language.text(
+                if dialog_result.portable_zip_url().is_some() {
+                    Message::UpdatePortableHint
+                } else {
+                    Message::UpdatePortableMissingZip
+                },
+            ).into(),
+            // Platforms without an installation adapter retain manual downloads.
+            _ if !crate::platform::CAPABILITIES.self_update_install => language
+                .pick(
+                    "此平台暂不支持应用内自动更新；请到发布页下载对应的安装包。",
+                    "In-app automatic updates are not available on this platform yet. Download the matching package from the Releases page.",
+                )
+                .into(),
+            _ => language.text(Message::UpdateNoVerifiedPackage).into(),
+        };
+
+        let primary_text: SharedString = match status {
+            DownloadStatus::Idle if dialog_result.portable_zip_url().is_some() => {
+                language.text(Message::UpdateDownloadZip).into()
+            },
+            DownloadStatus::Idle if verified_asset => {
+                language.pick("下载更新", "Download update").into()
+            },
+            DownloadStatus::Downloading { .. } => {
+                language.text(Message::UpdateStopDownload).into()
+            },
+            DownloadStatus::Ready { .. } => {
+                language.text(Message::UpdateRestartInstall).into()
+            },
+            DownloadStatus::InstallFailed(_) if verified_asset => {
+                language.text(Message::UpdateRecheckPackage).into()
+            },
+            DownloadStatus::Failed(_) if verified_asset => {
+                language.pick("重新下载", "Retry download").into()
+            },
+            _ => language.pick("打开发布页", "Open Releases").into(),
+        };
+
+        let mut body = v_flex()
+            .gap_4()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
+                    .px_3()
+                    .py_3()
+                    .rounded_md()
+                    .bg(version_background)
+                    .child(
+                        v_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(div().text_sm().text_color(muted).child(current_label))
+                            .child(div().text_base().font_semibold().child(current_version)),
+                    )
+                    .child(Icon::new(IconName::ArrowRight).small().text_color(muted))
+                    .child(
+                        v_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(div().text_sm().text_color(muted).child(latest_label))
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_semibold()
+                                    .text_color(latest_color)
+                                    .child(latest_version),
+                            ),
+                    ),
+            )
+            .child(div().text_base().line_height(relative(1.5)).text_color(muted).child(hint));
+
+        match &status {
+            DownloadStatus::Downloading { downloaded, total } => {
+                let percent = total
+                    .filter(|total| *total > 0)
+                    .map(|total| (*downloaded as f32 / total as f32 * 100.0).clamp(0.0, 100.0));
+                let progress_text: SharedString = total.map_or_else(
+                    || format!("{}", format_bytes(*downloaded)),
+                    |total| {
+                        format!(
+                            "{} / {}  ({:.0}%)",
+                            format_bytes(*downloaded),
+                            format_bytes(total),
+                            percent.unwrap_or(0.0)
+                        )
+                    },
+                ).into();
+                body = body
+                    .child(
+                        gpui_component::progress::Progress::new("nebula-update-download-progress")
+                            .small()
+                            .loading(percent.is_none())
+                            .value(percent.unwrap_or(0.0)),
+                    )
+                    .child(div().text_sm().text_color(muted).child(progress_text));
+            },
+            DownloadStatus::Ready { path, bytes } => {
+                let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+                body = body.child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(format!("{} · {}", file_name, format_bytes(*bytes))),
+                );
+            },
+            DownloadStatus::Failed(error) | DownloadStatus::InstallFailed(error) => {
+                body = body.child(
+                    div()
+                        .text_sm()
+                        .line_height(relative(1.4))
+                        .text_color(danger)
+                        .child(error.clone()),
+                );
+            },
+            DownloadStatus::Idle => {},
+        }
+
+        let skip_version = dialog_result.latest.clone();
+        let cancel_version = dialog_result.latest.clone();
+        let action_result = dialog_result.clone();
+        let save_failed_prefix = language.pick("无法保存更新提醒设置", "Could not save update preference");
+        let error_separator = language.pick("：", ": ");
+        let cancel_save_failed_prefix = save_failed_prefix.to_owned();
+        let cancel_error_separator = error_separator.to_owned();
+        let mut footer = DialogFooter::new()
+            .gap(px(6.0))
+            .child(
+                Button::new("skip-nebula-update")
+                    .label(skip_text)
+                    .ghost()
+                    .disabled(downloading)
+                    .on_click(move |_, window, cx| {
+                        if let Err(error) = crate::update_check::skip_version(&skip_version) {
+                            crate::gpui_shell::toast::toast(
+                                window,
+                                cx,
+                                crate::display::ToastKind::Warning,
+                                format!("{save_failed_prefix}{error_separator}{error}"),
+                            );
+                        }
+                        window.close_dialog(cx);
+                    }),
+            )
+            .child(div().flex_1())
+            .child(DialogClose::new().child(Button::new("cancel").label(later_text)));
+        if matches!(status, DownloadStatus::Ready { .. }) && let Some(asset) = asset.clone() {
+            footer = footer.child(Button::new("install-next-launch")
+                .label(language.text(Message::UpdateInstallNextLaunch))
+                .on_click(move |_, window, cx| {
+                    match windowing::schedule_update(&asset, cx) {
+                        Ok(()) => window.close_dialog(cx),
+                        Err(error) => crate::gpui_shell::toast::toast(window, cx,
+                            crate::display::ToastKind::Warning, error),
+                    }
+                }));
+        }
+        let primary = Button::new("ok").label(primary_text).primary();
+        footer = footer.child(DialogAction::new().child(primary));
+
+        update_dialog_frame(dialog, window, estimated_height, cx)
+            .close_button(true)
+            // 保留新 Dialog 的遮罩点击取消；它与 Esc、取消按钮共用 on_cancel。
+            .overlay_closable(true)
+            .title(div().text_lg().font_semibold().line_height(relative(1.0)).child(title))
+            .footer(footer)
+            .child(body)
+            .on_ok(move |_, window, cx| {
+                let Some(asset) = action_result.asset() else {
+                    cx.open_url(action_result.manual_download_url());
+                    return true;
+                };
+                match crate::update_download::status(asset) {
+                    DownloadStatus::Idle | DownloadStatus::Failed(_) | DownloadStatus::InstallFailed(_) if asset.sha256.is_some() => {
+                        start_update_download(action_result.clone(), window, cx);
+                        false
+                    },
+                    DownloadStatus::Downloading { .. } => {
+                        crate::update_download::cancel(asset);
+                        cx.refresh_windows();
+                        false
+                    },
+                    DownloadStatus::Ready { .. } => {
+                        window.close_dialog(cx);
+                        windowing::quit_for_update(asset.clone(), cx);
+                        false
+                    },
+                    _ => {
+                        cx.open_url(action_result.manual_download_url());
+                        true
+                    },
+                }
+            })
+            .on_cancel(move |_, window, cx| {
+                if let Err(error) = crate::update_check::remind_later(&cancel_version) {
+                    crate::gpui_shell::toast::toast(
+                        window,
+                        cx,
+                        crate::display::ToastKind::Warning,
+                        format!("{cancel_save_failed_prefix}{cancel_error_separator}{error}"),
+                    );
+                }
+                true
+            })
+    });
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    const KIB: f64 = 1024.0;
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / MIB)
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use gpui_component::{Theme, ThemeMode};
+
+    struct DialogProbe;
+
+    impl Render for DialogProbe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // 滚动组件依赖当前视图；沿用真实模态层，避免裸绘制 Dialog 缺失实体上下文。
+            div().size_full().children(Root::render_dialog_layer(window, cx))
+        }
+    }
+
+    #[gpui::test]
+    fn update_dialog_stays_opaque_without_changing_terminal_opacity(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| DialogProbe);
+            Root::new(view, window, cx)
+        });
+        cx.simulate_resize(size(px(800.0), px(600.0)));
+        for name in [pebrel_settings::ThemeName::LinenLight, pebrel_settings::ThemeName::Nord] {
+            cx.update(|window, cx| {
+                let mut runtime = pebrel_settings::RuntimeSettings::from_raw(
+                    &pebrel_settings::RawSettings::default(),
+                );
+                runtime.theme = name;
+                runtime.follow_system_theme = false;
+                cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(
+                    name, runtime,
+                ));
+                let mode = if crate::gpui_shell::theme::resolved_skin(cx).is_light {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                Theme::change(mode, Some(window), cx);
+            });
+            for alpha in [0.0, 0.2, 0.75, 1.0] {
+                for height in [UPDATE_DIALOG_IDLE_HEIGHT, UPDATE_DIALOG_STATUS_HEIGHT] {
+                    let shell = cx.update(|window, cx| {
+                        let panel = crate::gpui_shell::theme::settings_panel_bg(cx);
+                        let shell = panel.opacity(alpha);
+                        let theme = Theme::global_mut(cx);
+                        theme.background = shell;
+                        theme.tokens.background = shell.into();
+                        window.open_dialog(cx, move |dialog, window, cx| {
+                            let mut dialog = update_dialog_frame(dialog, window, height, cx);
+                            assert_eq!(panel.a, 1.0);
+                            assert_eq!(dialog.style().background, Some(panel.into()));
+                            assert_eq!(cx.theme().background, shell);
+                            assert_eq!(cx.theme().tokens.background, shell.into());
+                            dialog.title("Update").child(
+                                div()
+                                    .debug_selector(|| "update-dialog-body".to_owned())
+                                    .child("Version details"),
+                            )
+                        });
+                        shell
+                    });
+                    cx.run_until_parked();
+                    cx.update(|window, cx| {
+                        let _ = window.draw(cx);
+                        assert_eq!(cx.theme().background, shell);
+                        assert_eq!(cx.theme().tokens.background, shell.into());
+                    });
+                    let bounds = cx.debug_bounds("update-dialog-body").expect("rendered dialog");
+                    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+                    cx.update(|window, cx| window.close_dialog(cx));
+                }
+            }
+        }
+    }
+}

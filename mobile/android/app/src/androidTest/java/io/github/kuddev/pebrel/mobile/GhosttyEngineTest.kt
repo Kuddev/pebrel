@@ -343,8 +343,14 @@ class GhosttyEngineTest {
         instrumentation.waitForIdleSync()
         val labels = listOf(R.string.local_terminal, R.string.home_open_local, R.string.onboarding_phone_terminal)
             .joinToString("|") { java.util.regex.Pattern.quote(target.getString(it)) }
+        val localAction = androidx.test.uiautomator.By.text(java.util.regex.Pattern.compile(labels))
+        if (device.findObject(localAction) == null) {
+            // Saved hosts can push the home-page shortcut below the viewport.
+            checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(
+                androidx.test.uiautomator.By.desc(target.getString(R.string.new_connection))), 5000)).click()
+        }
         checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(
-            androidx.test.uiautomator.By.text(java.util.regex.Pattern.compile(labels))), 5000)).click()
+            localAction), 5000)).click()
         await { repository.sessions.value.any { it.id !in existing && it.source == "Local" && it.status == "ready" } }
         val local = repository.sessions.value.single { it.id !in existing && it.source == "Local" }
         val terminal = local.terminal

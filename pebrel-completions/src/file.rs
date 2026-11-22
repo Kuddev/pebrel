@@ -1,0 +1,744 @@
+use std::fmt::Write;
+use std::path::{Component, MAIN_SEPARATOR as SEP, Path, PathBuf, is_separator};
+
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::matcher::{CandidateMatcher, IgnoreCaseExt};
+use crate::options::{CompletionOptions, MatchAlgorithm};
+use crate::span::Span;
+
+// ---------------------------------------------------------------------------
+// FileSuggestion
+// ---------------------------------------------------------------------------
+
+/// A single file/directory completion candidate produced by [`complete_item`].
+pub struct FileSuggestion {
+    pub span: Span,
+    pub path: String,
+    #[cfg(feature = "color")]
+    pub style: Option<nu_ansi_term::Style>,
+    pub is_dir: bool,
+    pub display_override: Option<String>,
+    pub match_indices: Vec<usize>,
+}
+
+// ---------------------------------------------------------------------------
+// Helper types for recursive path completion
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+struct PathBuiltFromString {
+    cwd: PathBuf,
+    parts: Vec<MatchedPart>,
+    isdir: bool,
+}
+
+#[derive(Clone, Default)]
+struct MatchedPart {
+    text: String,
+    match_indices: Vec<usize>,
+}
+
+#[derive(Debug)]
+enum OriginalCwd {
+    None,
+    Home,
+    Prefix(String),
+}
+
+/// Expand n-dots (`...` → `../..`, `....` → `../../..`, etc.).
+fn expand_ndots(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(&c) = chars.peek() {
+        if c == '.' {
+            let mut dot_count = 0;
+            while chars.peek() == Some(&'.') {
+                chars.next();
+                dot_count += 1;
+            }
+            if dot_count > 2 {
+                // n dots → n-1 repetitions of ".."
+                for i in 0..dot_count - 1 {
+                    if i > 0 {
+                        result.push(SEP);
+                    }
+                    result.push_str("..");
+                }
+            } else {
+                for _ in 0..dot_count {
+                    result.push('.');
+                }
+            }
+        } else {
+            result.push(chars.next().unwrap());
+        }
+    }
+
+    PathBuf::from(result)
+}
+
+/// Collapse consecutive `..` segments back into n-dots.
+fn collapse_ndots(path: PathBuiltFromString) -> PathBuiltFromString {
+    let mut result = PathBuiltFromString {
+        parts: Vec::with_capacity(path.parts.len()),
+        isdir: path.isdir,
+        cwd: path.cwd,
+    };
+    let mut dot_count = 0;
+
+    for part in path.parts {
+        if part.text == ".." {
+            dot_count += 1;
+        } else {
+            if dot_count > 0 {
+                result.parts.push(MatchedPart {
+                    text: ".".repeat(dot_count + 1),
+                    match_indices: Vec::new(),
+                });
+                dot_count = 0;
+            }
+            result.parts.push(part);
+        }
+    }
+    if dot_count > 0 {
+        result
+            .parts
+            .push(MatchedPart { text: ".".repeat(dot_count + 1), match_indices: Vec::new() });
+    }
+    result
+}
+
+/// Recursively walk directories and collect matching paths.
+fn complete_rec(
+    partial: &[&str],
+    built_paths: &[PathBuiltFromString],
+    options: &CompletionOptions,
+    want_directory: bool,
+    isdir: bool,
+    enable_exact_match: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<PathBuiltFromString> {
+    if cancelled() {
+        return Vec::new();
+    }
+    let has_more = !partial.is_empty() && (partial.len() > 1 || isdir);
+
+    if let Some((&base, rest)) = partial.split_first()
+        && matches!(base, "." | "..")
+        && has_more
+    {
+        let built_paths: Vec<_> = built_paths
+            .iter()
+            .map(|built| {
+                let mut built = built.clone();
+                built.parts.push(MatchedPart { text: base.to_string(), match_indices: Vec::new() });
+                built.isdir = true;
+                built
+            })
+            .collect();
+        return complete_rec(
+            rest,
+            &built_paths,
+            options,
+            want_directory,
+            isdir,
+            enable_exact_match,
+            cancelled,
+        );
+    }
+
+    let prefix = partial.first().unwrap_or(&"");
+    let mut matcher = CandidateMatcher::literal(prefix, options, true);
+
+    let mut exact_match = None;
+    let mut multiple_exact_matches = false;
+
+    for built in built_paths {
+        if cancelled() {
+            return Vec::new();
+        }
+        let mut path = built.cwd.clone();
+        for part in &built.parts {
+            path.push(part.text.as_str());
+        }
+
+        let Ok(result) = path.read_dir() else {
+            continue;
+        };
+
+        for entry in result.filter_map(|e| e.ok()) {
+            // 系统调用本身无法中断；每个条目之间检查，避免旧输入继续遍历大目录。
+            if cancelled() {
+                return Vec::new();
+            }
+            // 目录项类型优先取 `file_type`，在文件系统提供 d_type 时省去每条目
+            // 一次 stat。它不跟随 symlink，因此 symlink 仍回退到 `is_dir`，
+            // 保持“指向目录的 symlink 视为目录”的既有语义；类型未知时同样回退。
+            let entry_isdir = match entry.file_type() {
+                Ok(file_type) if file_type.is_symlink() => entry.path().is_dir(),
+                Ok(file_type) => file_type.is_dir(),
+                Err(_) => entry.path().is_dir(),
+            };
+
+            if !want_directory || entry_isdir {
+                // 被 `want_directory` 过滤掉的条目不再分配名称，也不再 clone
+                // 父路径。
+                let entry_name = entry.file_name().to_string_lossy().into_owned();
+
+                if enable_exact_match && !multiple_exact_matches && has_more {
+                    let matches = if options.case_sensitive {
+                        entry_name.eq(prefix)
+                    } else {
+                        entry_name.eq_ignore_case(prefix)
+                    };
+                    if matches {
+                        if exact_match.is_none() {
+                            let match_indices: Vec<usize> =
+                                (0..entry_name.graphemes(true).count()).collect();
+                            let mut built_exact = built.clone();
+                            built_exact.isdir = entry_isdir;
+                            built_exact
+                                .parts
+                                .push(MatchedPart { text: entry_name.clone(), match_indices });
+                            exact_match = Some(built_exact);
+                        } else {
+                            multiple_exact_matches = true;
+                        }
+                    }
+                }
+
+                let mut completed = built.clone();
+                completed.isdir = entry_isdir;
+                matcher.add_owned(entry_name, completed);
+            }
+        }
+    }
+
+    // Single exact match → drill into it directly (hides sibling entries)
+    if !multiple_exact_matches && let Some(built) = exact_match {
+        return complete_rec(
+            &partial[1..],
+            &[built],
+            options,
+            want_directory,
+            isdir,
+            true,
+            cancelled,
+        );
+    }
+
+    let completion_iter = matcher.results_with_haystack().into_iter().map(
+        |(mut built, last_entry_name, last_match_indices)| {
+            built
+                .parts
+                .push(MatchedPart { text: last_entry_name, match_indices: last_match_indices });
+            built
+        },
+    );
+
+    if has_more {
+        completion_iter
+            .flat_map(|completion| {
+                complete_rec(
+                    &partial[1..],
+                    &[completion],
+                    options,
+                    want_directory,
+                    isdir,
+                    false,
+                    cancelled,
+                )
+            })
+            .collect()
+    } else {
+        completion_iter.collect()
+    }
+}
+
+/// Escape special characters in a path for safe insertion.
+///
+/// Returns `Some(escaped)` if escaping was needed, `None` if the path
+/// is safe as-is.
+pub fn escape_path(path: &str) -> Option<String> {
+    // Check for glob-like characters or backticks
+    let has_glob = path.contains(|c: char| matches!(c, '*' | '?' | '[' | ']'));
+    if has_glob || path.contains('`') {
+        // Simple tilde expansion
+        let expanded = if path.starts_with('~') {
+            dirs_next_home().map_or_else(
+                || path.to_string(),
+                |home| {
+                    let rest = &path[1..];
+                    if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
+                        format!("{}{}", home.display(), rest)
+                    } else {
+                        // ~user form — just leave it
+                        path.to_string()
+                    }
+                },
+            )
+        } else {
+            path.to_string()
+        };
+
+        if expanded.contains('\'') {
+            Some(format!("{expanded:?}")) // debug escapes quotes
+        } else {
+            Some(format!("'{expanded}'"))
+        }
+    } else {
+        let contaminated =
+            path.contains(['\'', '"', ' ', '#', '(', ')', '{', '}', '[', ']', '|', ';']);
+        let maybe_flag = path.starts_with('-');
+        let maybe_variable = path.starts_with('$');
+        let maybe_number = path.parse::<f64>().is_ok();
+        if contaminated || maybe_flag || maybe_variable || maybe_number {
+            Some(format!("`{path}`"))
+        } else {
+            None
+        }
+    }
+}
+
+/// Get the home directory (small helper to avoid pulling in `dirs` crate
+/// if we can use `std`).
+fn dirs_next_home() -> Option<PathBuf> {
+    // Try standard env vars first, then fall back to home_dir (deprecated but works)
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).or_else(
+        || {
+            std::env::var_os("HOMEDRIVE").and_then(|drive| {
+                std::env::var_os("HOMEPATH").map(|path| {
+                    let mut p = PathBuf::from(drive);
+                    p.push(path);
+                    p
+                })
+            })
+        },
+    )
+}
+
+/// Expand only a verified leading home token; quoted literal tildes never call this.
+pub fn expand_home(partial: &str) -> Option<String> {
+    let rest = partial.strip_prefix('~')?;
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return None;
+    }
+    Some(format!("{}{rest}", dirs_next_home()?.to_str()?))
+}
+
+/// Remove surrounding quotes from a partial path.
+pub fn surround_remove(partial: &str) -> String {
+    for c in ['`', '"', '\''] {
+        if partial.starts_with(c) {
+            let ret = partial.strip_prefix(c).unwrap_or(partial);
+            return match ret.split(c).collect::<Vec<_>>()[..] {
+                [inside] => inside.to_string(),
+                [inside, outside] if inside.ends_with(is_separator) => {
+                    format!("{inside}{outside}")
+                },
+                _ => ret.to_string(),
+            };
+        }
+    }
+    partial.to_string()
+}
+
+/// Complete files / directories recursively.
+///
+/// * `want_directory` — only return directories if `true`.
+/// * `span` — span of the partial in the input.
+/// * `partial` — the partial path the user typed.
+/// * `cwds` — one or more directories to search from.
+/// * `options` — matching configuration.
+/// * `use_ls_colors` — whether to compute ANSI styles from `LS_COLORS`.
+/// * `ls_colors_env` — optional `LS_COLORS` environment variable value.
+pub fn complete_item(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    use_ls_colors: bool,
+    ls_colors_env: Option<&str>,
+) -> Vec<FileSuggestion> {
+    complete_item_with_cancel(
+        want_directory,
+        span,
+        partial,
+        cwds,
+        options,
+        use_ls_colors,
+        ls_colors_env,
+        &|| false,
+    )
+}
+
+/// Complete paths with cooperative cancellation between directory operations.
+/// Cancellation discards partial results; it cannot interrupt a pending OS read.
+#[allow(clippy::too_many_arguments)]
+pub fn complete_item_with_cancel(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    use_ls_colors: bool,
+    ls_colors_env: Option<&str>,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    complete_paths(
+        want_directory,
+        span,
+        partial,
+        cwds,
+        options,
+        use_ls_colors,
+        ls_colors_env,
+        false,
+        cancelled,
+    )
+}
+
+/// Match decoded literal paths without shell quoting, home or n-dot interpretation.
+/// The caller owns shell spelling; traversal and cancellation remain shared.
+pub fn complete_literal_with_cancel(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    complete_paths(want_directory, span, partial, cwds, options, false, None, true, cancelled)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "color"), allow(unused_variables))]
+fn complete_paths(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    use_ls_colors: bool,
+    ls_colors_env: Option<&str>,
+    literal: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    if cancelled() {
+        return Vec::new();
+    }
+    let cleaned_partial = if literal { partial.to_owned() } else { surround_remove(partial) };
+    let isdir = cleaned_partial.ends_with(is_separator);
+    let expanded_partial = if literal {
+        PathBuf::from(&cleaned_partial)
+    } else {
+        expand_ndots(Path::new(&cleaned_partial))
+    };
+    let should_collapse_dots = expanded_partial != Path::new(&cleaned_partial);
+    let mut partial = expanded_partial.to_string_lossy().to_string();
+
+    #[cfg(unix)]
+    let path_separator = SEP;
+    #[cfg(windows)]
+    let path_separator = cleaned_partial.chars().rfind(|c: &char| is_separator(*c)).unwrap_or(SEP);
+
+    // Handle trailing dot case
+    if cleaned_partial.ends_with(&format!("{path_separator}.")) {
+        write!(partial, "{path_separator}.").expect("write to String is infallible");
+    }
+
+    let cwd_pathbufs: Vec<_> =
+        cwds.iter().map(|cwd| Path::new(cwd.as_ref()).to_path_buf()).collect();
+
+    #[cfg(feature = "color")]
+    let ls_colors = if use_ls_colors { crate::color::get_ls_colors(ls_colors_env) } else { None };
+
+    let mut cwds = cwd_pathbufs.clone();
+    let mut prefix_len = 0;
+    let mut original_cwd = OriginalCwd::None;
+
+    let mut components = Path::new(&partial).components().peekable();
+    match components.peek().cloned() {
+        Some(c @ Component::Prefix(..)) => {
+            // Windows prefix (e.g., `C:`)
+            cwds = vec![[c, Component::RootDir].iter().collect()];
+            prefix_len = c.as_os_str().len();
+            original_cwd = OriginalCwd::Prefix(c.as_os_str().to_string_lossy().into_owned());
+        },
+        Some(c @ Component::RootDir) => {
+            cwds = vec![PathBuf::from(c.as_os_str())];
+            prefix_len = 1;
+            original_cwd = OriginalCwd::Prefix(String::new());
+        },
+        Some(Component::Normal(home)) if !literal && home.to_string_lossy() == "~" => {
+            cwds = dirs_next_home().map(|dir| vec![dir]).unwrap_or(cwd_pathbufs);
+            prefix_len = 1;
+            original_cwd = OriginalCwd::Home;
+        },
+        _ => {},
+    };
+
+    let after_prefix = &partial[prefix_len..];
+    let partial: Vec<_> = after_prefix
+        .strip_prefix(is_separator)
+        .unwrap_or(after_prefix)
+        .split(is_separator)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let completed = complete_rec(
+        partial.as_slice(),
+        &cwds
+            .into_iter()
+            .map(|cwd| PathBuiltFromString { cwd, parts: Vec::new(), isdir: false })
+            .collect::<Vec<_>>(),
+        options,
+        want_directory,
+        isdir,
+        options.match_algorithm == MatchAlgorithm::Prefix,
+        cancelled,
+    );
+    if cancelled() {
+        return Vec::new();
+    }
+    let suggestions = completed
+        .into_iter()
+        .take_while(|_| !cancelled())
+        .map(|mut p| {
+            if should_collapse_dots {
+                p = collapse_ndots(p);
+            }
+            let is_dir = p.isdir;
+
+            let mut path = match &original_cwd {
+                OriginalCwd::None => String::new(),
+                OriginalCwd::Home => format!("~{path_separator}"),
+                OriginalCwd::Prefix(s) => format!("{s}{path_separator}"),
+            };
+            let mut match_index_offset = path.graphemes(true).count();
+            let mut match_indices = Vec::new();
+            for (i, part) in p.parts.iter().enumerate() {
+                path.push_str(&part.text);
+                for ind in &part.match_indices {
+                    match_indices.push(ind + match_index_offset);
+                }
+                match_index_offset += part.text.graphemes(true).count();
+                if i != p.parts.len() - 1 {
+                    path.push(path_separator);
+                    match_index_offset += path_separator.len_utf8();
+                }
+            }
+            if p.isdir {
+                path.push(path_separator);
+            }
+
+            #[cfg(feature = "color")]
+            let style = ls_colors.as_ref().and_then(|lsc| {
+                let real_path =
+                    std::path::absolute(&path).ok().unwrap_or_else(|| PathBuf::from(&path));
+                lsc.style_for_path_with_metadata(&real_path, None)
+                    .map(|s| s.to_nu_ansi_term_style())
+            });
+
+            let (value, display_override) = if !literal && let Some(escaped) = escape_path(&path) {
+                (escaped, Some(path))
+            } else {
+                (path, None)
+            };
+            FileSuggestion {
+                span,
+                path: value,
+                #[cfg(feature = "color")]
+                style,
+                is_dir,
+                display_override,
+                match_indices,
+            }
+        })
+        .collect();
+    if cancelled() { Vec::new() } else { suggestions }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::fs;
+
+    /// Isolated directory under the system temp dir; removed on drop.
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("pebrel-completions-tests-{}-{name}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create isolated test directory");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn cwd(&self) -> String {
+            self.path.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// File names and directory flags, independent of the absolute temp path.
+    fn entry_names(items: &[FileSuggestion]) -> Vec<(String, bool)> {
+        items
+            .iter()
+            .map(|item| {
+                let name = Path::new(item.path.trim_end_matches(is_separator))
+                    .file_name()
+                    .expect("completion has a file name")
+                    .to_string_lossy()
+                    .into_owned();
+                (name, item.is_dir)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn directory_filter_keeps_only_directories_in_name_order() {
+        let dir = TestDir::new("filter");
+        fs::create_dir(dir.path().join("z_dir")).unwrap();
+        fs::create_dir(dir.path().join("a_dir")).unwrap();
+        fs::write(dir.path().join("m_file"), b"").unwrap();
+        fs::write(dir.path().join("b_file"), b"").unwrap();
+
+        let cwd = dir.cwd();
+        let options = CompletionOptions::default();
+        let all = complete_item(false, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&all),
+            vec![
+                ("a_dir".to_string(), true),
+                ("b_file".to_string(), false),
+                ("m_file".to_string(), false),
+                ("z_dir".to_string(), true),
+            ]
+        );
+        assert!(
+            all.iter().filter(|item| item.is_dir).all(|item| item.path.ends_with(is_separator))
+        );
+
+        let dirs = complete_item(true, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&dirs),
+            vec![("a_dir".to_string(), true), ("z_dir".to_string(), true)]
+        );
+        assert!(dirs.iter().all(|item| item.path.ends_with(is_separator)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_follow_directory_targets_and_keep_file_targets_as_files() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("symlinks");
+        fs::create_dir(dir.path().join("real_dir")).unwrap();
+        fs::write(dir.path().join("real_file"), b"").unwrap();
+        symlink(dir.path().join("real_dir"), dir.path().join("link_dir")).unwrap();
+        symlink(dir.path().join("real_file"), dir.path().join("link_file")).unwrap();
+        symlink(dir.path().join("missing"), dir.path().join("link_broken")).unwrap();
+
+        let cwd = dir.cwd();
+        let options = CompletionOptions::default();
+        let all = complete_item(false, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&all),
+            vec![
+                ("link_broken".to_string(), false),
+                ("link_dir".to_string(), true),
+                ("link_file".to_string(), false),
+                ("real_dir".to_string(), true),
+                ("real_file".to_string(), false),
+            ]
+        );
+
+        let dirs = complete_item(true, Span::new(0, 0), "", &[cwd.as_str()], &options, false, None);
+        assert_eq!(
+            entry_names(&dirs),
+            vec![("link_dir".to_string(), true), ("real_dir".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn exact_match_drills_in_and_keeps_its_indices() {
+        let dir = TestDir::new("exact");
+        fs::create_dir(dir.path().join("targetdir")).unwrap();
+        fs::write(dir.path().join("targetdir").join("inner.txt"), b"").unwrap();
+        fs::write(dir.path().join("targetdir_sibling"), b"").unwrap();
+
+        let cwd = dir.cwd();
+        let case_sensitive = CompletionOptions::default();
+        let suggestions = complete_item(
+            false,
+            Span::new(0, 9),
+            "targetdir/",
+            &[cwd.as_str()],
+            &case_sensitive,
+            false,
+            None,
+        );
+        assert_eq!(entry_names(&suggestions), vec![("inner.txt".to_string(), false)]);
+        assert_eq!(suggestions[0].match_indices, (0..9).collect::<Vec<_>>());
+
+        let case_folded =
+            CompletionOptions { case_sensitive: false, ..CompletionOptions::default() };
+        let suggestions = complete_item(
+            false,
+            Span::new(0, 9),
+            "TARGETDIR/",
+            &[cwd.as_str()],
+            &case_folded,
+            false,
+            None,
+        );
+        assert_eq!(entry_names(&suggestions), vec![("inner.txt".to_string(), false)]);
+        assert_eq!(suggestions[0].path, "targetdir/inner.txt");
+        assert_eq!(suggestions[0].match_indices, (0..9).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cancellation_stops_directory_enumeration_and_discards_partial_results() {
+        let options = CompletionOptions::default();
+        let cwd = [env!("CARGO_MANIFEST_DIR")];
+        let span = Span::new(0, 4);
+        let expected = complete_item(false, span, "src/", &cwd, &options, false, None);
+        assert!(expected.len() > 3, "source directory supplies multiple real entries");
+        let checks = Cell::new(0);
+        let cancelled = || {
+            checks.set(checks.get() + 1);
+            checks.get() >= 5
+        };
+        let actual =
+            complete_item_with_cancel(false, span, "src/", &cwd, &options, false, None, &cancelled);
+        assert!(actual.is_empty());
+        assert!(checks.get() <= 7, "cancellation must stop enumeration, not just hide its output");
+        let actual =
+            complete_item_with_cancel(false, span, "src/", &cwd, &options, false, None, &|| false);
+        let values = |items: Vec<FileSuggestion>| {
+            items
+                .into_iter()
+                .map(|item| (item.path, item.is_dir, item.display_override, item.match_indices))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values(actual), values(expected));
+    }
+}

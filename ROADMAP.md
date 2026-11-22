@@ -11,7 +11,7 @@
 
 | 能力面 | 权重 | 已得 | 当前边界 |
 |---|---:|---:|---|
-| 架构与产品接入 | 15 | 15 | GPUI 已迁入 `nebula_app`，`nebula --gpui` 可独立运行 |
+| 架构与产品接入 | 15 | 15 | GPUI 已迁入 `pebrel_app`，`nebula --gpui` 可独立运行 |
 | 终端核心与会话 | 25 | 21 | ConPTY、网格、输入/选择/鼠标、IME 代码路径、多 tab 与 AI 会话已接入；分屏和最终人工验收未闭环 |
 | 工作区与产品表面 | 20 | 12 | 侧栏、tab 拖拽、命令面板、文件树、设置 tab、标题栏/视效已有实现；分屏、SSH HOSTS、Git 抽屉与部分命令动作未接入 |
 | 设置与业务工作流 | 20 | 11 | 纯键值设置和 Provider 编辑器已有实现；SSH、备份、按键编辑器、字体选择器仍缺 |
@@ -33,7 +33,7 @@
 
 ### 高难度剩余项（先独立设计和验收，不与零碎修改混做）
 
-1. **分屏面板接线**：接入 `nebula-split` 会改变 tab/pane 所有权、关闭与 Drop
+1. **分屏面板接线**：接入 `pebrel-split` 会改变 tab/pane 所有权、关闭与 Drop
    语义、PTY Resize、焦点路由、拖拽落点和 AI hook 的 pane 定位。必须先定
    生命周期合同，再改 `workspace.rs` 与终端会话层。
 2. **SSH 完整迁移**：共享 HostStore、SSH HOSTS 侧栏、设置 CRUD、置顶/隐藏/
@@ -55,11 +55,11 @@
 
 ## 终局形态（不可协商的三条）
 
-1. **唯一产品、唯一代码库**：`nebula.exe`（`nebula_app`）。GPUI 最终作为
-   `nebula_app` 体内的 UI 层接入——不是第二个产品 exe。`nebula_gpui` crate
+1. **唯一产品、唯一代码库**：`nebula.exe`（`pebrel_app`）。GPUI 最终作为
+   `pebrel_app` 体内的 UI 层接入——不是第二个产品 exe。`pebrel_gpui` crate
    永远只是**实验场**：快速验证组件、交互与渲染方案；验证通过的模块**并入
-   `nebula_app`**，产品代码不在实验场安家。
-2. **网格渲染永远自有**：`nebula_terminal` 引擎 + 渲染合同
+   `pebrel_app`**，产品代码不在实验场安家。
+2. **网格渲染永远自有**：`pebrel_terminal` 引擎 + 渲染合同
    （`render.rs` / `render/boxdraw.rs`）+ 终端 Element。终端内容只存在
    "单元格网格"一种形态，排版引擎（任何字体系统）无权移动网格字形。
    powerline、fastfetch、TUI 边框、CJK 对齐是**验收闸门**，不是愿望。
@@ -108,7 +108,7 @@
   分钟级，观感近似停摆）。这是 in-box host 自身行为，**不是引擎死锁**，
   引擎侧无从修复。运维硬规则：任何 nebula 系 exe 旁必须部署侧载对。
 - **1b IME 清单**：产品形态人工清单已更新到
-  `nebula_gpui/IME_CHECKLIST.md`；等待用户在 `nebula.exe --gpui` 亲手验收，
+  `pebrel_gpui/IME_CHECKLIST.md`；等待用户在 `nebula.exe --gpui` 亲手验收，
   实验场与双运行时 spike 的结果不计入 G2。
 - **1c 视觉对账集**：`scripts/visual_parity.ps1`——固定样张（boxdraw 全家
   桶、块/浓度/象限、Powerline 分隔符、CJK 对齐标尺、256 色/真彩）注入
@@ -121,8 +121,8 @@
 
 ### P2 终端体验齐平（裁定修订 2026-08-13：直接在产品内做）
 
-用户裁定：实验场不再堆产品功能——`nebula_gpui` 只是验证场，验证过即进
-`nebula_app`；P2 剩余项全部在 `nebula_app/src/gpui_shell/` 内继续。
+用户裁定：实验场不再堆产品功能——`pebrel_gpui` 只是验证场，验证过即进
+`pebrel_app`；P2 剩余项全部在 `pebrel_app/src/gpui_shell/` 内继续。
 
 - 选择/复制/鼠标语义 **✔（2026-08-13，1244f1a）**：鼠标模式上报（SGR/
   normal/UTF-8 扩展，`mouse_protocol.rs` 纯函数逐字对照旧壳 + 字节级单测；
@@ -130,32 +130,32 @@
   copy_on_select 抬手复制、Shift+点击扩展选区、Shift+PageUp/PageDown/
   Home/End 回滚翻页（仅主屏）。
 - 分屏规则共享化 **✔（2026-08-13，9e21bc9）**：新共享 crate
-  `nebula-split`（零依赖）——布局树、几何切割（floor+逐侧单元格钳制）、
+  `pebrel-split`（零依赖）——布局树、几何切割（floor+逐侧单元格钳制）、
   分隔条拖拽（关闭边距/预览钉边/整格量化提交）、方向聚焦（垂直漂移 4x
   惩罚），数学逐字对照旧壳 `split.rs`，12 个单测锁定。**GPUI 面板接线
   待办（在产品内做）**。
 - config 共享化 **✔ 第一刀完成（2026-08-13，9e29331）**：新共享 crate
-  `nebula-settings`（零依赖）承接 `nebula_settings.txt` 路径/键值语义与
+  `pebrel-settings`（零依赖）承接 `nebula_settings.txt` 路径/键值语义与
   主题终端色表；按旧壳同序叠加（toml → 主题），字体/光标/copy_on_select
   均读运行时设置。同主题对账样张已验。剩余：toml 侧 font offset、
   cursor 反色语义、follow_system_theme、热重载。
 - 剩余：滚动条（如旧壳有）、会话/SSH 逻辑共享化评估。
 
-### P3 接入 `nebula_app`（GPUI 成为产品 UI 层）
+### P3 接入 `pebrel_app`（GPUI 成为产品 UI 层）
 
 - **✔ 第一刀（2026-08-13，791fdc8）：GPUI UI 层物理迁入产品**。
   `git mv` 保历史：终端栈（view/element/session/keymap/mouse_protocol/
   colors）、config 桥、workspace、theme/prelude 全部住进
-  `nebula_app/src/gpui_shell/`；`gpui-shell` feature 自足（直接依赖
-  gpui/gpui-component/-assets + nebula-settings + futures，fork 经根
-  patch 表重定向），不再依赖 `nebula-gpui` crate。
+  `pebrel_app/src/gpui_shell/`；`gpui-shell` feature 自足（直接依赖
+  gpui/gpui-component/-assets + pebrel-settings + futures，fork 经根
+  patch 表重定向），不再依赖 `pebrel-gpui` crate。
   **`nebula --gpui` = GPUI 主窗形态**：主线程直接进 GPUI 消息循环，
   winit 完全不启动；已实跑验证（Nebula 主窗 + tabs + ConPTY 终端 +
   CJK + powerline，样张 `.tmp_parity_gpui-in-nebula.png`）。
-  `nebula_gpui` 瘦身为组件 gallery（终端预览移除；theme/prelude 留
+  `pebrel_gpui` 瘦身为组件 gallery（终端预览移除；theme/prelude 留
   注记副本），产品代码零残留。
 - 剩余：GPUI 主窗成为默认 UI（三闸门在 `--gpui` 形态复测通过后切换）；
-  分屏面板接线（消费 `nebula-split`）；产品面直接用组件库实现：设置
+  分屏面板接线（消费 `pebrel-split`）；产品面直接用组件库实现：设置
   **原生内嵌侧栏 pane**、启动器/命令面板、SSH 管理、标题栏/Acrylic
   对齐；`NEBULA_GPUI_SHELL` spike 移除。
 - 三闸门在接入形态下复测（实验场数字不能替代产品形态数字）。
@@ -174,7 +174,7 @@
   - `event.rs`（3178 行）/ `window_context.rs`（3100 行）→ 输入/窗口分层。
   - 拆分原则：先划模块边界再搬代码，行为零变化，每步独立 commit 可回退。
 
-## 纪律（引用 `nebula_gpui/ARCHITECTURE.md`）
+## 纪律（引用 `pebrel_gpui/ARCHITECTURE.md`）
 
 - 功能只写一次，进共享 crate；两壳都只写薄视图。
 - 直接采用：GPUI 赢下某个面后就是该面的唯一实现。

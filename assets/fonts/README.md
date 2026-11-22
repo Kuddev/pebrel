@@ -7,9 +7,11 @@ chain or theme editor draft explicitly needs it. Selecting another font does not
 registered native face; a fresh process avoids that registration entirely.
 
 `PebrelSymbols-Regular.ttf` is an independently named, OFL-licensed derivative
-containing the original private-use icons and standard power symbols. It has no
-Latin or CJK text glyphs. Geometry-rendered Powerline separators remain on the
-terminal's existing geometry path. Other prompt and interface icons use this
+containing the original private-use icons and standard power symbols. Its only
+text glyph is Maple's unchanged `m`, which GPUI's macOS loader requires before it
+registers any face; it has no other Latin or CJK text glyphs. Geometry-rendered
+Powerline separators remain on the terminal's existing geometry path. Other
+prompt and interface icons use this
 small face instead of implicitly requiring the complete Maple font.
 
 Regenerate it offline with `python scripts/build_symbol_font.py`, after installing
@@ -18,6 +20,6 @@ dependency. The source hash is checked before conversion; copyright/license
 metadata, glyph outlines and advances are retained, and reserved font names are
 replaced. See `licenses/LICENSE-PEBREL-SYMBOLS` and `THIRD-PARTY-NOTICES`.
 
-The complete face is 20,563,672 bytes; the generated symbol face is 1,941,228 bytes
+The complete face is 20,563,672 bytes; the generated symbol face is 1,941,408 bytes
 with the fontTools version used for this revision. These are font-file sizes,
 not a claim about process RSS or native font-cache allocations.

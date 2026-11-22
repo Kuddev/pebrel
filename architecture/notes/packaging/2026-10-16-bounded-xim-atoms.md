@@ -82,7 +82,7 @@ GPUI 已把所有 X 事件交给 `filter_event`，`PropertyNotify` 无需改动 
 独立 Fcitx 5.1.7 拼音实例向修复后的 XIM 客户端提交 40 次“你好”，全部匹配，
 收到 240 次预编辑回调，共转发 480 次按键事件。该验证使用独立显示和 D-Bus。
 PR 基线 `8de5331f5607a24c72a8cf209ab4099c8ba4c424` 上的
-`cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked --release` 通过。
+`cargo check -p pebrel --bin pebrel --features gpui-shell --tests --locked --release` 通过。
 架构检查、55 项架构规则测试、99 项设置测试、24 项国际化测试（另 1 项忽略）及格式检查通过。
 依赖元数据确认三个 XIM 包各只有一个实例，均来自同一修复提交；锁文件没有无关升级。
 这些结果不替代完整 GUI 人工验收、长期运行、其他输入法或 Windows/macOS 验证。

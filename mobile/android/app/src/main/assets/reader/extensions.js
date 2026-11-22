@@ -33,7 +33,11 @@
     var source = figure.querySelector('code').textContent;
     var key = figure.id + ':' + source;
     var cached = diagrams.get(key);
-    if (cached) { delete node.dataset.renderError; node.innerHTML = cached; return Promise.resolve(); }
+    if (cached) {
+      delete node.dataset.renderError; delete node.dataset.renderLoading;
+      node.innerHTML = cached; node.dataset.rendered = 'true';
+      return Promise.resolve();
+    }
     delete node.dataset.renderError;
     node.dataset.renderLoading = 'true';
     node.textContent = labels.loading;
@@ -47,6 +51,7 @@
       // strict 模式清洗 SVG；不绑定图中的脚本或外链回调。
       node.innerHTML = result.svg;
       node.querySelectorAll('a').forEach(function (link) { link.removeAttribute('href'); link.removeAttribute('xlink:href'); });
+      node.dataset.rendered = 'true';
       var svg = node.innerHTML;
       if (svg.length <= 512000) {
         diagrams.set(key, svg); cacheBytes += key.length + svg.length;
@@ -80,7 +85,7 @@
         lineColor: style.getPropertyValue('--muted').trim(),
         secondaryColor: style.getPropertyValue('--surface').trim(),
         tertiaryColor: style.getPropertyValue('--background').trim(), fontFamily: 'sans-serif' } });
-    var nodes = Array.from(document.querySelectorAll('[data-diagram]'));
+    var nodes = Array.from(document.querySelectorAll('[data-diagram]:not([data-rendered])'));
     // Mermaid 内部有全局布局状态，串行渲染；换页后不让旧 Promise 改写新文档。
     queue = queue.catch(function () {}).then(function () {
       return nodes.reduce(function (previous, node) {

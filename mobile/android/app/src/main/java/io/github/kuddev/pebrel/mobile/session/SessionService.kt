@@ -33,6 +33,8 @@ class SessionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var startCommandReceived = false
     private var idleStopPending = false
+    /** Held by default while sessions live, so keepalives still run when the CPU would sleep; the notification can release it. */
+    private var wakeLockReleasedByUser = false
 
     override fun onCreate() {
         super.onCreate()
@@ -84,6 +86,7 @@ class SessionService : Service() {
                 ensureForeground()
                 if (liveSessionCount > 0) {
                     repository.backgroundActive.value = true
+                    holdWakeLockUnlessReleased()
                     publishNotification()
                     idleStopPending = false
                 } else {
@@ -105,7 +108,13 @@ class SessionService : Service() {
         idleStopPending = false
         repository.backgroundActive.value = true
         ensureForeground()
+        holdWakeLockUnlessReleased()
         publishNotification()
+    }
+
+    private fun holdWakeLockUnlessReleased() {
+        val lock = wakeLock ?: return
+        if (!wakeLockReleasedByUser && liveSessionCount > 0 && !lock.isHeld) runCatching { lock.acquire() }
     }
 
     private fun stopForNoSessions() {
@@ -140,8 +149,10 @@ class SessionService : Service() {
         }
         val lock = wakeLock ?: return
         if (lock.isHeld) {
+            wakeLockReleasedByUser = true
             releaseWakeLock()
         } else {
+            wakeLockReleasedByUser = false
             runCatching { lock.acquire() }
         }
         publishNotification()

@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "2.3.2"
+  #define AppVersion "2.5.0"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "2.3.2.0"
+  #define NumericVersion "2.5.0.0"
 #endif
 
 #ifndef Configuration
@@ -61,7 +61,7 @@ ArchitecturesAllowed=x64compatible
 #endif
 MinVersion=10.0.17763
 LicenseFile={#RepoRoot}\LICENSE
-SetupIconFile={#RepoRoot}\nebula_app\windows\nebula.ico
+SetupIconFile={#RepoRoot}\pebrel_app\windows\nebula.ico
 UninstallDisplayIcon={app}\pebrel.exe
 OutputDir={#RepoRoot}\dist
 OutputBaseFilename={#PackageBrand}-v{#AppVersion}-windows-{#Architecture}-setup

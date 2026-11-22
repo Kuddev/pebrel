@@ -17,7 +17,7 @@ ANSI preview; D:\\SHARE\\nebula_fetch_preview.html the same in a browser).
 
 import math
 
-OUT_RS = r"D:\temp_build\nebula\nebula_app\src\window_context\nebula_fetch_art.rs"
+OUT_RS = r"D:\temp_build\nebula\pebrel_app\src\window_context\nebula_fetch_art.rs"
 OUT_HTML = r"D:\SHARE\nebula_fetch_preview.html"
 
 W, H = 62, 19

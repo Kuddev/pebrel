@@ -111,7 +111,7 @@ fun DesktopFileScreen(desktop: DesktopWorkspace, tab: DesktopTab, repository: Se
         }
     }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().glassBar().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
             Row(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClick = onTabs), verticalAlignment = Alignment.CenterVertically) {
                 DesktopTabSymbol(tab, Modifier.size(20.dp))

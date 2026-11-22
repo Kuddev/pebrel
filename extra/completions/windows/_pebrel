@@ -30,6 +30,7 @@ _pebrel() {
 '(--daemon)--ref-test[Generates ref test]' \
 '--gpui[Launch the GPUI UI shell as the main window]' \
 '--launched-at-login[Identify a launch from the per-user login item]' \
+'(--daemon --ref-test --launched-at-login)--new-instance[Start a separate GPUI process with a fresh, unsaved workspace]' \
 '(-v)*-q[Reduces the level of verbosity (the min level is -qq)]' \
 '(-q)*-v[Increases the level of verbosity (the max level is -vvv)]' \
 '--daemon[Do not spawn an initial window]' \
@@ -250,7 +251,11 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (new-tab)
 _arguments "${_arguments_options[@]}" : \
-'--window=[]:WINDOW:_default' \
+'--window=[Target window; omitted uses the window policy (most recently active by default)]:WINDOW:_default' \
+'--cwd=[Working directory for the new terminal (relative to this CLI process)]:CWD:_files -/' \
+'(-e --command)--shell=[Shell id from the settings, for example bash or wsl\:Ubuntu]:SHELL:_default' \
+'*-e+[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
+'*--command=[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
 '--timeout-ms=[Maximum time to wait for a command response]:TIMEOUT_MS:_default' \
 '--pretty[Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines]' \
 '-h[Print help]' \
@@ -305,6 +310,18 @@ down\:"Create the new pane below the focused pane"))' \
 _arguments "${_arguments_options[@]}" : \
 '--window=[]:WINDOW:_default' \
 '--pane=[]:PANE:_default' \
+'--timeout-ms=[Maximum time to wait for a command response]:TIMEOUT_MS:_default' \
+'--pretty[Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(notify-pane)
+_arguments "${_arguments_options[@]}" : \
+'--window=[]:WINDOW:_default' \
+'--pane=[]:PANE:_default' \
+'--title=[]:TITLE:_default' \
+'--message=[]:MESSAGE:_default' \
 '--timeout-ms=[Maximum time to wait for a command response]:TIMEOUT_MS:_default' \
 '--pretty[Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines]' \
 '-h[Print help]' \
@@ -545,6 +562,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(notify-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (zoom-pane)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -670,7 +691,20 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-tab-command-$line[1]:"
         case $line[1] in
-            (close)
+            (new)
+_arguments "${_arguments_options[@]}" : \
+'--window=[Target window; omitted uses the window policy (most recently active by default)]:WINDOW:_default' \
+'--cwd=[Working directory for the new terminal (relative to this CLI process)]:CWD:_files -/' \
+'(-e --command)--shell=[Shell id from the settings, for example bash or wsl\:Ubuntu]:SHELL:_default' \
+'*-e+[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
+'*--command=[Program and arguments to execute directly; must be the last option]:COMMAND:_default' \
+'--timeout-ms=[]:TIMEOUT_MS:_default' \
+'--pretty[Pretty-print the JSON response. Output is JSON either way]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(close)
 _arguments "${_arguments_options[@]}" : \
 '--window=[Window containing the tab]:WINDOW:_default' \
 '--timeout-ms=[]:TIMEOUT_MS:_default' \
@@ -714,7 +748,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-tab-help-command-$line[1]:"
         case $line[1] in
-            (close)
+            (new)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1103,7 +1141,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (init)
 _arguments "${_arguments_options[@]}" : \
-'--config-file=[Lua configuration path; otherwise use the platform user config directory]:CONFIG_FILE:_files' \
+'--config-file=[Luau configuration path; otherwise use the platform user config directory]:CONFIG_FILE:_files' \
 '--language=[Comment language for the generated template]:LANGUAGE:(system zh-CN en-US)' \
 '--force[Back up and replace an existing configuration]' \
 '-h[Print help]' \
@@ -1172,8 +1210,48 @@ _arguments "${_arguments_options[@]}" : \
 '--pretty[Pretty-print the JSON result]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':path:_files' \
+':path -- A package directory, or the ID of an installed plugin when no such path exists:_files' \
 ':command:_default' \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'*--grant=[Grant a capability the manifest requests\: \`theme-library\`]:GRANTS:_default' \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
+&& ret=0
+;;
+(uninstall)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
 && ret=0
 ;;
 (help)
@@ -1193,6 +1271,26 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uninstall)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1255,6 +1353,19 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(catalog)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':id:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_pebrel__theme__help_commands" \
@@ -1280,6 +1391,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (limits)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(catalog)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1434,6 +1553,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(notify-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (zoom-pane)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1514,7 +1637,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:pebrel-help-tab-command-$line[1]:"
         case $line[1] in
-            (close)
+            (new)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1670,6 +1797,26 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uninstall)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -1699,6 +1846,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (limits)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(catalog)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1847,8 +2002,8 @@ _pebrel__agent__wait_commands() {
 (( $+functions[_pebrel__config_commands] )) ||
 _pebrel__config_commands() {
     local commands; commands=(
-'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
-'init:Create an annotated Lua configuration template' \
+'check:Validate a Luau, TOML, or YAML configuration without opening the GUI' \
+'init:Create an annotated Luau configuration template' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel config commands' commands "$@"
@@ -1861,8 +2016,8 @@ _pebrel__config__check_commands() {
 (( $+functions[_pebrel__config__help_commands] )) ||
 _pebrel__config__help_commands() {
     local commands; commands=(
-'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
-'init:Create an annotated Lua configuration template' \
+'check:Validate a Luau, TOML, or YAML configuration without opening the GUI' \
+'init:Create an annotated Luau configuration template' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel config help commands' commands "$@"
@@ -1905,12 +2060,13 @@ _pebrel__ctl_commands() {
 'new-window:Create and focus a new terminal window' \
 'close-window:Close an idle window. Omitting --window targets the uniquely resolved window' \
 'focus:Focus a window or one of its panes' \
-'new-tab:Create a default-shell tab in the target window' \
+'new-tab:Open a terminal tab, optionally running a program instead of the default shell' \
 'close-tab:Close an idle tab by its zero-based index' \
 'rename-tab:Set a tab'\''s custom name. An empty value restores the generated title' \
 'move-tab:Move a tab to another index in the same window' \
 'split:Split the focused pane in the target window' \
 'close-pane:Close an idle pane' \
+'notify-pane:Notify the user about a pane with the built-in bell flash/sound and a toast' \
 'zoom-pane:Explicitly enable or disable focused-pane zoom for the pane'\''s tab' \
 'resize-pane:Set this pane'\''s share of its direct parent split' \
 'prompt:Send one plain-text prompt to a pane, optionally submitting it with Enter' \
@@ -2013,12 +2169,13 @@ _pebrel__ctl__help_commands() {
 'new-window:Create and focus a new terminal window' \
 'close-window:Close an idle window. Omitting --window targets the uniquely resolved window' \
 'focus:Focus a window or one of its panes' \
-'new-tab:Create a default-shell tab in the target window' \
+'new-tab:Open a terminal tab, optionally running a program instead of the default shell' \
 'close-tab:Close an idle tab by its zero-based index' \
 'rename-tab:Set a tab'\''s custom name. An empty value restores the generated title' \
 'move-tab:Move a tab to another index in the same window' \
 'split:Split the focused pane in the target window' \
 'close-pane:Close an idle pane' \
+'notify-pane:Notify the user about a pane with the built-in bell flash/sound and a toast' \
 'zoom-pane:Explicitly enable or disable focused-pane zoom for the pane'\''s tab' \
 'resize-pane:Set this pane'\''s share of its direct parent split' \
 'prompt:Send one plain-text prompt to a pane, optionally submitting it with Enter' \
@@ -2123,6 +2280,11 @@ _pebrel__ctl__help__new-window_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel ctl help new-window commands' commands "$@"
 }
+(( $+functions[_pebrel__ctl__help__notify-pane_commands] )) ||
+_pebrel__ctl__help__notify-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel ctl help notify-pane commands' commands "$@"
+}
 (( $+functions[_pebrel__ctl__help__orchestrate_commands] )) ||
 _pebrel__ctl__help__orchestrate_commands() {
     local commands; commands=()
@@ -2207,6 +2369,11 @@ _pebrel__ctl__new-tab_commands() {
 _pebrel__ctl__new-window_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel ctl new-window commands' commands "$@"
+}
+(( $+functions[_pebrel__ctl__notify-pane_commands] )) ||
+_pebrel__ctl__notify-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel ctl notify-pane commands' commands "$@"
 }
 (( $+functions[_pebrel__ctl__orchestrate_commands] )) ||
 _pebrel__ctl__orchestrate_commands() {
@@ -2350,8 +2517,8 @@ _pebrel__help__agent__wait_commands() {
 (( $+functions[_pebrel__help__config_commands] )) ||
 _pebrel__help__config_commands() {
     local commands; commands=(
-'check:Validate a Lua, TOML, or YAML configuration without opening the GUI' \
-'init:Create an annotated Lua configuration template' \
+'check:Validate a Luau, TOML, or YAML configuration without opening the GUI' \
+'init:Create an annotated Luau configuration template' \
     )
     _describe -t commands 'pebrel help config commands' commands "$@"
 }
@@ -2383,12 +2550,13 @@ _pebrel__help__ctl_commands() {
 'new-window:Create and focus a new terminal window' \
 'close-window:Close an idle window. Omitting --window targets the uniquely resolved window' \
 'focus:Focus a window or one of its panes' \
-'new-tab:Create a default-shell tab in the target window' \
+'new-tab:Open a terminal tab, optionally running a program instead of the default shell' \
 'close-tab:Close an idle tab by its zero-based index' \
 'rename-tab:Set a tab'\''s custom name. An empty value restores the generated title' \
 'move-tab:Move a tab to another index in the same window' \
 'split:Split the focused pane in the target window' \
 'close-pane:Close an idle pane' \
+'notify-pane:Notify the user about a pane with the built-in bell flash/sound and a toast' \
 'zoom-pane:Explicitly enable or disable focused-pane zoom for the pane'\''s tab' \
 'resize-pane:Set this pane'\''s share of its direct parent split' \
 'prompt:Send one plain-text prompt to a pane, optionally submitting it with Enter' \
@@ -2486,6 +2654,11 @@ _pebrel__help__ctl__new-tab_commands() {
 _pebrel__help__ctl__new-window_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help ctl new-window commands' commands "$@"
+}
+(( $+functions[_pebrel__help__ctl__notify-pane_commands] )) ||
+_pebrel__help__ctl__notify-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help ctl notify-pane commands' commands "$@"
 }
 (( $+functions[_pebrel__help__ctl__orchestrate_commands] )) ||
 _pebrel__help__ctl__orchestrate_commands() {
@@ -2640,8 +2813,13 @@ _pebrel__help__pane__zoom_commands() {
 (( $+functions[_pebrel__help__plugin_commands] )) ||
 _pebrel__help__plugin_commands() {
     local commands; commands=(
-'check:Validate package metadata and entry paths without executing Lua' \
-'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'check:Validate package metadata and entry paths without executing Luau' \
+'run:Invoke one declared native or Luau command; no resident plugin is started' \
+'install:Copy a package into the plugin library and record the grants given here' \
+'list:List installed plugins, their grants and theme commands' \
+'enable:Let an installed plugin run again' \
+'disable:Stop an installed plugin from running; its files and themes stay' \
+'uninstall:Remove an installed plugin. Themes it added stay in the theme library' \
     )
     _describe -t commands 'pebrel help plugin commands' commands "$@"
 }
@@ -2650,10 +2828,35 @@ _pebrel__help__plugin__check_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help plugin check commands' commands "$@"
 }
+(( $+functions[_pebrel__help__plugin__disable_commands] )) ||
+_pebrel__help__plugin__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin disable commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__enable_commands] )) ||
+_pebrel__help__plugin__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin enable commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__install_commands] )) ||
+_pebrel__help__plugin__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin install commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__list_commands] )) ||
+_pebrel__help__plugin__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin list commands' commands "$@"
+}
 (( $+functions[_pebrel__help__plugin__run_commands] )) ||
 _pebrel__help__plugin__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help plugin run commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__uninstall_commands] )) ||
+_pebrel__help__plugin__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin uninstall commands' commands "$@"
 }
 (( $+functions[_pebrel__help__predict_commands] )) ||
 _pebrel__help__predict_commands() {
@@ -2673,6 +2876,7 @@ _pebrel__help__ssh_commands() {
 (( $+functions[_pebrel__help__tab_commands] )) ||
 _pebrel__help__tab_commands() {
     local commands; commands=(
+'new:Open a terminal tab, optionally running a program instead of the default shell' \
 'close:Close an idle tab' \
 'rename:Set a tab'\''s custom name. Pass an empty name to restore the generated title' \
 'move:Move a tab to another index in the same window' \
@@ -2689,6 +2893,11 @@ _pebrel__help__tab__move_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help tab move commands' commands "$@"
 }
+(( $+functions[_pebrel__help__tab__new_commands] )) ||
+_pebrel__help__tab__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help tab new commands' commands "$@"
+}
 (( $+functions[_pebrel__help__tab__rename_commands] )) ||
 _pebrel__help__tab__rename_commands() {
     local commands; commands=()
@@ -2701,8 +2910,15 @@ _pebrel__help__theme_commands() {
 'pack:Export a native theme JSON with its local background image as a ZIP' \
 'import:Install a verified ZIP into the local theme library without applying it' \
 'limits:Print the authoritative package byte limits' \
+'catalog:Fetch the community theme catalog and show which entries are installed' \
+'install:Download a community theme, verify its pinned SHA-256, and add it to the library without applying it' \
     )
     _describe -t commands 'pebrel help theme commands' commands "$@"
+}
+(( $+functions[_pebrel__help__theme__catalog_commands] )) ||
+_pebrel__help__theme__catalog_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help theme catalog commands' commands "$@"
 }
 (( $+functions[_pebrel__help__theme__check_commands] )) ||
 _pebrel__help__theme__check_commands() {
@@ -2713,6 +2929,11 @@ _pebrel__help__theme__check_commands() {
 _pebrel__help__theme__import_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help theme import commands' commands "$@"
+}
+(( $+functions[_pebrel__help__theme__install_commands] )) ||
+_pebrel__help__theme__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help theme install commands' commands "$@"
 }
 (( $+functions[_pebrel__help__theme__limits_commands] )) ||
 _pebrel__help__theme__limits_commands() {
@@ -2881,8 +3102,13 @@ _pebrel__pane__zoom_commands() {
 (( $+functions[_pebrel__plugin_commands] )) ||
 _pebrel__plugin_commands() {
     local commands; commands=(
-'check:Validate package metadata and entry paths without executing Lua' \
-'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'check:Validate package metadata and entry paths without executing Luau' \
+'run:Invoke one declared native or Luau command; no resident plugin is started' \
+'install:Copy a package into the plugin library and record the grants given here' \
+'list:List installed plugins, their grants and theme commands' \
+'enable:Let an installed plugin run again' \
+'disable:Stop an installed plugin from running; its files and themes stay' \
+'uninstall:Remove an installed plugin. Themes it added stay in the theme library' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel plugin commands' commands "$@"
@@ -2892,11 +3118,26 @@ _pebrel__plugin__check_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin check commands' commands "$@"
 }
+(( $+functions[_pebrel__plugin__disable_commands] )) ||
+_pebrel__plugin__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin disable commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__enable_commands] )) ||
+_pebrel__plugin__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin enable commands' commands "$@"
+}
 (( $+functions[_pebrel__plugin__help_commands] )) ||
 _pebrel__plugin__help_commands() {
     local commands; commands=(
-'check:Validate package metadata and entry paths without executing Lua' \
-'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'check:Validate package metadata and entry paths without executing Luau' \
+'run:Invoke one declared native or Luau command; no resident plugin is started' \
+'install:Copy a package into the plugin library and record the grants given here' \
+'list:List installed plugins, their grants and theme commands' \
+'enable:Let an installed plugin run again' \
+'disable:Stop an installed plugin from running; its files and themes stay' \
+'uninstall:Remove an installed plugin. Themes it added stay in the theme library' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel plugin help commands' commands "$@"
@@ -2906,20 +3147,60 @@ _pebrel__plugin__help__check_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin help check commands' commands "$@"
 }
+(( $+functions[_pebrel__plugin__help__disable_commands] )) ||
+_pebrel__plugin__help__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help disable commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__enable_commands] )) ||
+_pebrel__plugin__help__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help enable commands' commands "$@"
+}
 (( $+functions[_pebrel__plugin__help__help_commands] )) ||
 _pebrel__plugin__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin help help commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__install_commands] )) ||
+_pebrel__plugin__help__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help install commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__list_commands] )) ||
+_pebrel__plugin__help__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help list commands' commands "$@"
 }
 (( $+functions[_pebrel__plugin__help__run_commands] )) ||
 _pebrel__plugin__help__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin help run commands' commands "$@"
 }
+(( $+functions[_pebrel__plugin__help__uninstall_commands] )) ||
+_pebrel__plugin__help__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help uninstall commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__install_commands] )) ||
+_pebrel__plugin__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin install commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__list_commands] )) ||
+_pebrel__plugin__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin list commands' commands "$@"
+}
 (( $+functions[_pebrel__plugin__run_commands] )) ||
 _pebrel__plugin__run_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel plugin run commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__uninstall_commands] )) ||
+_pebrel__plugin__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin uninstall commands' commands "$@"
 }
 (( $+functions[_pebrel__predict_commands] )) ||
 _pebrel__predict_commands() {
@@ -2939,6 +3220,7 @@ _pebrel__ssh_commands() {
 (( $+functions[_pebrel__tab_commands] )) ||
 _pebrel__tab_commands() {
     local commands; commands=(
+'new:Open a terminal tab, optionally running a program instead of the default shell' \
 'close:Close an idle tab' \
 'rename:Set a tab'\''s custom name. Pass an empty name to restore the generated title' \
 'move:Move a tab to another index in the same window' \
@@ -2954,6 +3236,7 @@ _pebrel__tab__close_commands() {
 (( $+functions[_pebrel__tab__help_commands] )) ||
 _pebrel__tab__help_commands() {
     local commands; commands=(
+'new:Open a terminal tab, optionally running a program instead of the default shell' \
 'close:Close an idle tab' \
 'rename:Set a tab'\''s custom name. Pass an empty name to restore the generated title' \
 'move:Move a tab to another index in the same window' \
@@ -2976,6 +3259,11 @@ _pebrel__tab__help__move_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel tab help move commands' commands "$@"
 }
+(( $+functions[_pebrel__tab__help__new_commands] )) ||
+_pebrel__tab__help__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel tab help new commands' commands "$@"
+}
 (( $+functions[_pebrel__tab__help__rename_commands] )) ||
 _pebrel__tab__help__rename_commands() {
     local commands; commands=()
@@ -2985,6 +3273,11 @@ _pebrel__tab__help__rename_commands() {
 _pebrel__tab__move_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel tab move commands' commands "$@"
+}
+(( $+functions[_pebrel__tab__new_commands] )) ||
+_pebrel__tab__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel tab new commands' commands "$@"
 }
 (( $+functions[_pebrel__tab__rename_commands] )) ||
 _pebrel__tab__rename_commands() {
@@ -2998,9 +3291,16 @@ _pebrel__theme_commands() {
 'pack:Export a native theme JSON with its local background image as a ZIP' \
 'import:Install a verified ZIP into the local theme library without applying it' \
 'limits:Print the authoritative package byte limits' \
+'catalog:Fetch the community theme catalog and show which entries are installed' \
+'install:Download a community theme, verify its pinned SHA-256, and add it to the library without applying it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel theme commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__catalog_commands] )) ||
+_pebrel__theme__catalog_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme catalog commands' commands "$@"
 }
 (( $+functions[_pebrel__theme__check_commands] )) ||
 _pebrel__theme__check_commands() {
@@ -3014,9 +3314,16 @@ _pebrel__theme__help_commands() {
 'pack:Export a native theme JSON with its local background image as a ZIP' \
 'import:Install a verified ZIP into the local theme library without applying it' \
 'limits:Print the authoritative package byte limits' \
+'catalog:Fetch the community theme catalog and show which entries are installed' \
+'install:Download a community theme, verify its pinned SHA-256, and add it to the library without applying it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel theme help commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help__catalog_commands] )) ||
+_pebrel__theme__help__catalog_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help catalog commands' commands "$@"
 }
 (( $+functions[_pebrel__theme__help__check_commands] )) ||
 _pebrel__theme__help__check_commands() {
@@ -3033,6 +3340,11 @@ _pebrel__theme__help__import_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel theme help import commands' commands "$@"
 }
+(( $+functions[_pebrel__theme__help__install_commands] )) ||
+_pebrel__theme__help__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help install commands' commands "$@"
+}
 (( $+functions[_pebrel__theme__help__limits_commands] )) ||
 _pebrel__theme__help__limits_commands() {
     local commands; commands=()
@@ -3047,6 +3359,11 @@ _pebrel__theme__help__pack_commands() {
 _pebrel__theme__import_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel theme import commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__install_commands] )) ||
+_pebrel__theme__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme install commands' commands "$@"
 }
 (( $+functions[_pebrel__theme__limits_commands] )) ||
 _pebrel__theme__limits_commands() {
