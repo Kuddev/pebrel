@@ -125,6 +125,7 @@ impl Request {
                 sidebar,
                 width: (sidebar + optics::FEATHER).min(width),
                 height,
+                viewport_width: width,
                 scale,
                 image: [
                     rect.origin.x.into(),

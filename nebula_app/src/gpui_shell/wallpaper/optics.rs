@@ -12,6 +12,7 @@ pub(super) struct StripGeometry {
     pub sidebar: f32,
     pub width: f32,
     pub height: f32,
+    pub viewport_width: f32,
     pub scale: f32,
     pub image: [f32; 4],
 }
@@ -23,7 +24,7 @@ pub(super) fn workspace_strip(
     tint: [u8; 3],
     cancelled: impl Fn() -> bool,
 ) -> Option<RgbaImage> {
-    let StripGeometry { sidebar, width, height, scale, image } = geometry;
+    let StripGeometry { sidebar, width, height, viewport_width, scale, image } = geometry;
     // Bound the strip and its filter intermediates even for giant virtual desktops.
     let scale = scale
         .min(1.5)
@@ -36,7 +37,7 @@ pub(super) fn workspace_strip(
     let pitch_x = width / w as f32;
     let pitch_y = height / h as f32;
     let columns: Vec<_> = (0..w + 2 * pad)
-        .map(|x| sample_axis(x, pad, pitch_x, image[0], image[2], source_width))
+        .map(|x| sample_axis(x, pad, pitch_x, image[0], image[2], source_width, viewport_width))
         .collect();
     let weights: Vec<_> = (0..w).map(|x| masks((x as f32 + 0.5) * pitch_x, sidebar)).collect();
 
@@ -46,7 +47,7 @@ pub(super) fn workspace_strip(
             return None;
         }
         if let Some(vertical) =
-            sample_axis(y as u32, pad, pitch_y, image[1], image[3], source_height)
+            sample_axis(y as u32, pad, pitch_y, image[1], image[3], source_height, height)
         {
             let stride = source_width as usize * 4;
             let top = &bytes[vertical.low * stride..][..stride];
@@ -154,8 +155,13 @@ fn sample_axis(
     origin: f32,
     length: f32,
     extent: u32,
+    viewport: f32,
 ) -> Option<Sample> {
-    let coordinate = ((index as f32 - pad as f32 + 0.5) * pitch - origin) / length;
+    // Extend the viewport edge into filter padding. Letterboxing inside the
+    // viewport still returns None; transparent pixels in the source stay transparent.
+    let position =
+        ((index as f32 - pad as f32 + 0.5) * pitch).clamp(0.0, (viewport - pitch * 0.5).max(0.0));
+    let coordinate = (position - origin) / length;
     if !(0.0..1.0).contains(&coordinate) {
         return None;
     }
@@ -235,6 +241,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn opaque_cover_stays_opaque_at_viewport_edges_at_every_scale() {
+        let source = RgbaImage::from_pixel(1000, 600, Rgba([160, 100, 60, 255]));
+        for (viewport_width, sidebar) in [(1000.0_f32, 234.0_f32), (200.0, 180.0)] {
+            for scale in [0.75, 1.0, 1.5, 2.0] {
+                let geometry = StripGeometry {
+                    sidebar,
+                    width: (sidebar + FEATHER).min(viewport_width),
+                    height: 600.0,
+                    viewport_width,
+                    scale,
+                    image: [0.0, 0.0, viewport_width, 600.0],
+                };
+                let strip = workspace_strip(
+                    source.as_raw(),
+                    source.dimensions(),
+                    geometry,
+                    [30, 20, 14],
+                    || false,
+                )
+                .unwrap();
+                assert!(
+                    strip.pixels().all(|pixel| pixel[3] == 255),
+                    "scale {scale}, viewport {viewport_width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn padding_preserves_contain_margins_and_source_transparency() {
+        let source = RgbaImage::from_pixel(200, 100, Rgba([50, 100, 150, 255]));
+        let geometry = StripGeometry {
+            sidebar: 80.0,
+            width: 144.0,
+            height: 300.0,
+            viewport_width: 300.0,
+            scale: 1.0,
+            image: [40.0, 60.0, 200.0, 100.0],
+        };
+        let strip =
+            workspace_strip(source.as_raw(), source.dimensions(), geometry, [30, 20, 14], || false)
+                .unwrap();
+        assert_eq!(strip.get_pixel(0, 0)[3], 0);
+        assert_eq!(strip.get_pixel(80, 299)[3], 0);
+        assert_eq!(strip.get_pixel(80, 100)[3], 255);
+        let transparent = RgbaImage::from_pixel(200, 100, Rgba([255, 0, 255, 0]));
+        let strip = workspace_strip(
+            transparent.as_raw(),
+            transparent.dimensions(),
+            geometry,
+            [30, 20, 14],
+            || false,
+        )
+        .unwrap();
+        assert!(strip.pixels().all(|pixel| pixel[3] == 0));
+    }
+
+    #[test]
     fn l4_masks_end_at_the_reference_distances() {
         let (mid, soft) = masks(0.0, 234.0);
         assert_eq!((mid, soft), (1.0, 1.0));
@@ -251,6 +315,7 @@ mod tests {
             sidebar: 234.0,
             width: 298.0,
             height: 80.0,
+            viewport_width: 360.0,
             scale: 1.0,
             image: [0.0, 0.0, 360.0, 80.0],
         };
