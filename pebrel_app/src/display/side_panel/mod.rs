@@ -1506,8 +1506,10 @@ impl SidePanel {
         use std::process::{Command, Stdio};
 
         // 普通目录（不在仓库里）是文件树最常见的形态，不能为一次注定失败的
-        // 查询起子进程。
-        if git_repository_root(root).is_none() {
+        // 查询起子进程。先解析符号链接，否则通过仓库子目录符号链接打开时，
+        // 词法祖先链里看不到真实仓库的 `.git`。
+        let repository_root = root.canonicalize().ok().and_then(|root| git_repository_root(&root));
+        if repository_root.is_none() {
             return None;
         }
         let candidates: Vec<(PathBuf, String)> = paths
