@@ -49,6 +49,7 @@ pub(super) struct LoadedImage {
 pub(super) struct LoadedWallpaper {
     pub source: LoadedImage,
     pub blurred: RgbaImage,
+    pub mica: RgbaImage,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,8 +75,12 @@ pub(super) fn load(request: Request) -> Result<Option<LoadedWallpaper>, LoadErro
     if request.cancelled() {
         return Ok(None);
     }
-    let blurred = blur_wallpaper(&source.pixels);
-    Ok((!request.cancelled()).then_some(LoadedWallpaper { source, blurred }))
+    let blurred = blur_wallpaper(&source.pixels, false);
+    if request.cancelled() {
+        return Ok(None);
+    }
+    let mica = blur_wallpaper(&source.pixels, true);
+    Ok((!request.cancelled()).then_some(LoadedWallpaper { source, blurred, mica }))
 }
 
 pub(super) fn load_preview(request: Request) -> Result<Option<LoadedImage>, LoadError> {
@@ -105,7 +110,7 @@ pub(super) fn prepare_strip(
     optics::workspace_strip(bytes, dimensions, geometry, tint, cancelled)
 }
 
-fn blur_wallpaper(pixels: &RgbaImage) -> RgbaImage {
+fn blur_wallpaper(pixels: &RgbaImage, mica: bool) -> RgbaImage {
     use image::imageops::{fast_blur, thumbnail};
 
     let has_alpha = pixels.pixels().any(|pixel| pixel[3] < 255);
@@ -133,8 +138,9 @@ fn blur_wallpaper(pixels: &RgbaImage) -> RgbaImage {
         downsample(pixels)
     };
 
-    // The prototype uses 18 px over a 1240 px window. Scale the kernel to the texture.
-    let sigma = (18.0 / 1240.0) * reduced.width().max(reduced.height()) as f32;
+    // S1 Mica uses a 14 px blur at quarter resolution; retain the light theme kernel.
+    let sigma =
+        (if mica { 56.0 } else { 18.0 } / 1240.0) * reduced.width().max(reduced.height()) as f32;
     let mut blurred = fast_blur(&reduced, sigma);
     if has_alpha {
         for pixel in blurred.pixels_mut() {
@@ -143,6 +149,17 @@ fn blur_wallpaper(pixels: &RgbaImage) -> RgbaImage {
                 for channel in &mut pixel.0[..3] {
                     *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
                 }
+            }
+        }
+    }
+    if mica {
+        for pixel in blurred.pixels_mut() {
+            let [b, g, r, _] = pixel.0.map(f32::from);
+            let luma = 0.072 * b + 0.715 * g + 0.213 * r;
+            for channel in &mut pixel.0[..3] {
+                *channel = ((luma + (f32::from(*channel) - luma) * 1.75) * 0.78)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -295,7 +312,7 @@ mod tests {
         let image = RgbaImage::from_fn(1024, 512, |x, _| {
             if x < 512 { image::Rgba([180, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 0]) }
         });
-        let blurred = blur_wallpaper(&image);
+        let blurred = blur_wallpaper(&image, false);
         assert_eq!(blurred.dimensions(), (512, 256));
         assert_eq!(blurred.get_pixel(200, 128).0, [180, 0, 0, 255]);
         assert_eq!(blurred.get_pixel(310, 128)[3], 0);
@@ -303,7 +320,22 @@ mod tests {
         assert!((80..=180).contains(&edge[3]));
         assert!((175..=185).contains(&edge[0]));
         assert_eq!(edge[2], 0);
-        assert_eq!(blur_wallpaper(&RgbaImage::new(1, 2048)).dimensions(), (1, 512));
+        assert_eq!(blur_wallpaper(&RgbaImage::new(1, 2048), false).dimensions(), (1, 512));
+    }
+
+    #[test]
+    fn mica_has_a_broad_blur_and_retains_opaque_edges() {
+        let image = RgbaImage::from_fn(1240, 620, |x, _| {
+            image::Rgba(if x < 620 { [255; 4] } else { [0, 0, 0, 255] })
+        });
+        let light = blur_wallpaper(&image, false);
+        let mica = blur_wallpaper(&image, true);
+        assert!(mica.pixels().all(|pixel| pixel[3] == 255));
+        assert_eq!(mica.get_pixel(0, 0).0, [199, 199, 199, 255]);
+        assert!(mica.get_pixel(285, 128)[0] > light.get_pixel(285, 128)[0] + 5);
+        assert!(mica.len() <= 1024 * 1024);
+        let transparent = RgbaImage::from_pixel(16, 16, image::Rgba([255, 0, 255, 0]));
+        assert!(blur_wallpaper(&transparent, true).pixels().all(|pixel| pixel[3] == 0));
     }
 
     #[test]

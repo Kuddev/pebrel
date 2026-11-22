@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::platform::window_material::{apply_windows_accent_policy, background_appearance};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, ContentMask, Corners, Hsla, IntoElement, ParentElement, Pixels, RenderImage,
     Styled, Window, WindowBackgroundAppearance, div, fill, point, px, size,
@@ -92,6 +93,7 @@ impl Default for WallpaperLayout {
 struct WallpaperImages {
     sharp: Arc<RenderImage>,
     blurred: Arc<RenderImage>,
+    mica: Arc<RenderImage>,
 }
 
 /// Refresh prepared visual state without reading or decoding image files on the UI thread.
@@ -206,6 +208,7 @@ fn start_load(cx: &mut App) {
                     let retired = wp.images.replace(WallpaperImages {
                         sharp: Arc::new(RenderImage::new([Frame::new(loaded.source.pixels)])),
                         blurred: Arc::new(RenderImage::new([Frame::new(loaded.blurred)])),
+                        mica: Arc::new(RenderImage::new([Frame::new(loaded.mica)])),
                     });
                     retire_wallpaper(retired, cx);
                     refresh_surface_opacity(cx);
@@ -262,7 +265,7 @@ fn sync_root_background(cx: &mut App) {
 
 fn retire_wallpaper(images: Option<WallpaperImages>, cx: &mut App) {
     if let Some(images) = images {
-        retire_images([images.sharp, images.blurred], cx);
+        retire_images([images.sharp, images.blurred, images.mica], cx);
     }
 }
 
@@ -320,13 +323,15 @@ pub fn set_opacity_live(opacity: f32, cx: &mut App) {
     }
 }
 
-/// Preserve the original extended-wallpaper scrim: shell and card surfaces
-/// retain the user's opacity, capped at 0.78, while text remains opaque.
-/// Before an image is ready (or after clearing it), use the normal surface.
+/// Inherited dark static wallpaper uses one base beneath transparent surfaces.
+/// Other modes retain their existing surface opacity and native backdrop.
 pub fn chrome_surface_opacity(cx: &App) -> f32 {
     let Some(effects) = cx.try_global::<VisualEffects>() else {
         return 1.0;
     };
+    if unified_workspace_backdrop(cx) {
+        return 0.0;
+    }
     let opacity = base_surface_opacity(effects, cx);
     if effects.layout.cover_chrome && animated::underlay_ready(cx) {
         return underlay_composition(opacity, effects.layout.opacity).0;
@@ -344,6 +349,18 @@ pub fn card_surface_opacity(cx: &App) -> f32 {
         return underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).0;
     }
     chrome_surface_opacity(cx)
+}
+
+/// Dark static wallpaper owns one background beneath all inherited chrome.
+/// Custom tab materials retain their independent native-backdrop contract.
+pub(super) fn unified_workspace_backdrop(cx: &App) -> bool {
+    !crate::gpui_shell::theme::resolved_skin(cx).is_light
+        && !tab_bar_material_is_custom(cx)
+        && cx.try_global::<VisualEffects>().is_some_and(|effects| {
+            effects.layout.cover_chrome
+                && !effects.kind.is_animated()
+                && effects.wallpaper.as_ref().is_some_and(|wp| wp.images.is_some())
+        })
 }
 
 fn base_surface_opacity(effects: &VisualEffects, cx: &App) -> f32 {
@@ -635,7 +652,13 @@ fn layer(
     let opacity = effects.map_or(1.0, |effects| effects.layout.opacity);
     let extended_static =
         effects.is_some_and(|effects| effects.layout.cover_chrome && !effects.kind.is_animated());
+    let unified = unified_workspace_backdrop(cx);
+    let dark_settings = matches!(layer, WallpaperLayer::Settings)
+        && !crate::gpui_shell::theme::resolved_skin(cx).is_light;
     let opacity = match layer {
+        WallpaperLayer::Card if unified => 0.0,
+        WallpaperLayer::Preview if unified => opacity,
+        WallpaperLayer::Settings if dark_settings => opacity.min(0.56),
         WallpaperLayer::Settings => {
             // The settings palette supplies the veil underneath the two tints.
             let is_light = crate::gpui_shell::theme::resolved_skin(cx).is_light;
@@ -650,7 +673,7 @@ fn layer(
     };
     // Canvas's style.paint does not apply element opacity in pinned GPUI;
     // Div owns that scope for its child, without baking alpha into the image.
-    div().absolute().inset_0().opacity(opacity).child(
+    let image = div().absolute().inset_0().opacity(opacity).child(
         gpui::canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
@@ -660,7 +683,13 @@ fn layer(
             },
         )
         .size_full(),
-    )
+    );
+    div().absolute().inset_0().child(image).when(dark_settings, |layer| {
+        let mut tint = crate::gpui_shell::theme::settings_panel_bg(cx);
+        tint.l *= 0.62;
+        tint.a = 0.60;
+        layer.child(div().absolute().inset_0().bg(tint))
+    })
 }
 
 fn extended_card_reveal(opacity: f32) -> f32 {
@@ -714,7 +743,14 @@ fn paint_wallpaper(
     let Some(wp) = effects.wallpaper.as_ref() else { return };
     let Some(images) = wp.images.as_ref() else { return };
     let (image, radius) = match layer {
-        WallpaperLayer::Settings => (&images.blurred, px(0.0)),
+        WallpaperLayer::Settings => (
+            if crate::gpui_shell::theme::resolved_skin(cx).is_light {
+                &images.blurred
+            } else {
+                &images.mica
+            },
+            px(0.0),
+        ),
         WallpaperLayer::Window | WallpaperLayer::Preview => (&images.sharp, px(0.0)),
         WallpaperLayer::Card => (&images.sharp, crate::gpui_shell::theme::card_radius(cx)),
     };
