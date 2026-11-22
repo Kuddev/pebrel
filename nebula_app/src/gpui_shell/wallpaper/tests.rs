@@ -97,13 +97,13 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
         assert_eq!(chrome_surface_opacity(cx), 1.0);
     });
     cx.run_until_parked();
-    let (sharp, blurred) = cx.update(|cx| {
+    let (sharp, blurred, mica) = cx.update(|cx| {
         assert!(!cx.global::<VisualEffects>().loading);
-        assert_eq!(chrome_surface_opacity(cx), 0.78);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
         assert!(settings_wallpaper_visible(cx));
         let wp = cx.global::<VisualEffects>().wallpaper.as_ref().unwrap();
         let images = wp.images.as_ref().unwrap();
-        (images.sharp.clone(), images.blurred.clone())
+        (images.sharp.clone(), images.blurred.clone(), images.mica.clone())
     });
     rt.background_image_opacity = 0.75;
     rt.background_image_fit = Some("contain".into());
@@ -115,9 +115,10 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
         let wp = effects.wallpaper.as_ref().unwrap();
         assert!(Arc::ptr_eq(&sharp, &wp.images.as_ref().unwrap().sharp));
         assert!(Arc::ptr_eq(&blurred, &wp.images.as_ref().unwrap().blurred));
+        assert!(Arc::ptr_eq(&mica, &wp.images.as_ref().unwrap().mica));
         assert_eq!(effects.layout.opacity, 0.75);
         assert_eq!(effects.layout.fit, BackgroundImageFit::Uniform);
-        assert_eq!(chrome_surface_opacity(cx), 0.78);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
         for width in 800..1000 {
             let bounds = Bounds::new(point(px(100.0), px(30.0)), size(px(width as f32), px(600.0)));
             let _ = image_bounds(wp, effects.layout, bounds, 1.5);
@@ -127,9 +128,10 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
         rt.background_image_opacity = 0.0;
         update_wallpaper(&rt, 0.8, BlurModeName::None, cx);
         assert!(!settings_wallpaper_visible(cx));
-        assert_eq!(chrome_surface_opacity(cx), 0.78);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
         set_opacity_live(0.4, cx);
-        assert_eq!(chrome_surface_opacity(cx), 0.4);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
+        assert_eq!(window_opacity(cx), 0.4);
         rt.background_image_cover_chrome = false;
         rt.background_image_opacity = 0.75;
         update_wallpaper(&rt, 0.8, BlurModeName::None, cx);

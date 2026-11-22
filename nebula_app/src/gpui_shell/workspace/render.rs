@@ -102,10 +102,15 @@ impl Render for NebulaWorkspace {
             .size_full()
             .flex()
             .flex_col()
-            // Settings uses a solid base below its translucent surfaces. In the
-            // workspace each panel owns its own alpha over the native backdrop.
-            .bg(if settings_wallpaper {
-                crate::gpui_shell::theme::settings_panel_bg(cx)
+            // A shared wallpaper base prevents chrome alpha from leaking desktop pixels.
+            .bg(if settings_wallpaper && !wallpaper_peek {
+                if cx.theme().is_dark() { gpui::black() } else {
+                    crate::gpui_shell::theme::settings_panel_bg(cx)
+                }
+            } else if crate::gpui_shell::wallpaper::unified_workspace_backdrop(cx) {
+                let mut base = crate::gpui_shell::theme::settings_panel_bg(cx);
+                base.a = crate::gpui_shell::wallpaper::window_opacity(cx);
+                base
             } else {
                 gpui::transparent_black()
             })
@@ -284,7 +289,7 @@ impl Render for NebulaWorkspace {
             } else {
                 crate::gpui_shell::wallpaper::window_layer(settings_wallpaper, workspace_strip.clone(), cx).into_any_element()
             })
-            .when(settings_wallpaper && !wallpaper_peek, |root| {
+            .when(settings_wallpaper && !wallpaper_peek && !cx.theme().is_dark(), |root| {
                 root.child(
                     div()
                         .absolute()

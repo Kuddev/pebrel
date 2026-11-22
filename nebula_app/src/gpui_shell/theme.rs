@@ -532,8 +532,8 @@ fn settings_surfaces(mut content: Hsla, is_light: bool, has_wallpaper: bool) -> 
         } else {
             sidebar.l *= 0.68;
             content.l *= 0.78;
-            sidebar.a = 0.54;
-            content.a = 0.54;
+            sidebar.a = 0.28;
+            content.a = 0.0;
         }
     }
     (sidebar, content)
@@ -1114,7 +1114,7 @@ mod tests {
             }
             assert_eq!(
                 (sidebar.a, content.a),
-                if palette.is_light { (0.68, 0.44) } else { (0.54, 0.54) }
+                if palette.is_light { (0.68, 0.44) } else { (0.28, 0.0) }
             );
         }
     }
