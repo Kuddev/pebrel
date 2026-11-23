@@ -107,6 +107,60 @@ mod startup_tests {
 
     #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
+    fn isolated_startup_directory_reaches_first_terminal(cx: &mut gpui::TestAppContext) {
+        let filter = "gpui_shell::workspace::windowing::startup::startup_tests::isolated_startup_directory_reaches_first_terminal";
+        if crate::platform::profile_test_isolation::run_exact_child(filter, None) {
+            return;
+        }
+        let configured = tempfile::tempdir().unwrap();
+        let explicit = tempfile::tempdir().unwrap();
+        // Keep the real launch path, but fail process creation before a native PTY reader starts.
+        let profile =
+            super::super::tab_launch_tests::imported_profile(configured.path(), "startup.exe");
+        let mut store = crate::terminal_profiles::TerminalProfiles::default();
+        store.upsert(profile.clone()).unwrap();
+        store.save().unwrap();
+        pebrel_settings::persist_keys(&[
+            ("startup_directory", configured.path().to_string_lossy().into_owned()),
+            ("shell", format!("profile:custom|{}", profile.id)),
+        ])
+        .unwrap();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            crate::gpui_shell::file_editor::init(cx);
+            super::super::super::init(cx);
+            cx.set_global(crate::gpui_shell::config::Settings::load(
+                pebrel_settings::ThemeName::Nord,
+            ));
+            initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        for (requested, expected) in
+            [(None, configured.path()), (Some(explicit.path().to_path_buf()), explicit.path())]
+        {
+            let (_, workspace) = cx.update(|cx| {
+                open_workspace_window_with_visibility(
+                    cx,
+                    initial_startup(requested, None, true),
+                    None,
+                    None,
+                    true,
+                    WindowRole::Regular,
+                    false,
+                )
+                .unwrap()
+            });
+            let actual = workspace.read_with(cx, |workspace, cx| {
+                let view = workspace.tabs[0].focused_view().unwrap().read(cx);
+                assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Failed);
+                view.cwd.clone()
+            });
+            assert_eq!(std::path::Path::new(&actual), expected);
+        }
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
     fn launch_visibility_reaches_the_actual_workspace(cx: &mut gpui::TestAppContext) {
         use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
         use pebrel_settings::{RawSettings, RuntimeSettings};

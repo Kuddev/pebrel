@@ -184,7 +184,7 @@ fn runtime_tab_launch_executes_literal_arguments_in_the_requested_directory(
     fixture.verify(record);
 }
 
-fn imported_profile(
+pub(super) fn imported_profile(
     directory: &std::path::Path,
     name: &str,
 ) -> crate::terminal_profiles::TerminalProfile {
