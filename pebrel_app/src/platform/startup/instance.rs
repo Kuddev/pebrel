@@ -19,3 +19,9 @@ pub(crate) fn explicitly_requested() -> bool {
 pub(crate) fn is_private() -> bool {
     explicitly_requested() || crate::platform::elevation::requires_isolation()
 }
+
+/// Shared by settings and window close: private instances have no public
+/// resident discovery path, even on a platform that can hide a window.
+pub(crate) fn can_keep_session() -> bool {
+    crate::platform::CAPABILITIES.hide_window_on_close && !is_private()
+}

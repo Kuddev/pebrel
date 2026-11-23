@@ -1115,16 +1115,13 @@ impl NebulaWorkspace {
     ) -> bool {
         // Private windows have no public resident discovery path.
         if self.window_role != super::windowing::WindowRole::Regular
-            || crate::platform::startup::instance::is_private()
+            || !crate::platform::startup::instance::can_keep_session()
         {
             return false;
         }
         let runtime = pebrel_settings::RuntimeSettings::load();
-        // 平台藏不了窗口就没有「驻留」可言：不拦关闭，否则 Unix 上会变成
-        // 既不关也不藏（设置页那一行也按同一能力位隐藏）。
-        let can_hide = crate::platform::CAPABILITIES.hide_window_on_close;
         if residency_close_action(
-            runtime.keep_session && can_hide,
+            runtime.keep_session,
             self.has_live_terminal_panes(),
             self.tabs.is_empty(),
             runtime.tray,
