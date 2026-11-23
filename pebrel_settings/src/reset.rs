@@ -63,6 +63,7 @@ const RESET_KEYS: &[&str] = &[
     "silent_start",
     "blur",
     "opacity",
+    "settings_follow_opacity",
     "tab_bar_opacity",
     "tab_bar_blur",
     "background",
@@ -309,6 +310,38 @@ mod tests {
         assert_eq!(restored, "future_setting=keep\n");
         let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
         assert_eq!(runtime.tab_bar_material, crate::TabBarMaterial::default());
+    }
+
+    #[test]
+    fn settings_surface_opacity_is_opt_in_and_round_trips_before_reset() {
+        use crate::{RawSettings, RuntimeSettings, apply_updates};
+
+        for value in ["", "invalid", "0", "false", "off", "no"] {
+            let text = format!("opacity=0.3\nsettings_follow_opacity={value}\n");
+            assert!(
+                !RuntimeSettings::from_raw(&RawSettings::from_text(&text)).settings_follow_opacity
+            );
+        }
+        assert!(!RuntimeSettings::from_raw(&RawSettings::default()).settings_follow_opacity);
+        for value in ["1", "true", "on", "yes"] {
+            let saved = apply_updates(
+                "opacity=0.3\ncustom=keep\n",
+                &[("settings_follow_opacity", value.into())],
+            );
+            let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&saved));
+            assert!(settings.settings_follow_opacity);
+            assert_eq!(settings.opacity, 0.3);
+            let disabled = apply_updates(&saved, &[("settings_follow_opacity", "0".into())]);
+            assert!(
+                !RuntimeSettings::from_raw(&RawSettings::from_text(&disabled))
+                    .settings_follow_opacity
+            );
+            let reset = default_settings_text(&saved);
+            assert_eq!(reset, "custom=keep\n");
+            assert!(
+                !RuntimeSettings::from_raw(&RawSettings::from_text(&reset)).settings_follow_opacity
+            );
+        }
     }
 
     #[test]

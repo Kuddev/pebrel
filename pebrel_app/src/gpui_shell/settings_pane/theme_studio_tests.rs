@@ -17,6 +17,8 @@ use pebrel_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 mod background_tests;
 #[path = "theme_community_tests.rs"]
 mod community_tests;
+#[path = "settings_opacity_tests.rs"]
+mod opacity_tests;
 #[path = "theme_package_tests.rs"]
 mod package_tests;
 #[cfg(feature = "shader-background")]

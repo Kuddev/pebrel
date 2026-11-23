@@ -58,6 +58,7 @@ pub struct Settings {
     /// Effective window material values after user settings and theme defaults
     /// have been merged once during settings loading.
     pub(crate) visual_opacity: f32,
+    pub(crate) settings_follow_opacity: bool,
     pub(crate) visual_blur: BlurModeName,
     pub palette: Palette,
     /// Fully resolved theme snapshot. Renderers use the derived palette above;
@@ -303,6 +304,7 @@ impl Settings {
                 .focus_follows_mouse
                 .unwrap_or(raw.mouse.focus_follows_mouse),
             dim_inactive_panes: runtime.dim_inactive_panes,
+            settings_follow_opacity: runtime.settings_follow_opacity,
             ai_toasts: runtime.ai_toasts,
             notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
