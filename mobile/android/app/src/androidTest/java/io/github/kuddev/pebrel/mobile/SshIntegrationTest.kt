@@ -170,10 +170,10 @@ class SshIntegrationTest {
         val target = host.copy(fingerprint = expectedFingerprint, sessionMode = mode, sessionName = name)
         fun connection(profile: HostProfile = target) = SshConnection(profile, "pebrel-test-only".toCharArray(),
             { _, _ -> error("The fixture fingerprint must already match") })
-        suspend fun opened(): Pair<TerminalSession, SshConnection> {
+        suspend fun opened(command: String? = null): Pair<TerminalSession, SshConnection> {
             val ready = CompletableDeferred<Unit>()
             val channel = connection()
-            val terminal = TerminalSession(SshTerminalTransport(channel), object : TerminalCallbacks() {
+            val terminal = TerminalSession(SshTerminalTransport(channel, command), object : TerminalCallbacks() {
                 override fun onTransportReady(session: TerminalSession) { ready.complete(Unit) }
                 override fun onSessionFinished(session: TerminalSession) { ready.complete(Unit) }
             })
@@ -201,6 +201,19 @@ class SshIntegrationTest {
             }
             @Suppress("UNREACHABLE_CODE") ""
         }
+        suspend fun fixtureCommand(command: String) = withContext(Dispatchers.IO) {
+            connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
+                cleanup.connect()
+                // A fresh connection is waiting for its first channel. Queries
+                // only run alongside an open terminal or exec channel.
+                cleanup.openExec("timeout 8s $command")
+                val output = cleanup.input().readBytes().toString(Charsets.UTF_8)
+                cleanup.awaitExit() to output
+            }
+        }
+        val stop = if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'"
+        val retry = checkNotNull(target.reconnectCommand())
+        var completed = false
         try {
             val (first, ssh) = opened()
             val pid = try {
@@ -210,19 +223,34 @@ class SshIntegrationTest {
                 assertTrue(SftpClient(ssh::sftp).list(".").path.startsWith('/'))
                 marker.substringAfterLast(':')
             } finally { first.finishIfRunning() }
-            val (second, _) = opened()
+            val (second, _) = opened(retry)
             try {
                 assertTrue(second.sendText("printf '\\115UX_SECOND:%s:%s\\n' \"\$PEBREL_QA_TOKEN\" \"\$\$\"\r"))
                 assertEquals("MUX_SECOND:$name:$pid", output(second, Regex("MUX_SECOND:$name:[0-9]+")))
             } finally { second.finishIfRunning() }
+            assertEquals("The remote fixture stop command must succeed", 0, fixtureCommand(stop).first)
+            if (mode == SshSessionMode.HERDR) {
+                val ended = CompletableDeferred<Unit>()
+                val missing = TerminalSession(SshTerminalTransport(connection(), retry), object : TerminalCallbacks() {
+                    override fun onSessionFinished(session: TerminalSession) { ended.complete(Unit) }
+                })
+                missing.start()
+                try {
+                    withTimeout(15_000) { ended.await() }
+                    assertNull(missing.failureCause)
+                } finally { missing.finishIfRunning() }
+                val (status, inventory) = fixtureCommand("herdr session list --json")
+                assertEquals(0, status)
+                val sessions = org.json.JSONObject(inventory).getJSONArray("sessions")
+                assertFalse((0 until sessions.length()).any {
+                    val session = sessions.getJSONObject(it)
+                    session.getString("name") == name && session.optBoolean("running")
+                })
+            }
+            completed = true
         } finally {
-            withContext(Dispatchers.IO + NonCancellable) {
-                connection(host.copy(fingerprint = expectedFingerprint)).use { cleanup ->
-                    cleanup.connect()
-                    cleanup.openExec(if (mode == SshSessionMode.TMUX) "tmux kill-session -t '$name'" else "herdr session stop '$name'")
-                    cleanup.input().readBytes()
-                    cleanup.awaitExit()
-                }
+            if (!completed) withContext(NonCancellable) {
+                runCatching { fixtureCommand(stop) }
             }
         }
     }

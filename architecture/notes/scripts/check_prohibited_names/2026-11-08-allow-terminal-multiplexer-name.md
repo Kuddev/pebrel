@@ -19,7 +19,7 @@ The 2.4.0 follow-up chain (#882, folding #883–#887) fails `architecture-contra
 on functional code and one commit message:
 
 - the remote hook bridge reads `$TMUX` and sends a `tmux=` route field
-  (`nebula_app/res/hooks/remote_tmux.py`, `remote_bridge.py`, `ai_hook/protocol.rs`);
+  (`pebrel_app/res/hooks/remote_tmux.py`, `remote_bridge.py`, `ai_hook/protocol.rs`);
 - the Android SSH integration test runs real `tmux` commands;
 - a merge commit message names the IME fix "in tmux".
 

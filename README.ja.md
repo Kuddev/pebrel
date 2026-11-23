@@ -60,17 +60,6 @@
       <p><a href="https://cn.aiapi.bot/invite?code=MCYLZ5H6FR">AIAPI を見る</a></p>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="240">
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
-      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
-    </td>
-    <td>
-      <p><strong>世界をリードする AI モデルにアクセスし、管理するためのひとつの入り口</strong></p>
-      <p>このプロジェクトをスポンサーしてくださっている Sidrune AI に感謝します！Sidrune AI は、個人開発者、技術チーム、企業に向けて、世界をリードする AI モデルにアクセスし、管理するための統一された API を提供しています。動的なマルチルートのスケジューリングによって可用性が高まり、モデルの性能、応答時間、コストは透明に保たれます。モデルとルートによっては、API の呼び出しコストが公式価格やベンチマーク価格より 40%〜98% 安くなります。</p>
-      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">今すぐアクセスして登録</a>すると、$3 分の API クレジットを受け取れます。</p>
-    </td>
-  </tr>
 </table>
 
 ビジネス上の協力やスポンサーについてのお問い合わせ先：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
@@ -80,11 +69,11 @@
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-11.jpg"><img src="extra/community/wechat-group-2026-11-11.jpg" alt="Pebrel の WeChat グループの QR コード（2026 年 11 月 11 日以降は無効）" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="Pebrel の WeChat グループの QR コード（2026 年 11 月 24 日以降は無効）" width="300" /></a>
 </p>
 
 <p align="center">
-  2026 年 11 月 11 日より前に WeChat でスキャンして参加してください。画像をクリックすると原寸で表示されます。
+  2026 年 11 月 24 日より前に WeChat でスキャンして参加してください。画像をクリックすると原寸で表示されます。
 </p>
 
 ## ひとつのワークスペース
@@ -121,13 +110,13 @@ Pebrel（旧称 Nebula）は、ローカルのシェル、リモートホスト�
   ネイティブの貼り付けキーは維持されます。既定に戻すと、再起動せずに既存のウィンドウにも
   反映されます。実行時の上書きは以前のルールを置き換えるため、追記のみの方式で生じていた
   古い無効化バインドが残ることはありません。保存される設定の形式は変わりません。
-  詳しくは[ショートカットの所有に関する決定](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)をご覧ください。
+  詳しくは[ショートカットの所有に関する決定](architecture/notes/pebrel_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md)をご覧ください。
 - ローカルの Windows PowerShell のプロンプトでは、複数行のクリップボードの貼り付けを
   PSReadLine 内に留めて確認できます。Enter で送信し、1 回の Undo で貼り付け全体を取り消せます。
   これには、シェル統合が有効で、管理対象の貼り付けショートカットにユーザーのバインドがないことが必要です。
   PSReadLine は CRLF を正規化し、タブを 4 つのスペースに展開します。その他のエディターは、
   ネゴシエートされた貼り付けや既存の確認動作をそのまま保ちます。詳しくは
-  [クリップボードの貼り付けの契約](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)をご覧ください。
+  [クリップボードの貼り付けの契約](architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)をご覧ください。
 
 ### インテリジェントな補完
 
@@ -288,7 +277,7 @@ pebrel config check
 固定された Rust ツールチェーンとプラットフォームの依存関係をインストールした状態で、次を実行します：
 
 ```sh
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 内部の Cargo パッケージの名前は今も `nebula` ですが、アプリケーションとコマンドの名前は

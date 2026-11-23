@@ -1,0 +1,795 @@
+//! A specialized 2D grid implementation optimized for use in a terminal.
+
+use std::cmp::{max, min};
+use std::ops::{Bound, Deref, Index, IndexMut, Range, RangeBounds};
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
+use crate::index::{Column, Line, Point};
+use crate::term::cell::{Cell, Flags, ResetDiscriminant};
+use crate::vte::ansi::{CharsetIndex, StandardCharset};
+
+pub mod resize;
+mod row;
+pub mod snapshot;
+mod storage;
+#[cfg(test)]
+mod tests;
+
+pub use self::row::Row;
+use self::storage::Storage;
+
+pub trait GridCell: Sized {
+    /// Check if the cell contains any content.
+    fn is_empty(&self) -> bool;
+
+    /// Perform an opinionated cell reset based on a template cell.
+    fn reset(&mut self, template: &Self);
+
+    /// Release transient content when a row leaves the logical grid, even
+    /// when its text allocation remains in the ring's reusable row cache.
+    fn discard(&mut self) {}
+
+    fn flags(&self) -> &Flags;
+    fn flags_mut(&mut self) -> &mut Flags;
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Cursor<T> {
+    /// The location of this cursor.
+    pub point: Point,
+
+    /// Template cell when using this cursor.
+    pub template: T,
+
+    /// Currently configured graphic character sets.
+    pub charsets: Charsets,
+
+    /// Tracks if the next call to input will need to first handle wrapping.
+    ///
+    /// This is true after the last column is set with the input function. Any function that
+    /// implicitly sets the line or column needs to set this to false to avoid wrapping twice.
+    ///
+    /// Tracking `input_needs_wrap` makes it possible to not store a cursor position that exceeds
+    /// the number of columns, which would lead to index out of bounds when interacting with arrays
+    /// without sanitization.
+    pub input_needs_wrap: bool,
+}
+
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct Charsets([StandardCharset; 4]);
+
+impl Index<CharsetIndex> for Charsets {
+    type Output = StandardCharset;
+
+    fn index(&self, index: CharsetIndex) -> &StandardCharset {
+        &self.0[index as usize]
+    }
+}
+
+impl IndexMut<CharsetIndex> for Charsets {
+    fn index_mut(&mut self, index: CharsetIndex) -> &mut StandardCharset {
+        &mut self.0[index as usize]
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Scroll {
+    Delta(i32),
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
+/// Grid based terminal content storage.
+///
+/// ```notrust
+/// ┌─────────────────────────┐  <-- max_scroll_limit + lines
+/// │                         │
+/// │      UNINITIALIZED      │
+/// │                         │
+/// ├─────────────────────────┤  <-- self.raw.inner.len()
+/// │                         │
+/// │      RESIZE BUFFER      │
+/// │                         │
+/// ├─────────────────────────┤  <-- self.history_size() + lines
+/// │                         │
+/// │     SCROLLUP REGION     │
+/// │                         │
+/// ├─────────────────────────┤v lines
+/// │                         │|
+/// │     VISIBLE  REGION     │|
+/// │                         │|
+/// ├─────────────────────────┤^ <-- display_offset
+/// │                         │
+/// │    SCROLLDOWN REGION    │
+/// │                         │
+/// └─────────────────────────┘  <-- zero
+///                           ^
+///                        columns
+/// ```
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Grid<T> {
+    /// Current cursor for writing data.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub cursor: Cursor<T>,
+
+    /// Last saved cursor.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub saved_cursor: Cursor<T>,
+
+    /// Lines in the grid. Each row holds a list of cells corresponding to the
+    /// columns in that row.
+    raw: Storage<T>,
+
+    /// Number of columns.
+    columns: usize,
+
+    /// Number of visible lines.
+    lines: usize,
+
+    /// Offset of displayed area.
+    ///
+    /// If the displayed region isn't at the bottom of the screen, it stays
+    /// stationary while more text is emitted. The scrolling implementation
+    /// updates this offset accordingly.
+    display_offset: usize,
+
+    /// Maximum number of lines in history.
+    max_scroll_limit: usize,
+
+    /// Total lines dropped from the top of the scrollback (history saturated,
+    /// shrunk, or cleared). `scrolled_out + total_lines()` never decreases, so
+    /// `scrolled_out + history_size() + line` is a stable "absolute" line
+    /// number for rows still in the buffer — used by prompt marks.
+    #[cfg_attr(feature = "serde", serde(default))]
+    scrolled_out: usize,
+
+    /// Whether growing wider re-merges soft-wrapped rows; see
+    /// [`Self::set_reflow_on_grow`]. Shrink-time wrapping is unconditional, so
+    /// this only gates the *inverse* operation.
+    #[cfg_attr(feature = "serde", serde(skip, default = "reflow_on_grow_default"))]
+    reflow_on_grow: bool,
+}
+
+/// Re-merging on grow is what makes a shrink→grow round-trip lossless, so it is
+/// the default; hosts that run a second reflow engine opt out explicitly.
+#[cfg(feature = "serde")]
+fn reflow_on_grow_default() -> bool {
+    true
+}
+
+impl<T: GridCell + Default + PartialEq> Grid<T> {
+    pub fn new(lines: usize, columns: usize, max_scroll_limit: usize) -> Grid<T> {
+        Grid {
+            raw: Storage::with_capacity(lines, columns),
+            max_scroll_limit,
+            display_offset: 0,
+            saved_cursor: Cursor::default(),
+            cursor: Cursor::default(),
+            scrolled_out: 0,
+            reflow_on_grow: true,
+            lines,
+            columns,
+        }
+    }
+
+    /// Control whether growing wider re-merges rows that a previous shrink
+    /// soft-wrapped.
+    ///
+    /// On means narrowing then widening restores the original layout: `shrink`
+    /// records `Flags::WRAPLINE` on every row it splits, and `grow` reads those
+    /// marks to pull the cells back. The two are inverses, so this is the only
+    /// thing standing between us and "拖窄再拖回能恢复".
+    ///
+    /// Off exists for one reason: a second reflow engine downstream. The legacy
+    /// in-box ConPTY reflows its own buffer on resize, and two engines rewriting
+    /// the same stream mangle it. With the sideloaded 1.22+ passthrough host we
+    /// are the only engine, so this stays on.
+    ///
+    /// Turning it off is not lossless-minus-a-feature: rows stay split forever
+    /// and the wrap marks accumulate unread.
+    pub fn set_reflow_on_grow(&mut self, enabled: bool) {
+        self.reflow_on_grow = enabled;
+    }
+
+    /// Update the size of the scrollback history.
+    pub fn update_history(&mut self, history_size: usize) {
+        let current_history_size = self.history_size();
+        if current_history_size > history_size {
+            self.scrolled_out += current_history_size - history_size;
+            self.raw.shrink_lines(current_history_size - history_size);
+        }
+        self.display_offset = min(self.display_offset, history_size);
+        self.max_scroll_limit = history_size;
+    }
+
+    pub fn scroll_display(&mut self, scroll: Scroll) {
+        self.display_offset = match scroll {
+            Scroll::Delta(count) => {
+                min(max((self.display_offset as i32) + count, 0) as usize, self.history_size())
+            },
+            Scroll::PageUp => min(self.display_offset + self.lines, self.history_size()),
+            Scroll::PageDown => self.display_offset.saturating_sub(self.lines),
+            Scroll::Top => self.history_size(),
+            Scroll::Bottom => 0,
+        };
+    }
+
+    fn increase_scroll_limit(&mut self, count: usize) {
+        let count = min(count, self.max_scroll_limit - self.history_size());
+        if count != 0 {
+            self.raw.initialize(count, self.columns);
+        }
+    }
+
+    fn decrease_scroll_limit(&mut self, count: usize) {
+        let count = min(count, self.history_size());
+        if count != 0 {
+            self.scrolled_out += count;
+            self.raw.shrink_lines(min(count, self.history_size()));
+            self.display_offset = min(self.display_offset, self.history_size());
+        }
+    }
+
+    #[inline]
+    pub fn scroll_down<D>(&mut self, region: &Range<Line>, positions: usize)
+    where
+        T: ResetDiscriminant<D>,
+        D: PartialEq,
+    {
+        // When rotating the entire region, just reset everything.
+        if region.end - region.start <= positions {
+            for i in (region.start.0..region.end.0).map(Line::from) {
+                self.raw[i].reset(&self.cursor.template);
+            }
+
+            return;
+        }
+
+        // Which implementation we can use depends on the existence of a scrollback history.
+        //
+        // Since a scrollback history prevents us from rotating the entire buffer downwards, we
+        // instead have to rely on a slower, swap-based implementation.
+        if self.max_scroll_limit == 0 {
+            // Swap the lines fixed at the bottom to their target positions after rotation.
+            //
+            // Since we've made sure that the rotation will never rotate away the entire region, we
+            // know that the position of the fixed lines before the rotation must already be
+            // visible.
+            //
+            // We need to start from the top, to make sure the fixed lines aren't swapped with each
+            // other.
+            let screen_lines = self.screen_lines() as i32;
+            for i in (region.end.0..screen_lines).map(Line::from) {
+                self.raw.swap(i, i - positions as i32);
+            }
+
+            // Rotate the entire line buffer downward.
+            self.raw.rotate_down(positions);
+
+            // Ensure all new lines are fully cleared.
+            for i in (0..positions).map(Line::from) {
+                self.raw[i].reset(&self.cursor.template);
+            }
+
+            // Swap the fixed lines at the top back into position.
+            for i in (0..region.start.0).map(Line::from) {
+                self.raw.swap(i, i + positions);
+            }
+        } else {
+            // Subregion rotation.
+            let range = (region.start + positions).0..region.end.0;
+            for line in range.rev().map(Line::from) {
+                self.raw.swap(line, line - positions);
+            }
+
+            let range = region.start.0..(region.start + positions).0;
+            for line in range.rev().map(Line::from) {
+                self.raw[line].reset(&self.cursor.template);
+            }
+        }
+    }
+
+    /// Move lines at the bottom toward the top.
+    ///
+    /// This is the performance-sensitive part of scrolling.
+    pub fn scroll_up<D>(&mut self, region: &Range<Line>, positions: usize)
+    where
+        T: ResetDiscriminant<D>,
+        D: PartialEq,
+    {
+        // When rotating the entire region with fixed lines at the top, just reset everything.
+        if region.end - region.start <= positions && region.start != 0 {
+            for i in (region.start.0..region.end.0).map(Line::from) {
+                self.raw[i].reset(&self.cursor.template);
+            }
+
+            return;
+        }
+
+        // Update display offset when not pinned to active area.
+        if self.display_offset != 0 {
+            self.display_offset = min(self.display_offset + positions, self.max_scroll_limit);
+        }
+
+        // Only rotate the entire history if the active region starts at the top.
+        if region.start == 0 {
+            // Rotated-away lines beyond the remaining scrollback capacity are
+            // dropped for good; account for them before growing the history.
+            let capacity_left = self.max_scroll_limit - self.history_size();
+            self.scrolled_out += positions.saturating_sub(capacity_left);
+
+            // Create scrollback for the new lines.
+            self.increase_scroll_limit(positions);
+
+            // Swap the lines fixed at the top to their target positions after rotation.
+            //
+            // Since we've made sure that the rotation will never rotate away the entire region, we
+            // know that the position of the fixed lines before the rotation must already be
+            // visible.
+            //
+            // We need to start from the bottom, to make sure the fixed lines aren't swapped with
+            // each other.
+            for i in (0..region.start.0).rev().map(Line::from) {
+                self.raw.swap(i, i + positions);
+            }
+
+            // Rotate the entire line buffer upward.
+            self.raw.rotate(-(positions as isize));
+
+            // Swap the fixed lines at the bottom back into position.
+            let screen_lines = self.screen_lines() as i32;
+            for i in (region.end.0..screen_lines).rev().map(Line::from) {
+                self.raw.swap(i, i - positions);
+            }
+        } else {
+            // Rotate lines without moving anything into history.
+            for i in (region.start.0..region.end.0 - positions as i32).map(Line::from) {
+                self.raw.swap(i, i + positions);
+            }
+        }
+
+        // Ensure all new lines are fully cleared.
+        for i in (region.end.0 - positions as i32..region.end.0).map(Line::from) {
+            self.raw[i].reset(&self.cursor.template);
+        }
+    }
+
+    pub fn clear_viewport<D>(&mut self)
+    where
+        T: ResetDiscriminant<D>,
+        D: PartialEq,
+    {
+        // Determine how many lines to scroll up by.
+        let end = Point::new(Line(self.lines as i32 - 1), Column(self.columns()));
+        let mut iter = self.iter_from(end);
+        while let Some(cell) = iter.prev() {
+            if !cell.is_empty() || cell.point.line < 0 {
+                break;
+            }
+        }
+        debug_assert!(iter.point.line >= -1);
+        let positions = (iter.point.line.0 + 1) as usize;
+        let region = Line(0)..Line(self.lines as i32);
+
+        // Clear the viewport.
+        self.scroll_up(&region, positions);
+
+        // Reset rotated lines.
+        for line in (0..(self.lines - positions)).map(Line::from) {
+            self.raw[line].reset(&self.cursor.template);
+        }
+    }
+
+    /// Completely reset the grid state.
+    pub fn reset<D>(&mut self)
+    where
+        T: ResetDiscriminant<D>,
+        D: PartialEq,
+    {
+        self.clear_history();
+
+        self.saved_cursor = Cursor::default();
+        self.cursor = Cursor::default();
+        self.display_offset = 0;
+
+        // Reset all visible lines.
+        let range = self.topmost_line().0..(self.screen_lines() as i32);
+        for line in range.map(Line::from) {
+            self.raw[line].reset(&self.cursor.template);
+        }
+    }
+}
+
+impl<T> Grid<T> {
+    /// Raw mutable access can introduce transient content without using the
+    /// protocol insertion path. Keep cleanup enabled even after a later reset.
+    pub(crate) fn track_transient_content(&mut self) -> &mut Self {
+        self.raw.may_have_images = true;
+        self.track_inline_content()
+    }
+
+    pub(crate) fn track_inline_content(&mut self) -> &mut Self {
+        self.raw.may_have_transient_content = true;
+        self
+    }
+
+    pub(crate) fn may_have_images(&self) -> bool {
+        self.raw.may_have_images
+    }
+
+    /// Reset a visible region within the grid.
+    pub fn reset_region<D, R: RangeBounds<Line>>(&mut self, bounds: R)
+    where
+        T: ResetDiscriminant<D> + GridCell + Default,
+        D: PartialEq,
+    {
+        let start = match bounds.start_bound() {
+            Bound::Included(line) => *line,
+            Bound::Excluded(line) => *line + 1,
+            Bound::Unbounded => Line(0),
+        };
+
+        let end = match bounds.end_bound() {
+            Bound::Included(line) => *line + 1,
+            Bound::Excluded(line) => *line,
+            Bound::Unbounded => Line(self.screen_lines() as i32),
+        };
+
+        debug_assert!(start < self.screen_lines() as i32);
+        debug_assert!(end <= self.screen_lines() as i32);
+
+        for line in (start.0..end.0).map(Line::from) {
+            self.raw[line].reset(&self.cursor.template);
+        }
+    }
+
+    #[inline]
+    pub fn clear_history(&mut self)
+    where
+        T: GridCell,
+    {
+        // Explicitly purge all lines from history.
+        self.scrolled_out += self.history_size();
+        self.raw.shrink_lines(self.history_size());
+
+        // Reset display offset.
+        self.display_offset = 0;
+    }
+
+    /// This is used only for initializing after loading ref-tests.
+    #[inline]
+    pub fn initialize_all(&mut self)
+    where
+        T: GridCell + Default,
+    {
+        // Remove all cached lines to clear them of any content.
+        self.truncate();
+
+        // Initialize everything with empty new lines.
+        self.raw.initialize(self.max_scroll_limit - self.history_size(), self.columns);
+    }
+
+    /// This is used only for truncating before saving ref-tests.
+    #[inline]
+    pub fn truncate(&mut self) {
+        self.raw.truncate();
+    }
+
+    /// Iterate over all cells in the grid starting at a specific point.
+    #[inline]
+    pub fn iter_from(&self, point: Point) -> GridIterator<'_, T> {
+        let last_column = self.last_column();
+        let end = Point::new(self.bottommost_line(), last_column);
+        GridIterator { grid: self, point, end, last_column }
+    }
+
+    /// Iterate over all visible cells.
+    ///
+    /// This is slightly more optimized than calling `Grid::iter_from` in combination with
+    /// `Iterator::take_while`.
+    #[inline]
+    pub fn display_iter(&self) -> GridIterator<'_, T> {
+        let last_column = self.last_column();
+        let start = Point::new(Line(-(self.display_offset() as i32) - 1), last_column);
+        let end_line = min(start.line + self.screen_lines(), self.bottommost_line());
+        let end = Point::new(end_line, last_column);
+
+        GridIterator { grid: self, point: start, end, last_column }
+    }
+
+    /// Iterate over a viewport inside the currently displayed grid area.
+    ///
+    /// The requested dimensions may temporarily differ from the grid while a
+    /// host throttles terminal reflow during an interactive resize.  Keeping
+    /// the iterator bounded here avoids allocating a projected grid just to
+    /// render the clipped viewport.
+    #[inline]
+    pub fn display_iter_from(
+        &self,
+        top: Line,
+        lines: usize,
+        columns: usize,
+    ) -> GridIterator<'_, T> {
+        debug_assert!(lines > 0);
+        debug_assert!(columns > 0);
+
+        let columns = min(columns, self.columns);
+        let lines = min(lines, (self.bottommost_line() - top).0.max(0) as usize + 1);
+        let last_column = Column(columns - 1);
+        // `start` sits one cell before the first yielded cell; advancing by
+        // `lines` rows therefore lands exactly on the crop's last row.
+        let start = Point::new(top - 1, last_column);
+        let end = Point::new(start.line + lines, last_column);
+
+        GridIterator { grid: self, point: start, end, last_column }
+    }
+
+    #[inline]
+    pub fn display_offset(&self) -> usize {
+        self.display_offset
+    }
+
+    /// Lines dropped from the top of the scrollback over this grid's lifetime.
+    ///
+    /// See the field docs: this anchors the absolute line numbering used by
+    /// prompt marks.
+    #[inline]
+    pub fn scrolled_out(&self) -> usize {
+        self.scrolled_out
+    }
+
+    #[inline]
+    pub fn cursor_cell(&mut self) -> &mut T {
+        let point = self.cursor.point;
+        &mut self[point.line][point.column]
+    }
+}
+
+impl<T: PartialEq> PartialEq for Grid<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare struct fields and check result of grid comparison.
+        self.raw.eq(&other.raw)
+            && self.columns.eq(&other.columns)
+            && self.lines.eq(&other.lines)
+            && self.display_offset.eq(&other.display_offset)
+    }
+}
+
+impl<T> Index<Line> for Grid<T> {
+    type Output = Row<T>;
+
+    #[inline]
+    fn index(&self, index: Line) -> &Row<T> {
+        &self.raw[index]
+    }
+}
+
+impl<T> IndexMut<Line> for Grid<T> {
+    #[inline]
+    fn index_mut(&mut self, index: Line) -> &mut Row<T> {
+        &mut self.raw[index]
+    }
+}
+
+impl<T> Index<Point> for Grid<T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, point: Point) -> &T {
+        &self[point.line][point.column]
+    }
+}
+
+impl<T> IndexMut<Point> for Grid<T> {
+    #[inline]
+    fn index_mut(&mut self, point: Point) -> &mut T {
+        &mut self[point.line][point.column]
+    }
+}
+
+/// Grid dimensions.
+pub trait Dimensions {
+    /// Total number of lines in the buffer, this includes scrollback and visible lines.
+    fn total_lines(&self) -> usize;
+
+    /// Height of the viewport in lines.
+    fn screen_lines(&self) -> usize;
+
+    /// Width of the terminal in columns.
+    fn columns(&self) -> usize;
+
+    /// Index for the last column.
+    #[inline]
+    fn last_column(&self) -> Column {
+        Column(self.columns() - 1)
+    }
+
+    /// Line farthest up in the grid history.
+    #[inline]
+    fn topmost_line(&self) -> Line {
+        Line(-(self.history_size() as i32))
+    }
+
+    /// Line farthest down in the grid history.
+    #[inline]
+    fn bottommost_line(&self) -> Line {
+        Line(self.screen_lines() as i32 - 1)
+    }
+
+    /// Number of invisible lines part of the scrollback history.
+    #[inline]
+    fn history_size(&self) -> usize {
+        self.total_lines().saturating_sub(self.screen_lines())
+    }
+}
+
+impl<G> Dimensions for Grid<G> {
+    #[inline]
+    fn total_lines(&self) -> usize {
+        self.raw.len()
+    }
+
+    #[inline]
+    fn screen_lines(&self) -> usize {
+        self.lines
+    }
+
+    #[inline]
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
+
+#[cfg(test)]
+impl Dimensions for (usize, usize) {
+    fn total_lines(&self) -> usize {
+        self.0
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.0
+    }
+
+    fn columns(&self) -> usize {
+        self.1
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Indexed<T> {
+    pub point: Point,
+    pub cell: T,
+}
+
+impl<T> Deref for Indexed<T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        &self.cell
+    }
+}
+
+impl Grid<Cell> {
+    /// Alternate-screen entry copies the cursor, including an image template
+    /// supplied through raw mutable access, without moving the source grid.
+    pub(crate) fn copy_cursor_from(&mut self, source: &Self) {
+        if source.cursor.template.image().is_some() {
+            self.track_transient_content();
+        } else if source.cursor.template.inline_marker().is_some() {
+            self.track_inline_content();
+        }
+        self.cursor = source.cursor.clone();
+    }
+
+    /// Only `Term` owns these initially empty grids without exposing mutable
+    /// cells. Public constructors, clones and deserialization stay conservative.
+    pub(crate) fn new_for_terminal(lines: usize, columns: usize, history: usize) -> Self {
+        let mut grid = Self::new(lines, columns, history);
+        grid.raw.may_have_transient_content = false;
+        grid.raw.may_have_images = false;
+        grid
+    }
+}
+
+/// Grid cell iterator.
+pub struct GridIterator<'a, T> {
+    /// Immutable grid reference.
+    grid: &'a Grid<T>,
+
+    /// Current position of the iterator within the grid.
+    point: Point,
+
+    /// Last cell included in the iterator.
+    end: Point,
+
+    /// Column at which a row ends and the iterator wraps to the next line.
+    ///
+    /// This matches the grid's last column except for viewport crops created
+    /// by [`Grid::display_iter_from`], which never yield cells past the
+    /// cropped width.
+    last_column: Column,
+}
+
+impl<'a, T> GridIterator<'a, T> {
+    /// Current iterator position.
+    pub fn point(&self) -> Point {
+        self.point
+    }
+
+    /// Cell at the current iterator position.
+    pub fn cell(&self) -> &'a T {
+        &self.grid[self.point]
+    }
+}
+
+impl<'a, T> Iterator for GridIterator<'a, T> {
+    type Item = Indexed<&'a T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Stop once we've reached the end of the grid.
+        if self.point >= self.end {
+            return None;
+        }
+
+        match self.point {
+            Point { column, .. } if column >= self.last_column => {
+                self.point.column = Column(0);
+                self.point.line += 1;
+            },
+            _ => self.point.column += Column(1),
+        }
+
+        Some(Indexed { cell: &self.grid[self.point], point: self.point })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.point >= self.end {
+            return (0, Some(0));
+        }
+
+        let row_width = self.last_column.0 + 1;
+        let size = if self.point.line == self.end.line {
+            (self.end.column - self.point.column).0
+        } else {
+            let cols_on_first_line = row_width.saturating_sub(self.point.column.0 + 1);
+            let middle_lines = (self.end.line - self.point.line).0 as usize - 1;
+            let cols_on_last_line = self.end.column + 1;
+
+            cols_on_first_line + middle_lines * row_width + cols_on_last_line.0
+        };
+
+        (size, Some(size))
+    }
+}
+
+/// Bidirectional iterator.
+pub trait BidirectionalIterator: Iterator {
+    fn prev(&mut self) -> Option<Self::Item>;
+}
+
+impl<T> BidirectionalIterator for GridIterator<'_, T> {
+    fn prev(&mut self) -> Option<Self::Item> {
+        let topmost_line = self.grid.topmost_line();
+
+        // Stop once we've reached the end of the grid.
+        if self.point <= Point::new(topmost_line, Column(0)) {
+            return None;
+        }
+
+        match self.point {
+            Point { column: Column(0), .. } => {
+                self.point.column = self.last_column;
+                self.point.line -= 1;
+            },
+            _ => self.point.column -= Column(1),
+        }
+
+        Some(Indexed { cell: &self.grid[self.point], point: self.point })
+    }
+}

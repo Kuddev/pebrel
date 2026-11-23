@@ -4,8 +4,8 @@ Pebrel 1.6 uses the `pebrel` command, Pebrel installation directories, and
 `PEBREL_*` environment variables. Legacy configuration and integration identifiers
 remain compatibility inputs; follow the [identity migration decision](docs/architecture-decisions.md#adr-0003---pebrel-16-identity-migration)
 when changing them. Internal Rust names migrate one module at a time. The completion package now uses
-`pebrel-completions`; its source directory remains `nebula-completions/` until the
-scan-root migration is validated. See the [package identity decision](architecture/notes/nebula-completions/2026-09-30-package-identity.md).
+`pebrel-completions`; its source directory remains `pebrel-completions/` until the
+scan-root migration is validated. See the [package identity decision](architecture/notes/pebrel-completions/2026-09-30-package-identity.md).
 
 ## Required reading
 
@@ -102,7 +102,7 @@ READMEs introduce the product and do not duplicate this policy. / 本节为规�
    product, not an accidentally substituted legacy executable:
 
    ```sh
-   cargo build --locked -p nebula --bin pebrel --features gpui-shell
+   cargo build --locked -p pebrel --bin pebrel --features gpui-shell
    ```
 
 3. Make the focused change, run the checks below, and open a PR against the agreed
@@ -155,15 +155,15 @@ ratcheting. Run without `--base` for current-tree checks during development.
 python3 scripts/check_architecture.py --base <PR-base-commit>
 python3 -m unittest scripts.tests.test_architecture_budgets scripts.tests.test_architecture_dependencies scripts.tests.test_architecture_governance
 cargo test --manifest-path tools/i18n-contract/Cargo.toml --locked
-cargo test -p nebula-settings
-cargo test -p nebula --test file_line_budget
+cargo test -p pebrel-settings
+cargo test -p pebrel --test file_line_budget
 cargo fmt --all -- --check
 ```
 
 Run affected behavior tests and the appropriate real product checks as well:
 
 ```sh
-cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
+cargo check -p pebrel --bin pebrel --features gpui-shell --tests --locked
 ```
 
 `Full native tests` plans validation on every PR. Ordinary shared-code changes

@@ -1,0 +1,803 @@
+//! Child-process inspection for close confirmation (a close-confirmation safety net).
+//!
+//! Before a pane/tab/window closes, its shell's descendant process tree is
+//! checked against a whitelist of "stateless" programs (shells and plumbing).
+//! Any other descendant — a running build, vim, ssh — means the close should be
+//! confirmed by the user rather than silently killing work. This deliberately
+//! needs no shell integration (unlike the OSC 133 approach), so it works with
+//! any shell out of the box.
+
+use crate::platform::process_snapshot::{self, ProcessRow};
+
+/// Programs whose presence never blocks a close: shells themselves plus the
+/// console plumbing every ConPTY session drags along. `git.exe` is here
+/// because Nebula's own prompt integration spawns it on every prompt render
+/// (branch for the powerline) — the close snapshot routinely catches one
+/// mid-flight, and a user-run git operation is crash-safe by design anyway.
+const STATELESS: &[&str] = &[
+    "cmd.exe",
+    "conhost.exe",
+    "openconsole.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "bash.exe",
+    "sh.exe",
+    "dash.exe",
+    "zsh.exe",
+    "fish.exe",
+    "nu.exe",
+    "wsl.exe",
+    "wslhost.exe",
+    "wslrelay.exe",
+    "winpty-agent.exe",
+    "git.exe",
+];
+
+/// 进去之后就是一个新提示符的程序：它们「在跑」不代表有活儿在跑。
+///
+/// 与 [`STATELESS`] 有意分成两张表。`STATELESS` 回答的是「关掉这个 pane 会不会
+/// 丢东西」，所以里面有 `git.exe`（我们自己的 prompt 集成每个提示符都跑它）和
+/// conhost 一类 console plumbing；这张表回答的是「前台这个东西会不会自己结束」。
+/// 混用会让 `git log` 刚开始就被判成不在跑。
+///
+/// 只收会 fork 子进程的 shell，不收 `python` / `node` 这类 REPL。区别在能不能
+/// 被纠正：在 `cmd` 里跑 `ping -t` 会多出一个 `ping.exe`，进程树看得见，状态能
+/// 被拉回运行中；而 REPL 里的 `time.sleep(60)` 跑在解释器进程内部，进程树永远
+/// 只看到 `python.exe`，一旦判成不在跑就再也纠正不回来。
+const INTERACTIVE_SHELLS: &[&str] =
+    &["cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "fish", "nu", "wsl"];
+
+/// 这条命令是不是「进入一个交互式 shell」，而不是一件会自己结束的活儿。
+///
+/// Windows 的 ConPTY 没有前台进程组（POSIX 的 `tcgetpgrp`），拿不到「现在谁占着
+/// 终端」这个实时事实，只能枚举进程树——那必须节流，最快也要几秒才出结果。命令
+/// 启动的这一刻是唯一能零延迟判断的时机，所以这里用名字判一次。
+///
+/// 必须整条命令就只有这个 shell 名（可带路径和 `.exe`）。带参数一律当普通命令：
+/// `cmd /c dir`、`bash script.sh`、`wsl ls` 都会自己结束，状态该正常走完。
+pub fn is_interactive_shell_command(command: &str) -> bool {
+    let command = command.trim();
+    // 整条命令是一个带引号的路径时先剥引号：安装路径里有空格就得这么写，
+    // 剥完不能再按空白切词，否则 `"C:\Program Files\pwsh.exe"` 会被当成两段。
+    if let Some(inner) = command.strip_prefix('"').and_then(|rest| rest.strip_suffix('"'))
+        && !inner.contains('"')
+    {
+        return is_shell_executable(inner);
+    }
+    let mut tokens = command.split_whitespace();
+    let Some(first) = tokens.next() else { return false };
+    if tokens.next().is_some() {
+        return false;
+    }
+    is_shell_executable(first)
+}
+
+/// 一个可执行文件路径的基名（去掉目录与 `.exe`）是否在交互式 shell 表里。
+pub(crate) fn is_shell_executable(path: &str) -> bool {
+    let name = path.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or(path);
+    let name = name.to_ascii_lowercase();
+    let stem = name.strip_suffix(".exe").unwrap_or(name.as_str());
+    INTERACTIVE_SHELLS.contains(&stem)
+}
+
+/// Turn a raw exe name into something a confirm dialog can show: drop the
+/// `.exe` suffix (`node.exe` → `node`).
+///
+/// 2026-07-27 用户反馈：关闭窗口时确认框写的是 `node.exe 仍在运行`——那其实
+/// 是 Claude Code，只不过快照只看得见宿主解释器。真正的修复在调用方
+/// （`busy_process_in` 优先用 pane 已知的 `running_program`）；这里只负责
+/// 没有那份身份信息时把名字擦干净。
+pub fn display_name(exe: &str) -> String {
+    let name = exe.rsplit(['/', '\\']).next().unwrap_or(exe);
+    name.strip_suffix(".exe").or_else(|| name.strip_suffix(".EXE")).unwrap_or(name).to_owned()
+}
+
+/// Host descendants establish local liveness; a remote pane also has terminal
+/// lifecycle evidence, since its actual foreground process is on another OS.
+pub(crate) fn close_warning_process(
+    remote: bool,
+    foreground: Option<&str>,
+    child: Option<&str>,
+) -> Option<String> {
+    let foreground = foreground.filter(|program| !is_interactive_shell_command(program));
+    if remote && let Some(program) = foreground {
+        return Some(program.to_owned());
+    }
+    child.map(|child| foreground.map(str::to_owned).unwrap_or_else(|| display_name(child)))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub parent_pid: u32,
+    pub executable: String,
+    pub depth: u32,
+}
+
+fn is_stateless_process(executable: &str) -> bool {
+    let name = executable.rsplit(['/', '\\']).next().unwrap_or(executable).to_ascii_lowercase();
+    if STATELESS.contains(&name.as_str()) {
+        return true;
+    }
+    let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    // POSIX login shells can expose argv[0] as `-bash`/`-zsh` in ps output.
+    // Apply this convention only to a known shell, never to the git/plumbing
+    // exemptions or Windows executable names. Command parsing stays separate.
+    let login_shell = !name.ends_with(".exe")
+        && stem.strip_prefix('-').is_some_and(|shell| INTERACTIVE_SHELLS.contains(&shell));
+    INTERACTIVE_SHELLS.contains(&stem) || login_shell || stem == "git"
+}
+
+fn snapshot() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+    Ok(verified_parentage(process_snapshot::snapshot()?))
+}
+
+/// 全机枚举的唯一出口（含测试 seam）：生产走 `snapshot()`，测试可注入
+/// 慢枚举/计数伪实现（见 `with_cached_snapshot` 的并发测试）。
+fn enumerate() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+    #[cfg(test)]
+    if let Some(fake) = test_snapshot_hook() {
+        count_test_enumeration();
+        return fake();
+    }
+    snapshot()
+}
+
+fn test_snapshot_hook()
+-> Option<fn() -> Result<std::collections::HashMap<u32, (u32, String)>, String>> {
+    *HOOK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+type SnapshotFn = fn() -> Result<std::collections::HashMap<u32, (u32, String)>, String>;
+static HOOK: std::sync::LazyLock<std::sync::Mutex<Option<SnapshotFn>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// 注入/清除测试枚举实现，同时把枚举计数清零。
+#[cfg(test)]
+pub(crate) fn set_test_snapshot_hook(fake: Option<SnapshotFn>) {
+    *HOOK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = fake;
+    TEST_ENUMERATION_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 枚举计数：每次经 seam 触发的枚举 +1（生产路径不计数）。
+#[cfg(test)]
+pub(crate) static TEST_ENUMERATION_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn count_test_enumeration() {
+    TEST_ENUMERATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn verified_parentage(rows: Vec<ProcessRow>) -> std::collections::HashMap<u32, (u32, String)> {
+    // Windows keeps a creator's PID after it exits. If that number now belongs
+    // to a younger process, it cannot be this child's parent. Missing creation
+    // times preserve the edge so uncertainty cannot hide a real busy child.
+    let creation_times: std::collections::HashMap<_, _> =
+        rows.iter().map(|row| (row.pid, row.created)).collect();
+    rows.into_iter()
+        .map(|row| {
+            let reused = row.created != 0
+                && creation_times.get(&row.parent).is_some_and(|parent| *parent > row.created);
+            let parent = if reused { 0 } else { row.parent };
+            (row.pid, (parent, row.executable))
+        })
+        .collect()
+}
+
+/// Snapshot the real local descendants owned by one terminal shell. The root
+/// is included at depth zero so clients can distinguish the PTY owner from the
+/// commands below it. The OS is intentionally sampled on demand; running this
+/// on the 1 Hz UI state pump would scan the whole machine continuously.
+pub fn descendants(root_pid: u32) -> Result<Vec<ProcessEntry>, String> {
+    descendants_from_rows(root_pid, process_snapshot::snapshot()?)
+}
+
+pub(crate) fn descendants_from_rows(
+    root_pid: u32,
+    rows: Vec<ProcessRow>,
+) -> Result<Vec<ProcessEntry>, String> {
+    if root_pid == 0 {
+        return Err("the pane does not own a local shell process".to_owned());
+    }
+
+    descendants_from_snapshot(root_pid, &verified_parentage(rows))
+}
+
+fn descendants_from_snapshot(
+    root_pid: u32,
+    processes: &std::collections::HashMap<u32, (u32, String)>,
+) -> Result<Vec<ProcessEntry>, String> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    if !processes.contains_key(&root_pid) {
+        return Err(format!("shell process {root_pid} is no longer present"));
+    }
+
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (&pid, &(parent, _)) in processes {
+        if parent != pid {
+            children.entry(parent).or_default().push(pid);
+        }
+    }
+    for child_ids in children.values_mut() {
+        child_ids.sort_unstable();
+    }
+
+    let mut result = Vec::new();
+    let mut queue = VecDeque::from([(root_pid, 0_u32)]);
+    let mut seen = HashSet::new();
+    while let Some((pid, depth)) = queue.pop_front() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        if let Some((parent_pid, executable)) = processes.get(&pid) {
+            result.push(ProcessEntry {
+                pid,
+                parent_pid: *parent_pid,
+                executable: executable.clone(),
+                depth,
+            });
+        }
+        if let Some(child_ids) = children.get(&pid) {
+            queue.extend(child_ids.iter().map(|child| (*child, depth.saturating_add(1))));
+        }
+    }
+    Ok(result)
+}
+
+/// First non-stateless process under `root_pid` (the pane's shell), or `None`
+/// when the whole tree is safe to kill. The name is used in the confirm modal.
+pub fn busy_child(root_pid: u32) -> Option<String> {
+    busy_descendant(descendants(root_pid).ok()?)
+}
+
+/// Liveness evidence for status reconciliation, separate from the close-warning
+/// exemptions. A safe-to-close process (for example git) can still be working.
+pub(crate) struct ActivityEvidence {
+    pub agent: Option<String>,
+    pub primary_present: Option<bool>,
+    pub child_present: bool,
+    pub busy: bool,
+}
+
+/// 进程树存活证据（看门狗对账用），走 [`with_cached_snapshot`] 的
+/// [`SNAPSHOT_TTL`] 窗口——看门狗多 pane 对账、hook 路由校验与祖先链查询
+/// 在同一窗口内共用一次全机枚举，而不是各查各的。快照失败返回 `Err`
+/// （= 无证据，调用方按无证据处理）。**只应在后台线程调用**：缓存未命中时
+/// 这里会同步 spawn `ps`（阻塞轮询最长 1s），上主线程就是可感知的周期性
+/// 卡顿。
+pub(crate) fn cached_activity_evidence(
+    root_pid: u32,
+    primary_pid: Option<u32>,
+) -> Result<ActivityEvidence, String> {
+    with_cached_snapshot(|processes| {
+        descendants_from_snapshot(root_pid, processes)
+            .map(|rows| activity_from_snapshot(&rows, primary_pid))
+    })
+    .unwrap_or_else(|| Err("process snapshot unavailable".to_owned()))
+}
+
+fn activity_from_snapshot(rows: &[ProcessEntry], primary_pid: Option<u32>) -> ActivityEvidence {
+    let mut evidence = ActivityEvidence {
+        agent: None,
+        primary_present: primary_pid.map(|pid| rows.iter().any(|row| row.pid == pid)),
+        child_present: false,
+        busy: false,
+    };
+    for (index, row) in rows.iter().enumerate() {
+        let name = display_name(&row.executable).to_ascii_lowercase();
+        if evidence.agent.is_none() {
+            evidence.agent =
+                crate::ai_agents::AgentKind::parse(&name).map(|agent| agent.slug().to_owned());
+        }
+        if index == 0 {
+            continue;
+        }
+        if matches!(name.as_str(), "conhost" | "openconsole" | "winpty-agent") {
+            continue;
+        }
+        evidence.child_present = true;
+        evidence.busy |= !is_shell_executable(&row.executable);
+    }
+    evidence
+}
+
+fn busy_descendant(processes: Vec<ProcessEntry>) -> Option<String> {
+    processes.into_iter().skip(1).find_map(|process| {
+        (!is_stateless_process(&process.executable)).then_some(process.executable)
+    })
+}
+
+/// First descendant that `AgentKind` recognizes as an AI CLI, as its slug.
+///
+/// `busy_child` walks BFS level order, so the first non-stateless hit is always
+/// the host interpreter rather than the agent: codex really runs as
+/// `powershell → node.exe → codex.exe → node_repl.exe`, and taking the depth-1
+/// `node.exe` as the identity yields "node", which `AgentKind::parse` rejects —
+/// the pane then has no logo and no semantic state at all.
+///
+/// 2026-08-22 实测（pane 4，issue #42 同批）：codex 已经答完，屏幕上就是空闲
+/// 输入框，但 `running_program` 是 None，于是 1 Hz 屏幕看门狗在入口处早退，
+/// 没有任何机制去看那块屏幕，转圈一直挂着。命令行首 token 是脆弱推断（会话
+/// 恢复、别名、`npx codex` 都会落空），进程树才是客观事实。
+pub fn agent_child(root_pid: u32) -> Option<String> {
+    descendants(root_pid).ok()?.into_iter().skip(1).find_map(|process| {
+        crate::ai_agents::AgentKind::parse(&display_name(&process.executable))
+            .map(|kind| kind.slug().to_owned())
+    })
+}
+
+/// 上溯上限。真实的 pane 进程链是 shell → 解释器 → agent → 子进程，个位数
+/// 深度；给足余量同时保证快照里的父指针成环时一定会停。
+const MAX_ANCESTRY_DEPTH: u32 = 64;
+
+/// `pid` 是否落在 `root_pid` 的进程树内（含 `root_pid` 自身）。
+///
+/// 纯函数形态，便于用构造出来的进程表覆盖分叉、成环和缺链三种情况。
+/// `None` 的含义是「拿不到证据」，绝不能当成校验失败——见
+/// [`is_within_tree`] 的说明。
+fn resolve_within_tree(
+    processes: &std::collections::HashMap<u32, (u32, String)>,
+    pid: u32,
+    root_pid: u32,
+) -> Option<bool> {
+    if pid == 0 || root_pid == 0 {
+        return None;
+    }
+    if pid == root_pid {
+        return Some(true);
+    }
+    // pid 已经不在表里：它退出得比这次快照更早，无法判定归属。
+    processes.get(&pid)?;
+    let mut current = pid;
+    for _ in 0..MAX_ANCESTRY_DEPTH {
+        // 链断在半路（父进程先退出，Windows 上 pid 会悬空）= 这条链走不到
+        // root，就是不在它的树内。这与「起始 pid 查不到」不同：那种情况才是
+        // 真的没有证据。
+        let Some(&(parent, _)) = processes.get(&current) else { return Some(false) };
+        if parent == root_pid {
+            return Some(true);
+        }
+        // 走到进程树顶。
+        if parent == 0 || parent == current {
+            return Some(false);
+        }
+        current = parent;
+    }
+    // 超过上限只可能是成环，说明快照本身不可信。
+    None
+}
+
+/// 带 TTL 的全机进程快照，供路由校验和祖先链查询共用。
+///
+/// 用闭包而不是把表交出去：调用方只需要读，克隆整张进程表纯属浪费。
+type ProcessSnapshotMap = std::collections::HashMap<u32, (u32, String)>;
+type SnapshotCacheCell = Option<(std::time::Instant, ProcessSnapshotMap)>;
+static SNAPSHOT_CACHE: std::sync::LazyLock<std::sync::Mutex<SnapshotCacheCell>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// 测试：清空快照缓存（下一次调用强制走慢路径）。
+#[cfg(test)]
+fn reset_snapshot_cache_for_test() {
+    *SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+fn with_cached_snapshot<T>(read: impl FnOnce(&ProcessSnapshotMap) -> T) -> Option<T> {
+    // 快路径：锁只覆盖新鲜度判定与纯读闭包（微秒级）。全机枚举绝不在这把
+    // 锁内发生——hook 路由校验（`is_within_tree`）与看门狗共用这把锁，
+    // 枚举挪进锁内会把 UI 线程挂在一次可达秒级的 `ps` 上。
+    {
+        let cache = SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((taken, processes)) = cache.as_ref()
+            && taken.elapsed() < SNAPSHOT_TTL
+        {
+            return Some(read(processes));
+        }
+    }
+    // 慢路径：锁外枚举。时间戳在枚举**完成后**取——发布出去的表不再先天
+    // 陈旧（旧实现先取戳再枚举，慢枚举把 TTL 预支给了枚举本身）。
+    let fresh = enumerate().ok()?;
+    let completed_at = std::time::Instant::now();
+    let mut cache = SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // 并发补位只认仍然陈旧的槽：不把别人刚发布的更新表换回自己的。
+    let stale = !cache.as_ref().is_some_and(|(taken, _)| taken.elapsed() < SNAPSHOT_TTL);
+    if stale {
+        *cache = Some((completed_at, fresh));
+    }
+    let (_, processes) = cache.as_ref()?;
+    Some(read(processes))
+}
+
+/// 事件路由的第二因子：`pid` 是否真的运行在 `root_pid` 这个 pane 里。
+///
+/// 环境变量携带的 pane id 是任何进程都能伪造的；进程祖先链不能。两者一致才
+/// 采信声明的 pane，不一致就拒绝该事件（而不是回退到当前焦点 pane——那正是
+/// 伪造者想要的结果）。
+///
+/// 返回 `None` 表示这一因子当前给不出证据（快照失败，或进程在我们查询之前
+/// 就退出了）。调用方此时必须放行：宁可少一层校验，也不能因为一次竞态丢掉
+/// 真实的完成通知。
+///
+/// 快照在 [`SNAPSHOT_TTL`] 内复用：一个回合里 hook 事件是成批到达的（每个
+/// tool call 一条），逐条扫描全机进程表会把校验本身变成开销。过期的表只会让
+/// 刚起的 helper 查不到而返回 `None`（放行），不会误判成伪造。
+pub fn is_within_tree(pid: u32, root_pid: u32) -> Option<bool> {
+    with_cached_snapshot(|processes| resolve_within_tree(processes, pid, root_pid)).flatten()
+}
+
+/// 快照复用窗口。取值只需覆盖「同一回合内成批到达的 hook」，不需要更长：
+/// 表越旧，查不到新 helper 的概率越高，校验就越容易退化成放行。
+const SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// 沿 `pid` 的祖先链找最近的 AI CLI 进程，返回它的 pid 与 slug。
+///
+/// hook helper 不一定是 agent 直接 spawn 的：Windows 上 claude 通过 shell 执行
+/// hook 命令，helper 的父进程是 `cmd.exe`，agent 在更上一层。所以不能只看父
+/// 进程，必须往上找到第一个认得的 CLI。
+///
+/// 这个 pid 是 agent 的**进程身份**，比 session id 稳：嵌套 `claude -p` 子代理
+/// 有自己的 pid，但它的 session id 是短命的，一旦被当成 pane 的会话身份，就会
+/// 把真正活着的那个顶掉（`claude --resume` 之后指向一个已经结束的会话）。
+pub fn nearest_agent_ancestor(pid: u32) -> Option<(u32, String)> {
+    with_cached_snapshot(|processes| resolve_agent_ancestor(processes, pid)).flatten()
+}
+
+/// Find the closest matching process using either a snapshot or live records.
+pub(crate) fn nearest_ancestor<T>(
+    mut pid: u32,
+    mut inspect: impl FnMut(u32) -> Option<(u32, Option<T>)>,
+) -> Option<T> {
+    for _ in 0..MAX_ANCESTRY_DEPTH {
+        let (parent, matched) = inspect(pid)?;
+        if matched.is_some() {
+            return matched;
+        }
+        if parent == 0 || parent == pid {
+            return None;
+        }
+        pid = parent;
+    }
+    None
+}
+
+/// [`nearest_agent_ancestor`] 的纯函数内核。
+fn resolve_agent_ancestor(
+    processes: &std::collections::HashMap<u32, (u32, String)>,
+    pid: u32,
+) -> Option<(u32, String)> {
+    nearest_ancestor(pid, |pid| {
+        let (parent, executable) = processes.get(&pid)?;
+        let matched = crate::ai_agents::AgentKind::parse(&display_name(executable))
+            .map(|kind| (pid, kind.slug().to_owned()));
+        Some((*parent, matched))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn remote_close_uses_foreground_lifecycle_without_a_host_child() {
+        for program in ["claude", "codex", "gemini", "cargo"] {
+            assert_eq!(
+                super::close_warning_process(true, Some(program), None).as_deref(),
+                Some(program)
+            );
+        }
+        assert_eq!(super::close_warning_process(true, None, None), None);
+        assert_eq!(super::close_warning_process(true, Some("bash"), None), None);
+        assert_eq!(super::close_warning_process(false, Some("claude"), None), None);
+        assert_eq!(
+            super::close_warning_process(false, Some("claude"), Some("node.exe")).as_deref(),
+            Some("claude")
+        );
+    }
+
+    use std::collections::HashMap;
+
+    use super::{
+        ProcessEntry, ProcessRow, busy_descendant, descendants_from_snapshot, display_name,
+        is_interactive_shell_command, is_stateless_process, resolve_agent_ancestor,
+        resolve_within_tree, verified_parentage,
+    };
+
+    #[test]
+    fn login_shell_process_names_are_stateless_without_exempting_other_programs() {
+        for name in ["-bash", "-zsh", "-sh", "-fish", "/bin/-bash"] {
+            assert!(is_stateless_process(name), "{name}");
+        }
+        for name in ["-vim", "-python", "-git", "--bash", "-bash.exe", "-bash script.sh"] {
+            assert!(!is_stateless_process(name), "{name}");
+        }
+        assert!(!is_interactive_shell_command("-bash"));
+    }
+
+    #[test]
+    fn login_shell_nodes_do_not_hide_a_busy_descendant() {
+        let entries = |commands: &[&str]| {
+            commands
+                .iter()
+                .enumerate()
+                .map(|(depth, command)| ProcessEntry {
+                    pid: depth as u32 + 1,
+                    parent_pid: depth as u32,
+                    executable: (*command).to_owned(),
+                    depth: depth as u32,
+                })
+                .collect()
+        };
+        assert_eq!(busy_descendant(entries(&["login", "-bash"])), None);
+        assert_eq!(busy_descendant(entries(&["login", "-bash", "vim"])), Some("vim".to_owned()));
+    }
+
+    #[test]
+    fn activity_evidence_keeps_close_exemptions_and_liveness_separate() {
+        let rows = |names: &[&str]| {
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| ProcessEntry {
+                    pid: index as u32 + 1,
+                    parent_pid: index as u32,
+                    executable: (*name).into(),
+                    depth: index as u32,
+                })
+                .collect::<Vec<_>>()
+        };
+        let tree = rows(&["pwsh.exe", "git.exe"]);
+        assert_eq!(busy_descendant(tree.clone()), None);
+        let evidence = super::activity_from_snapshot(&tree, None);
+        assert!(evidence.busy, "git is safe to close, but still executing");
+        assert!(evidence.child_present);
+        assert_eq!(evidence.primary_present, None);
+
+        let tree = rows(&["pwsh.exe", "node.exe", "codex.exe"]);
+        let evidence = super::activity_from_snapshot(&tree, Some(3));
+        assert_eq!(evidence.agent.as_deref(), Some("codex"));
+        assert_eq!(evidence.primary_present, Some(true));
+        let evidence = super::activity_from_snapshot(&tree[..2], Some(3));
+        assert_eq!(evidence.primary_present, Some(false));
+        assert!(evidence.child_present, "a wrapper can outlive the agent");
+
+        let evidence = super::activity_from_snapshot(&rows(&["pwsh.exe", "openconsole.exe"]), None);
+        assert!(!evidence.child_present);
+        assert!(!evidence.busy);
+        // 根 pid 选一个任何平台快照里都不存在的值：Windows 的 Toolhelp 快照
+        // 含 pid 0（System Idle），用它当「不存在的 shell」反而能遍历出后代；
+        // Linux /proc 则没有 pid 0。u32::MAX 两边都不存在，判据才与平台无关。
+        // （走真实快照缓存，与 seam 测试共用互斥避免并发注入串扰。）
+        {
+            let _guard = cache_test_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            super::cached_activity_evidence(u32::MAX, None)
+                .err()
+                .expect("no snapshot is not proof of idle");
+        }
+    }
+
+    /// seam 测试共享的互斥：注入伪枚举期间独占快照缓存状态。
+    fn cache_test_state() -> &'static std::sync::Mutex<()> {
+        static STATE: std::sync::LazyLock<std::sync::Mutex<()>> =
+            std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+        &STATE
+    }
+
+    fn fake_snapshot_map() -> std::collections::HashMap<u32, (u32, String)> {
+        std::collections::HashMap::from([(1u32, (0u32, "shell".to_owned()))])
+    }
+
+    /// 评审 2：慢全机枚举绝不占用缓存锁——两个并发读者各自枚举、并行完成，
+    /// 而不是在锁上排成 2×枚举时长（旧实现枚举持锁，UI 的 hook 路由校验
+    /// 会被一次可达秒级的 `ps` 挂住）。
+    #[test]
+    fn slow_snapshot_does_not_serialize_concurrent_readers() {
+        let _guard = cache_test_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        static GATE: (std::sync::Mutex<(usize, bool)>, std::sync::Condvar) =
+            (std::sync::Mutex::new((0, false)), std::sync::Condvar::new());
+        fn slow_fake() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+            let mut state = GATE.0.lock().unwrap();
+            state.0 += 1;
+            GATE.1.notify_all();
+            drop(GATE.1.wait_while(state, |(_, released)| !*released).unwrap());
+            Ok(fake_snapshot_map())
+        }
+        *GATE.0.lock().unwrap() = (0, false);
+        super::set_test_snapshot_hook(Some(slow_fake));
+        super::reset_snapshot_cache_for_test();
+        let a = std::thread::spawn(|| super::with_cached_snapshot(|processes| processes.len()));
+        let b = std::thread::spawn(|| super::with_cached_snapshot(|processes| processes.len()));
+        // Both enumerators must enter before either can finish. The timeout only
+        // bounds a lock regression; scheduler latency is not the assertion.
+        let (mut state, _) = GATE
+            .1
+            .wait_timeout_while(
+                GATE.0.lock().unwrap(),
+                std::time::Duration::from_secs(10),
+                |(entered, _)| *entered < 2,
+            )
+            .unwrap();
+        let overlapped = state.0 == 2;
+        state.1 = true;
+        GATE.1.notify_all();
+        drop(state);
+        let (ra, rb) = (a.join().unwrap(), b.join().unwrap());
+        let enumerations = super::TEST_ENUMERATION_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        super::set_test_snapshot_hook(None);
+        assert_eq!((ra, rb), (Some(1), Some(1)), "both readers see the snapshot");
+        assert!(overlapped, "both cache misses must enumerate before either publishes");
+        assert_eq!(enumerations, 2, "each miss enumerates on its own");
+    }
+
+    /// 评审 2：发布时间戳在枚举完成后取——缓存表的「年龄」从枚举结束起算，
+    /// 不再把 TTL 预支给枚举本身（旧实现先取戳，慢枚举发布即先天陈旧）。
+    #[test]
+    fn snapshot_timestamp_is_taken_after_enumeration_completes() {
+        let _guard = cache_test_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        static FAKE_COMPLETED: std::sync::LazyLock<std::sync::Mutex<Option<std::time::Instant>>> =
+            std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+        fn timed_fake() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            *FAKE_COMPLETED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(std::time::Instant::now());
+            Ok(fake_snapshot_map())
+        }
+        super::set_test_snapshot_hook(Some(timed_fake));
+        super::reset_snapshot_cache_for_test();
+        let seen = super::with_cached_snapshot(|processes| processes.len());
+        super::set_test_snapshot_hook(None);
+        assert_eq!(seen, Some(1));
+        let completed = FAKE_COMPLETED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .expect("fake ran");
+        let cache = super::SNAPSHOT_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (published, _) = cache.as_ref().expect("cache published");
+        assert!(
+            *published >= completed,
+            "cache timestamp must follow enumeration completion, not its start"
+        );
+    }
+
+    fn row(pid: u32, parent: u32, created: u64, executable: &str) -> ProcessRow {
+        ProcessRow { pid, parent, created, executable: executable.to_owned() }
+    }
+
+    #[test]
+    fn reused_parent_pid_cannot_attach_an_older_process_to_a_new_shell() {
+        let processes = verified_parentage(vec![
+            row(100, 4, 300, "cmd.exe"),
+            row(200, 100, 100, "csrss.exe"),
+            row(300, 200, 200, "other-user-work.exe"),
+        ]);
+        let descendants = descendants_from_snapshot(100, &processes).unwrap();
+        assert_eq!(descendants.len(), 1);
+        assert_eq!(busy_descendant(descendants), None);
+        assert_eq!(resolve_within_tree(&processes, 300, 100), Some(false));
+    }
+
+    #[test]
+    fn a_real_busy_child_still_requires_confirmation() {
+        let processes = verified_parentage(vec![
+            row(100, 4, 100, "cmd.exe"),
+            row(200, 100, 100, "powershell.exe"),
+            row(300, 200, 101, "cargo.exe"),
+        ]);
+        assert_eq!(
+            busy_descendant(descendants_from_snapshot(100, &processes).unwrap()),
+            Some("cargo.exe".to_owned())
+        );
+        assert_eq!(resolve_within_tree(&processes, 300, 100), Some(true));
+    }
+
+    #[test]
+    fn unknown_creation_time_does_not_hide_a_busy_child() {
+        let processes =
+            verified_parentage(vec![row(100, 4, 100, "cmd.exe"), row(200, 100, 0, "vim.exe")]);
+        assert_eq!(
+            busy_descendant(descendants_from_snapshot(100, &processes).unwrap()),
+            Some("vim.exe".to_owned())
+        );
+    }
+
+    fn table(rows: &[(u32, u32)]) -> HashMap<u32, (u32, String)> {
+        rows.iter().map(|&(pid, parent)| (pid, (parent, format!("p{pid}.exe")))).collect()
+    }
+
+    /// 带自定义可执行名的进程表，用来构造「helper 上面隔着一层 shell」的链。
+    fn named_table(rows: &[(u32, u32, &str)]) -> HashMap<u32, (u32, String)> {
+        rows.iter().map(|&(pid, parent, exe)| (pid, (parent, exe.to_owned()))).collect()
+    }
+
+    /// hook helper 的父进程往往不是 agent 本身：Windows 上 claude 通过
+    /// `cmd.exe` 执行 hook 命令。只看父进程会把 agent 身份漏掉，必须往上找。
+    #[test]
+    fn agent_identity_comes_from_the_nearest_ancestor_not_the_parent() {
+        // pwsh(100) → claude(200) → cmd(300) → nebula-hook(400)
+        let processes = named_table(&[
+            (100, 4, "pwsh.exe"),
+            (200, 100, "claude.exe"),
+            (300, 200, "cmd.exe"),
+            (400, 300, "nebula-hook.exe"),
+        ]);
+        let (pid, slug) = resolve_agent_ancestor(&processes, 400).expect("claude 应被找到");
+        assert_eq!(pid, 200);
+        assert_eq!(slug, "claude");
+
+        // 嵌套子代理：主 claude(200) 之下又起了一个 claude(500)。从子代理这条链
+        // 上溯，拿到的是子代理自己的 pid——两条流因此能被区分开，短命的子会话
+        // 不会顶掉活着的那个。
+        let nested = named_table(&[
+            (100, 4, "pwsh.exe"),
+            (200, 100, "claude.exe"),
+            (500, 200, "claude.exe"),
+            (600, 500, "nebula-hook.exe"),
+        ]);
+        assert_eq!(resolve_agent_ancestor(&nested, 600).map(|(pid, _)| pid), Some(500));
+        assert_eq!(resolve_agent_ancestor(&nested, 200).map(|(pid, _)| pid), Some(200));
+
+        // 链上没有任何认得的 CLI：不许瞎猜。
+        let plain = named_table(&[(100, 4, "pwsh.exe"), (200, 100, "nebula-hook.exe")]);
+        assert_eq!(resolve_agent_ancestor(&plain, 200), None);
+    }
+
+    #[test]
+    fn display_name_drops_exe_suffix() {
+        assert_eq!(display_name("node.exe"), "node");
+        assert_eq!(display_name("CARGO.EXE"), "CARGO");
+        assert_eq!(display_name("/bin/bash"), "bash");
+        // Unix names and dotted names that are not suffixes stay intact.
+        assert_eq!(display_name("cargo"), "cargo");
+        assert_eq!(display_name("python3.11"), "python3.11");
+    }
+
+    /// 裸 shell 名 = 进了一个新提示符，不是一件会结束的活儿；一旦带参数就是
+    /// 普通命令，状态必须照常走完，否则 `git log` 这种会一开始就被判完成。
+    #[test]
+    fn only_a_bare_shell_name_counts_as_entering_a_shell() {
+        for bare in ["cmd", "cmd.exe", "CMD.EXE", "wsl", "pwsh", "bash", "  zsh  "] {
+            assert!(is_interactive_shell_command(bare), "{bare} 应判为进入交互式 shell");
+        }
+        // 带路径也认。
+        assert!(is_interactive_shell_command(r"C:\Windows\System32\cmd.exe"));
+        assert!(is_interactive_shell_command("\"C:/Program Files/pwsh.exe\""));
+
+        for command in ["cmd /c dir", "bash script.sh", "wsl ls", "git log", "npm run dev", ""] {
+            assert!(!is_interactive_shell_command(command), "{command} 应判为普通命令");
+        }
+        // REPL 故意不在表里：它们里面跑的活儿在解释器进程内部，进程树看不见，
+        // 判错了就再也纠正不回来。
+        assert!(!is_interactive_shell_command("python"));
+        assert!(!is_interactive_shell_command("node"));
+    }
+
+    #[test]
+    fn ancestry_accepts_a_pid_inside_the_pane_tree() {
+        // shell(100) → node(200) → claude(300) → hook(400)
+        let processes = table(&[(100, 4), (200, 100), (300, 200), (400, 300)]);
+        assert_eq!(resolve_within_tree(&processes, 400, 100), Some(true));
+        assert_eq!(resolve_within_tree(&processes, 300, 100), Some(true));
+        // root 自身算在树内：agent 直接就是 pane 根进程时也要通过。
+        assert_eq!(resolve_within_tree(&processes, 100, 100), Some(true));
+    }
+
+    #[test]
+    fn ancestry_rejects_a_pid_from_another_pane() {
+        // 两个 pane 各自一条链；500 伪造声明自己属于 pane 100。
+        let processes = table(&[(100, 4), (200, 100), (500, 4), (600, 500)]);
+        assert_eq!(resolve_within_tree(&processes, 600, 100), Some(false));
+        assert_eq!(resolve_within_tree(&processes, 500, 100), Some(false));
+    }
+
+    #[test]
+    fn ancestry_reports_no_evidence_instead_of_failure() {
+        let processes = table(&[(100, 4), (200, 100)]);
+        // 进程已经退出：拿不到证据，必须是 None 而不是 Some(false)，否则一次
+        // 竞态就会把真实事件判成伪造。
+        assert_eq!(resolve_within_tree(&processes, 999, 100), None);
+        // pid 0 与未知 root 同理。
+        assert_eq!(resolve_within_tree(&processes, 0, 100), None);
+        assert_eq!(resolve_within_tree(&processes, 200, 0), None);
+        // 成环的快照不可信。
+        let looped = table(&[(10, 11), (11, 10)]);
+        assert_eq!(resolve_within_tree(&looped, 10, 100), None);
+    }
+}

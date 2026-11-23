@@ -1,0 +1,58 @@
+[package]
+name = "pebrel_terminal"
+version = "2.5.0"
+license = "GPL-3.0-or-later"
+description = "Nebula terminal emulation core"
+readme = "../README.md"
+homepage = "https://github.com/Kuddev/pebrel"
+repository = "https://github.com/Kuddev/pebrel"
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "bitflags/serde", "vte/serde"]
+
+[dependencies]
+base64 = "0.22.0"
+bitflags = "2.4.1"
+home = "0.5.5"
+libc = "0.2"
+log = "0.4"
+parking_lot = "0.12.0"
+polling = "3.8.0"
+regex-automata = "0.4.3"
+unicode-width = "0.2.0"
+unicode-segmentation = "1.13.3"
+unicode-properties = { version = "0.1.4", default-features = false, features = ["emoji"] }
+vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"] }
+serde = { version = "1", features = ["derive", "rc"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix-openpty = "0.2.0"
+rustix = { version = "1.0.0", default-features = false, features = ["std"] }
+signal-hook = "0.4.3"
+
+[target.'cfg(windows)'.dependencies]
+sha2 = "0.11"
+piper = "0.2.1"
+miow = "0.6.0"
+windows-sys = { version = "0.59.0", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    # CONOUT$ 句柄（ConPTY 光标对账探针，见 event_loop）。
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+]}
+
+[dev-dependencies]
+serde_json = "1.0.0"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59.0", features = ["Win32_UI_Input_KeyboardAndMouse"] }

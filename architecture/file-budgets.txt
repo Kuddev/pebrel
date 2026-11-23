@@ -1,22 +1,31 @@
 limit 2000
-root nebula_app
-root nebula_terminal
-root nebula_config
-root nebula_config_derive
-root nebula-completions
-root nebula_hook
-root nebula_gpui
-root nebula_settings
-root nebula_split
+root pebrel_app
+root pebrel_terminal
+root pebrel_config
+root pebrel_config_derive
+root pebrel-completions
+root pebrel_hook
+root pebrel_gpui
+root pebrel_settings
+root pebrel_split
 root mobile/link
 root scripts
 root tools
-nebula_app/src/display/chrome.rs 2442
-nebula_app/src/display/command_palette.rs 3935
-nebula_app/src/display/markdown_view.rs 2067
-nebula_app/src/display/mod.rs 11150
-nebula_app/src/display/settings.rs 8434
-nebula_app/src/event.rs 3594
-nebula_app/src/gpui_shell/workspace.rs 4798
-nebula_app/src/window_context.rs 3735
-nebula_terminal/src/term/mod.rs 2713
+moved nebula_app pebrel_app
+moved nebula_terminal pebrel_terminal
+moved nebula_config pebrel_config
+moved nebula_config_derive pebrel_config_derive
+moved nebula-completions pebrel-completions
+moved nebula_hook pebrel_hook
+moved nebula_gpui pebrel_gpui
+moved nebula_settings pebrel_settings
+moved nebula_split pebrel_split
+pebrel_app/src/display/chrome.rs 2442
+pebrel_app/src/display/command_palette.rs 3935
+pebrel_app/src/display/markdown_view.rs 2067
+pebrel_app/src/display/mod.rs 11150
+pebrel_app/src/display/settings.rs 8434
+pebrel_app/src/event.rs 3594
+pebrel_app/src/gpui_shell/workspace.rs 4798
+pebrel_app/src/window_context.rs 3735
+pebrel_terminal/src/term/mod.rs 2713

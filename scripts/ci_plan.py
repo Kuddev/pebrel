@@ -120,7 +120,7 @@ def select_pr_platforms(paths: Sequence[str]) -> set[str]:
                 or name in {"stable_release.py", "preview_release.py", "test_stable_release.py"}
                 or name.endswith((".asm", ".s", ".wgsl"))
                 or any(part in {"simd", "sse2", "avx", "neon", "x86", "aarch64"} for part in parts)
-                or path in {"nebula_app/src/main.rs", "nebula_app/src/gpui_shell/mod.rs"}):
+                or path in {"pebrel_app/src/main.rs", "pebrel_app/src/gpui_shell/mod.rs"}):
             return {p.runner for p in PLATFORMS}
         if name.endswith((".md", ".rst")) or path.startswith("docs/"):
             continue
@@ -131,7 +131,7 @@ def select_pr_platforms(paths: Sequence[str]) -> set[str]:
             selected.update(("macos-26", "macos-26-intel"))
         elif "platform" in parts or "tty" in parts:
             return {p.runner for p in PLATFORMS}
-        elif not path.startswith(("nebula_", "scripts/", "mobile/", "assets/", "locales/", "extra/", "tools/")):
+        elif not path.startswith(("pebrel_", "scripts/", "mobile/", "assets/", "locales/", "extra/", "tools/")):
             # 新的顶层代码区域没有经过分类时扩大验证，不默认为安全。
             return {p.runner for p in PLATFORMS}
     return selected

@@ -7,7 +7,7 @@
 #
 # 用法:
 #   .\scripts\visual_parity.ps1 -Exe <pebrel.exe> -Tag winit-old -ExeArgs '--working-directory D:\temp_build\nebula'
-#   .\scripts\visual_parity.ps1 -Exe <nebula-gpui.exe> -Tag gpui-lab
+#   .\scripts\visual_parity.ps1 -Exe <pebrel-gpui.exe> -Tag gpui-lab
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [Parameter(Mandatory = $true)][string]$Tag,
