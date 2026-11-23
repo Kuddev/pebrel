@@ -8,7 +8,7 @@ use std::time::Duration;
 struct Request {
     source: Arc<RenderImage>,
     geometry: optics::StripGeometry,
-    tint: [u8; 3],
+    appearance: optics::StripAppearance,
 }
 
 #[derive(Default)]
@@ -71,7 +71,7 @@ impl WorkspaceStrip {
                 request.source.as_bytes(0)?,
                 (dimensions.width.0 as u32, dimensions.height.0 as u32),
                 request.geometry,
-                request.tint,
+                request.appearance,
                 cancelled,
             )
         });
@@ -97,11 +97,7 @@ impl Request {
         let effects = cx.try_global::<VisualEffects>()?;
         let layout = effects.layout;
         let wallpaper = effects.wallpaper.as_ref()?;
-        if skin.is_light
-            || effects.kind.is_animated()
-            || !layout.cover_chrome
-            || layout.opacity <= 0.0
-        {
+        if effects.kind.is_animated() || !layout.cover_chrome || layout.opacity <= 0.0 {
             return None;
         }
         let source = wallpaper.images.as_ref()?.sharp.clone();
@@ -118,7 +114,12 @@ impl Request {
             return None;
         }
         let bg = skin.panel;
-        let tint = [bg.b, bg.g, bg.r].map(|channel| (f32::from(channel) * 0.65).round() as u8);
+        let tint = [bg.b, bg.g, bg.r];
+        let tint = if skin.is_light {
+            tint
+        } else {
+            tint.map(|channel| (f32::from(channel) * 0.65).round() as u8)
+        };
         Some(Self {
             source,
             geometry: optics::StripGeometry {
@@ -134,7 +135,7 @@ impl Request {
                     rect.size.height.into(),
                 ],
             },
-            tint,
+            appearance: optics::StripAppearance { tint, is_light: skin.is_light },
         })
     }
 }

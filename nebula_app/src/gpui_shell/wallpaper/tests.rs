@@ -82,6 +82,42 @@ fn fixture(path: &std::path::Path, color: [u8; 4]) {
 }
 
 #[gpui::test]
+fn light_workspace_uses_the_shared_backdrop_for_inherited_static_wallpaper(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wallpaper.png");
+    fixture(&path, [10, 20, 30, 255]);
+    let mut rt = settings(Some(path));
+    rt.theme = nebula_settings::ThemeName::BreezeLight;
+    rt.follow_system_theme = false;
+    rt.background_media_kind = nebula_settings::BackgroundMediaKind::Image;
+    rt.background_image_cover_chrome = true;
+    rt.tab_bar_material = Default::default();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(rt.theme, rt.clone()));
+        update_wallpaper(&rt, 1.0, BlurModeName::None, cx);
+        assert!(!unified_workspace_backdrop(cx));
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(crate::gpui_shell::theme::resolved_skin(cx).is_light);
+        assert!(unified_workspace_backdrop(cx));
+        assert_eq!(window_opacity(cx), 1.0);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
+        assert_eq!(card_surface_opacity(cx), 0.0);
+        assert_eq!(tab_bar_surface_opacity(cx), 0.0);
+
+        rt.tab_bar_material.opacity = Some(0.65);
+        update_wallpaper(&rt, 1.0, BlurModeName::None, cx);
+        assert!(!unified_workspace_backdrop(cx));
+        assert_eq!(tab_bar_surface_opacity(cx), 0.65);
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
 fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("wallpaper.png");
