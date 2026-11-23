@@ -961,7 +961,7 @@ impl NebulaWorkspace {
                 }
             },
             windowing::WorkspaceStartup::NewTerminal { cwd } => {
-                this.add_terminal_at(cwd, None, window, cx);
+                this.add_terminal_at(cwd.or_else(Self::cold_start_cwd), None, window, cx);
             },
             windowing::WorkspaceStartup::LaunchTerminal { cwd, launch } => {
                 this.add_terminal_with(launch, cwd, None, window, cx);
