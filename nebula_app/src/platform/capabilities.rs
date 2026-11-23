@@ -36,6 +36,8 @@ pub struct Capabilities {
     pub restore_directory_window_size: bool,
     /// The local shell integration can delegate clipboard edits to its native editor.
     pub native_shell_clipboard: bool,
+    /// The local PTY preserves negotiated Kitty keyboard protocol input.
+    pub local_kitty_keyboard: bool,
 }
 
 pub const CAPABILITIES: Capabilities = {
@@ -55,6 +57,7 @@ pub const CAPABILITIES: Capabilities = {
             shell_context_menu: true,
             restore_directory_window_size: true,
             native_shell_clipboard: true,
+            local_kitty_keyboard: false,
         }
     }
     #[cfg(not(windows))]
@@ -73,6 +76,7 @@ pub const CAPABILITIES: Capabilities = {
             shell_context_menu: true,
             restore_directory_window_size: false,
             native_shell_clipboard: false,
+            local_kitty_keyboard: true,
         }
     }
 };
@@ -83,6 +87,7 @@ mod tests {
 
     #[test]
     fn native_integrations_never_advertise_unimplemented_features() {
+        assert_eq!(CAPABILITIES.local_kitty_keyboard, !cfg!(windows));
         let all = [
             CAPABILITIES.hide_window_on_close,
             CAPABILITIES.system_tray,

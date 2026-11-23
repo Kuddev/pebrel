@@ -151,7 +151,9 @@ impl UiConfig {
             vi_mode_cursor_style: self.cursor.vi_mode_style(),
             default_cursor_style: self.cursor.style(),
             osc52: self.terminal.osc52.0,
-            kitty_keyboard: true,
+            // The local PTY must carry the negotiated keyboard protocol.
+            // Direct SSH enables its byte-preserving capability separately.
+            kitty_keyboard: crate::platform::CAPABILITIES.local_kitty_keyboard,
             conpty_resize,
         }
     }

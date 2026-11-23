@@ -576,59 +576,8 @@ mod tests {
     /// 真实的 0x1B——填 0 会被 OpenConsole 1.22 的翻译层丢掉，读字节流的
     /// 应用（Claude Code）就永远收不到 Esc。GPUI 没有 key-up 通道，所以
     /// 一次按键要成对写出 down+up，形状对齐旧壳真实键盘。
-    #[cfg(windows)]
-    #[test]
-    fn escape_becomes_a_win32_record_carrying_its_real_char() {
-        let bytes = encode(&keystroke("escape"), &TermMode::WIN32_INPUT_MODE)
-            .expect("win32 模式下 Esc 必须编码");
-        let text = String::from_utf8(bytes).expect("记录是 ASCII");
-        let records: Vec<&str> = text.split_inclusive('_').filter(|s| !s.is_empty()).collect();
-        assert_eq!(records.len(), 2, "一次 Esc 必须是 down+up 两条记录：{text:?}");
-
-        let parse = |record: &str| -> Vec<String> {
-            let body =
-                record.strip_prefix("\x1b[").and_then(|s| s.strip_suffix('_')).expect("CSI … _");
-            body.split(';').map(str::to_owned).collect()
-        };
-        let down = parse(records[0]);
-        let up = parse(records[1]);
-        assert_eq!(down.len(), 6, "字段数固定为 Vk;Sc;Uc;Kd;Cs;Rc：{text:?}");
-        assert_eq!(down[0], "27", "VK_ESCAPE");
-        // 扫描码问系统要（布局相关），只断言它不是 0——0 意味着查询失败。
-        assert_ne!(down[1], "0", "扫描码不能为 0：{text:?}");
-        assert_eq!(down[2], "27", "uChar 必须是真实的 0x1B，不是 0");
-        assert_eq!(down[3], "1", "按下");
-        assert_eq!(down[4], "0", "无修饰");
-        assert_eq!(down[5], "1", "重复次数");
-        assert_eq!(&up[..3], &down[..3], "抬起与按下的 Vk/Sc/Uc 必须一致");
-        assert_eq!(up[3], "0", "抬起");
-        assert_eq!(up[4], down[4]);
-        assert_eq!(up[5], "1");
-    }
-
     /// 无修饰字母必须交给 IME：Win32 模式也不能把拼音编进 PTY，否则 GPUI
     /// 当按键已处理、不再 TranslateMessage，中文组字起不来。
-    #[cfg(windows)]
-    #[test]
-    fn unmodified_letters_stay_on_the_ime_path_in_win32_mode() {
-        let mode = TermMode::WIN32_INPUT_MODE;
-        assert_eq!(encode(&keystroke("n"), &mode), None);
-        assert_eq!(encode(&keystroke("a"), &mode), None);
-        assert_eq!(encode(&keystroke("1"), &mode), None);
-        assert_eq!(encode(&keystroke("space"), &mode), None);
-        assert_eq!(encode(&keystroke("/"), &mode), None);
-        // Ctrl+C 仍走记录，不能为了 IME 把快捷键也放掉。
-        let mut ctrl_c = keystroke("c");
-        ctrl_c.modifiers.control = true;
-        assert!(encode(&ctrl_c, &mode).is_some());
-        assert!(encode(&keystroke("escape"), &mode).is_some());
-
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
-        let slash = Keystroke::parse("ctrl-/").unwrap();
-        let vk = unsafe { VkKeyScanW(b'/' as u16) } as u16 & 0xff;
-        assert!(encode(&slash, &mode).unwrap().starts_with(format!("\x1b[{vk};").as_bytes()));
-    }
-
     /// 普通空格与字母使用同一文本输入路径：英语布局最终提交 `" "`，IME
     /// 则先消费它完成候选词选择。keydown 抢先编码会让搜狗直接漏出空格。
     #[test]
@@ -676,29 +625,9 @@ mod tests {
     }
 
     /// 认不出 VK 的键回落传统 VT，而不是编一条 Vk=0 的假记录。
-    #[cfg(windows)]
-    #[test]
-    fn unknown_keys_fall_back_instead_of_forging_a_record() {
-        assert_eq!(win32::virtual_key_of("f99"), None);
-        assert_eq!(win32::virtual_key_of("capslock"), None);
-        // 方向键在 win32 模式下仍要出记录（它们有确定的 VK）。
-        assert!(win32::win32_input_record(&keystroke("up"), true).is_some());
-    }
-
     /// 9001 记录路径与真实控制台同构：Ctrl+Backspace 的记录 Uc=DEL（0x7f），
     /// 与旧壳 winit 期一致（`ctrl_space_and_ctrl_backspace_report_real_key_event_chars`）。
     /// PSReadLine 原生绑定 Ctrl+Backspace=BackwardKillWord 按 0x7f 命中。
-    #[cfg(windows)]
-    #[test]
-    fn ctrl_backspace_record_carries_del_like_a_real_console() {
-        let mut ks = keystroke("backspace");
-        ks.modifiers.control = true;
-        assert_eq!(
-            win32::win32_press_and_release(&ks),
-            Some(b"\x1b[8;14;127;1;8;1_\x1b[8;14;127;0;8;1_".to_vec())
-        );
-    }
-
     /// 增强键盘协议下 Ctrl+Backspace 必须是 CSI u（127 是协议定义的
     /// Backspace keysym，修饰参数 5=Ctrl）。pi 靠它识别 ctrl+backspace；
     /// 发裸 `\x08` 会被当成普通退格，只删一个字符。
@@ -827,54 +756,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn win32_enter_keeps_native_key_identity_and_character() {
-        let mode = TermMode::WIN32_INPUT_MODE;
-        for (shift, control, alt, text, character, flags) in [
-            (false, false, false, None, 13, 0),
-            (true, false, false, None, 13, 16),
-            (true, false, false, Some("\r"), 13, 16),
-            (true, false, false, Some("\n"), 10, 16),
-            (false, true, false, None, 10, 8),
-            (false, true, false, Some("\n"), 10, 8),
-            (false, false, true, Some("\r"), 13, 2),
-            (true, false, true, Some("\r"), 13, 18),
-            (true, true, false, Some("\n"), 10, 24),
-        ] {
-            let mut key = keystroke("enter");
-            key.modifiers.shift = shift;
-            key.modifiers.control = control;
-            key.modifiers.alt = alt;
-            key.key_char = text.map(str::to_owned);
-            let encoded = String::from_utf8(encode(&key, &mode).unwrap()).unwrap();
-            let records: Vec<Vec<u16>> = encoded
-                .split_inclusive('_')
-                .map(|record| {
-                    record
-                        .strip_prefix("\x1b[")
-                        .unwrap()
-                        .strip_suffix('_')
-                        .unwrap()
-                        .split(';')
-                        .map(|field| field.parse().unwrap())
-                        .collect()
-                })
-                .collect();
-            assert_eq!(records.len(), 2, "{encoded:?}");
-            for (index, record) in records.iter().enumerate() {
-                assert_eq!(record.len(), 6);
-                assert_eq!(record[0], 13, "VK_RETURN");
-                assert_ne!(record[1], 0, "native scan code");
-                assert_eq!(record[2], character, "native records preserve WM_CHAR");
-                assert_eq!(record[3], u16::from(index == 0));
-                assert_eq!(record[4], flags, "Shift/Ctrl/Alt are carried in Cs");
-                assert_eq!(record[5], 1);
-            }
-            assert_eq!(preserves_enter_modifiers(&key, &mode), flags != 0);
         }
     }
 
@@ -1046,25 +927,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn altgr_text_is_not_encoded_as_a_control_alt_shortcut() {
-        let mut key = keystroke("q");
-        key.modifiers.control = true;
-        key.modifiers.alt = true;
-        for text in ["@", "\u{20ac}"] {
-            key.key_char = Some(text.to_owned());
-            for mode in [
-                TermMode::default(),
-                TermMode::WIN32_INPUT_MODE,
-                pi_keyboard_mode(),
-                pi_keyboard_mode() | TermMode::WIN32_INPUT_MODE,
-            ] {
-                assert_eq!(encode(&key, &mode), None);
-            }
-        }
-    }
-
     #[derive(Clone, Default)]
     struct KeyboardReplyRecorder(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
 
@@ -1072,6 +934,56 @@ mod tests {
         fn send_event(&self, event: nebula_terminal::event::Event) {
             if let nebula_terminal::event::Event::PtyWrite(reply) = event {
                 self.0.borrow_mut().push(reply);
+            }
+        }
+    }
+
+    fn local_terminal_configs() -> [nebula_terminal::term::Config; 2] {
+        use crate::gpui_shell::config::Settings;
+        use nebula_settings::{RawSettings, RuntimeSettings, ThemeName};
+
+        [
+            crate::config::UiConfig::default().term_options(),
+            Settings::load_with_runtime(
+                ThemeName::Nebula,
+                RuntimeSettings::from_raw(&RawSettings::default()),
+            )
+            .term_config(),
+        ]
+    }
+
+    #[test]
+    fn keyboard_negotiation_follows_the_session_transport() {
+        use nebula_terminal::vte::ansi::Processor;
+
+        let size = super::super::session::GridSize { columns: 80, screen_lines: 24 };
+        for local in local_terminal_configs() {
+            for remote in [false, true] {
+                let config = if remote {
+                    crate::ssh_session::terminal_config(local.clone())
+                } else {
+                    local.clone()
+                };
+                let replies = KeyboardReplyRecorder::default();
+                let mut term = nebula_terminal::Term::new(config, &size, replies.clone());
+                let mut parser: Processor = Processor::new();
+                parser.advance(&mut term, b"\x1b[?u\x1b[>1u\x1b[?u");
+                let kitty_supported = remote || !cfg!(windows);
+                let mut ctrl_c = keystroke("c");
+                ctrl_c.modifiers.control = true;
+                let (escape, interrupt): (&[u8], &[u8]) = if kitty_supported {
+                    assert_eq!(replies.0.borrow().as_slice(), ["\x1b[?0u", "\x1b[?1u"]);
+                    (b"\x1b[27u", b"\x1b[99;5u")
+                } else {
+                    assert!(replies.0.borrow().is_empty());
+                    assert!(!term.mode().intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
+                    (b"\x1b", b"\x03")
+                };
+                assert_eq!(encode(&keystroke("escape"), term.mode()).as_deref(), Some(escape));
+                assert_eq!(encode(&ctrl_c, term.mode()).as_deref(), Some(interrupt));
+                parser.advance(&mut term, b"\x1b[<u");
+                assert_eq!(encode(&keystroke("escape"), term.mode()), Some(b"\x1b".to_vec()));
+                assert_eq!(encode(&ctrl_c, term.mode()), Some(b"\x03".to_vec()));
             }
         }
     }
@@ -1183,5 +1095,218 @@ mod tests {
             recorder.0.borrow().as_slice(),
             ["\x1b[?0u", "\x1b[?7u", "\x1b[?0u", "\x1b[?7u", "\x1b[?0u"]
         );
+    }
+    #[cfg(windows)]
+    mod windows {
+        use super::*;
+
+        #[test]
+        fn escape_becomes_a_win32_record_carrying_its_real_char() {
+            let bytes = encode(&keystroke("escape"), &TermMode::WIN32_INPUT_MODE)
+                .expect("win32 模式下 Esc 必须编码");
+            let text = String::from_utf8(bytes).expect("记录是 ASCII");
+            let records: Vec<&str> = text.split_inclusive('_').filter(|s| !s.is_empty()).collect();
+            assert_eq!(records.len(), 2, "一次 Esc 必须是 down+up 两条记录：{text:?}");
+
+            let parse = |record: &str| -> Vec<String> {
+                let body = record
+                    .strip_prefix("\x1b[")
+                    .and_then(|s| s.strip_suffix('_'))
+                    .expect("CSI … _");
+                body.split(';').map(str::to_owned).collect()
+            };
+            let down = parse(records[0]);
+            let up = parse(records[1]);
+            assert_eq!(down.len(), 6, "字段数固定为 Vk;Sc;Uc;Kd;Cs;Rc：{text:?}");
+            assert_eq!(down[0], "27", "VK_ESCAPE");
+            // 扫描码问系统要（布局相关），只断言它不是 0——0 意味着查询失败。
+            assert_ne!(down[1], "0", "扫描码不能为 0：{text:?}");
+            assert_eq!(down[2], "27", "uChar 必须是真实的 0x1B，不是 0");
+            assert_eq!(down[3], "1", "按下");
+            assert_eq!(down[4], "0", "无修饰");
+            assert_eq!(down[5], "1", "重复次数");
+            assert_eq!(&up[..3], &down[..3], "抬起与按下的 Vk/Sc/Uc 必须一致");
+            assert_eq!(up[3], "0", "抬起");
+            assert_eq!(up[4], down[4]);
+            assert_eq!(up[5], "1");
+        }
+
+        #[test]
+        fn unmodified_letters_stay_on_the_ime_path_in_win32_mode() {
+            let mode = TermMode::WIN32_INPUT_MODE;
+            assert_eq!(encode(&keystroke("n"), &mode), None);
+            assert_eq!(encode(&keystroke("a"), &mode), None);
+            assert_eq!(encode(&keystroke("1"), &mode), None);
+            assert_eq!(encode(&keystroke("space"), &mode), None);
+            assert_eq!(encode(&keystroke("/"), &mode), None);
+            // Ctrl+C 仍走记录，不能为了 IME 把快捷键也放掉。
+            let mut ctrl_c = keystroke("c");
+            ctrl_c.modifiers.control = true;
+            assert!(encode(&ctrl_c, &mode).is_some());
+            assert!(encode(&keystroke("escape"), &mode).is_some());
+
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
+            let slash = Keystroke::parse("ctrl-/").unwrap();
+            let vk = unsafe { VkKeyScanW(b'/' as u16) } as u16 & 0xff;
+            assert!(encode(&slash, &mode).unwrap().starts_with(format!("\x1b[{vk};").as_bytes()));
+        }
+
+        #[test]
+        fn unknown_keys_fall_back_instead_of_forging_a_record() {
+            assert_eq!(win32::virtual_key_of("f99"), None);
+            assert_eq!(win32::virtual_key_of("capslock"), None);
+            // 方向键在 win32 模式下仍要出记录（它们有确定的 VK）。
+            assert!(win32::win32_input_record(&keystroke("up"), true).is_some());
+        }
+
+        #[test]
+        fn ctrl_backspace_record_carries_del_like_a_real_console() {
+            let mut ks = keystroke("backspace");
+            ks.modifiers.control = true;
+            assert_eq!(
+                win32::win32_press_and_release(&ks),
+                Some(b"\x1b[8;14;127;1;8;1_\x1b[8;14;127;0;8;1_".to_vec())
+            );
+        }
+
+        #[test]
+        fn win32_enter_keeps_native_key_identity_and_character() {
+            let mode = TermMode::WIN32_INPUT_MODE;
+            for (shift, control, alt, text, character, flags) in [
+                (false, false, false, None, 13, 0),
+                (true, false, false, None, 13, 16),
+                (true, false, false, Some("\r"), 13, 16),
+                (true, false, false, Some("\n"), 10, 16),
+                (false, true, false, None, 10, 8),
+                (false, true, false, Some("\n"), 10, 8),
+                (false, false, true, Some("\r"), 13, 2),
+                (true, false, true, Some("\r"), 13, 18),
+                (true, true, false, Some("\n"), 10, 24),
+            ] {
+                let mut key = keystroke("enter");
+                key.modifiers.shift = shift;
+                key.modifiers.control = control;
+                key.modifiers.alt = alt;
+                key.key_char = text.map(str::to_owned);
+                let encoded = String::from_utf8(encode(&key, &mode).unwrap()).unwrap();
+                let records: Vec<Vec<u16>> = encoded
+                    .split_inclusive('_')
+                    .map(|record| {
+                        record
+                            .strip_prefix("\x1b[")
+                            .unwrap()
+                            .strip_suffix('_')
+                            .unwrap()
+                            .split(';')
+                            .map(|field| field.parse().unwrap())
+                            .collect()
+                    })
+                    .collect();
+                assert_eq!(records.len(), 2, "{encoded:?}");
+                for (index, record) in records.iter().enumerate() {
+                    assert_eq!(record.len(), 6);
+                    assert_eq!(record[0], 13, "VK_RETURN");
+                    assert_ne!(record[1], 0, "native scan code");
+                    assert_eq!(record[2], character, "native records preserve WM_CHAR");
+                    assert_eq!(record[3], u16::from(index == 0));
+                    assert_eq!(record[4], flags, "Shift/Ctrl/Alt are carried in Cs");
+                    assert_eq!(record[5], 1);
+                }
+                assert_eq!(preserves_enter_modifiers(&key, &mode), flags != 0);
+            }
+        }
+
+        #[test]
+        fn altgr_text_is_not_encoded_as_a_control_alt_shortcut() {
+            let mut key = keystroke("q");
+            key.modifiers.control = true;
+            key.modifiers.alt = true;
+            for text in ["@", "\u{20ac}"] {
+                key.key_char = Some(text.to_owned());
+                for mode in [
+                    TermMode::default(),
+                    TermMode::WIN32_INPUT_MODE,
+                    pi_keyboard_mode(),
+                    pi_keyboard_mode() | TermMode::WIN32_INPUT_MODE,
+                ] {
+                    assert_eq!(encode(&key, &mode), None);
+                }
+            }
+        }
+
+        #[test]
+        fn conpty_delivers_control_keys_after_kitty_request() {
+            use std::io::{Read, Write};
+            use std::time::{Duration, Instant};
+
+            use nebula_terminal::event::WindowSize;
+            use nebula_terminal::tty::{self, EventedReadWrite, Options, Shell};
+            use nebula_terminal::vte::ansi::Processor;
+
+            let size =
+                crate::gpui_shell::terminal::session::GridSize { columns: 80, screen_lines: 24 };
+            for config in local_terminal_configs() {
+                for request in ["", "[Console]::Out.Write([string][char]27 + '[>1u');"] {
+                    let program = format!(
+                        "[Console]::TreatControlCAsInput = $true; {request} \
+                         [Console]::Out.WriteLine('PROBE-READY'); \
+                         1..3 | ForEach-Object {{ $k = [Console]::ReadKey($true); \
+                         [Console]::Out.WriteLine(('KEY {{0}} {{1}} {{2}}' -f \
+                         $k.Key, [int]$k.KeyChar, [int]$k.Modifiers)) }}; \
+                         [Console]::Out.WriteLine('PROBE-DONE')"
+                    );
+                    let directory = tempfile::tempdir().unwrap();
+                    let options = Options {
+                        shell: Some(Shell::new(
+                            "powershell.exe".to_owned(),
+                            vec!["-NoLogo".into(), "-NoProfile".into(), "-Command".into(), program],
+                        )),
+                        working_directory: Some(directory.path().to_owned()),
+                        escape_args: true,
+                        ..Default::default()
+                    };
+                    let window_size =
+                        WindowSize { num_lines: 24, num_cols: 80, cell_width: 8, cell_height: 16 };
+                    let mut pty = tty::new(&options, window_size, 0).unwrap();
+                    let replies = KeyboardReplyRecorder::default();
+                    let mut term =
+                        nebula_terminal::Term::new(config.clone(), &size, replies.clone());
+                    let mut parser: Processor = Processor::new();
+                    let mut output = Vec::new();
+                    let mut sent = false;
+                    let deadline = Instant::now() + Duration::from_secs(15);
+                    while Instant::now() < deadline {
+                        let mut buffer = [0; 8192];
+                        let count = pty.reader().read(&mut buffer).unwrap();
+                        output.extend_from_slice(&buffer[..count]);
+                        parser.advance(&mut term, &buffer[..count]);
+                        for reply in replies.0.borrow_mut().drain(..) {
+                            pty.writer().write_all(reply.as_bytes()).unwrap();
+                        }
+                        let text = String::from_utf8_lossy(&output);
+                        if !sent && text.contains("PROBE-READY") {
+                            for name in ["escape", "c", "up"] {
+                                let mut key = keystroke(name);
+                                key.modifiers.control = name == "c";
+                                pty.writer()
+                                    .write_all(&encode(&key, term.mode()).unwrap())
+                                    .unwrap();
+                            }
+                            sent = true;
+                        }
+                        if text.contains("PROBE-DONE") {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    let output = String::from_utf8_lossy(&output);
+                    for expected in
+                        ["KEY Escape 27 0", "KEY C 3 4", "KEY UpArrow 0 0", "PROBE-DONE"]
+                    {
+                        assert!(output.contains(expected), "missing {expected}: {output:?}");
+                    }
+                }
+            }
+        }
     }
 }

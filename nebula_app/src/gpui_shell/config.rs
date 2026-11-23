@@ -350,7 +350,9 @@ impl Settings {
         {
             config.conpty_resize = true;
         }
-        config.kitty_keyboard = true;
+        // The local PTY must carry the negotiated keyboard protocol. Direct
+        // SSH enables its byte-preserving capability separately.
+        config.kitty_keyboard = crate::platform::CAPABILITIES.local_kitty_keyboard;
         config
     }
 }

@@ -43,11 +43,13 @@ pub use pane_connection::PaneConnection;
 pub use resume::{ResumeTarget, TmuxActivity};
 use route::{ResolvedRoute, RouteTransport};
 
-/// Remote terminals do not use the local ConPTY host's row anchoring.
+/// Direct SSH carries enhanced keyboard input without ConPTY's translation, handshake
+/// or host row anchoring, regardless of the desktop's operating system.
 pub(crate) fn terminal_config(
     mut config: nebula_terminal::term::Config,
 ) -> nebula_terminal::term::Config {
     config.conpty_resize = false;
+    config.kitty_keyboard = true;
     config
 }
 

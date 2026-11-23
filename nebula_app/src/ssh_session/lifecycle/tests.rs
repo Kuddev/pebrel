@@ -512,7 +512,7 @@ fn ssh_first_capability_query_receives_reply_and_input_keeps_flowing() {
         let events = Events { replies: Some(sender.clone()), ..Events::default() };
         let options = super::super::terminal_config(nebula_terminal::term::Config {
             conpty_resize: true,
-            kitty_keyboard: true,
+            kitty_keyboard: false,
             ..Default::default()
         });
         assert!(!options.conpty_resize);
