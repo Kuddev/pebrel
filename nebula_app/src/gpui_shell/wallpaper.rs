@@ -323,7 +323,7 @@ pub fn set_opacity_live(opacity: f32, cx: &mut App) {
     }
 }
 
-/// Inherited dark static wallpaper uses one base beneath transparent surfaces.
+/// Inherited static wallpaper uses one base beneath transparent surfaces.
 /// Other modes retain their existing surface opacity and native backdrop.
 pub fn chrome_surface_opacity(cx: &App) -> f32 {
     let Some(effects) = cx.try_global::<VisualEffects>() else {
@@ -351,11 +351,10 @@ pub fn card_surface_opacity(cx: &App) -> f32 {
     chrome_surface_opacity(cx)
 }
 
-/// Dark static wallpaper owns one background beneath all inherited chrome.
+/// 静态壁纸统一承担窗口底图，标题栏、两侧和终端不再分别叠底。
 /// Custom tab materials retain their independent native-backdrop contract.
 pub(super) fn unified_workspace_backdrop(cx: &App) -> bool {
-    !crate::gpui_shell::theme::resolved_skin(cx).is_light
-        && !tab_bar_material_is_custom(cx)
+    !tab_bar_material_is_custom(cx)
         && cx.try_global::<VisualEffects>().is_some_and(|effects| {
             effects.layout.cover_chrome
                 && !effects.kind.is_animated()

@@ -100,14 +100,14 @@ pub(super) fn prepare_strip(
     bytes: &[u8],
     dimensions: (u32, u32),
     geometry: StripGeometry,
-    tint: [u8; 3],
+    appearance: optics::StripAppearance,
     cancelled: impl Fn() -> bool,
 ) -> Option<RgbaImage> {
     let _preparation = PREPARATION.lock().unwrap_or_else(|error| error.into_inner());
     if cancelled() {
         return None;
     }
-    optics::workspace_strip(bytes, dimensions, geometry, tint, cancelled)
+    optics::workspace_strip(bytes, dimensions, geometry, appearance, cancelled)
 }
 
 fn blur_wallpaper(pixels: &RgbaImage, mica: bool) -> RgbaImage {

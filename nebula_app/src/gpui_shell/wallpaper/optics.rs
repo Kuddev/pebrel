@@ -17,11 +17,17 @@ pub(super) struct StripGeometry {
     pub image: [f32; 4],
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct StripAppearance {
+    pub tint: [u8; 3],
+    pub is_light: bool,
+}
+
 pub(super) fn workspace_strip(
     bytes: &[u8],
     (source_width, source_height): (u32, u32),
     geometry: StripGeometry,
-    tint: [u8; 3],
+    appearance: StripAppearance,
     cancelled: impl Fn() -> bool,
 ) -> Option<RgbaImage> {
     let StripGeometry { sidebar, width, height, viewport_width, scale, image } = geometry;
@@ -62,7 +68,7 @@ pub(super) fn workspace_strip(
 
     let mut result = RgbaImage::new(w, h);
     {
-        let mid = filtered(&source, 2.6 * scale, 0.55);
+        let mid = filtered(&source, 2.6 * scale, 0.55, appearance.is_light);
         for (x, y, pixel) in result.enumerate_pixels_mut() {
             let (mid_alpha, _) = weights[x as usize];
             *pixel = mix(
@@ -75,11 +81,12 @@ pub(super) fn workspace_strip(
     if cancelled() {
         return None;
     }
-    let soft = filtered(&source, 5.5 * scale, 1.0);
+    let soft = filtered(&source, 5.5 * scale, 1.0, appearance.is_light);
     drop(source);
     if cancelled() {
         return None;
     }
+    let tint_opacity = if appearance.is_light { 0.20 } else { 0.12 };
     for (y, row) in result.rows_mut().enumerate() {
         if cancelled() {
             return None;
@@ -91,7 +98,7 @@ pub(super) fn workspace_strip(
             if soft_alpha > 0.0 {
                 let mut frost = *soft.get_pixel(x as u32 + pad, y as u32 + pad);
                 let (grain_value, grain_alpha) = grain(logical_x as u32, logical_y as u32);
-                color_overlay(&mut frost, tint, 0.12);
+                color_overlay(&mut frost, appearance.tint, tint_opacity);
                 color_overlay(&mut frost, [grain_value; 3], grain_alpha * 0.030);
                 *pixel = mix(*pixel, frost, soft_alpha);
             }
@@ -121,20 +128,22 @@ fn stops(position: f32, stops: &[(f32, f32)]) -> f32 {
     0.0
 }
 
-fn filtered(source: &RgbaImage, sigma: f32, strength: f32) -> RgbaImage {
+fn filtered(source: &RgbaImage, sigma: f32, strength: f32, is_light: bool) -> RgbaImage {
     let contrast = 1.0 - 0.24 * strength;
-    let exposure = 1.0 - 0.06 * strength;
+    // 复用 L4-B 的羽化和反差，浅色只调整染色与饱和度，不沿用深色的压暗。
+    let (exposure, saturation, saturation_delta) =
+        if is_light { (1.0, 1.03, 0.03) } else { (1.0 - 0.06 * strength, 1.14, 0.14) };
     let gain = contrast * exposure;
     let offset = (1.0 - contrast) * exposure * 0.5;
     let prepared = RgbaImage::from_fn(source.width(), source.height(), |x, y| {
         let mut pixel = *source.get_pixel(x, y);
         let [b, g, r, alpha] = pixel.0.map(f32::from);
         let luma = 0.072 * b + 0.715 * g + 0.213 * r;
-        let bias = alpha * offset - luma * gain * 0.14;
+        let bias = alpha * offset - luma * gain * saturation_delta;
         // Contrast, exposure and saturation are affine in premultiplied color.
         // Only saturation can clip at this stage.
         for channel in &mut pixel.0[..3] {
-            *channel = byte((f32::from(*channel) * gain * 1.14 + bias).min(alpha));
+            *channel = byte((f32::from(*channel) * gain * saturation + bias).min(alpha));
         }
         pixel
     });
@@ -240,6 +249,9 @@ fn byte(value: f32) -> u8 {
 mod tests {
     use super::*;
 
+    const DARK: StripAppearance = StripAppearance { tint: [24; 3], is_light: false };
+    const LIGHT: StripAppearance = StripAppearance { tint: [242; 3], is_light: true };
+
     #[test]
     fn opaque_cover_stays_opaque_at_viewport_edges_at_every_scale() {
         let source = RgbaImage::from_pixel(1000, 600, Rgba([160, 100, 60, 255]));
@@ -253,18 +265,21 @@ mod tests {
                     scale,
                     image: [0.0, 0.0, viewport_width, 600.0],
                 };
-                let strip = workspace_strip(
-                    source.as_raw(),
-                    source.dimensions(),
-                    geometry,
-                    [30, 20, 14],
-                    || false,
-                )
-                .unwrap();
-                assert!(
-                    strip.pixels().all(|pixel| pixel[3] == 255),
-                    "scale {scale}, viewport {viewport_width}"
-                );
+                for appearance in [DARK, LIGHT] {
+                    let strip = workspace_strip(
+                        source.as_raw(),
+                        source.dimensions(),
+                        geometry,
+                        appearance,
+                        || false,
+                    )
+                    .unwrap();
+                    assert!(
+                        strip.pixels().all(|pixel| pixel[3] == 255),
+                        "scale {scale}, viewport {viewport_width}, light {}",
+                        appearance.is_light
+                    );
+                }
             }
         }
     }
@@ -280,21 +295,17 @@ mod tests {
             scale: 1.0,
             image: [40.0, 60.0, 200.0, 100.0],
         };
-        let strip =
-            workspace_strip(source.as_raw(), source.dimensions(), geometry, [30, 20, 14], || false)
-                .unwrap();
+        let strip = workspace_strip(source.as_raw(), source.dimensions(), geometry, DARK, || false)
+            .unwrap();
         assert_eq!(strip.get_pixel(0, 0)[3], 0);
         assert_eq!(strip.get_pixel(80, 299)[3], 0);
         assert_eq!(strip.get_pixel(80, 100)[3], 255);
         let transparent = RgbaImage::from_pixel(200, 100, Rgba([255, 0, 255, 0]));
-        let strip = workspace_strip(
-            transparent.as_raw(),
-            transparent.dimensions(),
-            geometry,
-            [30, 20, 14],
-            || false,
-        )
-        .unwrap();
+        let strip =
+            workspace_strip(transparent.as_raw(), transparent.dimensions(), geometry, DARK, || {
+                false
+            })
+            .unwrap();
         assert!(strip.pixels().all(|pixel| pixel[3] == 0));
     }
 
@@ -320,11 +331,15 @@ mod tests {
             image: [0.0, 0.0, 360.0, 80.0],
         };
         let strip =
-            workspace_strip(source.as_raw(), source.dimensions(), geo, [24; 3], || false).unwrap();
+            workspace_strip(source.as_raw(), source.dimensions(), geo, DARK, || false).unwrap();
         assert!(strip.get_pixel(20, 40)[0] < 200);
         assert_eq!(strip.get_pixel(297, 40).0, [255; 4]);
         assert!(
-            workspace_strip(source.as_raw(), source.dimensions(), geo, [24; 3], || true).is_none()
+            workspace_strip(source.as_raw(), source.dimensions(), geo, DARK, || true).is_none()
         );
+        let strip =
+            workspace_strip(source.as_raw(), source.dimensions(), geo, LIGHT, || false).unwrap();
+        assert!((210..250).contains(&strip.get_pixel(20, 40)[0]));
+        assert_eq!(strip.get_pixel(297, 40).0, [255; 4]);
     }
 }
