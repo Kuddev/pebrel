@@ -162,6 +162,12 @@ pub enum RuntimeCommand {
         text: String,
         submit: bool,
     },
+    DelegationPrompt {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        task_id: String,
+    },
     AgentPaste {
         agent: String,
         generation: Option<u64>,

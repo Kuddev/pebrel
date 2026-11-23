@@ -1,6 +1,7 @@
 //! Workspace keyboard actions and their tab/focus transitions.
 
 use gpui::{Context, Focusable as _, Window};
+use gpui_component::{Root, WindowExt as _};
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
@@ -16,25 +17,29 @@ pub(super) fn move_target(active: usize, len: usize, right: bool) -> Option<usiz
 
 impl NebulaWorkspace {
     pub(super) fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
-            if let Some((view, _)) = self.settings_surface.as_ref() {
-                let focus = view.read(cx).focus_handle(cx);
-                window.defer(cx, move |window, cx| window.focus(&focus, cx));
-            }
-            return;
-        }
-        let focus = match self.tabs.get(self.active) {
-            Some(tab @ WorkspaceTab::Terminal { .. }) => match tab.focused_view() {
-                Some(view) => view.read(cx).focus_handle(cx),
+        let focus = if self.settings_open {
+            let Some((view, _)) = &self.settings_surface else { return };
+            view.read(cx).focus_handle(cx)
+        } else {
+            match self.tabs.get(self.active) {
+                Some(tab @ WorkspaceTab::Terminal { .. }) => match tab.focused_view() {
+                    Some(view) => view.read(cx).focus_handle(cx),
+                    None => return,
+                },
+                Some(WorkspaceTab::Settings { view, .. }) => view.read(cx).focus_handle(cx),
+                Some(WorkspaceTab::Document { view, .. }) => view.read(cx).focus_handle(cx),
+                Some(WorkspaceTab::Code { view, .. }) => view.read(cx).focus_handle(cx),
+                Some(WorkspaceTab::Image { view }) => view.read(cx).focus_handle(cx),
                 None => return,
-            },
-            Some(WorkspaceTab::Settings { view, .. }) => view.read(cx).focus_handle(cx),
-            Some(WorkspaceTab::Document { view, .. }) => view.read(cx).focus_handle(cx),
-            Some(WorkspaceTab::Code { view, .. }) => view.read(cx).focus_handle(cx),
-            Some(WorkspaceTab::Image { view }) => view.read(cx).focus_handle(cx),
-            None => return,
+            }
         };
-        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        window.defer(cx, move |window, cx| {
+            // A background tab can exit after a modal takes keyboard focus.
+            if window.root::<Root>().flatten().is_some() && window.has_active_dialog(cx) {
+                return;
+            }
+            window.focus(&focus, cx);
+        });
     }
 
     pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {

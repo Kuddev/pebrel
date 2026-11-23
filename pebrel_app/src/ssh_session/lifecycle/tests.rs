@@ -80,18 +80,23 @@ enum Mode {
     Integration,
     RejectIntegration,
     BrokenPosixQuoting,
+    NoAssetExecTty,
     RejectSftp,
     HangSftp,
     AcceptSftp,
+    BusyFirstSftpChannel,
+    BusyFirstSftpTransport,
 }
 
 struct Loopback {
     mode: Mode,
     hang: bool,
+    reject_channel: bool,
     data: mpsc::UnboundedSender<Vec<u8>>,
     window_changes: mpsc::UnboundedSender<WindowSize>,
     channels: Vec<Channel<server::Msg>>,
     scripts: std::collections::HashMap<ChannelId, Vec<u8>>,
+    last_pty: Option<ChannelId>,
 }
 
 impl server::Handler for Loopback {
@@ -118,6 +123,13 @@ impl server::Handler for Loopback {
             return session.channel_failure(channel);
         }
         if command == resume::probe_command().as_bytes() {
+            if self.mode == Mode::NoAssetExecTty {
+                assert_eq!(self.last_pty, Some(channel), "probe must use its own accepted PTY");
+                session.channel_success(channel)?;
+                session.exit_status_request(channel, 1)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
             if matches!(self.mode, Mode::Integration | Mode::RejectIntegration) {
                 session.channel_success(channel)?;
                 session.data(channel, resume::PROBE_REPLY)?;
@@ -225,7 +237,7 @@ impl server::Handler for Loopback {
         let _ = self.data.send(b"sftp-request".to_vec());
         match self.mode {
             Mode::HangSftp => Ok(()),
-            Mode::AcceptSftp => {
+            Mode::AcceptSftp | Mode::BusyFirstSftpChannel | Mode::BusyFirstSftpTransport => {
                 session.channel_success(channel)?;
                 let index = self.channels.iter().position(|c| c.id() == channel).unwrap();
                 let stream = self.channels.remove(index).into_stream();
@@ -244,6 +256,11 @@ impl server::Handler for Loopback {
     ) -> Result<(), Self::Error> {
         if self.hang {
             std::future::pending::<()>().await;
+        }
+        if self.reject_channel {
+            self.reject_channel = self.mode == Mode::BusyFirstSftpTransport;
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
         }
         reply.accept().await;
         if self.mode == Mode::BackpressuredEcho {
@@ -271,6 +288,7 @@ impl server::Handler for Loopback {
         _modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.last_pty = Some(channel);
         if self.mode == Mode::RejectPty {
             session.channel_failure(channel)
         } else {
@@ -635,7 +653,13 @@ impl Fixture {
                 stream.set_nodelay(true).unwrap();
                 let handler = Loopback {
                     mode,
+                    last_pty: None,
                     hang: first && mode == Mode::HangFirstConnection,
+                    reject_channel: first
+                        && matches!(
+                            mode,
+                            Mode::BusyFirstSftpChannel | Mode::BusyFirstSftpTransport
+                        ),
                     data: data_tx.clone(),
                     window_changes: window_changes_tx.clone(),
                     channels: Vec::new(),
@@ -721,6 +745,22 @@ fn a_host_with_sh_but_incompatible_exec_quoting_opens_its_ordinary_shell() {
         let (channel, _) =
             open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
         assert!(channel.identity_input.is_none(), "unsupported startup must not run POSIX code");
+        assert!(channel.pending.iter().any(
+            |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
+        ));
+        drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn gateway_with_a_frontend_pty_and_piped_asset_exec_opens_an_interactive_shell() {
+    check(async {
+        let fixture = Fixture::new(Mode::NoAssetExecTty).await;
+        let acquired = fixture.connect().await;
+        let (channel, _) =
+            open_shell(&acquired, size(), None, None, &Events::default()).await.unwrap();
+        assert!(channel.identity_input.is_none());
         assert!(channel.pending.iter().any(
             |message| matches!(message, ChannelMsg::Data { data } if data.starts_with(b"welcome"))
         ));

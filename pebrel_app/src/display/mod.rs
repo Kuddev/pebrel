@@ -5647,7 +5647,7 @@ impl Display {
         self.nebula_window_opacity = 1.0;
         self.nebula_background = None;
         self.nebula_background_image = None;
-        self.nebula_background_image_opacity = 0.38;
+        self.nebula_background_image_opacity = nebula_settings::DEFAULT_BACKGROUND_IMAGE_OPACITY;
         self.nebula_background_image_fit = BackgroundImageFit::default();
         self.nebula_background_image_alignment = BackgroundImageAlignment::default();
         self.nebula_background_image_cover_chrome = false;
@@ -7625,15 +7625,7 @@ impl Display {
         );
         let math_coverage =
             terminal_math::CoverageMask::build(&terminal_math_overlays, &prepared_math);
-        // A normal shell line may reflow its suffix around a compact formula.
-        // Full-screen TUIs own fixed grid geometry (sidebars, cards, status
-        // bands), so moving every cell after an inline formula would also move
-        // those ANSI backgrounds and tear the interface into coloured blocks.
-        pane_state.terminal_math.update_projection(
-            &terminal_math_overlays,
-            &prepared_math,
-            !alt_screen,
-        );
+        pane_state.terminal_math.update_projection(&terminal_math_overlays, &prepared_math, true);
         let frame_images = inline_image::capture(
             &terminal,
             &mut pane_state.inline_images,
