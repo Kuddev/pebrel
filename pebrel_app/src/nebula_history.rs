@@ -1,0 +1,634 @@
+//! Persistent, scoped command history backing Pebrel's fish-style suggestions.
+//!
+//! Local Windows shells share one pool. WSL commands are isolated by distro,
+//! and SSH commands by destination, so a valid command on one machine never
+//! becomes a misleading suggestion on another.
+
+use std::collections::{BTreeMap, HashMap};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+const HISTORY_MAX: usize = 5_000;
+pub(crate) const LOCAL_HISTORY_FILE: &str = "pebrel_history.jsonl";
+pub(crate) const WSL_HISTORY_FILE: &str = "pebrel_history_wsl.jsonl";
+pub(crate) const SSH_HISTORY_FILE: &str = "pebrel_history_ssh.jsonl";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HistoryScope {
+    #[default]
+    Local,
+    Wsl(String),
+    Ssh(String),
+}
+
+impl HistoryScope {
+    fn normalized(self) -> Self {
+        match self {
+            Self::Local => Self::Local,
+            Self::Wsl(distro) => Self::Wsl(normalize_identity(&distro)),
+            Self::Ssh(destination) => Self::Ssh(normalize_ssh_identity(&destination)),
+        }
+    }
+
+    fn file_name(&self) -> &'static str {
+        match self {
+            Self::Local => LOCAL_HISTORY_FILE,
+            Self::Wsl(_) => WSL_HISTORY_FILE,
+            Self::Ssh(_) => SSH_HISTORY_FILE,
+        }
+    }
+
+    fn identity(&self) -> Option<&str> {
+        match self {
+            Self::Local => None,
+            Self::Wsl(identity) | Self::Ssh(identity) => Some(identity),
+        }
+    }
+}
+
+fn normalize_identity(identity: &str) -> String {
+    identity.trim().to_ascii_lowercase()
+}
+
+fn normalize_ssh_identity(destination: &str) -> String {
+    let destination = destination.trim();
+    match destination.rsplit_once('@') {
+        Some((user, host)) => format!("{user}@{}", host.to_ascii_lowercase()),
+        None => destination.to_ascii_lowercase(),
+    }
+}
+
+#[derive(Debug, Default)]
+struct HistoryIndex {
+    entries: Vec<String>,
+    index: BTreeMap<String, HistoryRank>,
+}
+
+/// Accepted submissions rank by frequency first; the latest use breaks ties.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct HistoryRank {
+    uses: u64,
+    position: usize,
+}
+
+impl HistoryIndex {
+    fn hint(&self, prefix: &str) -> Option<&str> {
+        self.hint_with_cancel(prefix, &|| false)
+    }
+
+    fn hint_with_cancel(&self, prefix: &str, cancelled: &dyn Fn() -> bool) -> Option<&str> {
+        if prefix.is_empty() {
+            return None;
+        }
+        let mut best: Option<(HistoryRank, &str)> = None;
+        for (cmd, &rank) in self.index.range(prefix.to_owned()..) {
+            if cancelled() {
+                return None;
+            }
+            if !cmd.starts_with(prefix) {
+                break;
+            }
+            if cmd.len() == prefix.len() {
+                continue;
+            }
+            if best.is_none_or(|(best_rank, _)| rank > best_rank) {
+                best = Some((rank, &cmd[prefix.len()..]));
+            }
+        }
+        best.map(|(_, remainder)| remainder)
+    }
+
+    fn hints(&self, prefix: &str, limit: usize) -> Vec<(&str, &str)> {
+        if prefix.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut matches: Vec<(HistoryRank, &str)> = Vec::new();
+        for (cmd, &rank) in self.index.range(prefix.to_owned()..) {
+            if !cmd.starts_with(prefix) {
+                break;
+            }
+            if cmd.len() != prefix.len() {
+                matches.push((rank, cmd.as_str()));
+            }
+        }
+        matches.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        matches.into_iter().take(limit).map(|(_, cmd)| (cmd, &cmd[prefix.len()..])).collect()
+    }
+
+    fn insert(&mut self, cmd: String) {
+        if let Some(rank) = self.index.get_mut(&cmd) {
+            rank.uses = rank.uses.saturating_add(1);
+            self.entries.remove(rank.position);
+            self.entries.push(cmd);
+            self.reindex();
+            return;
+        }
+        self.entries.push(cmd.clone());
+        self.index.insert(cmd, HistoryRank { uses: 1, position: self.entries.len() - 1 });
+        if self.entries.len() > HISTORY_MAX {
+            let drop = self.entries.len() - HISTORY_MAX;
+            for removed in self.entries.drain(0..drop) {
+                self.index.remove(&removed);
+            }
+            self.reindex();
+        }
+    }
+
+    fn reindex(&mut self) {
+        for (position, command) in self.entries.iter().enumerate() {
+            self.index.get_mut(command).expect("history entry is indexed").position = position;
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct NebulaHistory {
+    pools: HashMap<HistoryScope, HistoryIndex>,
+    append_directory: Option<PathBuf>,
+}
+
+impl NebulaHistory {
+    pub fn load() -> Self {
+        Self::load_at(
+            crate::platform::dirs::data_dir(),
+            pebrel_settings::RawSettings::try_load()
+                .is_ok_and(|raw| raw.command_history_persists()),
+        )
+    }
+
+    fn load_at(directory: &Path, persist: bool) -> Self {
+        let mut history = Self {
+            pools: HashMap::new(),
+            append_directory: persist.then(|| directory.to_path_buf()),
+        };
+        for scope in [
+            HistoryScope::Local,
+            HistoryScope::Wsl(String::new()),
+            HistoryScope::Ssh(String::new()),
+        ] {
+            history.load_file(&scope, &directory.join(scope.file_name()));
+        }
+        history_debug_log(
+            directory,
+            format!(
+                "history_load scopes={} entries={}",
+                history.pools.len(),
+                history.pools.values().map(|pool| pool.entries.len()).sum::<usize>()
+            ),
+        );
+        history
+    }
+
+    pub fn record(&mut self, scope: &HistoryScope, cmd: &str, cwd: &str) {
+        // A leading space keeps the command out of memory and disk, like bash's
+        // `HISTCONTROL=ignorespace`. Callers must pass the line before trimming it.
+        if cmd.starts_with(' ') {
+            return;
+        }
+        let scope = scope.clone().normalized();
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            return;
+        }
+        let pool = self.pools.entry(scope.clone()).or_default();
+        pool.insert(cmd.to_owned());
+        if let Some(directory) = &self.append_directory {
+            append(directory, &scope, cmd, cwd);
+            history_debug_log(
+                directory,
+                format!(
+                    "history_record scope={scope:?} cmd={cmd:?} cwd={cwd:?} entries={}",
+                    pool.entries.len()
+                ),
+            );
+        }
+    }
+
+    /// Popup search retains spelling and ranks matching commands by frequency, then recency.
+    /// Inline ghost suggestions remain literal suffixes of the current input.
+    pub fn search(&self, scope: &HistoryScope, text: &str, limit: usize) -> Vec<&str> {
+        self.search_with_cancel(scope, text, limit, &|| false)
+    }
+
+    pub(crate) fn search_with_cancel(
+        &self,
+        scope: &HistoryScope,
+        text: &str,
+        limit: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Vec<&str> {
+        if text.trim().is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let Some(pool) = self.pools.get(&scope.clone().normalized()) else { return Vec::new() };
+        let mut query = pebrel_completions::command_search::CommandQuery::new(text);
+        let mut matches: Vec<_> = pool
+            .entries
+            .iter()
+            .take_while(|_| !cancelled())
+            .filter_map(|command| {
+                (command != text)
+                    .then(|| query.score(command))
+                    .flatten()
+                    .map(|_| (pool.index[command], command.as_str()))
+            })
+            .collect();
+        if cancelled() {
+            return Vec::new();
+        }
+        matches.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        matches.into_iter().take(limit).map(|(_, command)| command).collect()
+    }
+
+    pub fn hint(&self, scope: &HistoryScope, prefix: &str) -> Option<&str> {
+        self.pools.get(&scope.clone().normalized())?.hint(prefix)
+    }
+
+    pub(crate) fn hint_with_cancel(
+        &self,
+        scope: &HistoryScope,
+        prefix: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<&str> {
+        self.pools.get(&scope.clone().normalized())?.hint_with_cancel(prefix, cancelled)
+    }
+
+    pub fn hints(&self, scope: &HistoryScope, prefix: &str, limit: usize) -> Vec<(&str, &str)> {
+        self.pools
+            .get(&scope.clone().normalized())
+            .map_or_else(Vec::new, |pool| pool.hints(prefix, limit))
+    }
+
+    /// The caller serializes this with recording. Failed categories retain their
+    /// in-memory entries, while successfully removed files cannot reappear on exit.
+    pub(crate) fn clear_at(&mut self, directory: &Path) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for file in history_file_names() {
+            match std::fs::remove_file(directory.join(file)) {
+                Ok(()) => self.pools.retain(|scope, _| scope.file_name() != file),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.pools.retain(|scope, _| scope.file_name() != file);
+                },
+                Err(error) => errors.push(format!("{file}: {error}")),
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    }
+
+    fn load_file(&mut self, category: &HistoryScope, path: &Path) {
+        let Ok(data) = std::fs::read_to_string(path) else { return };
+        for line in data.lines() {
+            let Some((scope, cmd)) = parse_record(category, line) else { continue };
+            self.pools.entry(scope).or_default().insert(cmd);
+        }
+    }
+}
+
+#[cfg(test)]
+mod deletion_tests;
+
+pub(crate) fn history_file_names() -> [&'static str; 3] {
+    [LOCAL_HISTORY_FILE, WSL_HISTORY_FILE, SSH_HISTORY_FILE]
+}
+
+fn history_debug_log(directory: &Path, message: impl AsRef<str>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ENABLED.get_or_init(|| {
+        std::env::var("PEBREL_DEBUG_LOG").or_else(|_| std::env::var("NEBULA_DEBUG_LOG")).is_ok_and(
+            |value| {
+                let value = value.trim();
+                !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+            },
+        )
+    }) {
+        return;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()))
+        .unwrap_or_else(|_| "0.000".to_owned());
+    let path = directory.join("pebrel_debug.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{ts}] {}", message.as_ref());
+    }
+}
+
+fn append(directory: &Path, scope: &HistoryScope, cmd: &str, cwd: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let mut record = serde_json::json!({ "ts": ts, "cwd": cwd, "cmd": cmd });
+    if let Some(identity) = scope.identity() {
+        record["scope"] = serde_json::Value::String(
+            match scope {
+                HistoryScope::Wsl(_) => "wsl",
+                HistoryScope::Ssh(_) => "ssh",
+                HistoryScope::Local => unreachable!(),
+            }
+            .to_owned(),
+        );
+        record["target"] = serde_json::Value::String(identity.to_owned());
+    }
+    let path = directory.join(scope.file_name());
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{record}");
+    }
+}
+
+fn parse_record(category: &HistoryScope, line: &str) -> Option<(HistoryScope, String)> {
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let cmd = value.get("cmd")?.as_str()?.trim();
+    if cmd.is_empty() {
+        return None;
+    }
+    let record_scope = value.get("scope").and_then(serde_json::Value::as_str);
+    let target = value.get("target").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let scope = match category {
+        HistoryScope::Local if record_scope.is_none() => HistoryScope::Local,
+        HistoryScope::Wsl(_) if record_scope == Some("wsl") && !target.trim().is_empty() => {
+            HistoryScope::Wsl(target.to_owned())
+        },
+        HistoryScope::Ssh(_) if record_scope == Some("ssh") && !target.trim().is_empty() => {
+            HistoryScope::Ssh(target.to_owned())
+        },
+        _ => return None,
+    }
+    .normalized();
+    Some((scope, cmd.to_owned()))
+}
+
+pub(crate) fn record_category_file(line: &str) -> Option<&'static str> {
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    if value.get("cmd")?.as_str()?.trim().is_empty() {
+        return None;
+    }
+    match value.get("scope") {
+        None => Some(LOCAL_HISTORY_FILE),
+        Some(scope) => {
+            let target = value.get("target")?.as_str()?.trim();
+            if target.is_empty() {
+                return None;
+            }
+            match scope.as_str()? {
+                "wsl" => Some(WSL_HISTORY_FILE),
+                "ssh" => Some(SSH_HISTORY_FILE),
+                _ => None,
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cancellation_stops_history_matching_before_traversing_the_whole_pool() {
+        let scope = super::HistoryScope::Local;
+        let commands: Vec<_> = (0..100).map(|i| format!("git switch branch-{i}")).collect();
+        let history = hist(scope.clone(), &commands.iter().map(String::as_str).collect::<Vec<_>>());
+        for popup in [false, true] {
+            let checks = std::cell::Cell::new(0);
+            let cancelled = || {
+                checks.set(checks.get() + 1);
+                checks.get() >= 3
+            };
+            if popup {
+                assert!(history.search_with_cancel(&scope, "git", 8, &cancelled).is_empty());
+            } else {
+                assert!(history.hint_with_cancel(&scope, "git", &cancelled).is_none());
+            }
+            assert!(checks.get() <= 4, "old input must not scan the remaining history");
+        }
+        assert_eq!(history.hint(&scope, "git switch "), Some("branch-99"));
+    }
+
+    #[test]
+    fn popup_search_ignores_case_and_keeps_remote_history_scoped() {
+        let local = super::HistoryScope::Local;
+        let mut history =
+            hist(local.clone(), &["Docker compose up", "docker compose logs", "git status"]);
+        history
+            .pools
+            .entry(super::HistoryScope::Wsl("ubuntu".into()))
+            .or_default()
+            .insert("docker remote-only".into());
+        assert_eq!(
+            history.search(&local, "COMPOSE DOCKER", 8),
+            vec!["docker compose logs", "Docker compose up"]
+        );
+        assert_eq!(history.search(&local, "dck cmp", 1), vec!["docker compose logs"]);
+        assert!(history.search(&local, "remote-only", 8).is_empty());
+        assert_eq!(
+            history.hint(&local, "DOCKER"),
+            None,
+            "an inline suffix cannot correct a prefix's spelling"
+        );
+    }
+
+    #[test]
+    #[ignore = "informational cost measurement with a populated local history"]
+    fn popup_search_cost_for_full_history() {
+        let scope = super::HistoryScope::Local;
+        let mut history = super::NebulaHistory::default();
+        let pool = history.pools.entry(scope.clone()).or_default();
+        for index in 0..5000 {
+            pool.insert(format!("docker compose -p service-{index} logs --tail 100"));
+        }
+        let started = std::time::Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(history.search(&scope, "DCK CMP logs", 8));
+        }
+        println!("100 popup queries over 5000 history entries: {:?}", started.elapsed());
+    }
+    use super::*;
+
+    fn hist(scope: HistoryScope, cmds: &[&str]) -> NebulaHistory {
+        let mut history = NebulaHistory::default();
+        let pool = history.pools.entry(scope.normalized()).or_default();
+        for command in cmds {
+            pool.insert((*command).to_owned());
+        }
+        history
+    }
+
+    #[test]
+    fn leading_space_commands_stay_out_of_memory_and_disk() {
+        let scope = HistoryScope::Ssh("leading-space-unit".into());
+        let mut history = NebulaHistory::default();
+        history.record(&scope, " echo hidden", "/");
+        history.record(&scope, "   echo hidden-too", "/");
+        // `record` returns before `append`, so no history file sees these lines.
+        assert!(history.pools.get(&scope.normalized()).is_none());
+    }
+
+    #[test]
+    fn hint_returns_remainder_of_newest_match() {
+        let scope = HistoryScope::Local;
+        let history = hist(scope.clone(), &["cargo build", "cargo test", "git status"]);
+        assert_eq!(history.hint(&scope, "cargo "), Some("test"));
+        assert_eq!(history.hint(&scope, "git "), Some("status"));
+    }
+
+    #[test]
+    fn exact_missing_and_empty_prefixes_have_no_hint() {
+        let scope = HistoryScope::Local;
+        let history = hist(scope.clone(), &["cargo build"]);
+        assert_eq!(history.hint(&scope, "cargo build"), None);
+        assert_eq!(history.hint(&scope, "npm "), None);
+        assert_eq!(history.hint(&scope, ""), None);
+    }
+
+    #[test]
+    fn rerunning_a_command_moves_it_to_the_newest_position() {
+        let scope = HistoryScope::Local;
+        let history = hist(scope.clone(), &["ls", "ll", "ls"]);
+        assert_eq!(history.hint(&scope, "l"), Some("s"));
+    }
+
+    #[test]
+    fn frequency_precedes_recency_for_inline_popup_and_list_suggestions() {
+        let scope = HistoryScope::Ssh("user@host".into());
+        let history = hist(scope.clone(), &["git status", "git status", "git pull", "git push"]);
+        assert_eq!(history.hint(&scope, "git "), Some("status"));
+        assert_eq!(history.search(&scope, "git", 3), vec!["git status", "git push", "git pull"]);
+        assert_eq!(history.hints(&scope, "git ", 1), vec![("git status", "status")]);
+        assert!(history.search(&HistoryScope::Local, "git", 3).is_empty());
+        let mut history = history;
+        history.pools.get_mut(&scope).unwrap().insert("git pull".into());
+        assert_eq!(history.search(&scope, "git", 3), vec!["git pull", "git status", "git push"]);
+    }
+
+    #[test]
+    fn reloading_existing_records_recovers_frequency_without_a_format_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(SSH_HISTORY_FILE);
+        std::fs::write(
+            &path,
+            [
+                r#"{"scope":"ssh","target":"user@host","cmd":"git status"}"#,
+                r#"{"scope":"ssh","target":"user@host","cmd":"git status"}"#,
+                r#"{"scope":"ssh","target":"user@host","cmd":"git pull"}"#,
+                r#"{"scope":"ssh","target":"other@host","cmd":"git push"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut history = NebulaHistory::default();
+        history.load_file(&HistoryScope::Ssh(String::new()), &path);
+        assert_eq!(history.hint(&HistoryScope::Ssh("user@host".into()), "git "), Some("status"));
+        history.clear_at(directory.path()).unwrap();
+        assert!(history.pools.is_empty());
+    }
+
+    #[test]
+    fn eviction_removes_frequency_and_recency_together() {
+        let mut pool = HistoryIndex::default();
+        for _ in 0..10 {
+            pool.insert("stale".into());
+        }
+        for i in 0..HISTORY_MAX {
+            pool.insert(format!("command {i}"));
+        }
+        assert!(!pool.index.contains_key("stale"));
+        pool.insert("stale".into());
+        assert_eq!(pool.index["stale"].uses, 1);
+        assert_eq!(pool.entries.len(), HISTORY_MAX);
+        assert_eq!(pool.index.len(), HISTORY_MAX);
+    }
+
+    #[test]
+    fn prefix_ranges_do_not_bleed_into_adjacent_commands() {
+        let scope = HistoryScope::Local;
+        let history = hist(scope.clone(), &["git push", "gitk"]);
+        assert_eq!(history.hint(&scope, "git "), Some("push"));
+    }
+
+    #[test]
+    fn scopes_do_not_leak_commands() {
+        let local = HistoryScope::Local;
+        let wsl = HistoryScope::Wsl("Ubuntu".to_owned());
+        let ssh = HistoryScope::Ssh("root@example.com".to_owned());
+        let mut history = NebulaHistory::default();
+        history
+            .pools
+            .entry(local.clone().normalized())
+            .or_default()
+            .insert("dir windows".to_owned());
+        history
+            .pools
+            .entry(wsl.clone().normalized())
+            .or_default()
+            .insert("sudo apt update".to_owned());
+        history
+            .pools
+            .entry(ssh.clone().normalized())
+            .or_default()
+            .insert("systemctl restart api".to_owned());
+
+        assert_eq!(history.hint(&local, "dir "), Some("windows"));
+        assert_eq!(history.hint(&wsl, "sudo "), Some("apt update"));
+        assert_eq!(history.hint(&ssh, "systemctl "), Some("restart api"));
+        assert_eq!(history.hint(&local, "sudo "), None);
+        assert_eq!(history.hint(&wsl, "systemctl "), None);
+    }
+
+    #[test]
+    fn remote_identity_is_case_insensitive() {
+        let stored = HistoryScope::Wsl("ubuntu".to_owned());
+        let queried = HistoryScope::Wsl("Ubuntu".to_owned());
+        let history = hist(stored, &["apt update"]);
+        assert_eq!(history.hint(&queried, "apt "), Some("update"));
+    }
+
+    #[test]
+    fn ssh_normalization_preserves_case_sensitive_user_names() {
+        assert_eq!(
+            HistoryScope::Ssh("BuildUser@EXAMPLE.COM:22".to_owned()).normalized(),
+            HistoryScope::Ssh("BuildUser@example.com:22".to_owned())
+        );
+        assert_ne!(
+            HistoryScope::Ssh("BuildUser@example.com".to_owned()).normalized(),
+            HistoryScope::Ssh("builduser@example.com".to_owned()).normalized()
+        );
+    }
+
+    #[test]
+    fn hints_list_matches_newest_first_and_skip_exact() {
+        let scope = HistoryScope::Local;
+        let history = hist(scope.clone(), &["git pull", "git push", "git status", "git p"]);
+        assert_eq!(
+            history.hints(&scope, "git p", 2),
+            vec![("git push", "ush"), ("git pull", "ull")]
+        );
+    }
+
+    #[test]
+    fn sync_records_route_back_to_their_category_files() {
+        assert_eq!(record_category_file(r#"{"cmd":"dir"}"#), Some(LOCAL_HISTORY_FILE));
+        assert_eq!(
+            record_category_file(r#"{"scope":"wsl","target":"ubuntu","cmd":"ls"}"#),
+            Some(WSL_HISTORY_FILE)
+        );
+        assert_eq!(
+            record_category_file(r#"{"scope":"ssh","target":"me@box","cmd":"pwd"}"#),
+            Some(SSH_HISTORY_FILE)
+        );
+        assert_eq!(record_category_file(r#"{"scope":"ssh","cmd":"pwd"}"#), None);
+        assert_eq!(record_category_file(r#"{"scope":"future","cmd":"pwd"}"#), None);
+        assert_eq!(record_category_file(r#"{"cmd":"  "}"#), None);
+        assert_eq!(record_category_file("not json"), None);
+    }
+
+    #[test]
+    fn category_files_reject_mismatched_record_scopes() {
+        let wsl_file = HistoryScope::Wsl(String::new());
+        let ssh_record = r#"{"scope":"ssh","target":"me@box","cmd":"pwd"}"#;
+        assert_eq!(parse_record(&wsl_file, ssh_record), None);
+
+        let local_record = r#"{"cmd":"dir"}"#;
+        assert_eq!(
+            parse_record(&HistoryScope::Local, local_record),
+            Some((HistoryScope::Local, "dir".to_owned()))
+        );
+    }
+}

@@ -14,7 +14,7 @@ the ordinary product build.
 
 ## Evidence
 
-`nebula_app/Cargo.toml` defines `shader-background` through the existing GIF,
+`pebrel_app/Cargo.toml` defines `shader-background` through the existing GIF,
 video and GPUI features. `scripts/build-windows-product.ps1` and the release
 workflow use Cargo defaults. Native controllers already check saved activation
 and backend support independently of feature inclusion.

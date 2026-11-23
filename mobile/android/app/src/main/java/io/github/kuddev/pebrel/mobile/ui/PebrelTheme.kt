@@ -15,11 +15,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kuddev.pebrel.mobile.PebrelApplication
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.session.SessionRepository
+import org.json.JSONArray
 import org.json.JSONObject
 
 val LocalTerminalFont = staticCompositionLocalOf<FontFamily> { FontFamily.Monospace }
@@ -28,6 +30,28 @@ private fun JSONObject.color(key: String): Color {
     val value = getJSONArray(key)
     return Color(value.getInt(0), value.getInt(1), value.getInt(2), if (value.length() == 4) value.getInt(3) else 255)
 }
+
+/** The terminal engine's table: foreground, background, cursor, then the theme's real ANSI 0-15. */
+internal fun terminalColors(palette: JSONObject): IntArray {
+    fun argb(rgb: JSONArray) = android.graphics.Color.rgb(rgb.getInt(0), rgb.getInt(1), rgb.getInt(2))
+    val ansi = palette.getJSONArray("ansi")
+    require(ansi.length() == 16)
+    return intArrayOf(argb(palette.getJSONArray("foreground")), argb(palette.getJSONArray("background")),
+        argb(palette.getJSONArray("accent"))) + IntArray(16) { argb(ansi.getJSONArray(it)) }
+}
+
+// Body roles keep their reviewed CJK line heights; the added roles use Material type scale sizes.
+private val PebrelTypography = Typography(
+    titleLarge = TextStyle(fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
+    bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 19.sp),
+    labelLarge = TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
+    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
+)
 
 @Composable
 fun PebrelTheme(content: @Composable () -> Unit) {
@@ -65,25 +89,13 @@ fun PebrelTheme(content: @Composable () -> Unit) {
             }
         }
     }
-    LaunchedEffect(name) {
-        fun argb(role: String): Int {
-            val rgb = palette.getJSONArray(role)
-            return android.graphics.Color.rgb(rgb.getInt(0), rgb.getInt(1), rgb.getInt(2))
-        }
-        val roles = listOf("background", "red", "green", "yellow", "blue", "purple", "cyan", "foreground")
-        application.sessions.setTerminalColors(intArrayOf(argb("foreground"), argb("background"), argb("accent")) +
-            (roles + roles).map(::argb).toIntArray())
-    }
-    MaterialTheme(colorScheme = scheme, typography = Typography(
-        bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
-        bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
-        bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 19.sp),
-        labelLarge = TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
-    ), shapes = Shapes(
+    LaunchedEffect(name) { application.sessions.setTerminalColors(terminalColors(palette)) }
+    val glass = rememberGlassRendering()
+    MaterialTheme(colorScheme = scheme, typography = PebrelTypography, shapes = Shapes(
         extraSmall = RoundedCornerShape(8.dp), small = RoundedCornerShape(14.dp),
         medium = RoundedCornerShape(18.dp), large = RoundedCornerShape(20.dp),
         extraLarge = RoundedCornerShape(24.dp),
     )) {
-        CompositionLocalProvider(LocalTerminalFont provides terminalFont, content = content)
+        CompositionLocalProvider(LocalTerminalFont provides terminalFont, LocalGlassRendering provides glass, content = content)
     }
 }

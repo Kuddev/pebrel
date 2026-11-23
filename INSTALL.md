@@ -30,6 +30,14 @@ passphrases requires `libsecret-tools` and an unlocked Secret Service keyring
 recommends these dependencies. If storage is unavailable, enter the secret for
 the current connection instead; Pebrel does not silently claim to save it.
 
+## NixOS
+
+On x86_64 Linux with Nix flakes enabled, install the application and its hook helper:
+
+```sh
+nix profile add github:Kuddev/pebrel#pebrel
+```
+
 ## macOS Preview
 
 Download the DMG matching the Mac architecture:
@@ -146,7 +154,7 @@ Server 2019 desktop or the intended Remote Desktop/graphics configuration.
 ```powershell
 git clone https://github.com/Kuddev/pebrel
 cd pebrel
-cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+cargo build --release --locked -p pebrel --bin pebrel --features gpui-shell
 ```
 
 Build and assemble the portable archive with:

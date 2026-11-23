@@ -30,7 +30,7 @@ New-Item -ItemType Directory -Force -Path $ProbeDir | Out-Null
 foreach ($name in @("pebrel.exe", "conpty.dll", "OpenConsole.exe")) {
     $src = Join-Path $SourceDir $name
     if (-not (Test-Path $src)) {
-        Write-Error "missing build artifact: $src (run cargo build -p nebula --bin pebrel first)"
+        Write-Error "missing build artifact: $src (run cargo build -p pebrel --bin pebrel first)"
     }
     # A previous probe may still hold the same file. A failed copy means it is
     # alive; say so, and point at killing it BY PID rather than by image name.

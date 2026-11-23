@@ -1,0 +1,938 @@
+//! Runtime 命令模型、请求解析、输入校验与终端采集边界。
+
+use super::*;
+
+#[derive(Debug, Clone)]
+pub enum RuntimeCommand {
+    Snapshot,
+    Conversation {
+        window_id: u64,
+        pane_id: u64,
+        request: conversation::Request,
+    },
+    Tab {
+        window_id: u64,
+        request: tabs::Request,
+    },
+    NewWindow {
+        /// 普通启动 / Explorer 右键要求新开窗口时，把目标目录一路带到首个标签。
+        cwd: Option<PathBuf>,
+        /// 命令行 `--shell <id>` 指名要用的 shell；`None` = 用设置里的默认 shell。
+        /// 右键菜单「在 Pebrel 中打开（Ubuntu）」靠它把 WSL 意图带进已有实例。
+        shell_id: Option<String>,
+    },
+    CloseWindow {
+        window_id: Option<u64>,
+    },
+    Focus {
+        window_id: Option<u64>,
+        pane_id: Option<u64>,
+    },
+    NewTab {
+        window_id: Option<u64>,
+        cwd: Option<PathBuf>,
+        /// Caller-resolved native interpretation of an ambiguous Windows path.
+        host_cwd: Option<PathBuf>,
+        /// 见 [`RuntimeCommand::NewWindow::shell_id`]。
+        shell_id: Option<String>,
+        /// Literal PTY command; mutually exclusive with an explicit shell id.
+        command: Option<crate::config::ui_config::Program>,
+    },
+    CloseTab {
+        window_id: Option<u64>,
+        tab_index: usize,
+    },
+    RenameTab {
+        window_id: Option<u64>,
+        tab_index: usize,
+        name: String,
+    },
+    MoveTab {
+        window_id: Option<u64>,
+        tab_index: usize,
+        to_index: usize,
+    },
+    Split {
+        window_id: Option<u64>,
+        pane_id: Option<u64>,
+        direction: RuntimeSplitDirection,
+    },
+    ClosePane {
+        window_id: Option<u64>,
+        pane_id: u64,
+    },
+    ZoomPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        zoomed: bool,
+    },
+    ResizePane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        ratio: f32,
+    },
+    Notify {
+        window_id: Option<u64>,
+        pane_id: u64,
+        title: Option<String>,
+        message: String,
+    },
+    Prompt {
+        window_id: Option<u64>,
+        pane_id: u64,
+        text: String,
+        submit: bool,
+    },
+    Paste {
+        window_id: Option<u64>,
+        pane_id: u64,
+        text: String,
+        submit: bool,
+    },
+    ReadPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        lines: usize,
+        screen: Option<ScreenMode>,
+    },
+    ScrollPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        lines: i16,
+        column: u16,
+        row: u16,
+        application_only: bool,
+    },
+    Procs {
+        window_id: Option<u64>,
+        pane_id: u64,
+    },
+    SendKey {
+        window_id: Option<u64>,
+        pane_id: u64,
+        key: RuntimeKey,
+        modifiers: RuntimeKeyModifiers,
+        repeat: u16,
+    },
+    Run {
+        window_id: Option<u64>,
+        pane_id: u64,
+        command: String,
+        wait: bool,
+        timeout_ms: u64,
+    },
+    Exec {
+        window_id: Option<u64>,
+        pane_id: u64,
+        argv: Vec<String>,
+        timeout_ms: u64,
+        max_output_bytes: usize,
+    },
+    Git {
+        window_id: Option<u64>,
+        pane_id: u64,
+        request: git::Request,
+    },
+    AgentStart {
+        window_id: Option<u64>,
+        pane_id: Option<u64>,
+        name: String,
+        kind: crate::ai_agents::AgentKind,
+        cwd: Option<PathBuf>,
+        session_id: Option<String>,
+        command: String,
+        worktree: Option<crate::git_worktree::WorktreeProvenance>,
+    },
+    AgentFork {
+        window_id: Option<u64>,
+        source_pane_id: Option<u64>,
+        source_cwd: Option<PathBuf>,
+        name: String,
+        kind: crate::ai_agents::AgentKind,
+        session_id: Option<String>,
+        command: String,
+        branch: Option<String>,
+        base: Option<String>,
+        path: Option<PathBuf>,
+        allow_dirty_source: bool,
+    },
+    AgentPrompt {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        submit: bool,
+    },
+    DelegationPrompt {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        task_id: String,
+    },
+    AgentPaste {
+        agent: String,
+        generation: Option<u64>,
+        text: String,
+        submit: bool,
+    },
+    AgentRead {
+        agent: String,
+        generation: Option<u64>,
+        lines: usize,
+    },
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl RuntimeCommand {
+    pub(crate) fn test_request(method: &str, params: Value) -> Result<Self, ApiError> {
+        Self::from_request(&ApiRequest::new("fixture".into(), method, params))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    #[serde(default)]
+    pane_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    /// `tab.new` 可选：新标签的工作目录（Explorer 右键并入驻留实例时携带）。
+    #[serde(default)]
+    cwd: Option<PathBuf>,
+    /// `tab.new` / `window.create` 可选：新标签用哪个 shell（`shell=` 设置与
+    /// `--shell` 同一套 id，如 `wsl:Ubuntu`）。缺省 = 设置里的默认 shell，所以
+    /// 老客户端不带这个字段的行为不变。
+    #[serde(default)]
+    shell: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewTabParams {
+    window_id: Option<u64>,
+    cwd: Option<PathBuf>,
+    host_cwd: Option<PathBuf>,
+    shell: Option<String>,
+    argv: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowTargetParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TabTargetParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    tab_index: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameTabParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    tab_index: usize,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveTabParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    tab_index: usize,
+    to_index: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SplitParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    #[serde(default)]
+    pane_id: Option<u64>,
+    direction: RuntimeSplitDirection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PromptParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    text: String,
+    #[serde(default = "default_true")]
+    submit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotifyParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    #[serde(default)]
+    title: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PasteParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    text: String,
+    #[serde(default = "default_true")]
+    submit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    #[serde(default = "default_read_lines")]
+    lines: usize,
+    #[serde(default)]
+    screen: bool,
+    #[serde(default)]
+    screen_viewport: bool,
+    #[serde(default)]
+    screen_history: Option<HistoryParams>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryParams {
+    #[serde(default)]
+    start: Option<u64>,
+    rows: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScrollParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    lines: i16,
+    column: u16,
+    row: u16,
+    #[serde(default)]
+    application_only: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaneParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ZoomPaneParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    zoomed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizePaneParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    ratio: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SendKeyParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    key: RuntimeKey,
+    #[serde(default)]
+    modifiers: RuntimeKeyModifiers,
+    #[serde(default = "default_key_repeat")]
+    repeat: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    command: String,
+    #[serde(default = "default_true")]
+    wait: bool,
+    #[serde(default = "default_run_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    argv: Vec<String>,
+    #[serde(default = "default_run_timeout_ms")]
+    timeout_ms: u64,
+    #[serde(default = "default_exec_output_bytes")]
+    max_output_bytes: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SubscribeParams {
+    #[serde(default)]
+    pub(super) since_revision: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WaitParams {
+    #[serde(default)]
+    pub(super) window_id: Option<u64>,
+    pub(super) pane_id: u64,
+    pub(super) state: RuntimeWaitState,
+    pub(super) timeout_ms: u64,
+    /// Baseline transition counter captured when the client submitted work.
+    /// When present, the wait additionally requires the pane's counter to
+    /// advance past it — so a pane that was already in the target state does
+    /// not satisfy "wait until it settles again".
+    #[serde(default)]
+    pub(super) after_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RuntimeWaitState {
+    Idle,
+    Running,
+    WaitingInput,
+    Attention,
+    Finished,
+    Failed,
+    Settled,
+}
+
+pub(super) fn default_true() -> bool {
+    true
+}
+
+pub(super) fn default_read_lines() -> usize {
+    DEFAULT_READ_LINES
+}
+
+fn default_key_repeat() -> u16 {
+    1
+}
+
+fn default_run_timeout_ms() -> u64 {
+    COMMAND_TIMEOUT.as_millis() as u64
+}
+
+fn default_exec_output_bytes() -> usize {
+    DEFAULT_EXEC_OUTPUT_BYTES
+}
+
+impl RuntimeCommand {
+    pub(crate) fn execution_target(&self) -> Option<(Option<u64>, u64)> {
+        match self {
+            Self::Exec { window_id, pane_id, .. } | Self::Git { window_id, pane_id, .. } => {
+                Some((*window_id, *pane_id))
+            },
+            _ => None,
+        }
+    }
+
+    pub(super) fn from_request(request: &ApiRequest) -> Result<Self, ApiError> {
+        match request.method.as_str() {
+            "runtime.snapshot" => Ok(Self::Snapshot),
+            "conversation.read"
+            | "conversation.send"
+            | "conversation.choose"
+            | "conversation.key" => super::conversation::parse(request),
+            "tab.focus" | "tab.open" | "tab.read" => super::tabs::parse(request),
+            "tab.close" if request.params.get("tab_id").is_some() => super::tabs::parse(request),
+            "window.create" => {
+                let params: WindowParams = parse_params(&request.params)?;
+                Ok(Self::NewWindow { cwd: params.cwd, shell_id: params.shell })
+            },
+            "window.close" => {
+                let params: WindowTargetParams = parse_params(&request.params)?;
+                Ok(Self::CloseWindow { window_id: params.window_id })
+            },
+            "window.focus" => {
+                let params: TargetParams = parse_params(&request.params)?;
+                Ok(Self::Focus { window_id: params.window_id, pane_id: params.pane_id })
+            },
+            "tab.new" => {
+                let params: NewTabParams = parse_params(&request.params)?;
+                for (name, directory) in
+                    [("cwd", params.cwd.as_ref()), ("host_cwd", params.host_cwd.as_ref())]
+                {
+                    if directory
+                        .is_some_and(|path| path.as_os_str().as_encoded_bytes().contains(&0))
+                    {
+                        return Err(ApiError::invalid_params(format!(
+                            "{name} must not contain NUL"
+                        )));
+                    }
+                }
+                if let Some(host_cwd) = &params.host_cwd {
+                    if params
+                        .cwd
+                        .as_deref()
+                        .and_then(crate::platform::launch_directory::guest_path)
+                        .is_none()
+                        || !host_cwd.is_absolute()
+                    {
+                        return Err(ApiError::invalid_params(
+                            "host_cwd requires a rooted guest cwd and an absolute native path",
+                        ));
+                    }
+                }
+                let command = params
+                    .argv
+                    .map(|argv| {
+                        validate_exec_argv(&argv)?;
+                        if params.shell.is_some() {
+                            return Err(ApiError::invalid_params(
+                                "shell and argv are mutually exclusive",
+                            ));
+                        }
+                        Ok(crate::config::ui_config::Program::WithArgs {
+                            program: argv[0].clone(),
+                            args: argv[1..].to_vec(),
+                        })
+                    })
+                    .transpose()?;
+                Ok(Self::NewTab {
+                    window_id: params.window_id,
+                    cwd: params.cwd,
+                    host_cwd: params.host_cwd,
+                    shell_id: params.shell,
+                    command,
+                })
+            },
+            "tab.close" => {
+                let params: TabTargetParams = parse_params(&request.params)?;
+                Ok(Self::CloseTab { window_id: params.window_id, tab_index: params.tab_index })
+            },
+            "tab.rename" => {
+                let params: RenameTabParams = parse_params(&request.params)?;
+                validate_tab_name(&params.name)?;
+                Ok(Self::RenameTab {
+                    window_id: params.window_id,
+                    tab_index: params.tab_index,
+                    name: params.name,
+                })
+            },
+            "tab.move" => {
+                let params: MoveTabParams = parse_params(&request.params)?;
+                Ok(Self::MoveTab {
+                    window_id: params.window_id,
+                    tab_index: params.tab_index,
+                    to_index: params.to_index,
+                })
+            },
+            "pane.split" => {
+                let params: SplitParams = parse_params(&request.params)?;
+                Ok(Self::Split {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    direction: params.direction,
+                })
+            },
+            "pane.close" => {
+                let params: PaneParams = parse_params(&request.params)?;
+                Ok(Self::ClosePane { window_id: params.window_id, pane_id: params.pane_id })
+            },
+            "pane.zoom" => {
+                let params: ZoomPaneParams = parse_params(&request.params)?;
+                Ok(Self::ZoomPane {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    zoomed: params.zoomed,
+                })
+            },
+            "pane.resize" => {
+                let params: ResizePaneParams = parse_params(&request.params)?;
+                if !params.ratio.is_finite()
+                    || !(MIN_PANE_RATIO..=MAX_PANE_RATIO).contains(&params.ratio)
+                {
+                    return Err(ApiError::invalid_params(format!(
+                        "ratio must be between {MIN_PANE_RATIO} and {MAX_PANE_RATIO}"
+                    )));
+                }
+                Ok(Self::ResizePane {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    ratio: params.ratio,
+                })
+            },
+            "pane.prompt" => {
+                let params: PromptParams = parse_params(&request.params)?;
+                validate_prompt(&params.text)?;
+                Ok(Self::Prompt {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    text: params.text,
+                    submit: params.submit,
+                })
+            },
+            "pane.notify" => {
+                let params: NotifyParams = parse_params(&request.params)?;
+                validate_notification_text(&params.message, "notification message")?;
+                if let Some(title) = &params.title {
+                    validate_notification_text(title, "notification title")?;
+                }
+                Ok(Self::Notify {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    title: params.title,
+                    message: params.message,
+                })
+            },
+            "pane.paste" => {
+                let params: PasteParams = parse_params(&request.params)?;
+                validate_paste_text(&params.text)?;
+                Ok(Self::Paste {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    text: params.text,
+                    submit: params.submit,
+                })
+            },
+            "pane.read" => {
+                let params: ReadParams = parse_params(&request.params)?;
+                if params.lines == 0 || params.lines > MAX_READ_LINES {
+                    return Err(ApiError::invalid_params(format!(
+                        "lines must be between 1 and {MAX_READ_LINES}"
+                    )));
+                }
+                if params.screen_viewport && !params.screen {
+                    return Err(ApiError::invalid_params("screen_viewport requires screen=true"));
+                }
+                if let Some(history) = &params.screen_history {
+                    if !params.screen
+                        || params.screen_viewport
+                        || !(1..=200).contains(&history.rows)
+                        || history.start.is_some_and(|start| start > 9_007_199_254_740_991)
+                    {
+                        return Err(ApiError::invalid_params(
+                            "screen_history requires screen=true, 1..200 rows, a safe unsigned start and no screen_viewport",
+                        ));
+                    }
+                }
+                Ok(Self::ReadPane {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    lines: params.lines,
+                    screen: params.screen.then_some(if let Some(history) = params.screen_history {
+                        ScreenMode::History { start: history.start, rows: history.rows }
+                    } else if params.screen_viewport {
+                        ScreenMode::Viewport
+                    } else {
+                        ScreenMode::Live
+                    }),
+                })
+            },
+            "pane.scroll" => {
+                let params: ScrollParams = parse_params(&request.params)?;
+                if params.lines == 0
+                    || params.lines.unsigned_abs() > 32
+                    || params.column >= 400
+                    || params.row >= 200
+                {
+                    return Err(ApiError::invalid_params(
+                        "scroll requires 1..32 signed lines and a valid screen cell",
+                    ));
+                }
+                Ok(Self::ScrollPane {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    lines: params.lines,
+                    column: params.column,
+                    row: params.row,
+                    application_only: params.application_only,
+                })
+            },
+            "pane.procs" => {
+                let params: PaneParams = parse_params(&request.params)?;
+                Ok(Self::Procs { window_id: params.window_id, pane_id: params.pane_id })
+            },
+            "pane.send_key" => {
+                let params: SendKeyParams = parse_params(&request.params)?;
+                if params.repeat == 0 || params.repeat > MAX_KEY_REPEAT {
+                    return Err(ApiError::invalid_params(format!(
+                        "repeat must be between 1 and {MAX_KEY_REPEAT}"
+                    )));
+                }
+                if params.key.letter().is_some() && !params.modifiers.control {
+                    return Err(ApiError::invalid_params(
+                        "letter keys require control=true; use pane.prompt for printable text",
+                    ));
+                }
+                Ok(Self::SendKey {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    key: params.key,
+                    modifiers: params.modifiers,
+                    repeat: params.repeat,
+                })
+            },
+            "pane.run" => {
+                let params: RunParams = parse_params(&request.params)?;
+                validate_command_line(&params.command)?;
+                if params.timeout_ms == 0 || Duration::from_millis(params.timeout_ms) > MAX_WAIT {
+                    return Err(ApiError::invalid_params(
+                        "timeout_ms must be between 1 and 86400000",
+                    ));
+                }
+                Ok(Self::Run {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    command: params.command,
+                    wait: params.wait,
+                    timeout_ms: params.timeout_ms,
+                })
+            },
+            "pane.exec" => {
+                let params: ExecParams = parse_params(&request.params)?;
+                validate_exec_argv(&params.argv)?;
+                if params.timeout_ms == 0 || Duration::from_millis(params.timeout_ms) > MAX_WAIT {
+                    return Err(ApiError::invalid_params(
+                        "timeout_ms must be between 1 and 86400000",
+                    ));
+                }
+                if !(1..=MAX_EXEC_OUTPUT_BYTES).contains(&params.max_output_bytes) {
+                    return Err(ApiError::invalid_params(format!(
+                        "max_output_bytes must be between 1 and {MAX_EXEC_OUTPUT_BYTES}"
+                    )));
+                }
+                Ok(Self::Exec {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    argv: params.argv,
+                    timeout_ms: params.timeout_ms,
+                    max_output_bytes: params.max_output_bytes,
+                })
+            },
+            "agent.start" | "agent.fork" | "agent.prompt" | "agent.paste" | "agent.read" => {
+                agent_api::command_from_request(request)
+            },
+            method if method.starts_with("git.") => super::git::command(request),
+            method => Err(ApiError::new(
+                "method_not_found",
+                format!("runtime API method {method:?} does not exist"),
+            )),
+        }
+    }
+}
+
+pub(crate) fn capture_process_tree(
+    window_id: u64,
+    pane_id: u64,
+    root_pid: u32,
+) -> Result<RuntimePaneProcesses, ApiError> {
+    let entries = crate::process_tree::descendants(root_pid).map_err(|message| {
+        ApiError::new("process_query_failed", "failed to read the pane process tree")
+            .details(json!({ "root_pid": root_pid, "reason": message }))
+    })?;
+    let processes = entries
+        .into_iter()
+        .map(|entry| {
+            let agent_kind = crate::ai_agents::AgentKind::parse(
+                &crate::process_tree::display_name(&entry.executable),
+            )
+            .map(|kind| kind.slug().to_owned());
+            RuntimeProcess {
+                pid: entry.pid,
+                parent_pid: (entry.pid != root_pid).then_some(entry.parent_pid),
+                display_name: crate::process_tree::display_name(&entry.executable),
+                executable: entry.executable,
+                depth: entry.depth,
+                agent_kind,
+            }
+        })
+        .collect();
+    Ok(RuntimePaneProcesses { window_id, pane_id, root_pid, processes })
+}
+
+pub(super) fn parse_params<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| ApiError::invalid_params(format!("invalid method parameters: {error}")))
+}
+
+fn validate_tab_name(name: &str) -> Result<(), ApiError> {
+    if name.len() > MAX_TAB_NAME_BYTES {
+        return Err(ApiError::invalid_params(format!(
+            "tab name exceeds the {MAX_TAB_NAME_BYTES}-byte limit"
+        )));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params("tab name contains control characters"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_prompt(text: &str) -> Result<(), ApiError> {
+    if text.is_empty() {
+        return Err(ApiError::invalid_params("prompt text must not be empty"));
+    }
+    if text.len() > MAX_PROMPT_BYTES {
+        return Err(ApiError::invalid_params(format!(
+            "prompt text exceeds the {MAX_PROMPT_BYTES}-byte limit"
+        )));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params(
+            "prompt text contains control characters; pane.prompt accepts one plain-text line",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_notification_text(text: &str, label: &str) -> Result<(), ApiError> {
+    validate_multiline_text(text, label)?;
+    if text.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params(format!("{label} must be one plain-text line")));
+    }
+    Ok(())
+}
+
+/// Send-to-Chat 需要保留引用块与评论的换行，但仍不能把 ESC/NUL 等终端控制
+/// 字符送进目标 pane。它不是公开的 `pane.prompt` 合同，不能借机放宽后者。
+pub(crate) fn validate_chat_message(text: &str) -> Result<(), ApiError> {
+    validate_multiline_text(text, "chat message")
+}
+
+/// Runtime paste preserves CR/LF/TAB as text inside a bracketed-paste block,
+/// while rejecting terminal control sequences and arbitrary byte injection.
+pub(crate) fn validate_paste_text(text: &str) -> Result<(), ApiError> {
+    validate_multiline_text(text, "paste text")
+}
+
+fn validate_multiline_text(text: &str, label: &str) -> Result<(), ApiError> {
+    if text.trim().is_empty() {
+        return Err(ApiError::invalid_params(format!("{label} must not be empty")));
+    }
+    if text.len() > MAX_PROMPT_BYTES {
+        return Err(ApiError::invalid_params(format!(
+            "{label} exceeds the {MAX_PROMPT_BYTES}-byte limit"
+        )));
+    }
+    if text.chars().any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')) {
+        return Err(ApiError::invalid_params(format!(
+            "{label} contains unsupported terminal control characters"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_command_line(command: &str) -> Result<(), ApiError> {
+    if command.trim().is_empty() {
+        return Err(ApiError::invalid_params("command must not be empty"));
+    }
+    if command.len() > MAX_PROMPT_BYTES {
+        return Err(ApiError::invalid_params(format!(
+            "command exceeds the {MAX_PROMPT_BYTES}-byte limit"
+        )));
+    }
+    if command.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params(
+            "command contains control characters; pane.run accepts one plain-text shell line",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_exec_argv(argv: &[String]) -> Result<(), ApiError> {
+    if argv.is_empty() || argv[0].trim().is_empty() {
+        return Err(ApiError::invalid_params("argv must contain a non-empty program"));
+    }
+    if argv.len() > 256 {
+        return Err(ApiError::invalid_params("argv may contain at most 256 elements"));
+    }
+    let bytes = argv.iter().try_fold(0_usize, |total, arg| {
+        total.checked_add(arg.len()).and_then(|value| value.checked_add(1))
+    });
+    if bytes.is_none_or(|bytes| bytes > MAX_PROMPT_BYTES) {
+        return Err(ApiError::invalid_params(format!(
+            "argv exceeds the {MAX_PROMPT_BYTES}-byte limit"
+        )));
+    }
+    if argv.iter().any(|arg| arg.contains('\0')) {
+        return Err(ApiError::invalid_params("argv must not contain NUL bytes"));
+    }
+    if argv[0].chars().any(char::is_control) {
+        return Err(ApiError::invalid_params("argv program must not contain control characters"));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_agent_name(name: &str) -> Result<(), ApiError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return Err(ApiError::invalid_params("agent name must contain between 1 and 64 bytes"));
+    }
+    if trimmed != name || name.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params(
+            "agent name must not have surrounding whitespace or control characters",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_agent_selector(agent: &str) -> Result<(), ApiError> {
+    if agent.trim().is_empty() || agent.len() > 128 || agent.chars().any(char::is_control) {
+        return Err(ApiError::invalid_params("agent selector is invalid"));
+    }
+    Ok(())
+}
+
+/// A wait is satisfied only when the pane both reads as the requested state and
+/// has moved past the caller's baseline. Without the counter check, waiting on
+/// an already-idle pane returns immediately and the caller concludes its work
+/// finished before the shell even saw it.
+pub(super) fn wait_matches(
+    pane: &RuntimePane,
+    expected: RuntimeWaitState,
+    after_seq: Option<u64>,
+) -> bool {
+    after_seq.is_none_or(|baseline| pane.state_change_seq > baseline)
+        && wait_state_matches(pane.task_state, expected)
+}
+
+pub(super) fn wait_state_matches(actual: RuntimeTaskState, expected: RuntimeWaitState) -> bool {
+    match expected {
+        RuntimeWaitState::Idle => actual == RuntimeTaskState::Idle,
+        RuntimeWaitState::Running => actual == RuntimeTaskState::Running,
+        RuntimeWaitState::WaitingInput => actual == RuntimeTaskState::WaitingInput,
+        RuntimeWaitState::Attention => actual == RuntimeTaskState::Attention,
+        RuntimeWaitState::Finished => actual == RuntimeTaskState::Finished,
+        RuntimeWaitState::Failed => actual == RuntimeTaskState::Failed,
+        RuntimeWaitState::Settled => actual != RuntimeTaskState::Running,
+    }
+}

@@ -1,0 +1,776 @@
+//! Find the current Codex conversation when no session ID was reported by its hook.
+//!
+//! Inspect rollouts held open by a process belonging to the pane. In Linux and
+//! WSL the PTY launcher supplies the pane ID, and the process must still have a
+//! controlling terminal. Linux also verifies the shell's terminal and session.
+//! Only the first metadata record is read, without conversation content.
+//! The lookup is bounded and is only called by a background
+//! task; UI code must never scan `/proc` or start `wsl.exe` synchronously.
+
+use std::io::{self, Read, Seek as _};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use super::process_snapshot::is_codex_process_name;
+
+#[cfg(any(target_os = "macos", test))]
+mod macos;
+#[cfg(windows)]
+mod windows;
+
+/// Native probe helpers run before GUI, hooks or CLI setup.
+pub(crate) fn run_helper_if_requested() -> Option<i32> {
+    #[cfg(windows)]
+    return windows::run_helper_if_requested();
+    #[cfg(not(windows))]
+    None
+}
+
+/// Keep owned copies of the application executable stopped during installation.
+/// Acquisition waits on the background executor; cancellation only releases a gate.
+pub(crate) struct UpdatePause {
+    #[cfg(windows)]
+    inner: windows::UpdatePause,
+}
+
+impl UpdatePause {
+    pub(crate) fn acquire() -> io::Result<Self> {
+        Ok(Self {
+            #[cfg(windows)]
+            inner: windows::UpdatePause::acquire()?,
+        })
+    }
+
+    /// A committed handoff must keep probes stopped even when its owner is dropped.
+    pub(crate) fn commit(&mut self) {
+        #[cfg(windows)]
+        self.inner.commit();
+    }
+}
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_PROBE_OUTPUT: usize = 64 * 1024;
+const MAX_PROBE_LINE: usize = 64 * 1024;
+const MAX_PROBE_RECORDS: usize = 128;
+
+const PROBE_SCRIPT: &str = r###"
+pane="$1"
+instance="$2"
+for proc in /proc/[0-9]*; do
+    pid=${proc##*/}
+    IFS= read -r comm < "$proc/comm" 2>/dev/null || continue
+    case "$comm" in
+        codex|codex.exe|codex-*) ;;
+        *) continue ;;
+    esac
+    [ -r "$proc/environ" ] || continue
+    environment=$(tr "\0" "\n" < "$proc/environ" 2>/dev/null || true)
+    pane_id=$(printf '%s\n' "$environment" | sed -n "s/^PEBREL_PANE_ID=//p" | head -n 1)
+    if [ "$pane_id" != "$pane" ]; then
+        pane_id=$(printf '%s\n' "$environment" | sed -n "s/^NEBULA_PANE_ID=//p" | head -n 1)
+    fi
+    process_id=$(printf '%s\n' "$environment" | sed -n "s/^PEBREL_PROCESS_ID=//p" | head -n 1)
+    [ "$pane_id" = "$pane" ] && [ "$process_id" = "$instance" ] || continue
+    # A shared backend can keep the pane's environment after leaving its PTY.
+    IFS= read -r stat < "$proc/stat" 2>/dev/null || continue
+    IFS=' ' read -r state ppid pgrp sid tty rest <<EOF
+${stat##*) }
+EOF
+    [ "${tty:-0}" -ne 0 ] 2>/dev/null || continue
+    codex_root=$(printf '%s\n' "$environment" | sed -n "s/^CODEX_HOME=//p" | head -n 1)
+    if [ -z "$codex_root" ]; then
+        guest_home=$(printf '%s\n' "$environment" | sed -n "s/^HOME=//p" | head -n 1)
+        [ -n "$guest_home" ] || continue
+        codex_root="$guest_home/.codex"
+    fi
+    case "$codex_root" in
+        /*) ;;
+        *) codex_root="$proc/cwd/$codex_root" ;;
+    esac
+    # fd 返回真实路径；每个已匹配进程只解析一次目录，避免逐句柄重复 I/O。
+    sessions_root=$(CDPATH= cd -P "$codex_root/sessions" 2>/dev/null && pwd -P) || continue
+    for fd in "$proc"/fd/*; do
+        link=$(readlink "$fd" 2>/dev/null || true)
+        case "$link" in
+            "$sessions_root"/*/rollout-*.jsonl)
+                first=$(head -c 65536 "$fd" 2>/dev/null | head -n 1)
+                [ -n "$first" ] || continue
+                printf '%s\t%s\t%s\t%s\n' "$pid" "${fd##*/}" "$link" "$first"
+                ;;
+        esac
+    done
+done
+"###;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbeRecord {
+    _pid: u32,
+    _fd: u32,
+    link: String,
+    first_line: String,
+}
+
+/// Identity and working directory from the active rollout's own metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexSession {
+    pub session_id: String,
+    pub session_file: String,
+    pub cwd: Option<String>,
+}
+
+/// Distinct user rollouts verified against the processes in this pane.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CodexRollouts(Vec<CodexSession>);
+
+impl CodexRollouts {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn from_test_records(output: &str) -> Self {
+        parse_probe_context(output).expect("fixture must include a valid native user rollout")
+    }
+
+    pub(crate) fn needs_selection(&self) -> bool {
+        self.0.len() > 1
+    }
+
+    pub(crate) fn select(mut self, displayed_id: Option<&str>) -> Option<CodexSession> {
+        if !self.needs_selection() {
+            return self.0.pop();
+        }
+        let id = displayed_id?;
+        let mut matches = self.0.into_iter().filter(|session| session.session_id == id);
+        let session = matches.next()?;
+        matches.next().is_none().then_some(session)
+    }
+}
+
+/// Probe the active Codex rollout for one pane.
+///
+/// WSL panes are inspected inside the guest because Windows Toolhelp cannot
+/// see Linux processes or their open session files. Linux hosts use the same
+/// process metadata directly. Windows inspects only the pane shell's verified
+/// descendants in one reusable, process-owned helper. Each request remains bounded;
+/// a stalled helper is terminated before a later request can replace it.
+pub(crate) fn probe_codex_session(
+    pane_id: u64,
+    exec_context: Option<&crate::runtime_exec::PaneExecContext>,
+    shell_pid: Option<u32>,
+) -> Option<CodexRollouts> {
+    let pane_id = pane_id.to_string();
+    let context = exec_context?;
+    let instance = context.process_instance()?;
+    if let Some(distro) = context.wsl_distribution() {
+        return probe_wsl(distro, context.wsl_user(), &pane_id, instance);
+    }
+
+    #[cfg(target_os = "linux")]
+    return probe_local_proc(&pane_id, instance, shell_pid?);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (pane_id, instance);
+        return macos::probe(shell_pid?);
+    }
+    #[cfg(windows)]
+    {
+        let _ = (pane_id, instance);
+        windows::probe(shell_pid?)
+    }
+}
+
+/// A local hook can use the usual process lookup unless its platform requires
+/// affirmative terminal ownership. An error means the event must not route.
+#[cfg(unix)]
+pub(crate) fn local_hook_agent_pid(_source: &str, client_pid: u32) -> Result<Option<u32>, ()> {
+    #[cfg(target_os = "linux")]
+    if _source == "codex" {
+        // The helper may have its own session. Stop at the closest Codex
+        // ancestor, even if it is a daemon with no controlling terminal.
+        let owner = crate::process_tree::nearest_ancestor(client_pid, |pid| {
+            let process = super::process_snapshot::linux_process(pid)?;
+            let matched = process.name.as_deref().is_some_and(is_codex_process_name);
+            Some((process.parent, matched.then_some((pid, process.terminal))))
+        });
+        return owner
+            .filter(|(_, terminal)| terminal.is_attached())
+            .map(|(pid, _)| Some(pid))
+            .ok_or(());
+    }
+    Ok(crate::process_tree::nearest_agent_ancestor(client_pid).map(|(pid, _)| pid))
+}
+
+fn parse_probe_context(output: &str) -> Option<CodexRollouts> {
+    let mut candidates = Vec::new();
+    for record in output.lines().filter_map(parse_probe_record) {
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.first_line) else {
+            continue;
+        };
+        if meta.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let payload = meta.get("payload").unwrap_or(&meta);
+        let Some(id) = payload.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !valid_uuid(id) {
+            continue;
+        }
+        // Codex's main interactive thread is marked as a CLI/user thread.
+        // Keep accepting older session_meta lines that lack these fields, but
+        // reject an explicit guardian/sub-agent marker.
+        if !matches_optional_string(payload, &meta, "source", "cli")
+            || !matches_optional_string(payload, &meta, "thread_source", "user")
+        {
+            continue;
+        }
+        let Some(filename_id) = rollout_id(Path::new(&record.link)) else { continue };
+        if filename_id != id {
+            continue;
+        }
+        let context = CodexSession {
+            session_id: id.to_owned(),
+            session_file: record.link,
+            cwd: payload
+                .get("cwd")
+                .and_then(serde_json::Value::as_str)
+                .filter(|cwd| valid_cwd(cwd))
+                .map(str::to_owned),
+        };
+        if !candidates.contains(&context) {
+            candidates.push(context);
+        }
+    }
+    (!candidates.is_empty()).then_some(CodexRollouts(candidates))
+}
+
+fn valid_cwd(cwd: &str) -> bool {
+    !cwd.chars().any(char::is_control)
+        && (cwd.starts_with('/')
+            || cwd.starts_with(r"\\")
+            || (cwd.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                && cwd.as_bytes().get(1) == Some(&b':')
+                && matches!(cwd.as_bytes().get(2), Some(b'/' | b'\\'))))
+}
+
+#[cfg(test)]
+fn parse_probe_records(output: &str) -> Option<String> {
+    parse_probe_context(output)?.select(None).map(|context| context.session_id)
+}
+
+fn parse_probe_record(line: &str) -> Option<ProbeRecord> {
+    let mut fields = line.splitn(4, '\t');
+    Some(ProbeRecord {
+        _pid: fields.next()?.parse().ok()?,
+        _fd: fields.next()?.parse().ok()?,
+        link: fields.next()?.to_owned(),
+        first_line: fields.next()?.to_owned(),
+    })
+}
+
+fn matches_optional_string(
+    payload: &serde_json::Value,
+    root: &serde_json::Value,
+    key: &str,
+    expected: &str,
+) -> bool {
+    payload
+        .get(key)
+        .or_else(|| root.get(key))
+        .map_or(true, |value| value.as_str() == Some(expected))
+}
+
+fn valid_uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.as_bytes().iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) { *byte == b'-' } else { byte.is_ascii_hexdigit() }
+        })
+}
+
+fn rollout_id(path: &Path) -> Option<String> {
+    crate::session::codex_rollout_id(path.to_str()?).map(str::to_owned)
+}
+
+fn probe_wsl(
+    distro: Option<&str>,
+    user: Option<&str>,
+    pane_id: &str,
+    instance: &str,
+) -> Option<CodexRollouts> {
+    let mut command = Command::new("wsl.exe");
+    command.args(wsl_probe_args(distro, user, pane_id, instance));
+    crate::platform::process::hidden_command(&mut command);
+    run_probe_command(command)
+}
+
+fn wsl_probe_args(
+    distro: Option<&str>,
+    user: Option<&str>,
+    pane_id: &str,
+    instance: &str,
+) -> Vec<String> {
+    let mut args = Vec::with_capacity(9);
+    if let Some(distro) = distro {
+        args.extend(["--distribution".to_owned(), distro.to_owned()]);
+    }
+    if let Some(user) = user {
+        args.extend(["--user".to_owned(), user.to_owned()]);
+    }
+    args.extend([
+        "--exec".to_owned(),
+        "sh".to_owned(),
+        "-c".to_owned(),
+        PROBE_SCRIPT.to_owned(),
+        "pebrel-ai-session-probe".to_owned(),
+        pane_id.to_owned(),
+        instance.to_owned(),
+    ]);
+    args
+}
+
+/// Bound the guest lookup by time and output size. A temporary file avoids a
+/// reader thread surviving when a descendant keeps the output handle open.
+fn run_probe_command(command: Command) -> Option<CodexRollouts> {
+    parse_probe_context(&String::from_utf8_lossy(&run_probe_output(command)?))
+}
+
+fn run_probe_output(command: Command) -> Option<Vec<u8>> {
+    super::process_output::read(command, PROBE_TIMEOUT, MAX_PROBE_OUTPUT).ok()
+}
+
+fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
+    let mut output = Vec::with_capacity(limit.min(8 * 1024));
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(output);
+        }
+        let remaining = limit.saturating_sub(output.len());
+        if read > remaining {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "probe output exceeded limit"));
+        }
+        output.extend_from_slice(&buffer[..read]);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn probe_local_proc(pane_id: &str, instance: &str, shell_pid: u32) -> Option<CodexRollouts> {
+    use super::process_snapshot::linux_process;
+
+    let terminal = linux_process(shell_pid)?.terminal;
+    if !terminal.is_attached() {
+        return None;
+    }
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let mut output = String::new();
+    let mut records = 0;
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|name| name.parse::<u32>().ok()) else {
+            continue;
+        };
+        let proc_dir = entry.path();
+        let Ok(comm) = std::fs::read_to_string(proc_dir.join("comm")) else { continue };
+        if !is_codex_process_name(comm.trim()) {
+            continue;
+        }
+        let Ok(environment) = std::fs::read(proc_dir.join("environ")) else { continue };
+        if !environment_has_value(&environment, b"PEBREL_PANE_ID", pane_id.as_bytes())
+            && !environment_has_value(&environment, b"NEBULA_PANE_ID", pane_id.as_bytes())
+        {
+            continue;
+        }
+        if !environment_has_value(
+            &environment,
+            crate::agent_env::PROCESS_ENV.as_bytes(),
+            instance.as_bytes(),
+        ) {
+            continue;
+        }
+        if linux_process(pid).is_none_or(|process| process.terminal != terminal) {
+            continue;
+        }
+        let Some(codex_home) = codex_home_from_environment(&environment) else {
+            continue;
+        };
+        // /proc/fd 返回真实路径；先统一目录身份，再做词法边界检查，且不逐句柄访问磁盘。
+        let Ok(sessions_root) =
+            proc_dir.join("cwd").join(codex_home).join("sessions").canonicalize()
+        else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(proc_dir.join("fd")) else { continue };
+        for fd in fds.flatten() {
+            let fd_path = fd.path();
+            let Ok(link) = std::fs::read_link(&fd_path) else { continue };
+            if !is_rollout_link(&link, &sessions_root) {
+                continue;
+            }
+            let Ok(first_line) = read_first_line(&fd_path) else { continue };
+            let fd_number = fd.file_name().to_string_lossy().parse::<u32>().ok();
+            let Some(fd_number) = fd_number else { continue };
+            use std::fmt::Write as _;
+            let _ = writeln!(output, "{pid}\t{fd_number}\t{}\t{first_line}", link.display());
+            records += 1;
+            if records >= MAX_PROBE_RECORDS || output.len() >= MAX_PROBE_OUTPUT {
+                return None;
+            }
+        }
+    }
+    parse_probe_context(&output)
+}
+
+#[cfg(unix)]
+fn environment_has_value(environment: &[u8], key: &[u8], expected: &[u8]) -> bool {
+    let mut prefix = Vec::with_capacity(key.len() + 1);
+    prefix.extend_from_slice(key);
+    prefix.push(b'=');
+    environment
+        .split(|byte| *byte == 0)
+        .any(|item| item.strip_prefix(prefix.as_slice()).is_some_and(|value| value == expected))
+}
+
+#[cfg(unix)]
+fn environment_value<'a>(environment: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+    let mut prefix = Vec::with_capacity(key.len() + 1);
+    prefix.extend_from_slice(key);
+    prefix.push(b'=');
+    environment
+        .split(|byte| *byte == 0)
+        .find_map(|item| item.strip_prefix(prefix.as_slice()))
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(unix)]
+fn codex_home_from_environment(environment: &[u8]) -> Option<std::path::PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let home = environment_value(environment, b"CODEX_HOME")
+        .or_else(|| environment_value(environment, b"HOME"))?;
+    let home = std::path::PathBuf::from(OsStr::from_bytes(home));
+    if environment_value(environment, b"CODEX_HOME").is_some() {
+        Some(home)
+    } else {
+        Some(home.join(".codex"))
+    }
+}
+
+#[cfg(unix)]
+fn is_rollout_link(link: &Path, sessions_root: &Path) -> bool {
+    link.strip_prefix(sessions_root).is_ok_and(|relative| {
+        relative.components().count() >= 2
+            && link
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+    })
+}
+
+fn read_first_line(path: &Path) -> std::io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    read_metadata_line(file)
+}
+
+fn read_metadata_line(file: impl Read) -> std::io::Result<String> {
+    use std::io::{BufRead as _, BufReader};
+    let mut line = String::new();
+    BufReader::new(file).take(MAX_PROBE_LINE as u64).read_line(&mut line)?;
+    if !line.ends_with(['\r', '\n']) && line.len() >= MAX_PROBE_LINE {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "session metadata line too long"));
+    }
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    mod proc_fixture;
+
+    const ROOT_ID: &str = "01a079fa-4a9b-7d93-8a4a-4a7a9edaf247";
+    const GUARDIAN_ID: &str = "01a079f7-7e36-7232-882b-f06d3bde9df8";
+
+    #[cfg(unix)]
+    #[test]
+    fn guest_lookup_returns_within_its_deadline() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 10"]);
+        let started = Instant::now();
+        assert_eq!(run_probe_command(command), None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn oversized_output_is_rejected_instead_of_selecting_a_partial_candidate() {
+        assert_eq!(read_bounded(&b"1234"[..], 4).unwrap(), b"1234");
+        assert!(read_bounded(&b"12345"[..], 4).is_err());
+    }
+
+    #[test]
+    fn review_regression_active_rollout_supplies_cwd_without_accepting_invalid_paths() {
+        for (cwd, expected) in [
+            ("/mnt/d/temp_build/project", Some("/mnt/d/temp_build/project")),
+            ("/home/hello/项目 with spaces", Some("/home/hello/项目 with spaces")),
+            ("relative/path", None),
+            ("/bad\npath", None),
+        ] {
+            let metadata = serde_json::json!({"type":"session_meta", "payload": {
+                "id": ROOT_ID, "cwd": cwd, "source": "cli", "thread_source": "user",
+            }});
+            let output = format!(
+                "42\t7\t/home/hello/.codex/sessions/rollout-x-{ROOT_ID}.jsonl\t{metadata}\n"
+            );
+            let context = parse_probe_context(&output).unwrap().select(None).unwrap();
+            assert_eq!(context.session_id, ROOT_ID);
+            assert_eq!(context.cwd.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn selects_cli_user_rollout_and_rejects_guardian_thread() {
+        let output = format!(
+            "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ROOT_ID}\",\"source\":\"cli\",\"thread_source\":\"user\"}}}}\n1996\t80\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{GUARDIAN_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{GUARDIAN_ID}\",\"source\":\"cli\",\"thread_source\":\"guardian\"}}}}\n"
+        );
+        assert_eq!(parse_probe_records(&output).as_deref(), Some(ROOT_ID));
+    }
+
+    #[test]
+    fn rejects_a_rollout_bound_to_a_different_filename() {
+        let output = format!(
+            "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{GUARDIAN_ID}\"}}}}\n"
+        );
+        assert_eq!(parse_probe_records(&output), None);
+    }
+
+    #[test]
+    fn accepts_legacy_session_meta_without_thread_markers() {
+        let output = format!(
+            "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ROOT_ID}\"}}}}\n"
+        );
+        assert_eq!(parse_probe_records(&output).as_deref(), Some(ROOT_ID));
+    }
+
+    #[test]
+    fn wsl_probe_keeps_named_distribution_and_pane_as_arguments() {
+        let full = wsl_probe_args(Some("Debian"), Some("hello"), "7", "42");
+        let named: Vec<_> = full.iter().map(String::as_str).take(5).collect();
+        assert_eq!(named, vec!["--distribution", "Debian", "--user", "hello", "--exec"]);
+        let args = wsl_probe_args(None, None, "7", "42");
+        assert_eq!(args.first().map(String::as_str), Some("--exec"));
+        assert_eq!(args[args.len() - 2], "7");
+        assert_eq!(args.last().map(String::as_str), Some("42"));
+        assert_eq!(args[args.len() - 3], "pebrel-ai-session-probe");
+    }
+
+    #[test]
+    fn explicit_subagent_markers_are_not_accepted_as_the_main_thread() {
+        let output = format!(
+            "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ROOT_ID}\",\"source\":\"subagent\",\"thread_source\":\"user\"}}}}\n"
+        );
+        assert_eq!(parse_probe_records(&output), None);
+    }
+
+    #[test]
+    fn multiple_distinct_main_rollouts_are_rejected_as_ambiguous() {
+        let output = format!(
+            "1996\t37\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{ROOT_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ROOT_ID}\",\"source\":\"cli\"}}}}\n1996\t38\t/home/hello/.codex/sessions/2026/09/07/rollout-x-{GUARDIAN_ID}.jsonl\t{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{GUARDIAN_ID}\",\"source\":\"cli\"}}}}\n"
+        );
+        assert_eq!(parse_probe_records(&output), None);
+        let rollouts = || parse_probe_context(&output).unwrap();
+        assert!(rollouts().needs_selection());
+        assert_eq!(rollouts().select(Some(GUARDIAN_ID)).unwrap().session_id, GUARDIAN_ID);
+        assert_eq!(rollouts().select(Some(ROOT_ID)).unwrap().session_id, ROOT_ID);
+        assert_eq!(rollouts().select(Some("foreign-thread")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_codex_home_is_used_instead_of_the_default_directory() {
+        let environment = b"HOME=/home/hello\0CODEX_HOME=/srv/codex-data\0";
+        assert_eq!(
+            codex_home_from_environment(environment).as_deref(),
+            Some(Path::new("/srv/codex-data"))
+        );
+        let environment = b"HOME=/home/hello\0";
+        assert_eq!(
+            codex_home_from_environment(environment).as_deref(),
+            Some(Path::new("/home/hello/.codex"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_probes_resolve_session_symlinks_and_preserve_ownership_boundaries() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::symlink;
+        use std::os::unix::process::CommandExt as _;
+
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("user");
+        let physical = root.path().join("physical data");
+        let sessions = physical.join("sessions/2026/10/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        symlink(&physical, home.join(".codex")).unwrap();
+        let linked_sessions = root.path().join("linked sessions");
+        std::fs::create_dir(&linked_sessions).unwrap();
+        symlink(physical.join("sessions"), linked_sessions.join("sessions")).unwrap();
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir_all(unrelated.join("sessions")).unwrap();
+        let rollout = sessions.join(format!("rollout-x-{ROOT_ID}.jsonl"));
+        let metadata = serde_json::json!({"type":"session_meta", "payload": {
+            "id": ROOT_ID, "source": "cli", "thread_source": "user",
+        }});
+        std::fs::write(&rollout, format!("{metadata}\n")).unwrap();
+        // 样本只持有日志文件；就绪字节保证 exec 已完成，避免读到继承的测试线程名。
+        let program = root.path().join("codex");
+        symlink("/bin/sh", &program).unwrap();
+        let pane = "session-symlink-fixture";
+        let instance = std::process::id().to_string();
+        let fixture_cwd = root.path().canonicalize().unwrap();
+        let fixture_rollout = rollout.canonicalize().unwrap();
+        let first_line = metadata.to_string();
+        // A daemon started from this pane can hold a valid CLI rollout for a
+        // different pane. Keep it open through both the positive and no-match cases.
+        let other_rollout = sessions.join(format!("rollout-x-{GUARDIAN_ID}.jsonl"));
+        let other_meta = serde_json::json!({"type":"session_meta", "payload": {
+            "id": GUARDIAN_ID, "source": "cli", "thread_source": "user",
+        }})
+        .to_string();
+        std::fs::write(&other_rollout, format!("{other_meta}\n")).unwrap();
+        let mut daemon = Command::new(&program);
+        daemon
+            .args(["-c", "read -r _"])
+            .current_dir(root.path())
+            .env_clear()
+            .env("HOME", &home)
+            .env("PEBREL_PANE_ID", pane)
+            .env("NEBULA_PANE_ID", pane)
+            .env(crate::agent_env::PROCESS_ENV, &instance)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::open(&other_rollout).unwrap());
+        // SAFETY: a fresh process session reproduces the shared daemon's detach.
+        unsafe {
+            daemon.pre_exec(|| {
+                (libc::setsid() >= 0).then_some(()).ok_or_else(io::Error::last_os_error)
+            });
+        }
+        let mut daemon = OwnedChild(daemon.spawn().unwrap());
+        proc_fixture::wait_for_child(
+            &mut daemon.0,
+            &proc_fixture::Expected {
+                pane,
+                instance: &instance,
+                home: &home,
+                codex_home: None,
+                cwd: &fixture_cwd,
+                rollout: &other_rollout,
+                first_line: &other_meta,
+            },
+        )
+        .unwrap();
+
+        for (case, (codex_home, expected)) in [
+            (Some(physical.clone()), true),
+            (Some(home.join(".codex")), true),
+            (None, true),
+            (Some(linked_sessions), true),
+            (Some(std::path::PathBuf::from("physical data")), true),
+            (Some(unrelated), false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut command = Command::new(&program);
+            command
+                .args(["-c", "printf R; read -r _"])
+                .current_dir(root.path())
+                .env_clear()
+                .env("HOME", &home)
+                .env("PEBREL_PANE_ID", pane)
+                .env("NEBULA_PANE_ID", pane)
+                .env(crate::agent_env::PROCESS_ENV, &instance)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(std::fs::File::open(&rollout).unwrap());
+            if let Some(value) = &codex_home {
+                command.env("CODEX_HOME", value);
+            }
+            let _master =
+                crate::platform::process_snapshot::test_pty::attach(&mut command).unwrap();
+            let mut child = OwnedChild(command.spawn().unwrap());
+            // stdin 管道维持样本存活；父进程退出时 EOF 也能结束样本，不遗留休眠进程。
+            let mut ready = child.0.stdout.take().unwrap();
+            let mut event =
+                libc::pollfd { fd: ready.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: pollfd 在调用期间有效；只等待就绪，不重试被测探测器或延长其期限。
+            let signaled =
+                unsafe { libc::poll(&mut event, 1, PROBE_TIMEOUT.as_millis() as libc::c_int) };
+            assert_eq!(signaled, 1, "fixture did not signal readiness");
+            let mut signal = [0];
+            ready.read_exact(&mut signal).unwrap();
+            assert_eq!(signal, [b'R']);
+            let expected_child = proc_fixture::Expected {
+                pane,
+                instance: &instance,
+                home: &home,
+                codex_home: codex_home.as_deref(),
+                cwd: &fixture_cwd,
+                rollout: &fixture_rollout,
+                first_line: &first_line,
+            };
+            proc_fixture::wait_for_child(&mut child.0, &expected_child).unwrap_or_else(|error| {
+                panic!("case={case} home={codex_home:?}: fixture not ready: {error}")
+            });
+            for (query_pane, query_instance, matches) in [
+                (pane, instance.as_str(), expected),
+                ("other-pane", instance.as_str(), false),
+                (pane, "other-instance", false),
+            ] {
+                let assert_found = |probe, found: Option<CodexSession>, elapsed: Duration| {
+                    let context = format!(
+                        "probe={probe} case={case} child={} pane={query_pane} \
+                         instance={query_instance} home={codex_home:?} elapsed={elapsed:?}",
+                        child.0.id(),
+                    );
+                    assert_eq!(found.is_some(), matches, "{context}");
+                    if let Some(found) = found {
+                        assert_eq!(found.session_id, ROOT_ID, "{context}");
+                        assert_eq!(Path::new(&found.session_file), rollout, "{context}");
+                    }
+                };
+                // Assert immediately after each single probe. An eager array
+                // erased which implementation failed in the original CI log.
+                let started = Instant::now();
+                let found = probe_local_proc(query_pane, query_instance, child.0.id())
+                    .and_then(|rollouts| rollouts.select(None));
+                assert_found("local_proc", found, started.elapsed());
+
+                let mut guest = Command::new("/bin/sh");
+                guest.env_clear().env("PATH", "/usr/bin:/bin").env("HOME", &home).args([
+                    "-c",
+                    PROBE_SCRIPT,
+                    "probe",
+                    query_pane,
+                    query_instance,
+                ]);
+                let started = Instant::now();
+                let found = run_probe_command(guest).and_then(|rollouts| rollouts.select(None));
+                assert_found("guest_shell", found, started.elapsed());
+            }
+        }
+    }
+}

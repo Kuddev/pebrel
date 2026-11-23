@@ -18,7 +18,7 @@ class CompletionEditorTests(unittest.TestCase):
         self.fixture = shell_integration.ShellIntegrationTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        self.adapter = Path(__file__).resolve().parents[2] / "nebula_terminal/src/tty/completion.sh"
+        self.adapter = Path(__file__).resolve().parents[2] / "pebrel_terminal/src/tty/completion.sh"
 
     def start(self, shell: str, rc: str = "") -> shell_integration.ShellSession:
         session = self.fixture.start(shell, rc)
@@ -44,17 +44,17 @@ class CompletionEditorTests(unittest.TestCase):
         program = shutil.which(shell)
         if not program:
             self.skipTest(f"{shell} is not installed")
-        adapter = "\n".join((root / "nebula_terminal/src/tty" / name).read_text()
+        adapter = "\n".join((root / "pebrel_terminal/src/tty" / name).read_text()
                             for name in ("connection.sh", "completion.sh"))
         if route == "wsl":
-            source = (root / "nebula_app/src/shell_detect.rs").read_text()
+            source = (root / "pebrel_app/src/shell_detect.rs").read_text()
             report = re.search(r'const REPORT: &str = r#"(.*?)"#;', source, re.S)
             self.assertIsNotNone(report)
             prompt = report.group(1).replace("__PEBREL_CONNECTION_HOOK__", adapter)
             args = ["--noprofile", "--norc", "-i"]
             env = {"PROMPT_COMMAND": prompt, "WSL_DISTRO_NAME": "completion-fixture"}
         else:
-            source = (root / "nebula_app/src/ssh.rs").read_text()
+            source = (root / "pebrel_app/src/ssh.rs").read_text()
             name = "REMOTE_BASH" if shell == "bash" else "REMOTE_ZSH"
             body = re.search(rf'const {name}: &str = r#"(.*?)"#;', source, re.S)
             self.assertIsNotNone(body)

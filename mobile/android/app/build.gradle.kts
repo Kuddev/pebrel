@@ -75,6 +75,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    // 1.7+ requires Compose 1.9 and Kotlin 2.2; see architecture/notes before upgrading.
+    implementation("dev.chrisbanes.haze:haze:1.6.10")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
@@ -97,8 +99,8 @@ dependencies {
 
 val generateAssets by tasks.registering(Exec::class) {
     val root = rootProject.projectDir.resolve("../..").canonicalFile
-    inputs.files(root.resolve("nebula_settings/src/lib.rs"), root.resolve("nebula_settings/src/themes.rs"),
-        root.resolve("nebula_app/src/display/ui/os_icons.rs"), root.resolve("assets/fonts/MapleMono-NF-CN-Regular.ttf"),
+    inputs.files(root.resolve("pebrel_settings/src/lib.rs"), root.resolve("pebrel_settings/src/themes.rs"),
+        root.resolve("pebrel_app/src/display/ui/os_icons.rs"), root.resolve("assets/fonts/MapleMono-NF-CN-Regular.ttf"),
         root.resolve("assets/fonts/JetBrainsMono-Regular.ttf"), root.resolve("extra/logo/nebula-titanium.png"))
     inputs.dir(root.resolve("mobile/tools"))
     inputs.files(fileTree(root.resolve("mobile/relay")) { include("*.mjs", "*.json", "*.md", "*.yaml", "Caddyfile", "Dockerfile") })

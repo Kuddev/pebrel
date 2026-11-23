@@ -172,6 +172,9 @@ _pebrel() {
             pebrel__ctl,new-window)
                 cmd="pebrel__ctl__new__window"
                 ;;
+            pebrel__ctl,notify-pane)
+                cmd="pebrel__ctl__notify__pane"
+                ;;
             pebrel__ctl,orchestrate)
                 cmd="pebrel__ctl__orchestrate"
                 ;;
@@ -267,6 +270,9 @@ _pebrel() {
                 ;;
             pebrel__ctl__help,new-window)
                 cmd="pebrel__ctl__help__new__window"
+                ;;
+            pebrel__ctl__help,notify-pane)
+                cmd="pebrel__ctl__help__notify__pane"
                 ;;
             pebrel__ctl__help,orchestrate)
                 cmd="pebrel__ctl__help__orchestrate"
@@ -427,6 +433,9 @@ _pebrel() {
             pebrel__help__ctl,new-window)
                 cmd="pebrel__help__ctl__new__window"
                 ;;
+            pebrel__help__ctl,notify-pane)
+                cmd="pebrel__help__ctl__notify__pane"
+                ;;
             pebrel__help__ctl,orchestrate)
                 cmd="pebrel__help__ctl__orchestrate"
                 ;;
@@ -522,6 +531,9 @@ _pebrel() {
                 ;;
             pebrel__help__tab,move)
                 cmd="pebrel__help__tab__move"
+                ;;
+            pebrel__help__tab,new)
+                cmd="pebrel__help__tab__new"
                 ;;
             pebrel__help__tab,rename)
                 cmd="pebrel__help__tab__rename"
@@ -664,6 +676,9 @@ _pebrel() {
             pebrel__tab,move)
                 cmd="pebrel__tab__move"
                 ;;
+            pebrel__tab,new)
+                cmd="pebrel__tab__new"
+                ;;
             pebrel__tab,rename)
                 cmd="pebrel__tab__rename"
                 ;;
@@ -675,6 +690,9 @@ _pebrel() {
                 ;;
             pebrel__tab__help,move)
                 cmd="pebrel__tab__help__move"
+                ;;
+            pebrel__tab__help,new)
+                cmd="pebrel__tab__help__new"
                 ;;
             pebrel__tab__help,rename)
                 cmd="pebrel__tab__help__rename"
@@ -740,7 +758,7 @@ _pebrel() {
 
     case "${cmd}" in
         pebrel)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --launched-at-login --config-file --socket --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] predict view ctl env window tab pane agent migrate config plugin theme setup-ai help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --launched-at-login --new-instance --config-file --socket --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] predict view ctl env window tab pane agent migrate config plugin theme setup-ai help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1260,7 +1278,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__ctl)
-            opts="-h --pretty --timeout-ms --help describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
+            opts="-h --pretty --timeout-ms --help describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane notify-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1690,7 +1708,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__ctl__help)
-            opts="describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
+            opts="describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane notify-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1955,6 +1973,20 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__ctl__help__notify__pane)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__ctl__help__orchestrate)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -2182,13 +2214,32 @@ _pebrel() {
             return 0
             ;;
         pebrel__ctl__new__tab)
-            opts="-h --window --pretty --timeout-ms --help"
+            opts="-e -h --window --cwd --shell --command --pretty --timeout-ms --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=()
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o plusdirs
+                    fi
+                    return 0
+                    ;;
+                --shell)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --command)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -e)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2210,6 +2261,40 @@ _pebrel() {
                 return 0
             fi
             case "${prev}" in
+                --timeout-ms)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__ctl__notify__pane)
+            opts="-h --window --pane --title --message --pretty --timeout-ms --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --pane)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --title)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --message)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --timeout-ms)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -2813,7 +2898,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__ctl)
-            opts="describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait"
+            opts="describe snapshot orchestrate agents agent-start agent-fork agent-get agent-prompt agent-paste agent-read agent-wait subscribe new-window close-window focus new-tab close-tab rename-tab move-tab split close-pane notify-pane zoom-pane resize-pane prompt paste read procs send-key run exec-pane wait"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3051,6 +3136,20 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__ctl__new__window)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__ctl__notify__pane)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -3583,7 +3682,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__tab)
-            opts="close rename move"
+            opts="new close rename move"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3611,6 +3710,20 @@ _pebrel() {
             return 0
             ;;
         pebrel__help__tab__move)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__tab__new)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -4522,7 +4635,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__tab)
-            opts="-h --help close rename move help"
+            opts="-h --help new close rename move help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4558,7 +4671,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__tab__help)
-            opts="close rename move help"
+            opts="new close rename move help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4613,6 +4726,20 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__tab__help__new)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__tab__help__rename)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -4635,6 +4762,47 @@ _pebrel() {
             fi
             case "${prev}" in
                 --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --timeout-ms)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__tab__new)
+            opts="-e -h --window --cwd --shell --command --pretty --timeout-ms --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=()
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o plusdirs
+                    fi
+                    return 0
+                    ;;
+                --shell)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --command)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -e)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

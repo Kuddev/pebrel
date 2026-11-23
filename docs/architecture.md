@@ -16,30 +16,30 @@ to rename all existing directories or create abstract interfaces everywhere.
 
 | Area | Owns | Must not become |
 | --- | --- | --- |
-| `nebula_settings` | Runtime settings, language registry, shared preference contracts | A UI/widget library |
-| `nebula_split` | Split tree, geometry, navigation rules | Window management or rendering |
-| `nebula_terminal` | Grid, VT processing, terminal/PTY behavior | Product panels or GPUI state |
-| `nebula_config`, `nebula_config_derive` | Configuration abstractions and derives | Application orchestration |
-| `pebrel-completions` (source: `nebula-completions/`) | Completion matching and presentation-independent results | Terminal view ownership |
-| `nebula_app/src/completion.rs` | Completion request snapshots, shared source lifetime and per-pane source selection | A GPUI task owner or a shell interpreter |
-| `nebula_app/src/display/suggest_engine.rs` | Shared candidate calculation from input snapshots; compatibility adapter for pane state | A second source registry or access to the terminal grid during calculation |
-| `nebula_hook` | Small process/lifecycle hook bridge | An application dependency container |
-| `nebula_app/src/i18n` | Static lookup, locale resolution and formatting | Runtime catalog parsing or UI ownership |
-| `nebula_app/src/scrollbar.rs` | Shared overlay-scrollbar geometry, hit testing and drag mapping | A renderer, view owner or input dispatcher |
-| `nebula_app/src/math` | Parse, validate, layout, compile and cache responsibilities | A duplicated per-shell math engine |
-| `nebula_app/src/platform` | Explicit platform capabilities and native adapters | A dumping ground for unrelated logic |
-| `nebula_app/src/ai_hook` | Normalized provider facts, bounded ordering, one shared pane lifecycle and owned installation policy; native Windows/Unix transports | Screen keyword rules or a separate state machine per UI shell |
-| `nebula_app/src/platform/ssh_agent.rs` | Native agent endpoints, transport connection and bounded identity discovery | Host authentication policy or private key selection |
-| `nebula_app/src/ssh_session/agent.rs` | SSH agent identity selection, signing outcomes and total discovery budget; fresh scope per host | A second authentication plan, credential store or agent forwarding service |
-| `nebula_app/src/serial_session.rs` | Native serial port transport for non-PTY panes and the `serial:` destination syntax | SSH authentication, remote files or a settings form |
-| `nebula_app/src/ssh_session/integration.rs` | Authenticated exec/PTY orchestration for remote hook installation and shell startup | Provider policy or a second Agent state machine |
-| `nebula_app/src/ai_agents` | Agent identity and structurally constrained screen observations | Authority to overwrite hook results or infer remote completion from silence |
-| `nebula_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |
-| `nebula_app/src/product_ui` | Feature-selected shared presentation facade | A route to legacy rendering dependencies |
-| `nebula_app/src/display`, `renderer` | Legacy rendering and still-shared extracted models | A source of new undifferentiated functionality |
-| `nebula_app/src/display/animations.rs` | Legacy window animation state and shared frame snapshots behind existing display operations | Public tween fields or rendering/hit-test ownership |
-| `nebula_gpui` | Component acceptance lab | A dependency of the product |
-| `nebula_app/build`, `tools/i18n-contract` | Generation and independent contract verification | Runtime configuration loading |
+| `pebrel_settings` | Runtime settings, language registry, shared preference contracts | A UI/widget library |
+| `pebrel_split` | Split tree, geometry, navigation rules | Window management or rendering |
+| `pebrel_terminal` | Grid, VT processing, terminal/PTY behavior | Product panels or GPUI state |
+| `pebrel_config`, `pebrel_config_derive` | Configuration abstractions and derives | Application orchestration |
+| `pebrel-completions` (source: `pebrel-completions/`) | Completion matching and presentation-independent results | Terminal view ownership |
+| `pebrel_app/src/completion.rs` | Completion request snapshots, shared source lifetime and per-pane source selection | A GPUI task owner or a shell interpreter |
+| `pebrel_app/src/display/suggest_engine.rs` | Shared candidate calculation from input snapshots; compatibility adapter for pane state | A second source registry or access to the terminal grid during calculation |
+| `pebrel_hook` | Small process/lifecycle hook bridge | An application dependency container |
+| `pebrel_app/src/i18n` | Static lookup, locale resolution and formatting | Runtime catalog parsing or UI ownership |
+| `pebrel_app/src/scrollbar.rs` | Shared overlay-scrollbar geometry, hit testing and drag mapping | A renderer, view owner or input dispatcher |
+| `pebrel_app/src/math` | Parse, validate, layout, compile and cache responsibilities | A duplicated per-shell math engine |
+| `pebrel_app/src/platform` | Explicit platform capabilities and native adapters | A dumping ground for unrelated logic |
+| `pebrel_app/src/ai_hook` | Normalized provider facts, bounded ordering, one shared pane lifecycle and owned installation policy; native Windows/Unix transports | Screen keyword rules or a separate state machine per UI shell |
+| `pebrel_app/src/platform/ssh_agent.rs` | Native agent endpoints, transport connection and bounded identity discovery | Host authentication policy or private key selection |
+| `pebrel_app/src/ssh_session/agent.rs` | SSH agent identity selection, signing outcomes and total discovery budget; fresh scope per host | A second authentication plan, credential store or agent forwarding service |
+| `pebrel_app/src/serial_session.rs` | Native serial port transport for non-PTY panes and the `serial:` destination syntax | SSH authentication, remote files or a settings form |
+| `pebrel_app/src/ssh_session/integration.rs` | Authenticated exec/PTY orchestration for remote hook installation and shell startup | Provider policy or a second Agent state machine |
+| `pebrel_app/src/ai_agents` | Agent identity and structurally constrained screen observations | Authority to overwrite hook results or infer remote completion from silence |
+| `pebrel_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |
+| `pebrel_app/src/product_ui` | Feature-selected shared presentation facade | A route to legacy rendering dependencies |
+| `pebrel_app/src/display`, `renderer` | Legacy rendering and still-shared extracted models | A source of new undifferentiated functionality |
+| `pebrel_app/src/display/animations.rs` | Legacy window animation state and shared frame snapshots behind existing display operations | Public tween fields or rendering/hit-test ownership |
+| `pebrel_gpui` | Component acceptance lab | A dependency of the product |
+| `pebrel_app/build`, `tools/i18n-contract` | Generation and independent contract verification | Runtime configuration loading |
 
 The map records current responsibilities; it does not assert that every legacy
 file has already reached the target shape. Eleven oversized legacy files remain
@@ -52,7 +52,7 @@ projects those records into existing status badges, progress and Runtime API
 states, before Hooks and screen/process inference. Pane/transport failure still
 takes precedence. Reports do not create Hook ownership, session ids or additional
 desktop notifications. See
-the [protocol boundary](../architecture/notes/nebula_terminal/program_status/2026-10-21-osc7501-record-lifecycle.md).
+the [protocol boundary](../architecture/notes/pebrel_terminal/program_status/2026-10-21-osc7501-record-lifecycle.md).
 
 ## Rust module names are not file locations
 
@@ -106,11 +106,11 @@ WSL or authenticated SSH execution scope; SSH connection generations separate
 cached snapshots. Queries use owned background processes or channels. Workspace
 selection and command argument roles remain shared rules, with local and guest
 catalogs using the same selection code. See the
-[metadata boundary](../architecture/notes/nebula_app/completion/2026-10-03-scoped-metadata.md)
-and [editor ownership](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-03-editor-snapshots.md).
+[metadata boundary](../architecture/notes/pebrel_app/completion/2026-10-03-scoped-metadata.md)
+and [editor ownership](../architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-03-editor-snapshots.md).
 The existing legacy adapter still accepts pane state, then
 calls the same candidate calculation; it does not gain local Git discovery through
-this extraction. See the [request boundary decision](../architecture/notes/nebula_app/completion/2026-09-30-request-boundary.md).
+this extraction. See the [request boundary decision](../architecture/notes/pebrel_app/completion/2026-09-30-request-boundary.md).
 
 ## Extension checklist
 

@@ -50,6 +50,10 @@
 -keep enum io.github.kuddev.pebrel.mobile.connection.SshStage { *; }
 -keep enum io.github.kuddev.pebrel.mobile.connection.SshSessionMode { *; }
 -keep enum io.github.kuddev.pebrel.mobile.connection.SshFailureKind { *; }
+# The separate SSH instrumentation APK calls the production reconnect command.
+-keep class io.github.kuddev.pebrel.mobile.connection.SshSessionModeKt {
+    public static java.lang.String reconnectCommand(io.github.kuddev.pebrel.mobile.connection.HostProfile);
+}
 # The SFTP instrumentation exercises suspend APIs from a separate APK. Preserve
 # only its javap-verified public boundary; production release shrinking is unchanged.
 -keep,includedescriptorclasses class io.github.kuddev.pebrel.mobile.connection.SftpClient { public *; }

@@ -8,7 +8,7 @@ Accepted with the maintainer-requested Pebrel naming migration, 2026-11-09.
 
 The maintainer asked for the remaining `nebula` names, including crate source
 directories such as `nebula_app`, to become `pebrel`. The
-[completion package identity note](../../nebula-completions/2026-09-30-package-identity.md)
+[completion package identity note](../../pebrel-completions/2026-09-30-package-identity.md)
 already recorded that the line-budget checker rejects removed source roots,
 so a physical directory rename needed a reviewed policy change first.
 

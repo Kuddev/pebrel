@@ -14,7 +14,7 @@ const atlasSizes = [...sizes, 512];
 const atlasWidth = 512;
 const atlasHeight = atlasSizes.reduce((total, size) => total + size, 0);
 const source = await readFile(join(root, 'extra/logo/nebula-coverage.svg'), 'utf8');
-const catalogSource = await readFile(join(root, 'nebula_settings/src/app_icon.rs'), 'utf8');
+const catalogSource = await readFile(join(root, 'pebrel_settings/src/app_icon.rs'), 'utf8');
 const palettePattern = /\w+\s*=>\s*\(\s*"([^"]+)"\s*,\s*"(\d+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*0x([\dA-Fa-f]{6})\s*,\s*0x([\dA-Fa-f]{6})\s*,\s*0x([\dA-Fa-f]{6})\s*\)/g;
 const palettes = [...catalogSource.matchAll(palettePattern)].map(([, key, number, nameZh, nameEn, tile, mark, border]) => ({
   key, number, nameZh, nameEn, tile: `#${tile}`, mark: `#${mark}`, border: `#${border}`,
@@ -183,13 +183,13 @@ for (const palette of palettes.filter(palette => palette.key in aliases)) {
     .replace('#FF0000', palette.tile).replace('#00FF00', palette.border).replace('#0000FF', palette.mark);
   outputs.set(`extra/logo/nebula-${alias}.svg`, Buffer.from(svg));
   outputs.set(`extra/logo/nebula-${alias}.png`, png);
-  outputs.set(`nebula_app/windows/nebula-${alias}.ico`, ico);
+  outputs.set(`pebrel_app/windows/nebula-${alias}.ico`, ico);
   if (palette.key === 'titanium') {
     outputs.set('extra/logo/nebula.png', png);
-    outputs.set('nebula_app/windows/nebula.ico', ico);
+    outputs.set('pebrel_app/windows/nebula.ico', ico);
   }
 }
-const payloadBytes = atlasPng.length + outputs.get('nebula_app/windows/nebula.ico').length;
+const payloadBytes = atlasPng.length + outputs.get('pebrel_app/windows/nebula.ico').length;
 assert.ok(payloadBytes <= 96 * 1024, `Runtime icon payload exceeds 96 KiB: ${payloadBytes}`);
 outputs.set('extra/logo/icon-catalog.json', Buffer.from(`${JSON.stringify({
   default: 'titanium', sizes, atlasSizes, atlasWidth, atlasHeight, payloadBytes, palettes,
