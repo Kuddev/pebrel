@@ -683,7 +683,7 @@ pub struct NebulaWorkspace {
     /// pane 矩形的帧记录（ctrl+alt+方向 的最近邻导航用）。
     pane_bounds: PaneBoundsStore,
     /// 标题栏背景使用本帧实际终端列边界，与两侧面板和卡缝连续衔接。
-    titlebar_background: window_titlebar::TitleBarBackground,
+    window_backdrop: window_titlebar::WindowBackdrop,
     theme_transition: crate::gpui_shell::theme::ThemeTransition,
     /// GPUI presentation over the shared old-shell command catalog.
     command_palette_open: bool,
@@ -953,7 +953,7 @@ impl NebulaWorkspace {
             reader_focus: None,
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
             pane_bounds: PaneBoundsStore::default(),
-            titlebar_background: window_titlebar::TitleBarBackground::default(),
+            window_backdrop: window_titlebar::WindowBackdrop::new(cx),
             theme_transition: crate::gpui_shell::theme::ThemeTransition::default(),
             command_palette_open: false,
             command_palette_input,
@@ -1275,12 +1275,7 @@ impl NebulaWorkspace {
         };
         let (cols, rows, launch) = {
             let view = anchor.view.read(cx);
-            let (launch, cwd) = tab_duplication::copy_launch(
-                view.session_launch.clone(),
-                tab_duplication::CopyKind::Split,
-                tab_duplication::PaneOrigin::of(view),
-            );
-            let launch = Self::terminal_launch_from_session(&launch, cwd);
+            let launch = tab_duplication::split_launch(view, cx);
             (view.grid_cols() as u16, view.grid_rows() as u16, launch)
         };
         let grid = match direction {

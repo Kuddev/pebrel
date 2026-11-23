@@ -228,6 +228,8 @@ pub enum TerminalViewEvent {
     /// Provider 明确上报的 permission/awaiting-input 上下文。宿主拥有 Window，
     /// 由它负责驻留提示、后台 Tab 标记和系统通知；raw context 不进入文案。
     AiAttention(crate::ai_hook::AttentionContext),
+    /// Completed turn accepted by the pane that owns this hook.
+    AiTurnDone(Arc<crate::ai_hook::AiHookEvent>),
     Notification(crate::notify::Notification),
     /// 非应用鼠标模式下右键命中真实终端选区。菜单由 workspace 根持有，
     /// 避免每个 pane 都渲染一份带叠加阴影的 PopupMenu。
@@ -821,7 +823,7 @@ impl TerminalView {
             // 退出码接到「上一条命令失败」的未读徽章上（⚠ 三角）；`Some(0)` 与
             // `None`（没带退出码的 133;D）都算过关。记在下面那道 barrier 之后：
             // 属于上一轮/初始化的那个边沿不能改写徽章。
-            TermEvent::CommandDone { exit_code } => {
+            TermEvent::CommandDone { exit_code, empty_prompt_zone } => {
                 // 新 PTY 初始化提示符也可能先发一个 CommandDone。Runtime
                 // 文本还在等待回显 barrier 时，这个边沿属于上一轮/初始化，
                 // 不能清掉尚未发送的 Enter 或把新请求提前投影成 idle。
@@ -829,6 +831,10 @@ impl TerminalView {
                     || self.pending_shell_command.is_some()
                     || self.recovery.preparing()
                 {
+                    return;
+                }
+                // OMP emits a successful command boundary when it paints a user message.
+                if empty_prompt_zone && self.local_omp_foreground() {
                     return;
                 }
                 self.finish_foreground_command(exit_code, cx);
@@ -851,7 +857,9 @@ impl TerminalView {
                 // ——比 OSC 133 的命令行嗅探准，后者漏掉包装启动和没有 shell
                 // 集成的会话。少了这一条，远端 agent 的侧栏图标和会话身份
                 // （fork/恢复要用）全都缺席。
-                if let Some(hook) = crate::ai_hook::parse_remote_envelope(&envelope, None) {
+                if let Some(hook) =
+                    crate::ai_hook::parse_remote_envelope(&envelope, Some(self.pane_id))
+                {
                     self.handle_ai_hook(&hook, cx);
                 }
             },
@@ -1400,6 +1408,25 @@ impl TerminalView {
         }
     }
 
+    fn powershell_owns_line_selection(&self) -> bool {
+        if self.ssh_destination.is_some() || !self.suggest.suggest_env.is_this_machine() {
+            return false;
+        }
+        if self.running_program.is_some() || self.command_running && !self.command_running_disproved
+        {
+            return false;
+        }
+        if let Some(token) = self.suggest.completion_context.current_shell_token() {
+            return token.starts_with("pwsh:");
+        }
+        self.exec_context.as_ref().and_then(|context| context.shell_program()).is_some_and(
+            |program| {
+                use pebrel_completions::command_context::ShellSyntax;
+                ShellSyntax::for_program(program) == ShellSyntax::PowerShell
+            },
+        )
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // 搜索输入具有独立焦点，祖先终端不得再次把同一按键写入 PTY。
         if !self.focus_handle.is_focused(window) {
@@ -1496,12 +1523,17 @@ impl TerminalView {
         }
 
         // 回滚快捷键（对齐旧壳默认绑定，仅主屏）：Shift+PageUp/PageDown
-        // 翻页、Shift+Home/End 到顶/到底；备用屏下不拦截，交给编码器
+        // 翻页、Shift+Home/End 到顶/到底。PowerShell 提示符用后者选区；备用屏交给编码器
         // 把带修饰的键序发给应用（less 自己处理 Shift+PageUp）。
         if mods.shift && !mods.control && !mods.alt && !mode.contains(TermMode::ALT_SCREEN) {
             let scroll = match ks.key.as_str() {
                 "pageup" => Some(Scroll::PageUp),
                 "pagedown" => Some(Scroll::PageDown),
+                "home" | "end"
+                    if !mode.contains(TermMode::VI) && self.powershell_owns_line_selection() =>
+                {
+                    None
+                },
                 "home" => Some(Scroll::Top),
                 "end" => Some(Scroll::Bottom),
                 _ => None,

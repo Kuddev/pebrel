@@ -101,7 +101,7 @@ pub(super) fn load_restore(
     let restore_directory_size =
         crate::platform::CAPABILITIES.restore_directory_window_size && !has_regular_window;
     load_restore_from(id, startup, restore_directory_size, cx, || {
-        if crate::platform::elevation::requires_isolation() {
+        if crate::platform::startup::instance::is_private() {
             return None;
         }
         crate::session::load().and_then(|session| session.startup_window_state())
@@ -266,6 +266,8 @@ pub(super) fn regular_options(
         }),
         window_min_size: Some(size(px(760.0), px(540.0)).min(&bounds.size)),
         titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+        window_decorations: (cx.compositor_name() == "Wayland")
+            .then_some(gpui::WindowDecorations::Client),
         app_id: Some(crate::platform::window_chrome::application_id("pebrel")),
         window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
         focus,

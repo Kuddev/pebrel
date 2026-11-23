@@ -812,7 +812,10 @@ fn issue_358_history_popup_matches_a_command_prefix_without_a_trailing_space(
             feed(view, format!("\x1b[2J\x1b[H❯ {command}").as_bytes());
             view.commit_line(cx);
             view.process_event(Event::CommandStart, cx);
-            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+            view.process_event(
+                Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+                cx,
+            );
         }
         feed(view, "\x1b[2J\x1b[H❯ cls".as_bytes());
         view.ghost_enabled = true;
@@ -869,7 +872,10 @@ fn hybrid_tab_opens_history_behind_native_prediction_without_writing(cx: &mut Te
             feed(view, format!("\x1b[2J\x1b[H❯ {command}").as_bytes());
             view.commit_line(cx);
             view.process_event(Event::CommandStart, cx);
-            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+            view.process_event(
+                Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+                cx,
+            );
         }
         view.ghost_enabled = true;
         view.completion_style = crate::display::CompletionStyle::Hybrid;
@@ -1063,7 +1069,7 @@ fn ended_command_does_not_leave_osc_progress_running(cx: &mut TestAppContext) {
             view.process_event(Event::CommandStart, cx);
             view.process_event(Event::Progress { state: 3, value: None }, cx);
             assert_eq!(view.sidebar_activity(), SidebarActivity::Running);
-            view.process_event(Event::CommandDone { exit_code }, cx);
+            view.process_event(Event::CommandDone { exit_code, empty_prompt_zone: false }, cx);
             let expected = if exit_code.is_some_and(|code| code != 0) {
                 SidebarActivity::CommandFailed
             } else {
@@ -1141,7 +1147,10 @@ fn ai_tab_name_shows_reported_task_and_restores_directory_on_exit(cx: &mut TestA
             let hover = view.tab_tooltip(&view.tab_label(cx));
             assert!(hover.contains("/home/test/很长的项目目录"));
             assert!(hover.contains("修复 SSH 标签名称"));
-            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+            view.process_event(
+                Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false },
+                cx,
+            );
             assert_eq!(view.tab_label(cx), "很长的项目目录");
             assert!(!view.tab_tooltip(&view.tab_label(cx)).contains("修复 SSH 标签名称"));
         }
@@ -1168,7 +1177,7 @@ fn static_tab_titles_keep_the_directory_while_hover_names_the_ai_task(cx: &mut T
         assert_eq!(view.tab_label(cx), "VALE");
 
         cx.global_mut::<Settings>().static_tab_titles = true;
-        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false }, cx);
         assert_eq!(view.tab_label(cx), "很长的项目目录");
     });
 }
@@ -1192,7 +1201,7 @@ fn ai_task_name_preserves_remote_identity_in_hover_and_shell_fallback(cx: &mut T
             view.tab_tooltip(&view.tab_label(cx)),
             "修复登录失败\nSG-1 新加坡\nroot@192.0.2.10:2222\n/srv/project\nclaude · 修复登录失败"
         );
-        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false }, cx);
         assert_eq!(view.tab_label(cx), "SG-1 新加坡");
         view.running_program = Some("htop".into());
         view.process_event(Event::Title("ordinary application title".into()), cx);
@@ -1210,7 +1219,7 @@ fn review_regression_cold_resume_survives_initial_prompt_and_clears_on_exit(
         view.seed_ai_session("codex".into(), "saved-42".into(), cx);
         assert!(receiver.try_recv().is_err(), "do not submit into shell initialization");
         assert_eq!(view.session_agent().unwrap().session_id.as_deref(), Some("saved-42"));
-        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false }, cx);
         assert!(view.pending_shell_command.is_some());
         feed(view, b"\x1b]133;A\x07hello@host:/home/hello$ ");
         view.process_event(Event::Wakeup, cx);
@@ -1219,7 +1228,7 @@ fn review_regression_cold_resume_survives_initial_prompt_and_clears_on_exit(
         assert!(view.ai_session.is_none(), "submission is not confirmation");
         assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes) if bytes.as_ref() == b"codex resume saved-42"));
         // The initial shell edge cannot consume the pending Enter or identity.
-        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false }, cx);
         assert!(view.recovery.awaiting_confirmation);
         feed(view, b"codex resume saved-42");
         view.flush_pending_runtime_submit(cx);
@@ -1232,7 +1241,7 @@ fn review_regression_cold_resume_survives_initial_prompt_and_clears_on_exit(
         event.pane = Some(view.pane_id);
         assert!(view.handle_ai_hook(&event, cx));
         assert_eq!(view.ai_session.as_ref().unwrap().session_id, "saved-42");
-        view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(0), empty_prompt_zone: false }, cx);
         assert!(view.running_program.is_none());
         assert!(view.ai_session.is_none(), "both foreground fields must clear together");
         assert!(view.runtime_agent().is_none());
@@ -1321,7 +1330,10 @@ fn failed_cold_resume_keeps_target_for_retry(cx: &mut TestAppContext) {
             view.flush_pending_runtime_submit(cx);
             view.process_event(Event::CommandStart, cx);
             feed(view, b"\r\nNo session found matching 'saved-42'\r\n");
-            view.process_event(Event::CommandDone { exit_code: Some(1) }, cx);
+            view.process_event(
+                Event::CommandDone { exit_code: Some(1), empty_prompt_zone: false },
+                cx,
+            );
             assert!(view.ai_session.is_none());
             assert_eq!(view.session_agent(), Some(saved));
             assert!(view.recovery.awaiting_confirmation);
@@ -1546,6 +1558,7 @@ fn cold_resume_of_supported_clis_waits_for_the_shell_and_preserves_each_target(
         ("cursor", "agent --resume=saved-conversation"),
         ("copilot", "copilot --resume saved-conversation"),
         ("grok", "grok --resume saved-conversation"),
+        ("codebuddy", "codebuddy --resume saved-conversation --port 0"),
         ("omp", "omp --resume saved-conversation"),
         ("kimi", "kimi --session saved-conversation"),
     ] {
@@ -1629,6 +1642,29 @@ fn cold_resume_preserves_codex_id_with_a_legacy_native_file(cx: &mut TestAppCont
     });
 }
 
+#[gpui::test]
+fn codex_snapshot_without_an_id_queues_the_native_picker_at_the_shell_prompt(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let saved = crate::session::AgentSession {
+            source: "codex".into(),
+            session_id: None,
+            session_file: None,
+        };
+        view.restore_agent(saved.clone(), cx);
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        view.process_event(Event::Wakeup, cx);
+        assert!(receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == b"codex resume")
+        }));
+        assert!(view.recovery_pending());
+        assert_eq!(view.session_agent(), Some(saved));
+    });
+}
+
 fn submit_codex_restore(
     view: &mut TerminalView,
     receiver: &Receiver<Msg>,
@@ -1657,7 +1693,7 @@ fn missing_codex_target_opens_the_native_chooser_and_confirms_the_users_choice(
     view.update(window, |view, cx| {
         let saved = submit_codex_restore(view, &receiver, cx);
         feed(view, b"\r\nERROR: No saved session found with ID saved-missing. Run codex resume without an ID.\r\n");
-        view.process_event(Event::CommandDone { exit_code: Some(1) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(1), empty_prompt_zone: false }, cx);
         assert_eq!(view.session_agent(), Some(saved));
         assert!(view.pending_shell_command.is_some());
         assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
@@ -1707,7 +1743,7 @@ fn unrelated_codex_failures_do_not_replace_the_saved_target(cx: &mut TestAppCont
         view.update(window, |view, cx| {
             let saved = submit_codex_restore(view, &receiver, cx);
             feed(view, format!("\r\n{message}\r\n").as_bytes());
-            view.process_event(Event::CommandDone { exit_code }, cx);
+            view.process_event(Event::CommandDone { exit_code, empty_prompt_zone: false }, cx);
             assert!(view.pending_shell_command.is_none(), "{message}: {exit_code:?}");
             assert_eq!(view.session_agent(), Some(saved));
         });
@@ -1790,7 +1826,7 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
         let saved = submit_codex_restore(view, &receiver, cx);
         let error = b"\r\nERROR: No saved session found with ID saved-missing.\r\n";
         feed(view, error);
-        view.process_event(Event::CommandDone { exit_code: Some(1) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(1), empty_prompt_zone: false }, cx);
         feed(view, b"\x1b]133;A\x07user@host:~$ ");
         view.flush_pending_shell_command(cx);
         feed(view, b"codex resume");
@@ -1798,11 +1834,56 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
         view.process_event(Event::CommandStart, cx);
         receiver.try_iter().for_each(drop);
         feed(view, error);
-        view.process_event(Event::CommandDone { exit_code: Some(1) }, cx);
+        view.process_event(Event::CommandDone { exit_code: Some(1), empty_prompt_zone: false }, cx);
         assert!(view.pending_shell_command.is_none());
         assert_eq!(view.session_agent(), Some(saved));
         assert!(view.can_retry_recovery());
         assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+    });
+}
+
+#[gpui::test]
+fn shift_home_and_end_reach_the_local_powershell_editor(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+                &pebrel_terminal::tty::Options {
+                    shell: Some(pebrel_terminal::tty::Shell::new("powershell.exe".into(), vec![])),
+                    ..Default::default()
+                },
+            ));
+            for (token, forwarded) in
+                [(None, true), (Some("pwsh:42"), true), (Some("bash:43"), false)]
+            {
+                if let Some(token) = token {
+                    view.suggest.completion_shell_report("pebrel_shell", token);
+                }
+                for chord in ["shift-home", "shift-end"] {
+                    let event = KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse(chord).unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    };
+                    let expected = keymap::encode(&event.keystroke, &view.term_mode()).unwrap();
+                    view.on_key_down(&event, window, cx);
+                    let input: Vec<_> = receiver
+                        .try_iter()
+                        .filter_map(|msg| match msg {
+                            Msg::Input(bytes) => Some(bytes.into_owned()),
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect();
+                    assert_eq!(
+                        input,
+                        if forwarded { expected } else { vec![] },
+                        "{token:?} {chord}"
+                    );
+                }
+            }
+        });
     });
 }
 

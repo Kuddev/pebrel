@@ -33,6 +33,7 @@ impl NebulaWorkspace {
     ) {
         match event {
             SettingsPaneEvent::Close => self.close_settings(window, cx),
+            SettingsPaneEvent::WallpaperPreview => cx.notify(),
             SettingsPaneEvent::Changed | SettingsPaneEvent::BackupRestored => {
                 crate::prompt_suggestions::service::invalidate_config();
                 self.apply_runtime_settings(cx);
@@ -147,6 +148,9 @@ impl NebulaWorkspace {
             return;
         }
         self.settings_open = false;
+        if let Some((view, _)) = &self.settings_surface {
+            view.update(cx, |pane, cx| pane.set_wallpaper_peek(false, cx));
+        }
         self.sync_settings_layout(tab_reveal_instant(cx));
         let restore_panel = std::mem::take(&mut self.settings_restore_side_panel_open);
         if restore_panel && !self.side_panel.open {

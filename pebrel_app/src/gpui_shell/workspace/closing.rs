@@ -30,7 +30,9 @@ impl NebulaWorkspace {
             )
             .on_ok(move |_, window, cx| {
                 let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_pane(tab_ix, pane_id, window, cx);
+                    if let Some(current) = workspace.tab_of_pane(pane_id) {
+                        workspace.close_pane(current, pane_id, window, cx);
+                    }
                 });
                 true
             })
@@ -47,12 +49,14 @@ impl NebulaWorkspace {
             self.close_tab(tab_ix, window, cx);
             return;
         };
+        let tab_id = self.tab_meta[tab_ix].runtime_id.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
         let body: SharedString =
             language.format(Message::WorkspaceCloseRunningProcess, &[("process", &process)]).into();
         let workspace = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, window, _cx| {
             let workspace = workspace.clone();
+            let tab_id = tab_id.clone();
             confirm_dialog(
                 dialog,
                 window,
@@ -64,7 +68,9 @@ impl NebulaWorkspace {
             )
             .on_ok(move |_, window, cx| {
                 let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_tab(tab_ix, window, cx);
+                    if let Ok(current) = workspace.runtime_tab_index(&tab_id.0) {
+                        workspace.close_tab(current, window, cx);
+                    }
                 });
                 true
             })

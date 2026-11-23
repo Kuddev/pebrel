@@ -113,6 +113,10 @@ impl RawSettings {
             .filter(|value| !value.is_empty())
     }
 
+    pub fn command_history_persists(&self) -> bool {
+        self.bool_on("command_history_persist").unwrap_or(true)
+    }
+
     pub fn f32(&self, key: &str) -> Option<f32> {
         self.value(key)?.parse().ok()
     }
@@ -1058,6 +1062,9 @@ pub struct RuntimeSettings {
     pub ghost: bool,
     pub accept: AcceptKeyName,
     pub completion_style: CompletionStyleName,
+    /// Append submitted commands to `pebrel_history*.jsonl`. Off keeps new commands
+    /// in memory only. Saved history still loads. Restart to apply file edits.
+    pub command_history_persist: bool,
     pub prompt_suggestions: PromptSuggestions,
     /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗）。
     pub cjk_bold_regular: bool,
@@ -1163,6 +1170,7 @@ pub struct ThemeCardGeometry {
 
 /// 旧壳默认快速终端热键。
 pub const DEFAULT_QUICK_TERMINAL_HOTKEY: &str = "ctrl+`";
+pub const DEFAULT_BACKGROUND_IMAGE_OPACITY: f32 = 0.38;
 pub const DEFAULT_SIDEBAR_WIDTH: f32 = 230.0;
 pub const MIN_SIDEBAR_WIDTH: f32 = 170.0;
 pub const MAX_SIDEBAR_WIDTH: f32 = 420.0;
@@ -1254,6 +1262,7 @@ impl RuntimeSettings {
                 .value("completion_style")
                 .and_then(CompletionStyleName::from_settings)
                 .unwrap_or_default(),
+            command_history_persist: raw.command_history_persists(),
             prompt_suggestions: PromptSuggestions::from_raw(raw),
             cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
             tabs_position: raw
@@ -1316,7 +1325,7 @@ impl RuntimeSettings {
             background_image_opacity: raw
                 .f32("background_image_opacity")
                 .map(|o| o.clamp(0.0, 1.0))
-                .unwrap_or(0.38),
+                .unwrap_or(DEFAULT_BACKGROUND_IMAGE_OPACITY),
             background_image_fit: raw.value("background_image_fit").map(str::to_owned),
             background_image_alignment: raw.value("background_image_alignment").map(str::to_owned),
             background_image_cover_chrome: raw
