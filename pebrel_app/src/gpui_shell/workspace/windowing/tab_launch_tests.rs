@@ -127,7 +127,7 @@ fn runtime_and_initial_launch_apply_wsl_directory_only_on_windows(cx: &mut TestA
         program: program.clone(),
         args: vec!["literal value".into()],
     };
-    let WorkspaceStartup::LaunchTerminal { cwd, launch } =
+    let WorkspaceStartup::LaunchTerminal { cwd, launch, .. } =
         startup::initial_startup(Some(directory.path().into()), Some(command), false)
     else {
         panic!("expected a direct startup launch");
@@ -380,6 +380,7 @@ fn elevated_directory_handover_uses_the_imported_default_profile(cx: &mut TestAp
             cwd: Some(root.clone()),
             command: None,
             shell_id: None,
+            hold: false,
             update_restore: None,
         });
         dispatch_shell_events(vec![GpuiShellEvent::ElevatedLaunch(dispatch)], cx);

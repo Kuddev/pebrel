@@ -409,6 +409,7 @@ mod tests {
                 args: vec!["-NoExit".into(), "quotes \" and $(literal); %PATH%".into()],
             }),
             shell_id: None,
+            hold: false,
             update_restore: None,
         }
     }

@@ -7,12 +7,13 @@ pub(super) fn dispatch(request: Arc<Dispatch>, cx: &mut App) {
     request.run(|request| open(request, cx).map(|_| ()).map_err(|error| error.message));
 }
 
-fn startup(request: &Request) -> Result<WorkspaceStartup, ApiError> {
-    if request.shell_id.is_some() {
+fn startup(request: &Request, cx: &App) -> Result<WorkspaceStartup, ApiError> {
+    let startup = if request.shell_id.is_some() {
         runtime_window_startup(request.cwd.clone(), request.shell_id.as_deref())
     } else {
         Ok(initial_startup(request.cwd.clone(), request.command.clone(), true))
-    }
+    }?;
+    Ok(startup.with_hold(request.hold, cx))
 }
 
 fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
@@ -32,7 +33,7 @@ fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
             })?;
         return open_update_windows(sessions, None, None, cx);
     }
-    let startup = startup(request)?;
+    let startup = startup(request, cx)?;
     let behavior = pebrel_settings::RuntimeSettings::load().windowing_behavior;
     let target = (behavior != pebrel_settings::WindowingBehaviorName::UseNew)
         .then(|| select_mru_window(behavior, cx))
@@ -43,10 +44,10 @@ fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
                 .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
         return Ok((id, workspace.read(cx).active_terminal_pane_id().unwrap_or_default()));
     };
-    let (launch, cwd) = match startup {
-        WorkspaceStartup::LaunchTerminal { launch, cwd } => (launch, cwd),
+    let (launch, cwd, hold) = match startup {
+        WorkspaceStartup::LaunchTerminal { launch, cwd, hold } => (launch, cwd, hold),
         WorkspaceStartup::NewTerminal { cwd } => {
-            (super::super::shell_launch::configured_at(cx, cwd.as_deref()), cwd)
+            (super::super::shell_launch::configured_at(cx, cwd.as_deref()), cwd, false)
         },
         _ => return Err(ApiError::new("invalid_startup", "handover cannot restore a session")),
     };
@@ -55,7 +56,7 @@ fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
         .handle
         .update(cx, move |_, window, cx| {
             workspace.update(cx, |workspace, cx| {
-                workspace.add_terminal_with(launch, cwd, None, window, cx)
+                workspace.add_terminal_with_hold(launch, cwd, hold, window, cx)
             })
         })
         .and_then(|value| value)
@@ -88,6 +89,7 @@ mod tests {
                 args: vec![argument.into()],
             }),
             shell_id: None,
+            hold: false,
             update_restore: None,
         }
     }
@@ -96,6 +98,33 @@ mod tests {
         let (request, reply) = Dispatch::new(request);
         dispatch_shell_events(vec![GpuiShellEvent::ElevatedLaunch(request)], cx);
         reply.try_recv().unwrap()
+    }
+
+    #[gpui::test]
+    fn elevated_hold_is_scoped_to_each_forwarded_pane(cx: &mut gpui::TestAppContext) {
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
+        configure("use_any_existing");
+        initialize_test(cx);
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            let (_, workspace) = open_test_window(cx, 0);
+            for hold in [true, false] {
+                let mut value = request(directory.path(), "literal argument");
+                value.hold = hold;
+                deliver(value, cx).unwrap();
+                let view = workspace.read(cx).tabs[workspace.read(cx).active]
+                    .focused_view()
+                    .unwrap()
+                    .clone();
+                view.update(cx, |view, _| {
+                    let _receiver = view.install_completion_test_session();
+                    assert_eq!(view.retain_on_exit(), hold);
+                });
+            }
+            assert_eq!(workspace.read(cx).tabs.len(), 2);
+            assert_eq!(cx.global::<WindowRegistry>().entries.len(), 1);
+        });
     }
 
     #[gpui::test]
