@@ -653,13 +653,21 @@ function global:Convert-NebulaBareEnvAssignment {
         return $null
     }
 
-    $pattern = '^(?<indent>\s*)\$env:(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>[^''"`$@\(\[\{;|&<>#\s][^;|&<>`]*)\s*$'
+    $pattern = '^(?<indent>\s*)\$env:(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>[^''"`$@()\[\]{};|&<>#,\s][^''"`$()\[\]{};|&<>#,\s]*)\s*$'
     if ($Line -notmatch $pattern) {
         return $null
     }
 
     $value = $Matches['value'].Trim()
     if ([string]::IsNullOrEmpty($value)) {
+        return $null
+    }
+
+    # A single whitespace-free value can still be an expression (e.g. 1+2).
+    # Quote only one bare command token; let PowerShell evaluate other syntax.
+    $parseErrors = $null
+    $tokens = [System.Management.Automation.PSParser]::Tokenize($value, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0 -or $tokens.Count -ne 1 -or $tokens[0].Type -ne 'Command') {
         return $null
     }
 
@@ -1413,6 +1421,35 @@ $env:PEBREL_CONFIG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) 'pebrel-ps-
 $env:NEBULA_CONFIG_DIR = $env:PEBREL_CONFIG_DIR
 function global:Set-PSReadLineOption { }
 "#;
+
+    #[test]
+    fn powershell_bare_env_assignment_preserves_commands_and_expressions() {
+        let checks = r#"
+$ErrorActionPreference = 'Stop'
+foreach ($line in @(
+    '$env:PEBREL_INPUT_TEST = Read-Host ''workbench password'' -MaskInput',
+    '$env:PEBREL_INPUT_TEST = Get-Content input.txt',
+    '$env:PEBREL_INPUT_TEST = echo plain text',
+    '$env:PEBREL_INPUT_TEST = 1 + 2',
+    '$env:PEBREL_INPUT_TEST = 1+2',
+    '$env:PEBREL_INPUT_TEST = name$other',
+    '$env:PEBREL_INPUT_TEST = name$(Get-Date)',
+    '$env:PEBREL_INPUT_TEST = ''quoted value''',
+    '$env:PEBREL_INPUT_TEST = 1,2',
+    '$env:PEBREL_INPUT_TEST = token # comment'
+)) {
+    if ($null -ne (Convert-NebulaBareEnvAssignment $line)) { throw "Native expression was rewritten: $line" }
+}
+foreach ($value in @('sk-example-token', 'https://example.invalid/v1', 'abc+123==', 'user@example.invalid')) {
+    $line = '  $env:PEBREL_INPUT_TEST = ' + $value + '  '
+    $expected = '  $env:PEBREL_INPUT_TEST=''' + $value + ''''
+    if ((Convert-NebulaBareEnvAssignment $line) -cne $expected) { throw 'Bare token was not quoted correctly' }
+}
+"#;
+        for executable in ["powershell", "pwsh"] {
+            run_powershell_case(executable, PS_PRELUDE, checks);
+        }
+    }
 
     #[test]
     fn powershell_ls_retains_nonfilesystem_provider_objects() {
