@@ -542,11 +542,34 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
     }
 
+    /// Whether every cell in this logical line is blank.
+    ///
+    /// Reflow drops blank rows, which makes the number of blank logical lines
+    /// below the cursor unstable. Anchors therefore count only non-empty
+    /// logical lines; those keep their identity and order.
+    fn logical_line_is_empty(&self, end: Line) -> bool {
+        let topmost = self.topmost_line();
+        let mut line = end;
+        while line > topmost && self.has_wrapline(line - 1) {
+            line -= 1;
+        }
+
+        while line <= end {
+            if !self[line].is_clear() {
+                return false;
+            }
+            line += 1;
+        }
+        true
+    }
+
     /// Record where the cursor sits relative to the *content*, so it can be found
     /// again after the rows underneath it have been split or merged.
     ///
-    /// Returns `None` when the cursor is outside the viewport, which leaves the
-    /// existing bookkeeping in charge rather than guessing.
+    /// Returns `None` when the cursor is outside the viewport, or when its own
+    /// logical line is blank. Reflow drops blank rows, so an anchor that counts
+    /// them cannot be located again; the existing bookkeeping stays in charge
+    /// rather than guessing.
     fn cursor_anchor(&self) -> Option<CursorAnchor> {
         let cursor = self.cursor.point;
         if cursor.line < Line(0) || cursor.line > self.bottommost_line() {
@@ -564,22 +587,26 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             offset += self.logical_width(start);
         }
 
-        // Find the logical line's last row, then count the logical lines below
-        // it. Reflow splits and merges rows *within* a logical line and never
-        // moves a hard line break, so this count is what survives it — physical
-        // row indices do not. Counting from the bottom also makes it immune to
+        // Find the logical line's last row, then count the non-empty logical
+        // lines below it. Reflow splits and merges rows *within* a logical line
+        // and never moves a hard line break, so non-empty logical lines are the
+        // unit that survives it — physical row indices do not, and blank lines
+        // are dropped. Counting from the bottom also makes it immune to
         // scrollback truncation, which only ever drops the oldest rows.
         let bottommost = self.bottommost_line();
         let mut end = cursor.line;
         while end < bottommost && self.has_wrapline(end) {
             end += 1;
         }
+        if self.logical_line_is_empty(end) {
+            return None;
+        }
 
         let mut logical_lines_below = 0;
         let mut line = end + 1;
         while line <= bottommost {
             // Every logical line ends in exactly one row without a wrap flag.
-            if !self.has_wrapline(line) {
+            if !self.has_wrapline(line) && !self.logical_line_is_empty(line) {
                 logical_lines_below += 1;
             }
             line += 1;
@@ -594,22 +621,32 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         let topmost = self.topmost_line();
         let bottommost = self.bottommost_line();
 
-        // Walk up from the bottom of the buffer until `logical_lines_below`
-        // logical lines have been passed; the next row up ends the anchored one.
-        let mut end = bottommost;
+        // Walk up from the bottom of the buffer until the non-empty logical
+        // lines below the anchor have been passed. Blank lines are skipped:
+        // their number is not preserved by reflow, while non-empty lines and
+        // their order are.
+        let mut end = None;
         let mut seen = 0;
-        while seen < anchor.logical_lines_below {
-            if !self.has_wrapline(end) {
+        let mut line = bottommost;
+        loop {
+            if !self.has_wrapline(line) && !self.logical_line_is_empty(line) {
                 seen += 1;
+                if seen > anchor.logical_lines_below {
+                    end = Some(line);
+                    break;
+                }
             }
 
-            if end == topmost {
-                // The anchored line is no longer in the buffer; leave the
-                // cursor where the reflow put it rather than inventing a spot.
-                return;
+            if line == topmost {
+                break;
             }
-            end -= 1;
+            line -= 1;
         }
+        let Some(end) = end else {
+            // The anchored line is no longer in the buffer; leave the cursor
+            // where the reflow put it rather than inventing a spot.
+            return;
+        };
 
         // Then back up to that logical line's first row and walk down through it,
         // spending the recorded offset one row at a time.
@@ -651,7 +688,8 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 /// Both fields are measured against the *logical* line — the run of rows joined
 /// by [`Flags::WRAPLINE`] — because that is the unit reflow preserves.
 struct CursorAnchor {
-    /// Logical lines between the cursor's own and the bottom of the buffer.
+    /// Non-empty logical lines between the cursor's own and the bottom of the
+    /// buffer. Blank lines are excluded because reflow drops them.
     logical_lines_below: usize,
 
     /// Cursor's column offset from the start of its logical line.

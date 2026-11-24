@@ -556,6 +556,46 @@ fn grow_reflow_multiline() {
     }
 }
 
+/// Reflow must keep the cursor on the logical line it was editing in both
+/// directions, even when the line below the cursor also becomes multi-row.
+///
+/// Anchors used to count blank lines and to treat a wrapped line below the
+/// cursor as the anchor itself, which moved the cursor one logical line down
+/// per width step — the shell's cursor queries then reported a row below the
+/// real prompt. Regression for issue #1091.
+#[test]
+fn reflow_keeps_cursor_on_its_logical_line_while_scrolled_back() {
+    let mut grid = Grid::<Cell>::new(6, 80, 400);
+    for n in 0..120 {
+        let id = format!("L{n:04}");
+        let text: Vec<char> = format!("{id}{}", "x".repeat(70 - id.len())).chars().collect();
+        for (col, ch) in text.into_iter().enumerate() {
+            grid[Line(5)][Column(col)] = cell(ch);
+        }
+        grid.scroll_up(&(Line(0)..Line(6)), 1);
+    }
+    grid.scroll_display(Scroll::Delta(30));
+    grid.cursor.point = Point::new(Line(3), Column(10));
+
+    let id_at_cursor = |grid: &Grid<Cell>| -> String {
+        (0..5).map(|c| grid[grid.cursor.point.line][Column(c)].c).collect()
+    };
+    let id = id_at_cursor(&grid);
+    assert_eq!(id, "L0118");
+
+    // Every intermediate width a drag would observe, down across the wrap
+    // boundary and back up again.
+    for cols in (40..80).rev().chain(41..=80) {
+        grid.resize_conpty(true, 6, cols);
+        assert_eq!(id_at_cursor(&grid), id, "cursor left its logical line at {cols} columns");
+        assert_eq!(
+            grid.cursor.point.column,
+            Column(10),
+            "cursor moved inside its logical line at {cols} columns"
+        );
+    }
+}
+
 #[test]
 fn grow_reflow_disabled() {
     let mut grid = Grid::<Cell>::new(2, 2, 0);
