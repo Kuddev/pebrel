@@ -17,6 +17,23 @@ impl WorkspaceTab {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn add_terminal_with_hold(
+        &mut self,
+        launch: crate::session::LaunchSession,
+        cwd: Option<std::path::PathBuf>,
+        hold: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        let pane_id = self.add_terminal_with(launch, cwd, None, window, cx);
+        // Creation and exit subscription delivery run on the UI thread, so this
+        // is installed before even an immediately exiting child is dispatched.
+        if hold && let Some(view) = self.tabs[self.active].focused_view() {
+            view.update(cx, |view, _| view.hold_on_exit());
+        }
+        pane_id
+    }
+
     pub(super) fn on_terminal_event(
         &mut self,
         view: &Entity<TerminalView>,
@@ -53,7 +70,7 @@ impl NebulaWorkspace {
             TerminalViewEvent::Exited => {
                 if let Some((tab_ix, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.runtime_hub.record_pane_exited(self.runtime_window_id, pane_id);
-                    if view.read(cx).local_session_failed() {
+                    if view.read(cx).retain_on_exit() {
                         cx.notify();
                     } else {
                         self.close_pane(tab_ix, pane_id, window, cx);

@@ -111,7 +111,7 @@ pub(crate) enum WorkspaceStartup {
     RestoreOrDefault,
     RestoreUpdate(crate::session::Session),
     NewTerminal { cwd: Option<PathBuf> },
-    LaunchTerminal { cwd: Option<PathBuf>, launch: crate::session::LaunchSession },
+    LaunchTerminal { cwd: Option<PathBuf>, launch: crate::session::LaunchSession, hold: bool },
     Empty,
 }
 
