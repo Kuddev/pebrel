@@ -24,6 +24,7 @@ macOS, Linux, and Android downloads are Preview builds.
 
 #### Fixed
 
+- Fixed session restore and saving being disabled whenever Pebrel ran elevated: the administrator marker had also been applied to the workspace snapshot, so every elevated launch started from a single home-directory tab and nothing was written on exit.
 - Fixed a delegated prompt remaining in the terminal editor when the agent changed keyboard mode before Enter was sent.
 - Fixed delegated Claude Code tasks reporting that no final message was available even when Claude supplied an answer.
 - Fixed a reply from a worker’s previous turn being returned for a newly delegated task.
@@ -37,6 +38,7 @@ macOS、Linux 和 Android 下载为预览版。
 
 #### 修复
 
+- 修复以管理员身份运行 Pebrel 时不再恢复也不再保存会话的问题：管理员标记被一并套用到工作区快照，导致每次提权启动都只剩一个默认标签，退出时也不落盘。
 - 修复 Agent 在接收委派内容后切换键盘模式，导致回车未提交、指令留在输入框的问题。
 - 修复 Claude Code 已经给出最终答复，发起委派的窗格却显示没有最终消息的问题。
 - 修复新任务刚被委派时，调用方可能收到上一轮答复的问题。

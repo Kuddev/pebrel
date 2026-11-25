@@ -101,9 +101,8 @@ pub(super) fn load_restore(
     let restore_directory_size =
         crate::platform::CAPABILITIES.restore_directory_window_size && !has_regular_window;
     load_restore_from(id, startup, restore_directory_size, cx, || {
-        if crate::platform::elevation::requires_isolation() {
-            return None;
-        }
+        // Elevation is not an input to restore: an administrator instance reads the
+        // same workspace snapshot as an ordinary one.
         crate::session::load().and_then(|session| session.startup_window_state())
     });
 }

@@ -29,11 +29,9 @@ pub(crate) fn open_initial_window(
                 },
             }
         } else {
-            initial_startup(
-                initial_cwd,
-                initial_command,
-                crate::platform::elevation::requires_isolation(),
-            )
+            // Elevation is not an input to workspace restore: an administrator
+            // launch reads the same snapshot as an ordinary one.
+            initial_startup(initial_cwd, initial_command, false)
         };
         let start_hidden = initial_window_hidden(
             &startup,
@@ -79,10 +77,15 @@ pub(super) fn runtime_window_startup(
     }
 }
 
+/// Resolve how the first workspace starts.
+///
+/// `handover` marks an elevated dispatch that asks for a specific tab; such a
+/// request must never replay the whole workspace. Elevation alone is not one:
+/// an administrator launch restores the same snapshot as an ordinary one.
 pub(super) fn initial_startup(
     cwd: Option<PathBuf>,
     command: Option<crate::config::ui_config::Program>,
-    isolated: bool,
+    handover: bool,
 ) -> WorkspaceStartup {
     if let Some(command) = command {
         let program = command.program().to_owned();
@@ -92,7 +95,7 @@ pub(super) fn initial_startup(
         let launch = super::super::shell_launch::at_explicit_directory(launch, cwd.as_deref());
         return WorkspaceStartup::LaunchTerminal { cwd, launch };
     }
-    if cwd.is_some() || isolated {
+    if cwd.is_some() || handover {
         WorkspaceStartup::NewTerminal { cwd }
     } else {
         WorkspaceStartup::RestoreOrDefault
@@ -282,8 +285,14 @@ mod startup_tests {
     }
 
     #[test]
-    fn privileged_startup_never_restores_the_ordinary_session() {
+    fn elevation_restores_but_a_handover_only_opens_the_requested_tab() {
+        // Elevation alone must not skip the workspace snapshot: only a handover
+        // request (an elevated dispatch asking for one tab) stays a new terminal.
         assert!(matches!(initial_startup(None, None, false), WorkspaceStartup::RestoreOrDefault));
+        assert!(matches!(
+            initial_startup(Some(PathBuf::from("project")), None, false),
+            WorkspaceStartup::NewTerminal { .. }
+        ));
         assert!(matches!(
             initial_startup(None, None, true),
             WorkspaceStartup::NewTerminal { cwd: None }
