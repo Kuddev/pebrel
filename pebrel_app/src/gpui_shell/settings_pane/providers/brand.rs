@@ -72,13 +72,16 @@ impl SettingsPane {
                 AgentKind::CodeBuddy,
                 AgentKind::Droid,
                 AgentKind::Antigravity,
+                AgentKind::Dsh,
             ]
             .into_iter()
             .filter_map(|agent| {
                 let (mut pixels, width, height) =
                     crate::display::AiLogo::render_brand(source(agent)?, ink, target.0)?;
                 for pixel in pixels.chunks_exact_mut(4) {
-                    if agent == AgentKind::Kimi && pixel[0] == pixel[1] && pixel[1] == pixel[2] {
+                    if (agent == AgentKind::Kimi && pixel[0] == pixel[1] && pixel[1] == pixel[2])
+                        || agent == AgentKind::Dsh
+                    {
                         pixel[..3].copy_from_slice(&ink);
                     }
                     // 夜间保留色相，只把品牌原色轻压暗；不改成单色蒙版。
@@ -145,6 +148,7 @@ fn source(agent: AgentKind) -> Option<&'static [u8]> {
         AgentKind::CodeBuddy => AiLogo::CodeBuddy.svg(),
         AgentKind::Droid => include_bytes!("../../../../../extra/logo/ai_droid.svgz"),
         AgentKind::Antigravity => AiLogo::Antigravity.svg(),
+        AgentKind::Dsh => AiLogo::DeepSeek.svg(),
         _ => return None,
     })
 }
