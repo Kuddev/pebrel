@@ -57,6 +57,7 @@ use keyboard_bindings::{
 };
 mod details_panel;
 mod documents;
+mod dropped_paths;
 mod export;
 mod file_tree;
 mod key_actions;

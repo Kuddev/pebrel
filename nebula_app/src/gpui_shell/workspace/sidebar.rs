@@ -705,7 +705,14 @@ impl NebulaWorkspace {
                             ),
                     ),
             )
-            .child(self.wrap_tabs_scroll_list(items, rows.len(), cx));
+            .child(self.wrap_tabs_scroll_list(items, rows.len(), cx))
+            // 拖入外部文件夹 = 各开一个标签（终端区自己的落点另说）。落点高亮
+            // 只在这一层，否则用户拖到一半无法判断松手落在哪里。
+            .drag_over::<gpui::ExternalPaths>(move |style, _, _, _| style.bg(hover_bg))
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                cx.stop_propagation();
+                this.open_dropped_directories(paths.paths(), window, cx);
+            }));
         sidebar
     }
 

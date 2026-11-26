@@ -38,7 +38,7 @@ _pebrel() {
 '--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
 '--version[Print version]' \
-'::directory -- Open a directory supplied by the desktop file manager:_files -/' \
+'::directory -- Open directories supplied by the desktop file manager:_files -/' \
 ":: :_pebrel_commands" \
 "*::: :->Pebrel" \
 && ret=0

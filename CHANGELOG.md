@@ -22,6 +22,10 @@ Every release entry is provided in English and Simplified Chinese.
 
 macOS, Linux, and Android downloads are Preview builds.
 
+#### Added
+
+- Opening folders from Explorer with several folders selected now opens one tab per folder, and dropping folders onto the tab bar does the same. Non-folder drops are ignored with a notice.
+
 #### Fixed
 
 - Fixed a delegated prompt remaining in the terminal editor when the agent changed keyboard mode before Enter was sent.
@@ -34,6 +38,10 @@ macOS, Linux, and Android downloads are Preview builds.
 ### 中文
 
 macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 资源管理器多选文件夹后「在 Pebrel 中打开」现在一个文件夹一个标签；把文件夹拖到标签栏效果相同，非文件夹项按忽略处理并给出提示。
 
 #### 修复
 

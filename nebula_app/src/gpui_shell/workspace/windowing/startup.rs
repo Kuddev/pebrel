@@ -6,11 +6,15 @@ pub(crate) fn open_initial_window(
     cx: &mut App,
     ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
     shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
-    initial_cwd: Option<PathBuf>,
+    initial_directories: Vec<PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
     launched_at_login: bool,
 ) {
+    // 桌面多选时只有第一个目录走启动意图，其余目录在窗口建好后逐个补成标签，
+    // 一次选择就是同一扇窗里的 N 个标签，不是 N 扇窗。
+    let mut directories = initial_directories;
+    let initial_cwd = if directories.is_empty() { None } else { Some(directories.remove(0)) };
     if let Some(sessions) = crate::update_download::handoff::restore_ticket() {
         if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
             log::error!("Could not reopen updated workspace: {}", error.message);
@@ -40,7 +44,7 @@ pub(crate) fn open_initial_window(
             &nebula_settings::RuntimeSettings::load(),
             launched_at_login,
         );
-        open_workspace_window_with_visibility(
+        let (runtime_window_id, workspace) = open_workspace_window_with_visibility(
             cx,
             startup,
             Some(ai_events),
@@ -50,11 +54,42 @@ pub(crate) fn open_initial_window(
             start_hidden,
         )
         .expect("failed to open Pebrel GPUI window");
+        if !directories.is_empty() {
+            add_directories_as_tabs(cx, runtime_window_id, workspace, directories);
+        }
     }
 
     // The Runtime can accept subscriptions during boot. Publish once after
     // all initial windows are registered, including when startup stays quiet.
     publish_runtime_snapshot(cx);
+}
+
+/// 把一次多选里剩下的目录补成同一扇窗的标签。
+///
+/// 桌面的多选只有第一个目录参与了启动意图，其余目录在这里补上；`add_terminal_at`
+/// 自己会把新标签设为活动标签，所以最后一个目录自然成为焦点，不需要额外操作。
+fn add_directories_as_tabs(
+    cx: &mut App,
+    runtime_window_id: u64,
+    workspace: Entity<NebulaWorkspace>,
+    directories: Vec<PathBuf>,
+) {
+    let Some(handle) = cx
+        .global::<WindowRegistry>()
+        .entries
+        .iter()
+        .find(|entry| entry.runtime_window_id == runtime_window_id)
+        .map(|entry| entry.handle)
+    else {
+        return;
+    };
+    let _ = handle.update(cx, move |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            for directory in directories {
+                workspace.add_terminal_at(Some(directory), None, window, cx);
+            }
+        });
+    });
 }
 
 fn initial_window_hidden(

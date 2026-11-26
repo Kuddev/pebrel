@@ -616,6 +616,12 @@ impl NebulaWorkspace {
                     .when_some(port_forward_button, |controls, button| controls.child(button))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
+            // 与侧栏同一合同：拖入文件夹 = 各开一个标签，落点给一层底色反馈。
+            .drag_over::<gpui::ExternalPaths>(move |style, _, _, _| style.bg(hover_bg))
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                cx.stop_propagation();
+                this.open_dropped_directories(paths.paths(), window, cx);
+            }))
             .into_any_element()
     }
 

@@ -867,6 +867,8 @@
     "drop_paths_expired": "Path paste was canceled because the active input changed.",
     "drop_paths_failed": "Could not convert the paths for this WSL session. Please try again.",
     "drop_paths_remote": "Local paths cannot be used directly over SSH. Drop the files into the remote file tree to upload them.",
+    "drop_directories_ignored": "Opened a tab for each dropped folder. {ignored} dropped item(s) are not folders and were ignored.",
+    "drop_directories_empty": "None of the dropped items is a folder.",
     "file_upload_disconnected": "Connect the SSH session before uploading files.",
     "file_upload_busy": "The previous file upload is still in progress.",
     "file_upload_failed": "Could not upload files: {error}",

@@ -164,6 +164,9 @@ Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Pebrel"; ValueT
 Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Pebrel\command"; ValueType: string; ValueName: ""; ValueData: """{app}\pebrel.exe"" --gpui --working-directory ""%V"""
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:OpenInPebrel}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\pebrel.exe,0"
+; Player 让 Explorer 只调用一次，并把整批选中项追加到命令行尾部；CLI 把
+; `--working-directory` 与这些位置参数合成按顺序去重的目录表，一项一个标签。
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Player"
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel\command"; ValueType: string; ValueName: ""; ValueData: """{app}\pebrel.exe"" --gpui --working-directory ""%1"""
 #endif
 

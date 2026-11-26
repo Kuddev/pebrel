@@ -87,7 +87,7 @@ pub(crate) enum GpuiShellEvent {
 /// GPUI 拥有自己的消息循环：主窗形态从主线程调用（winit 不启动）；
 /// spike 形态从专用线程调用。一个进程内只允许调用一次。
 pub fn run_shell(
-    initial_cwd: Option<std::path::PathBuf>,
+    initial_directories: Vec<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
     config_file: Option<std::path::PathBuf>,
@@ -114,7 +114,7 @@ pub fn run_shell(
         let settings = nebula_settings::RuntimeSettings::load();
         let request = Request {
             cwd: crate::platform::startup::resident_launch_directory(
-                initial_cwd.clone(),
+                initial_directories.first().cloned(),
                 &settings,
                 crate::platform::launch_directory::is_wsl(
                     initial_command
@@ -203,7 +203,7 @@ pub fn run_shell(
         // 发布 endpoint。短暂等待并交接，避免继续打开一个无控制面的空窗口。
         let settings = nebula_settings::RuntimeSettings::load();
         let handover_cwd = crate::platform::startup::resident_launch_directory(
-            initial_cwd.clone(),
+            initial_directories.first().cloned(),
             &settings,
             crate::platform::launch_directory::is_wsl(
                 workspace::shell_launch::startup_shell(shell_id.clone()).as_ref(),
@@ -251,7 +251,7 @@ pub fn run_shell(
         // per-process hook pipe before the first TerminalView spawns.
         let ai_events = crate::ai_hook::spawn_gpui_server();
         init(cx, startup_window);
-        if initial_cwd.is_some()
+        if !initial_directories.is_empty()
             || initial_command.is_some()
             || shell_id.is_some()
             || crate::platform::elevation::requires_isolation()
@@ -267,7 +267,7 @@ pub fn run_shell(
             ai_events,
             shell_rx,
             runtime_hub,
-            initial_cwd,
+            initial_directories,
             initial_command,
             shell_id,
             launched_at_login,
@@ -352,7 +352,7 @@ fn open_main_window(
     ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
     shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
     runtime_hub: crate::runtime_api::RuntimeHub,
-    initial_cwd: Option<std::path::PathBuf>,
+    initial_directories: Vec<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
     launched_at_login: bool,
@@ -362,7 +362,7 @@ fn open_main_window(
         cx,
         ai_events,
         shell_events,
-        initial_cwd,
+        initial_directories,
         initial_command,
         shell_id,
         launched_at_login,
