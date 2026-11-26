@@ -14,10 +14,11 @@ pub enum AiLogo {
     OhMyPi,
     CodeBuddy,
     Kimi,
+    DeepSeek,
 }
 
 impl AiLogo {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Claude,
         Self::OpenAi,
         Self::OpenCode,
@@ -28,6 +29,7 @@ impl AiLogo {
         Self::OhMyPi,
         Self::CodeBuddy,
         Self::Kimi,
+        Self::DeepSeek,
     ];
 
     /// 每种标志只嵌入一个无损压缩的矢量源，两个壳按当前 DPI 共用它。
@@ -43,6 +45,7 @@ impl AiLogo {
             Self::OhMyPi => include_bytes!("../../../extra/logo/ai_omp.svgz"),
             Self::CodeBuddy => include_bytes!("../../../extra/logo/ai_codebuddy.svgz"),
             Self::Kimi => include_bytes!("../../../extra/logo/ai_kimi.svgz"),
+            Self::DeepSeek => include_bytes!("../../../extra/logo/ai_deepseek.svgz"),
         }
     }
 
@@ -75,12 +78,14 @@ impl AiLogo {
             Self::OhMyPi => include_bytes!("../../../extra/logo/ai_omp.png"),
             Self::CodeBuddy => include_bytes!("../../../extra/logo/ai_codebuddy.png"),
             Self::Kimi => include_bytes!("../../../extra/logo/ai_kimi.png"),
+            // 新标志直接采用矢量源，没有历史 PNG 需要核对。
+            Self::DeepSeek => panic!("DeepSeek has no historical PNG fixture"),
         }
     }
 
     fn tint_preserves_luma(self) -> Option<bool> {
         match self {
-            Self::OpenAi | Self::Pi => Some(false),
+            Self::OpenAi | Self::Pi | Self::DeepSeek => Some(false),
             // OpenCode stores a luma map: the frame is white, the inner block gray.
             // Kimi's letterform is solid white with a small blue accent: embedded
             // unchanged it vanishes on light themes, so it rides the luma map too —
@@ -210,6 +215,7 @@ pub(crate) fn ai_logo_for_program(program: &str) -> Option<AiLogo> {
         AgentKind::OhMyPi => Some(AiLogo::OhMyPi),
         AgentKind::CodeBuddy => Some(AiLogo::CodeBuddy),
         AgentKind::Kimi => Some(AiLogo::Kimi),
+        AgentKind::Dsh => Some(AiLogo::DeepSeek),
         _ => None,
     }
 }
@@ -228,7 +234,7 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
         "gemini" => "\u{f0ce6}",
         "copilot" => "\u{f4b8}",
         "cursor" | "cursor-agent" => "\u{f0ec3}",
-        "aider" | "goose" | "crush" | "ollama" => "\u{f06a9}",
+        "aider" | "goose" | "crush" | "ollama" | "dsh" => "\u{f06a9}",
         "opencode" | "trae-cli" => "\u{f489}",
         "pi" | "omp" | "oh-my-pi" => "\u{f135}",
         "codebuddy" | "cbc" | "codebuddy-code" | "codebuddy-lowmem" => "\u{f06a9}",
@@ -293,6 +299,7 @@ mod tests {
         }
 
         assert_eq!(logo_for_command("codex"), Some(AiLogo::OpenAi));
+        assert_eq!(logo_for_command("dsh --profile tui"), Some(AiLogo::DeepSeek));
         assert_eq!(logo_for_command("C:\\Tools\\CLAUDE.EXE --resume"), Some(AiLogo::Claude));
         assert_eq!(program_icon("cargo"), "\u{e7a8}");
         assert_eq!(logo_for_command("unlisted-program"), None);
@@ -432,7 +439,7 @@ mod tests {
             logo.tint_pixels(&mut pixels, ink);
             assert_eq!(pixels, source);
         }
-        for logo in [AiLogo::OpenAi, AiLogo::Pi] {
+        for logo in [AiLogo::OpenAi, AiLogo::Pi, AiLogo::DeepSeek] {
             let mut pixels = source;
             logo.tint_pixels(&mut pixels, ink);
             assert_eq!(pixels, [100, 200, 240, 128, 100, 200, 240, 64]);
