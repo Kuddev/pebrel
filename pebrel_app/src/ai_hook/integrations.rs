@@ -6,7 +6,7 @@ use pebrel_settings::AgentHook;
 
 use crate::ai_agents::AgentKind;
 
-pub(crate) const AGENTS: [AgentKind; 15] = [
+pub(crate) const AGENTS: [AgentKind; 16] = [
     AgentKind::Claude,
     AgentKind::Codex,
     AgentKind::OpenCode,
@@ -22,6 +22,7 @@ pub(crate) const AGENTS: [AgentKind; 15] = [
     AgentKind::Droid,
     AgentKind::Antigravity,
     AgentKind::Hermes,
+    AgentKind::Dsh,
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -237,5 +238,20 @@ mod tests {
         assert_eq!(find_executable(AgentKind::Hermes, &[bin]), None);
         assert_eq!(AgentKind::parse_command("hermes"), Some(AgentKind::Hermes));
         assert_eq!(AgentKind::parse("HERMES.EXE"), Some(AgentKind::Hermes));
+    }
+
+    #[test]
+    fn dsh_discovery_accepts_the_npm_launcher_without_installing_hooks() {
+        assert!(AGENTS.contains(&AgentKind::Dsh));
+        assert_eq!(hook_for(AgentKind::Dsh), None);
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("npm");
+        let mut path = executable(&bin, "dsh");
+        if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+            let shim = path.with_extension("cmd");
+            std::fs::rename(&path, &shim).unwrap();
+            path = shim;
+        }
+        assert_eq!(find_executable(AgentKind::Dsh, &[bin]), Some(path));
     }
 }
