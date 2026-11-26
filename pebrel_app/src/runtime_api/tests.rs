@@ -577,6 +577,27 @@ fn agent_start_exposes_only_verified_launch_contracts() {
         }) if command == "codex"
     ));
 
+    for session in [None, Some("session-1")] {
+        let request = ApiRequest::new(
+            "token".into(),
+            "agent.start",
+            json!({ "name": "reviewer", "kind": "dsh", "resume_session_id": session }),
+        );
+        let expected = if session.is_some() {
+            "dsh --profile tui --resume session-1"
+        } else {
+            "dsh --profile tui"
+        };
+        assert!(matches!(
+            RuntimeCommand::from_request(&request),
+            Ok(RuntimeCommand::AgentStart {
+                kind: crate::ai_agents::AgentKind::Dsh,
+                ref command,
+                ..
+            }) if command == expected
+        ));
+    }
+
     let unsupported = ApiRequest::new(
         "token".into(),
         "agent.start",
