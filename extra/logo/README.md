@@ -243,6 +243,27 @@ dims proportionally. The committed bytes keep the source colors. The icon
 identifies running `kimi` and `kimi-code` processes and does not imply
 endorsement by Moonshot AI.
 
+### DeepSeek Harness / DSH TUI
+
+`ai_deepseek.svg` is the unchanged DeepSeek whale mark from the official
+DeepSeek Harness repository, downloaded on 2026-11-26:
+
+- Source: https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/apps/web/public/favicon.svg
+- License: [MIT](LICENSE-deepseek-harness), copyright DeepSeek.
+- SVG SHA-256: `9e983b4f649c25c6ca0623a50be1a6e705fd8f49f756638b980fa13b40575ab6`.
+
+The adjacent SVGZ is lossless gzip with timestamp zero. Both shells render this
+monochrome mark with theme ink so it remains visible on light and dark surfaces.
+No PNG is embedded or required for this vector asset.
+
+The official npm package `@deepseek-ai/dsh` exposes `dsh` as its executable.
+The terminal interface uses `@tomowang/dsh-tui`, installed with
+`dsh plugin --profile tui add @tomowang/dsh-tui` and launched with
+`dsh --profile tui`. Runtime launches and resumes target that profile;
+manually entered commands retain the user's own arguments. Sources:
+https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/cli and
+https://github.com/tomowang/dsh-tui#install.
+
 ### Oh My Pi
 
 `ai_omp.svg` is a Pebrel-drawn purple gradient π mark following the maintainer's
