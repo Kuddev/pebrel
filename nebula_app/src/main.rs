@@ -237,12 +237,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         let requested_shell = terminal_options.command().map(Into::into).or_else(|| {
             crate::gpui_shell::workspace::shell_launch::startup_shell(shell_id.clone())
         });
-        let initial_cwd = terminal_options.resolved_working_directory().and_then(|path| {
-            platform::launch_directory::validate(
-                path,
-                platform::launch_directory::is_wsl(requested_shell.as_ref()),
-            )
-        });
+        // 桌面文件管理器多选时，右键的那一项走 `--working-directory`，其余选项
+        // 作为尾部位置参数追加；两者合成一份按顺序去重的目录表。
+        let initial_directories: Vec<std::path::PathBuf> = terminal_options
+            .startup_directories()
+            .into_iter()
+            .filter_map(|path| {
+                platform::launch_directory::validate(
+                    path,
+                    platform::launch_directory::is_wsl(requested_shell.as_ref()),
+                )
+            })
+            .collect();
         platform::startup::prepare_gui();
         let _log_file = logging::initialize(&options).expect("Unable to initialize logger");
         // 显式点名的 shell 解析不了就别开窗：悄悄换回默认 shell 是这条路径最该
@@ -269,7 +275,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             });
         }
         gpui_shell::run_shell(
-            initial_cwd,
+            initial_directories,
             terminal_options.command(),
             shell_id,
             options.config_file.clone(),
@@ -590,22 +596,61 @@ fn try_hand_over_to_resident(options: &Options) -> bool {
     }
     let shell_id = terminal_options.shell_id();
     let settings = nebula_settings::RuntimeSettings::load();
-    let launch_dir = resident_launch_directory(terminal_options, &settings);
+    let launch_dirs = resident_launch_directories(terminal_options, &settings);
     if settings.windowing_behavior == nebula_settings::WindowingBehaviorName::UseNew {
-        return runtime_api::try_open_window_existing(launch_dir.as_deref(), shell_id.as_deref());
+        return runtime_api::try_open_window_existing(
+            launch_dirs.first().map(|dir| dir.as_path()),
+            shell_id.as_deref(),
+        );
     }
-    if launch_dir.is_none() && runtime_api::try_open_default_tab_existing(shell_id.as_deref()) {
+    if launch_dirs.is_empty() && runtime_api::try_open_default_tab_existing(shell_id.as_deref()) {
         return true;
     }
-    // Explorer 右键「在 Nebula 中打开」带着 --working-directory 走到这里。
-    // 带目录、无 -e 命令的启动优先并入驻留实例——ATTACH 恢复窗口，再在
-    // 其中打开定目录标签；没有驻留实例时照旧独立启动。
-    if let Some(dir) = launch_dir
-        && runtime_api::try_open_directory_existing(&dir, shell_id.as_deref())
-    {
-        return true;
+    // Explorer 右键「在 Pebrel 中打开」带着 --working-directory 走到这里，
+    // 多选时其余目录以尾部位置参数跟来。每个目录各发一次 `tab.new`，只要
+    // 有一次被驻留实例接下就视为本进程已交接（再本地开窗会多出一扇窗）；
+    // 全部失败才回落到独立启动。
+    if !launch_dirs.is_empty() {
+        let mut handed_over = false;
+        for dir in &launch_dirs {
+            handed_over |= runtime_api::try_open_directory_existing(dir, shell_id.as_deref());
+        }
+        if handed_over {
+            return true;
+        }
     }
     false
+}
+
+fn resident_launch_directories(
+    options: &cli::TerminalOptions,
+    settings: &nebula_settings::RuntimeSettings,
+) -> Vec<std::path::PathBuf> {
+    let directories = options.startup_directories();
+    if directories.is_empty() {
+        // 没有显式目录时才让「启动目录」设置顶上来；一次多选绝不能被设置
+        // 覆盖成同一个目录。
+        return resident_launch_directory(options, settings).into_iter().collect();
+    }
+    #[cfg(feature = "gpui-shell")]
+    let shell = options.command().map(Into::into).or_else(|| {
+        crate::gpui_shell::workspace::shell_launch::startup_shell(
+            options.shell_id().or_else(|| settings.shell.clone()),
+        )
+    });
+    #[cfg(not(feature = "gpui-shell"))]
+    let shell = options.command().map(Into::into);
+    let wsl = platform::launch_directory::is_wsl(shell.as_ref());
+    let mut resolved = Vec::new();
+    for directory in directories {
+        if let Some(directory) =
+            platform::startup::resident_launch_directory(Some(directory), settings, wsl)
+            && !resolved.contains(&directory)
+        {
+            resolved.push(directory);
+        }
+    }
+    resolved
 }
 
 fn resident_launch_directory(

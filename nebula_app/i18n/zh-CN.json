@@ -867,6 +867,8 @@
     "drop_paths_expired": "当前输入状态已改变，已取消路径粘贴。",
     "drop_paths_failed": "无法为此 WSL 会话转换路径，请重试。",
     "drop_paths_remote": "SSH 中不能直接使用本地路径，请将文件拖到远程文件树上传。",
+    "drop_directories_ignored": "已为每个拖入的文件夹打开标签；{ignored} 个拖入项不是文件夹，已忽略。",
+    "drop_directories_empty": "拖入的项目中没有文件夹。",
     "file_upload_disconnected": "请先连接 SSH 会话再上传文件。",
     "file_upload_busy": "上一组文件仍在上传。",
     "file_upload_failed": "无法上传文件：{error}",
