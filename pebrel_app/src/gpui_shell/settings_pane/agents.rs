@@ -310,6 +310,7 @@ impl SettingsPane {
                 | AgentKind::Droid
                 | AgentKind::Antigravity
                 | AgentKind::Hermes
+                | AgentKind::Dsh
         ) {
             self.provider_brand(agent)
         } else if let Some(path) = match agent {

@@ -54,10 +54,11 @@ pub enum AgentKind {
     Trae,
     CodeBuddy,
     CommandCode,
+    Dsh,
 }
 
 impl AgentKind {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Claude,
         Self::Codex,
         Self::Gemini,
@@ -86,6 +87,7 @@ impl AgentKind {
         Self::Trae,
         Self::CodeBuddy,
         Self::CommandCode,
+        Self::Dsh,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -118,6 +120,7 @@ impl AgentKind {
             Self::Trae => "trae-cli",
             Self::CodeBuddy => "codebuddy",
             Self::CommandCode => "command-code",
+            Self::Dsh => "dsh",
         }
     }
 
@@ -151,6 +154,7 @@ impl AgentKind {
             Self::Trae => "Trae CLI",
             Self::CodeBuddy => "CodeBuddy Code",
             Self::CommandCode => "Command Code",
+            Self::Dsh => "DeepSeek Harness",
         }
     }
 
@@ -194,6 +198,7 @@ impl AgentKind {
             Self::CodeBuddy => &["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"],
             // The package's `cmd` bin is omitted: it is the Windows Command Prompt.
             Self::CommandCode => &["command-code", "commandcode", "cmdc"],
+            Self::Dsh => &["dsh"],
         }
     }
 
@@ -253,7 +258,14 @@ impl AgentKind {
             // The prewarm helper also lives inside the codebuddy-code package;
             // its parent directory alone must not identify it as a live CLI.
             .filter(|token| launcher_stem(token) != "cbc-prewarm")
-            .find_map(|token| token.split(['/', '\\']).find_map(Self::parse))
+            .find_map(|token| {
+                // npm 的版本后缀不属于可执行文件名，只在已知包入口上解析。
+                if token.strip_prefix("@deepseek-ai/dsh@").is_some_and(|version| !version.is_empty()) {
+                    Some(Self::Dsh)
+                } else {
+                    token.split(['/', '\\']).find_map(Self::parse)
+                }
+            })
     }
 
     /// Shell-safe resume command. Session ids are untrusted hook/file input,
@@ -289,6 +301,7 @@ impl AgentKind {
             | Self::Trae => return None,
             Self::Kimi => format!("kimi --session {session_id}"),
             Self::CommandCode => format!("command-code --resume {session_id}"),
+            Self::Dsh => format!("dsh --profile tui --resume {session_id}"),
         })
     }
 
@@ -306,6 +319,8 @@ impl AgentKind {
             Self::Kimi => Some("kimi".to_owned()),
             Self::CommandCode => Some("command-code".to_owned()),
             Self::Hermes => Some("hermes".to_owned()),
+            // 官方启动器按 profile 选择界面；终端入口使用 dsh-tui 的安装约定。
+            Self::Dsh => Some("dsh --profile tui".to_owned()),
             _ => None,
         }
     }
@@ -1041,6 +1056,41 @@ mod tests {
         assert_eq!(AgentKind::Trae.start_command(), None);
         assert_eq!(AgentKind::Trae.resume_command("session-1"), None);
         assert_eq!(AgentKind::Trae.fork_command("session-1"), None);
+    }
+
+    #[test]
+    fn dsh_cli_entry_points_and_tui_launches() {
+        for executable in ["dsh", "DSH.CMD", r"C:\tools\dsh.ps1", "/usr/local/bin/dsh"] {
+            assert_eq!(AgentKind::parse(executable), Some(AgentKind::Dsh), "{executable}");
+        }
+        for command in [
+            "dsh web",
+            "dsh --profile tui",
+            "dsh --profile custom --resume session-1",
+            "npx --yes @deepseek-ai/dsh --profile tui",
+            "npx @deepseek-ai/dsh@0.2.2-rc.5 --profile tui",
+            "npm exec @deepseek-ai/dsh -- --profile tui",
+            "node /opt/node_modules/@deepseek-ai/dsh/lib/bin.js --profile tui",
+            r"node.exe C:\npm\node_modules\@deepseek-ai\dsh\lib\bin.js --profile tui",
+        ] {
+            assert_eq!(AgentKind::parse_command(command), Some(AgentKind::Dsh), "{command}");
+        }
+        for command in [
+            "dsh-helper",
+            "cat dsh.md",
+            "npx @tomowang/dsh-tui",
+            "npx @deepseek-ai/dsh-base",
+            "node server.js",
+        ] {
+            assert_eq!(AgentKind::parse_command(command), None, "{command}");
+        }
+        assert_eq!(AgentKind::Dsh.start_command().as_deref(), Some("dsh --profile tui"));
+        assert_eq!(
+            AgentKind::Dsh.resume_command("session-1").as_deref(),
+            Some("dsh --profile tui --resume session-1")
+        );
+        assert_eq!(AgentKind::Dsh.resume_command("session; calc"), None);
+        assert_eq!(AgentKind::Dsh.fork_command("session-1"), None);
     }
 
     #[test]
