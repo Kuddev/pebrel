@@ -2210,12 +2210,12 @@ impl Display {
         // and light marks, selected to match the chrome ink without tinting.
         let grok_uses_light_mark =
             u32::from(ink.r) * 299 + u32::from(ink.g) * 587 + u32::from(ink.b) * 114 >= 128_000;
-        let key = match logo {
-            AiLogo::Grok if grok_uses_light_mark => (logo, [255, 255, 255], target_size),
-            AiLogo::OpenAi | AiLogo::OpenCode | AiLogo::Pi | AiLogo::Kimi | AiLogo::Grok => {
-                (logo, [ink.r, ink.g, ink.b], target_size)
-            },
-            _ => (logo, [0, 0, 0], target_size),
+        let key = if logo == AiLogo::Grok && grok_uses_light_mark {
+            (logo, [255, 255, 255], target_size)
+        } else if logo.shares_theme_texture() {
+            (logo, [0, 0, 0], target_size)
+        } else {
+            (logo, [ink.r, ink.g, ink.b], target_size)
         };
         if let Some(cached) = self.nebula_ai_logo_cache.get(&key) {
             return Some(cached.clone());
