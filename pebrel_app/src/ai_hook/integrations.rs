@@ -247,7 +247,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("npm");
         let mut path = executable(&bin, "dsh");
-        if cfg!(windows) {
+        if crate::platform::Platform::current() == crate::platform::Platform::Windows {
             let shim = path.with_extension("cmd");
             std::fs::rename(&path, &shim).unwrap();
             path = shim;
