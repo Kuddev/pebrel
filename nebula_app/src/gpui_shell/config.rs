@@ -81,6 +81,8 @@ pub struct Settings {
     pub tab_close_visible: bool,
     /// Use the working directory or SSH destination as the automatic tab title.
     pub static_tab_titles: bool,
+    /// 终端可点击路径按磁盘存在性跨空格延长（默认关，见 `display::hint`）。
+    pub clickable_paths_with_spaces: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
     pub tab_sleep: nebula_settings::TabSleep,
     /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
@@ -134,6 +136,11 @@ pub(crate) fn ai_toasts_enabled(cx: &App) -> bool {
 /// 标签标题固定在目录/主机名上：只读内存快照，渲染路径不做磁盘 I/O。
 pub(crate) fn static_tab_titles(cx: &App) -> bool {
     cx.try_global::<Settings>().is_some_and(|settings| settings.static_tab_titles)
+}
+
+/// 终端可点击路径是否跨空格延长：未注册全局设置时等同上游（关）。
+pub(crate) fn clickable_paths_with_spaces(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.clickable_paths_with_spaces)
 }
 
 #[inline]
@@ -194,6 +201,8 @@ impl Settings {
     /// panes use this entry point to avoid resolving the old theme between the
     /// write and the global cache update.
     pub fn load_with_runtime(theme: nebula_settings::ThemeName, runtime: RuntimeSettings) -> Self {
+        // 提示开关在渲染热路径上每帧读取，只能从内存原子量取，不能读设置文件。
+        crate::display::hint::set_clickable_paths_with_spaces(runtime.clickable_paths_with_spaces);
         let resolved_theme =
             Arc::new(crate::gpui_shell::theme::ResolvedTheme::from_runtime(&runtime, theme));
         let ui_language = resolve_ui_language(runtime.language);
@@ -304,6 +313,7 @@ impl Settings {
             notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
             static_tab_titles: runtime.static_tab_titles,
+            clickable_paths_with_spaces: runtime.clickable_paths_with_spaces,
             tab_reveal: runtime.tab_reveal,
             tab_sleep: runtime.tab_sleep,
             ghost: runtime.ghost,

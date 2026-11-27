@@ -108,6 +108,11 @@ pub fn run_shell(
     // Script execution belongs to startup, before any GUI or background consumer
     // reads its first RuntimeSettings snapshot.
     let startup_window = config::source::initialize(config_file.clone());
+    // 终端提示的跨空格开关在首帧渲染前就要就位；Settings 全局建立时还会再推进一次，
+    // 这里覆盖「设置页从未打开」的冷启动路径。
+    crate::display::hint::set_clickable_paths_with_spaces(
+        nebula_settings::RuntimeSettings::load().clickable_paths_with_spaces,
+    );
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
     let _elevated_handover = if crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
         use crate::platform::elevation::handover::{Request, Startup, start_or_forward};
