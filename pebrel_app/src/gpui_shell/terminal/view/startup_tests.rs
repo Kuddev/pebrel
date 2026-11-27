@@ -71,7 +71,9 @@ fn open_at(
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        cx.set_global(Settings::load(pebrel_settings::ThemeName::Nord));
+        let mut settings = Settings::load(pebrel_settings::ThemeName::Nord);
+        settings.agent_resume_args = Default::default();
+        cx.set_global(settings);
     });
     let mut result = None;
     let (_, window) = cx.add_window_view(|window, cx| {

@@ -19,6 +19,10 @@ mod config_defaults;
 pub use config_defaults::{UiValueKind, install_config_defaults, ui_value_kind};
 mod agent_hooks;
 pub use agent_hooks::AgentHook;
+mod agent_resume;
+pub use agent_resume::{AGENT_RESUME_SETTINGS, AgentResumeArgs, AgentResumeRule};
+mod bell;
+pub use bell::BellModeName;
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
 mod background_media;
@@ -846,46 +850,6 @@ impl VcsDisplayName {
     }
 }
 
-/// 终端 BEL（`^G`）的通知方式：关 / 闪烁 / 声音 / 两者。
-/// 缺省 `Both`：旧壳给 AI CLI 回合结束的可听提示默认是开的。
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-pub enum BellModeName {
-    None,
-    Visual,
-    Audible,
-    #[default]
-    Both,
-}
-
-impl BellModeName {
-    pub fn from_settings(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "none" | "off" => Some(Self::None),
-            "visual" => Some(Self::Visual),
-            "audible" => Some(Self::Audible),
-            "both" => Some(Self::Both),
-            _ => None,
-        }
-    }
-
-    pub fn settings_value(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Visual => "visual",
-            Self::Audible => "audible",
-            Self::Both => "both",
-        }
-    }
-
-    pub fn visual(self) -> bool {
-        matches!(self, Self::Visual | Self::Both)
-    }
-
-    pub fn audible(self) -> bool {
-        matches!(self, Self::Audible | Self::Both)
-    }
-}
-
 /// 窗口背景模糊材质：关 / Mica 系列 / Aero / Acrylic。
 ///
 /// 五档对应不同的 DWM 成本模型，落点在
@@ -1095,6 +1059,7 @@ pub struct RuntimeSettings {
     pub silent_start: bool,
     pub restore_session: bool,
     pub resume_ai: bool,
+    pub agent_resume_args: AgentResumeArgs,
     /// 常驻系统托盘图标。
     pub tray: bool,
     pub blur: BlurModeName,
@@ -1303,6 +1268,7 @@ impl RuntimeSettings {
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
+            agent_resume_args: AgentResumeArgs::from_raw(raw),
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
             opacity,

@@ -135,6 +135,7 @@ impl NebulaWorkspace {
         let saved_launch = tab.launch.clone().unwrap_or(LaunchSession::Default);
         let grid = self.initial_grid;
         let mut panes: Vec<TerminalPane> = Vec::new();
+        let mut deferred_agents = Vec::new();
         for (index, leaf) in layout.leaves().into_iter().enumerate() {
             let LayoutSession::Pane { cwd, agent, launch, custom_name } = leaf else { continue };
             let mut launch_session = launch.clone().unwrap_or_else(|| {
@@ -187,7 +188,7 @@ impl NebulaWorkspace {
                 && !command_owns_input
                 && let Some(agent) = agent
             {
-                pane.view.update(cx, |view, cx| view.restore_agent(agent.clone(), cx));
+                deferred_agents.push((pane.view.clone(), agent.clone()));
             }
             panes.push(pane);
         }
@@ -214,6 +215,9 @@ impl NebulaWorkspace {
                 has_bell: false,
             },
         );
+        for (view, agent) in deferred_agents {
+            view.update(cx, |view, cx| view.restore_agent(agent, cx));
+        }
         true
     }
 

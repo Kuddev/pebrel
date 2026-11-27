@@ -254,7 +254,7 @@ pub fn drop_text_for_path(path: &str) -> Option<Vec<u8>> {
     drop_text_for_paths(&[path.to_owned()], PathQuote::CommandPrompt).map(String::into_bytes)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathQuote {
     CommandPrompt,
     PowerShell,
