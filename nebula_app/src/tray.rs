@@ -245,6 +245,20 @@ mod win {
                 log::warn!("tray: CreateWindowExW failed; tray icon disabled");
                 return;
             }
+            // Explorer 通常是普通权限；管理员托盘只放行这条无载荷的重建通知。
+            if let Some(&message) = TASKBAR_CREATED.get() {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    ChangeWindowMessageFilterEx, MSGFLT_ALLOW,
+                };
+                if ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, std::ptr::null_mut())
+                    == 0
+                {
+                    log::warn!(
+                        "tray: could not allow the taskbar restart message: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+            }
             HWND.store(hwnd as isize, Ordering::Release);
 
             let icons = build_icons();
@@ -680,6 +694,83 @@ mod win {
             fn drop(&mut self) {
                 // SAFETY: 测试独占此菜单，断言失败时也要释放原生句柄。
                 unsafe { DestroyMenu(self.0) };
+            }
+        }
+
+        #[test]
+        #[ignore = "requires an interactive Explorer notification area"]
+        fn native_taskbar_recreation_reregisters_only_enabled_icons() {
+            use windows_sys::Win32::UI::Shell::{NIM_DELETE, NIM_MODIFY, Shell_NotifyIconW};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, RegisterWindowMessageW, WS_OVERLAPPED,
+            };
+            // 真实通知区删掉图标而应用仍记 added=true，等价于 Explorer 重建后的状态。
+            unsafe {
+                let hwnd = CreateWindowExW(
+                    0,
+                    windows_sys::w!("STATIC"),
+                    windows_sys::w!("Pebrel tray regression"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                );
+                assert!(!hwnd.is_null());
+                struct Cleanup(windows_sys::Win32::Foundation::HWND);
+                impl Drop for Cleanup {
+                    fn drop(&mut self) {
+                        remove_icon(self.0);
+                        ICONS.with(|slot| {
+                            slot.borrow_mut().take();
+                        });
+                        state().enabled = false;
+                        unsafe {
+                            DestroyWindow(self.0);
+                        }
+                    }
+                }
+                let _cleanup = Cleanup(hwnd);
+                let (normal, attention) = build_icons();
+                ICONS.with(|slot| {
+                    *slot.borrow_mut() = Some(Icons {
+                        normal: normal as isize,
+                        attention: attention as isize,
+                        added: false,
+                    })
+                });
+                state().enabled = true;
+                apply_enabled(hwnd);
+                let data = notify_data(hwnd);
+                assert_ne!(
+                    Shell_NotifyIconW(NIM_MODIFY, &data),
+                    0,
+                    "Explorer must accept the initial icon"
+                );
+                let message = RegisterWindowMessageW(windows_sys::w!("TaskbarCreated"));
+                assert_ne!(message, 0);
+                let _ = TASKBAR_CREATED.set(message);
+                for _ in 0..2 {
+                    assert_ne!(Shell_NotifyIconW(NIM_DELETE, &data), 0);
+                    assert_eq!(Shell_NotifyIconW(NIM_MODIFY, &data), 0);
+                    tray_wnd_proc(hwnd, message, 0, 0);
+                    assert_ne!(
+                        Shell_NotifyIconW(NIM_MODIFY, &data),
+                        0,
+                        "restart must restore registration"
+                    );
+                }
+                state().enabled = false;
+                tray_wnd_proc(hwnd, message, 0, 0);
+                assert_eq!(
+                    Shell_NotifyIconW(NIM_MODIFY, &data),
+                    0,
+                    "disabled tray must stay absent"
+                );
             }
         }
 

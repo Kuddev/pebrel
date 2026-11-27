@@ -33,13 +33,16 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 class DpiChild {
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessMitigationPolicy(IntPtr process, int policy, out uint flags, UIntPtr size);
     [DllImport("user32.dll")] static extern IntPtr GetDpiAwarenessContextForProcess(IntPtr process);
     [DllImport("user32.dll")] static extern bool AreDpiAwarenessContextsEqual(IntPtr a, IntPtr b);
     static int Main(string[] args) {
+        uint redirection;
+        if (!GetProcessMitigationPolicy(new IntPtr(-1), 16, out redirection, new UIntPtr(4))) return 7;
         IntPtr context = GetDpiAwarenessContextForProcess(new IntPtr(-1));
         string report = "v1=" + (AreDpiAwarenessContextsEqual(context, new IntPtr(-3)) ? "1" : "0") +
             "\nv2=" + (AreDpiAwarenessContextsEqual(context, new IntPtr(-4)) ? "1" : "0") +
-            "\nargs=" + String.Join(" ", args);
+            "\nargs=" + String.Join(" ", args) + "\nredirection=" + redirection;
         File.WriteAllText(Environment.GetEnvironmentVariable("PEBREL_LAUNCH_FIXTURE_REPORT"), report);
         return 0;
     }
@@ -86,3 +89,23 @@ $process = Start-Process -FilePath $fixture -ArgumentList @('/VERYSILENT', '/SUP
 $report = Get-Content -LiteralPath (Join-Path $root 'result.txt') -Raw -Encoding UTF8
 if ($report -ne 'PASS: shutdown restore') { throw "Shutdown restore failed: $report; see $root" }
 Write-Output "installer-launch.tests.ps1: $scopeReport; real Run entry and shutdown restore PASS; old-behavior control failed as expected. Evidence: $root"
+
+# 使用生产设置值重建真实 [Run] 子进程，再以旧默认值作对照。
+$production = Get-Content -LiteralPath (Join-Path $repo 'scripts\installer.iss') -Raw -Encoding UTF8
+if ($production -notmatch '(?m)^RedirectionGuard=(?<guard>no)\s*$') { throw 'Production installer must not pass Redirection Guard into terminal children.' }
+$productionGuard = $Matches.guard
+foreach ($guard in @('yes', $productionGuard)) {
+    & $InnoCompiler '/Q' "/DFixtureRoot=$root" "/DFixtureGuard=$guard" "/O$root" (Join-Path $PSScriptRoot 'installer-launch-fixture.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Redirection Guard fixture compilation failed.' }
+    $process = Start-Process -FilePath $fixture -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/runentry=1') -WindowStyle Hidden -Wait -PassThru
+    $deadline = [datetime]::UtcNow.AddSeconds(5)
+    do {
+        $childReport = if (Test-Path -LiteralPath $childPath) { Get-Content -LiteralPath $childPath -Raw -Encoding UTF8 } else { '' }
+        if ($childReport -match 'redirection=(?<flags>[0-9]+)') { break }
+        Start-Sleep -Milliseconds 100
+    } while ([datetime]::UtcNow -lt $deadline)
+    if ($childReport -notmatch 'redirection=(?<flags>[0-9]+)') { throw 'Native child did not report Redirection Guard.' }
+    $enabled = ([uint32]$Matches.flags -band 1) -ne 0
+    if ($enabled -ne ($guard -eq 'yes')) { throw "Installer guard=$guard produced unexpected child policy: $childReport" }
+}
+Write-Output 'Redirection Guard: old installer child = enabled, production installer child = disabled; native Run-entry comparison PASS.'

@@ -2,6 +2,10 @@
   #error FixtureRoot must point at an isolated workspace directory.
 #endif
 
+#ifndef FixtureGuard
+  #define FixtureGuard "no"
+#endif
+
 [Setup]
 AppId=PebrelInstallerLaunchFixture
 AppName=Pebrel Installer Launch Fixture
@@ -9,6 +13,7 @@ AppVersion=0.0.0
 DefaultDirName={#FixtureRoot}
 CreateAppDir=no
 Uninstallable=no
+RedirectionGuard={#FixtureGuard}
 PrivilegesRequired=lowest
 OutputBaseFilename=installer-launch-fixture
 Compression=none
