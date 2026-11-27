@@ -121,6 +121,13 @@ impl SettingsPane {
                 opacity,
                 cx,
             ))
+            .child(self.switch_row(
+                "settings_follow_opacity",
+                language.text(crate::i18n::Message::SettingsOpacityFollow),
+                language.text(crate::i18n::Message::SettingsOpacityFollowDescription),
+                self.runtime.settings_follow_opacity,
+                cx,
+            ))
             .child(self.select_row(
                 "blur",
                 language.text(crate::i18n::Message::SettingsAppearanceBackgroundBlur),

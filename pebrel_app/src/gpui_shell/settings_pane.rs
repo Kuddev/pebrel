@@ -425,6 +425,7 @@ impl SettingsPane {
                 | "dim_inactive_panes"
                 | "refresh_environment"
                 | "automatic_command_views"
+                | "settings_follow_opacity"
         ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
@@ -813,6 +814,7 @@ impl SettingsPane {
             "copy_on_select" => flag!(copy_on_select),
             "focus_follows_mouse" => Some((cur.focus_follows_mouse.is_some(), String::new())),
             "dim_inactive_panes" => flag!(dim_inactive_panes),
+            "settings_follow_opacity" => flag!(settings_follow_opacity),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
             "static_tab_titles" => flag!(static_tab_titles),
@@ -1619,6 +1621,7 @@ impl SettingsPane {
         // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
         let nav = v_flex()
             .debug_selector(|| "settings-sidebar".to_owned())
+            .bg(crate::gpui_shell::theme::settings_navigation_bg(cx))
             .w(px(SETTINGS_NAV_WIDTH))
             .h_full()
             .flex_shrink_0()
