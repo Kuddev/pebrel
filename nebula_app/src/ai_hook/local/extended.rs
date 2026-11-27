@@ -109,11 +109,31 @@ pub(super) fn owns_command(command: &str, tail: &str) -> bool {
     if crate::ai_hook::is_helper_shell_command(command, tail) {
         return true;
     }
-    let Some(encoded) =
-        command.strip_prefix("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
+    let Some((host, encoded)) =
+        command.split_once(" -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
     else {
         return false;
     };
+    let host = if let Some(quoted) = host.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        quoted
+    } else {
+        if host.chars().any(char::is_whitespace) {
+            return false;
+        }
+        host
+    };
+    let filename = host.rsplit(['/', '\\']).next().unwrap_or_default();
+    let absolute = host.starts_with('/')
+        || host.starts_with(r"\\")
+        || (host.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && host.as_bytes().get(1) == Some(&b':')
+            && matches!(host.as_bytes().get(2), Some(b'/' | b'\\')));
+    if host.chars().any(|c| c.is_control() || matches!(c, '"' | '&' | ';' | '|'))
+        || (host != filename && !absolute)
+        || !["powershell.exe", "pwsh.exe"].iter().any(|name| filename.eq_ignore_ascii_case(name))
+    {
+        return false;
+    }
     let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else { return false };
     if bytes.len() % 2 != 0 {
         return false;
@@ -135,10 +155,19 @@ pub(super) fn owns_command(command: &str, tail: &str) -> bool {
 }
 
 pub(super) fn encoded_powershell(script: &str) -> String {
+    #[cfg(windows)]
+    let host = crate::shell_detect::find_pwsh().unwrap_or_else(|| "powershell.exe".into());
+    #[cfg(not(windows))]
+    let host = "powershell.exe".to_owned();
+    encoded_powershell_with_host(script, &host)
+}
+
+fn encoded_powershell_with_host(script: &str, host: &str) -> String {
     use base64::Engine as _;
     let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let host = if host.contains([' ', '\t']) { format!("\"{host}\"") } else { host.to_owned() };
     format!(
-        "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
+        "{host} -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     )
 }
@@ -180,6 +209,21 @@ pub(super) fn apply(agent: AgentHook, helper: &str, enabled: bool) -> io::Result
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn encoded_hook_ownership_survives_powershell_host_migration() {
+        let script = "& 'C:/用户''s Tools/pebrel-hook.exe' antigravity --event done";
+        for host in ["powershell.exe", "pwsh.exe", "C:/Program Files/PowerShell/7/pwsh.exe"] {
+            let command = encoded_powershell_with_host(script, host);
+            assert!(owns_command(&command, "antigravity --event done"));
+            assert!(!owns_command(&command, "claude"));
+            assert!(!owns_command(&format!("{command}; echo custom"), "antigravity --event done"));
+        }
+        assert!(!owns_command(
+            &encoded_powershell_with_host(script, "other.exe"),
+            "antigravity --event done"
+        ));
+    }
 
     #[test]
     fn native_event_names_and_shell_paths_are_preserved() {

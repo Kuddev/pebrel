@@ -53,10 +53,11 @@ pub enum AgentKind {
     Maki,
     Trae,
     CodeBuddy,
+    Dsh,
 }
 
 impl AgentKind {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::Claude,
         Self::Codex,
         Self::Gemini,
@@ -84,6 +85,7 @@ impl AgentKind {
         Self::Maki,
         Self::Trae,
         Self::CodeBuddy,
+        Self::Dsh,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -115,6 +117,7 @@ impl AgentKind {
             Self::Maki => "maki",
             Self::Trae => "trae-cli",
             Self::CodeBuddy => "codebuddy",
+            Self::Dsh => "dsh",
         }
     }
 
@@ -147,6 +150,7 @@ impl AgentKind {
             Self::Maki => "Maki",
             Self::Trae => "Trae CLI",
             Self::CodeBuddy => "CodeBuddy Code",
+            Self::Dsh => "DeepSeek Harness",
         }
     }
 
@@ -188,6 +192,7 @@ impl AgentKind {
             Self::Trae => &["trae-cli"],
             // @tencent-ai/codebuddy-code 2.150.0's interactive bin entries.
             Self::CodeBuddy => &["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"],
+            Self::Dsh => &["dsh"],
         }
     }
 
@@ -282,6 +287,7 @@ impl AgentKind {
             | Self::Trae
             | Self::CodeBuddy => return None,
             Self::Kimi => format!("kimi --session {session_id}"),
+            Self::Dsh => format!("dsh --profile tui --resume {session_id}"),
         })
     }
 
@@ -297,6 +303,7 @@ impl AgentKind {
             Self::Pi => Some("pi".to_owned()),
             Self::OhMyPi => Some("omp".to_owned()),
             Self::Kimi => Some("kimi".to_owned()),
+            Self::Dsh => Some("dsh --profile tui".to_owned()),
             Self::Hermes => Some("hermes".to_owned()),
             _ => None,
         }

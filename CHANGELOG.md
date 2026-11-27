@@ -4,7 +4,7 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.6.2 - Unreleased
+## 2.6.2 - 2026-11-27
 
 - `Pebrel-v2.6.2-android-universal-preview.apk`: `PENDING FINAL BUILD`
 - `Pebrel-v2.6.2-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
@@ -22,8 +22,20 @@ Every release entry is provided in English and Simplified Chinese.
 
 macOS, Linux, and Android downloads are Preview builds.
 
+#### Added
+
+- Added opt-in support for externally installed DSH lifecycle hooks and complete assistant answers in the existing reader. Enable `ai_hooks_dsh=1` and have the plugin invoke `pebrel-hook dsh` with a Claude-style JSON payload on stdin. Addresses [#1105](https://github.com/Kuddev/nebula/issues/1105).
+
 #### Fixed
 
+- Fixed restoring Claude Code sessions with the permission mode reported by their hooks, including bypass mode. Addresses [#1108](https://github.com/Kuddev/nebula/issues/1108).
+- Fixed `--hold` closing a terminal after its command exits; the option also preserves the configured startup directory. Addresses [#1098](https://github.com/Kuddev/nebula/issues/1098).
+- Fixed PowerShell environment assignments rewriting commands and expressions as literal strings. Addresses [#1092](https://github.com/Kuddev/nebula/issues/1092).
+- Fixed elevated Windows windows discarding background sessions on close and opening an extra pane when waking a hidden workspace. Addresses [#1082](https://github.com/Kuddev/nebula/issues/1082).
+- Fixed the first terminal ignoring the configured startup directory in an isolated elevated launch. Addresses [#1081](https://github.com/Kuddev/nebula/issues/1081).
+- Fixed Escape and Ctrl+C after enhanced keyboard requests in local Windows ConPTY sessions; direct SSH and non-Windows terminals retain their negotiated keyboard protocol. Addresses [#1080](https://github.com/Kuddev/nebula/issues/1080).
+- Fixed OMP message redraws clearing the active task title when hooks are disabled. Addresses [#1029](https://github.com/Kuddev/nebula/issues/1029).
+- Fixed transparent wallpaper blur edges and inconsistent light/dark window backgrounds; selected command and folder rows keep their icons aligned.
 - Fixed a delegated prompt remaining in the terminal editor when the agent changed keyboard mode before Enter was sent.
 - Fixed delegated Claude Code tasks reporting that no final message was available even when Claude supplied an answer.
 - Fixed a reply from a worker’s previous turn being returned for a newly delegated task.
@@ -33,14 +45,28 @@ macOS, Linux, and Android downloads are Preview builds.
 
 #### Improved
 
+- Improved Windows hook commands to prefer PowerShell 7 from PATH or known installation locations, with Windows PowerShell as fallback; existing owned hook commands remain recognized. Addresses [#1112](https://github.com/Kuddev/nebula/issues/1112).
+- Improved light and dark wallpaper composition with a shared window background, bounded cached blur, and a dedicated Settings Mica texture.
 - Improved the Settings background by blurring the configured wallpaper behind the sidebar and content and fading it at the top of the window.
 
 ### 中文
 
 macOS、Linux 和 Android 下载为预览版。
 
+#### 新增
+
+- 新增外部安装的 DSH 生命周期 Hook 支持，并把完整回答接入现有阅读器。开启 `ai_hooks_dsh=1` 后，由插件调用 `pebrel-hook dsh`，通过标准输入传入 Claude 风格 JSON 载荷。对应 [#1105](https://github.com/Kuddev/nebula/issues/1105)。
+
 #### 修复
 
+- 修复 Claude Code 恢复时丢失 Hook 已报告权限模式的问题，包括 bypass 模式。对应 [#1108](https://github.com/Kuddev/nebula/issues/1108)。
+- 修复 `--hold` 在命令退出后仍关闭终端的问题，并保留配置的启动目录。对应 [#1098](https://github.com/Kuddev/nebula/issues/1098)。
+- 修复 PowerShell 环境变量赋值把命令和表达式改写为字面字符串的问题。对应 [#1092](https://github.com/Kuddev/nebula/issues/1092)。
+- 修复 Windows 管理员窗口关闭时丢失后台会话，以及唤醒隐藏工作区时额外创建窗格的问题。对应 [#1082](https://github.com/Kuddev/nebula/issues/1082)。
+- 修复管理员隔离启动时首个终端忽略配置启动目录的问题。对应 [#1081](https://github.com/Kuddev/nebula/issues/1081)。
+- 修复 Windows 本地 ConPTY 会话在增强键盘请求后 Escape、Ctrl+C 失效的问题；直接 SSH 和其他桌面系统继续使用各自协商的键盘协议。对应 [#1080](https://github.com/Kuddev/nebula/issues/1080)。
+- 修复关闭 Hook 时 OMP 消息重绘清除当前任务标题的问题。对应 [#1029](https://github.com/Kuddev/nebula/issues/1029)。
+- 修复壁纸模糊边缘漏底及浅色、深色窗口背景层次不一致的问题，并保持选中命令行与文件夹行的图标对齐。
 - 修复 Agent 在接收委派内容后切换键盘模式，导致回车未提交、指令留在输入框的问题。
 - 修复 Claude Code 已经给出最终答复，发起委派的窗格却显示没有最终消息的问题。
 - 修复新任务刚被委派时，调用方可能收到上一轮答复的问题。
@@ -50,6 +76,8 @@ macOS、Linux 和 Android 下载为预览版。
 
 #### 改进
 
+- 改进 Windows Hook 命令：优先使用 PATH 或常见安装位置中的 PowerShell 7，缺失时回退 Windows PowerShell，并继续识别已有的托管 Hook 命令。对应 [#1112](https://github.com/Kuddev/nebula/issues/1112)。
+- 改进浅色和深色壁纸合成，统一整窗背景，复用有界模糊缓存，并为设置页提供独立 Mica 纹理。
 - 改进设置页背景。设置壁纸后，侧栏和正文会显示同一张模糊壁纸，顶部平滑渐隐。
 
 ### Contributors
@@ -61,6 +89,7 @@ macOS、Linux 和 Android 下载为预览版。
 
 - [@Kuddev](https://github.com/Kuddev)
 - [@yjjheizhu](https://github.com/yjjheizhu)
+- [@Aschenbath](https://github.com/Aschenbath)
 
 ## 2.6.1 - 2026-11-20
 

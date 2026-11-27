@@ -55,6 +55,13 @@ pub(super) fn configuration(agent: AgentHook) -> Option<(PathBuf, bool)> {
 pub(crate) fn inspect(agent: AgentHook) -> HookInspection {
     let helper = helper_command();
     let mut result = HookInspection { helper_missing: helper.is_none(), ..Default::default() };
+    if agent == AgentHook::Dsh {
+        // DSH 插件由用户安装；这里只管理接收开关，不伪造外部配置文件。
+        result.available = true;
+        result.enabled = agent.enabled(&RawSettings::load());
+        result.installed = result.enabled;
+        return result;
+    }
     if let Some((path, footprint)) = configuration(agent) {
         result.available = footprint;
         match installed_at(agent, &path, helper.as_deref().unwrap_or_default()) {
@@ -186,6 +193,12 @@ fn current_at(agent: AgentHook, path: &Path, helper: &str) -> io::Result<bool> {
 
 pub(crate) fn set_enabled(agent: AgentHook, enabled: bool) -> io::Result<()> {
     let _lock = lock()?;
+    if agent == AgentHook::Dsh {
+        return nebula_settings::persist_keys(&[(
+            agent.settings_key(),
+            if enabled { "1" } else { "0" }.into(),
+        )]);
+    }
     if enabled {
         let (_, footprint) = configuration(agent)
             .ok_or_else(|| io::Error::other("Agent configuration unavailable"))?;
@@ -224,6 +237,7 @@ pub(super) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()
 
 pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
     match (agent, enabled) {
+        (AgentHook::Dsh, _) => {},
         (AgentHook::Claude, true) => {
             ensure_claude_hooks();
         },

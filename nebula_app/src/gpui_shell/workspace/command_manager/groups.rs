@@ -245,6 +245,9 @@ impl NebulaWorkspace {
             .cursor_pointer()
             .role(gpui::Role::Button)
             .aria_label(name.clone())
+            .when_some(crate::gpui_shell::theme::selection_glass(cx), |row, glass| {
+                glass.reserve(row)
+            })
             .when(selected, |row| selected_glass(row.bg(active), cx))
             .when(!selected, |row| row.hover(move |row| row.bg(hover)))
             .active(move |row| row.bg(active))

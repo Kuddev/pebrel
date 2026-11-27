@@ -1095,9 +1095,10 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Private administrator windows have no public resident discovery path.
+        // 管理员通过现有同身份交接和托盘恢复，工作区仍不写入普通会话。
         if self.window_role != super::windowing::WindowRole::Regular
-            || crate::platform::elevation::requires_isolation()
+            || (crate::platform::elevation::requires_isolation()
+                && !crate::platform::elevation::is_elevated().is_ok_and(|value| value))
         {
             return false;
         }

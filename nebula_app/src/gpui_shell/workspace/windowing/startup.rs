@@ -12,9 +12,7 @@ pub(crate) fn open_initial_window(
     launched_at_login: bool,
     hold: bool,
 ) {
-    if !hold
-        && let Some(sessions) = crate::update_download::handoff::restore_ticket()
-    {
+    if !hold && let Some(sessions) = crate::update_download::handoff::restore_ticket() {
         if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
             log::error!("Could not reopen updated workspace: {}", error.message);
             assert!(
@@ -111,10 +109,14 @@ impl WorkspaceStartup {
         }
         match self {
             Self::LaunchTerminal { cwd, launch, .. } => Self::LaunchTerminal { cwd, launch, hold },
-            Self::NewTerminal { cwd } => Self::LaunchTerminal {
-                launch: super::super::shell_launch::configured_at(cx, cwd.as_deref()),
-                cwd,
-                hold,
+            Self::NewTerminal { cwd } => {
+                // --hold 只改变退出行为，首个终端仍遵循配置的启动目录。
+                let cwd = cwd.or_else(NebulaWorkspace::cold_start_cwd);
+                Self::LaunchTerminal {
+                    launch: super::super::shell_launch::configured_at(cx, cwd.as_deref()),
+                    cwd,
+                    hold,
+                }
             },
             other => other,
         }
@@ -125,7 +127,10 @@ impl WorkspaceStartup {
 mod startup_tests {
     use super::*;
 
-    fn imported_profile(directory: &std::path::Path, name: &str) -> crate::terminal_profiles::TerminalProfile {
+    fn imported_profile(
+        directory: &std::path::Path,
+        name: &str,
+    ) -> crate::terminal_profiles::TerminalProfile {
         let command = directory.join(name);
         let mut bytes = vec![0_u8; 0x86];
         bytes[..2].copy_from_slice(b"MZ");
@@ -134,31 +139,41 @@ mod startup_tests {
         bytes[0x84..0x86].copy_from_slice(&0x014c_u16.to_le_bytes());
         std::fs::write(&command, bytes).unwrap();
         crate::terminal_profiles::TerminalProfile {
-            id: format!("fixture-{name}"), name: name.into(), command,
-            args: vec!["literal value".into()], cwd: None, shell_id: None, env: Default::default(),
+            id: format!("fixture-{name}"),
+            name: name.into(),
+            command,
+            args: vec!["literal value".into()],
+            cwd: None,
+            shell_id: "pwsh".into(),
         }
     }
-
-
 
     #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
     fn isolated_startup_directory_reaches_first_terminal(cx: &mut gpui::TestAppContext) {
         let filter = "gpui_shell::workspace::windowing::startup::startup_tests::isolated_startup_directory_reaches_first_terminal";
-        if crate::platform::profile_test_isolation::run_exact_child(filter, None) {
+        if std::env::var_os("PEBREL_STARTUP_DIRECTORY_TEST").is_none() {
+            let config = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", filter, "--nocapture"])
+                .env("PEBREL_STARTUP_DIRECTORY_TEST", "1")
+                .env("PEBREL_CONFIG_DIR", config.path())
+                .env("NEBULA_CONFIG_DIR", config.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
             return;
         }
         let configured = tempfile::tempdir().unwrap();
         let explicit = tempfile::tempdir().unwrap();
         // Keep the real launch path, but fail process creation before a native PTY reader starts.
-        let profile =
-            imported_profile(configured.path(), "startup.exe");
+        let profile = imported_profile(configured.path(), "startup.exe");
         let mut store = crate::terminal_profiles::TerminalProfiles::default();
         store.upsert(profile.clone()).unwrap();
         store.save().unwrap();
         nebula_settings::persist_keys(&[
             ("startup_directory", configured.path().to_string_lossy().into_owned()),
-            ("shell", format!("profile:custom|{}", profile.id)),
+            ("shell", format!("profile:pwsh|{}", profile.id)),
         ])
         .unwrap();
         cx.update(|cx| {

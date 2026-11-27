@@ -87,6 +87,8 @@ impl NebulaWorkspace {
             .when(list_scrollable, |row| row.pr(px(18.0)))
             .rounded(px(radius::CONTROL))
             .cursor_pointer()
+            // 为玻璃选中边框预留同样空间，切换选中项时图标和文字不横移。
+            .when_some(crate::gpui_shell::theme::selection_glass(cx), |row, glass| glass.reserve(row))
             .when(selected, |row| selected_glass(row.bg(selected_bg), cx))
             .when(!selected, |row| row.group_hover(hover_group.clone(), |row| row.bg(hover_bg)))
             .on_click(cx.listener(move |this, _, window, cx| {

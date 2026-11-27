@@ -65,6 +65,33 @@ pub(in crate::gpui_shell::terminal) fn open(
     open_at(cx, None)
 }
 
+#[gpui::test]
+fn claude_permission_mode_survives_hooks_snapshot_and_resume(cx: &mut TestAppContext) {
+    let (view, window, _receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.agent_activity.begin_command(true);
+        for (mode, expected) in [
+            (Some("bypassPermissions"), "bypassPermissions"),
+            (None, "bypassPermissions"),
+            (Some("plan"), "plan"),
+            (Some("default"), "default"),
+        ] {
+            let mut payload = serde_json::json!({"hook_event_name":"UserPromptSubmit", "session_id":"saved-claude"});
+            if let Some(mode) = mode {
+                payload["permission_mode"] = mode.into();
+            }
+            let wire = format!("nebula-hook/1 source=claude pane={}\n{payload}", view.pane_id);
+            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(view.pane_id)).unwrap();
+            assert!(view.handle_ai_hook(&event, cx));
+            let snapshot = serde_json::to_vec(&view.session_agent().unwrap()).unwrap();
+            let saved: crate::session::AgentSession = serde_json::from_slice(&snapshot).unwrap();
+            assert_eq!(saved.resume_command().unwrap(), format!("claude --resume saved-claude --permission-mode {expected}"));
+        }
+        let old: crate::session::AgentSession = serde_json::from_str(r#"{"source":"claude","session_id":"old"}"#).unwrap();
+        assert_eq!(old.resume_command().as_deref(), Some("claude --resume old"));
+    });
+}
+
 fn open_at(
     cx: &mut TestAppContext,
     cwd: Option<std::path::PathBuf>,
@@ -1110,6 +1137,7 @@ fn failed_cold_resume_keeps_target_for_retry(cx: &mut TestAppContext) {
     window.update(|_, cx| {
         view.update(cx, |view, cx| {
             let saved = crate::session::AgentSession {
+                permission_mode: None,
                 source: "codex".into(),
                 session_id: Some("saved-42".into()),
                 session_file: None,
@@ -1257,6 +1285,7 @@ fn shutdown_waits_for_missing_native_identity_but_keeps_a_known_target(cx: &mut 
 fn different_native_session_cannot_confirm_or_erase_a_pending_resume() {
     use super::startup_command::SessionRecovery;
     let saved = crate::session::AgentSession {
+        permission_mode: None,
         source: "pi".into(),
         session_id: Some("saved".into()),
         session_file: None,
@@ -1265,6 +1294,7 @@ fn different_native_session_cannot_confirm_or_erase_a_pending_resume() {
     recovery.target = Some(saved.clone());
     recovery.awaiting_confirmation = true;
     assert!(!recovery.confirm(crate::session::AgentSession {
+        permission_mode: None,
         session_id: Some("unrelated".into()),
         ..saved.clone()
     }));
@@ -1280,6 +1310,7 @@ fn native_acknowledgements_keep_known_files_when_a_bridge_omits_the_path() {
     use super::startup_command::SessionRecovery;
     for source in ["claude", "codex", "pi", "omp", "gemini", "opencode", "kimi"] {
         let saved = crate::session::AgentSession {
+            permission_mode: None,
             source: source.into(),
             session_id: Some("saved-conversation".into()),
             session_file: Some("/sessions/conversation.jsonl".into()),
@@ -1310,6 +1341,7 @@ fn cold_resume_normalizes_codex_identity_before_waiting_for_native_confirmation(
         let path = format!(r"C:\Users\user\.codex\sessions\rollout-date-{thread}.jsonl");
         view.restore_agent(
             crate::session::AgentSession {
+                permission_mode: None,
                 source: "codex".into(),
                 session_id: Some("obsolete-hook-group".into()),
                 session_file: Some(path.clone()),
@@ -1356,6 +1388,7 @@ fn cold_resume_of_supported_clis_waits_for_the_shell_and_preserves_each_target(
         let (view, window, receiver) = open(cx);
         view.update(window, |view, cx| {
             let saved = crate::session::AgentSession {
+                permission_mode: None,
                 source: source.into(),
                 session_id: Some("saved-conversation".into()),
                 session_file: None,
@@ -1382,6 +1415,7 @@ fn cold_resume_of_supported_clis_waits_for_the_shell_and_preserves_each_target(
 fn file_only_recovery_requires_the_provider_to_confirm_that_file() {
     use super::startup_command::SessionRecovery;
     let saved = crate::session::AgentSession {
+        permission_mode: None,
         source: "pi".into(),
         session_id: None,
         session_file: Some("/sessions/selected.jsonl".into()),
@@ -1390,6 +1424,7 @@ fn file_only_recovery_requires_the_provider_to_confirm_that_file() {
     recovery.target = Some(saved.clone());
     recovery.awaiting_confirmation = true;
     assert!(!recovery.confirm(crate::session::AgentSession {
+        permission_mode: None,
         source: "pi".into(),
         session_id: Some("unrelated".into()),
         session_file: None,
@@ -1397,6 +1432,7 @@ fn file_only_recovery_requires_the_provider_to_confirm_that_file() {
     assert!(recovery.awaiting_confirmation);
     assert_eq!(recovery.target, Some(saved.clone()));
     assert!(recovery.confirm(crate::session::AgentSession {
+        permission_mode: None,
         session_id: Some("selected-native-id".into()),
         ..saved
     }));
@@ -1411,6 +1447,7 @@ fn cold_resume_preserves_codex_id_with_a_legacy_native_file(cx: &mut TestAppCont
             Some(view.pane_id),
         ).unwrap();
         let reported = crate::session::AgentSession {
+            permission_mode: None,
             source: event.source,
             session_id: event.session_id,
             session_file: event.session_file,
@@ -1440,6 +1477,7 @@ fn codex_snapshot_without_an_id_queues_the_native_picker_at_the_shell_prompt(
     let (view, window, receiver) = open(cx);
     view.update(window, |view, cx| {
         let saved = crate::session::AgentSession {
+            permission_mode: None,
             source: "codex".into(),
             session_id: None,
             session_file: None,
@@ -1462,6 +1500,7 @@ fn submit_codex_restore(
     cx: &mut Context<TerminalView>,
 ) -> crate::session::AgentSession {
     let saved = crate::session::AgentSession {
+        permission_mode: None,
         source: "codex".into(),
         session_id: Some("saved-missing".into()),
         session_file: None,
@@ -1495,11 +1534,13 @@ fn missing_codex_target_opens_the_native_chooser_and_confirms_the_users_choice(
         }));
         assert!(view.recovery_pending(), "opening a chooser is not a recovered conversation");
         let selected = crate::session::AgentSession {
+            permission_mode: None,
             source: "codex".into(),
             session_id: Some("0199a213-c2a4-7cf5-8f6b-d746fbb6e86c".into()),
             session_file: Some("/sessions/rollout-date-0199a213-c2a4-7cf5-8f6b-d746fbb6e86c.jsonl".into()),
         };
         assert!(!view.recovery.accepts(&crate::session::AgentSession {
+            permission_mode: None,
             source: "claude".into(),
             ..selected.clone()
         }));
@@ -1594,7 +1635,7 @@ fn lifecycle_only_hook_cannot_replace_a_verified_rollout_id(cx: &mut TestAppCont
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         let id = "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c";
-        let target = crate::session::AgentSession { source: "codex".into(), session_id: Some(id.into()),
+        let target = crate::session::AgentSession { permission_mode: None, source: "codex".into(), session_id: Some(id.into()),
             session_file: Some(format!("C:/sessions/rollout-date-{id}.jsonl")) };
         assert!(view.recovery.confirm(target.clone()));
         view.ai_session = Some(crate::display::AiSessionIdentity { source: "codex".into(), session_id: id.into() });

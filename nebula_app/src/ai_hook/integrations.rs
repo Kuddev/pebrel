@@ -6,7 +6,7 @@ use nebula_settings::AgentHook;
 
 use crate::ai_agents::AgentKind;
 
-pub(crate) const AGENTS: [AgentKind; 15] = [
+pub(crate) const AGENTS: [AgentKind; 16] = [
     AgentKind::Claude,
     AgentKind::Codex,
     AgentKind::OpenCode,
@@ -22,6 +22,7 @@ pub(crate) const AGENTS: [AgentKind; 15] = [
     AgentKind::Droid,
     AgentKind::Antigravity,
     AgentKind::Hermes,
+    AgentKind::Dsh,
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -59,6 +60,7 @@ pub(crate) fn hook_for(agent: AgentKind) -> Option<AgentHook> {
         AgentKind::Qwen => Some(AgentHook::Qwen),
         AgentKind::Droid => Some(AgentHook::Droid),
         AgentKind::Antigravity => Some(AgentHook::Antigravity),
+        AgentKind::Dsh => Some(AgentHook::Dsh),
         _ => None,
     }
 }

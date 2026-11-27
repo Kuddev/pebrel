@@ -104,6 +104,7 @@ impl TerminalView {
         };
         log::debug!("agent session identity from active rollout: pane={}", self.pane_id);
         let target = crate::session::AgentSession {
+            permission_mode: None,
             source: "codex".to_owned(),
             session_id: Some(session.session_id.clone()),
             session_file: Some(session.session_file),

@@ -11,9 +11,9 @@ use super::{
 
 const ID_MAX_CHARS: usize = 512;
 
-/// Agents documenting Claude Code's hook payload; each signs its own source.
+/// Claude-style payloads, including the explicitly installed external DSH bridge.
 pub(super) fn claude_style(source: &str) -> bool {
-    matches!(source, "claude" | "qoder" | "codebuddy" | "qwen" | "droid")
+    matches!(source, "claude" | "qoder" | "codebuddy" | "qwen" | "droid" | "dsh")
 }
 const TURN_RESULT_MAX_CHARS: usize = 4_000;
 static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -53,6 +53,12 @@ fn parse_envelope_with_transport(bytes: &[u8], local_transport: bool) -> Option<
         }
     }
     let source = source?;
+    if local_transport
+        && source == "dsh"
+        && !nebula_settings::AgentHook::Dsh.enabled(&nebula_settings::RawSettings::load())
+    {
+        return None;
+    }
 
     let payload: Value = serde_json::from_slice(raw).unwrap_or(Value::Null);
     let native_codex = source == "codex" && payload.get("hook_event_name").is_some();

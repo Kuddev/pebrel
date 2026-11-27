@@ -128,6 +128,10 @@ pub fn run_shell(
             command: initial_command.clone(),
             shell_id: shell_id.clone(),
             hold,
+            activate_only: initial_cwd.is_none()
+                && initial_command.is_none()
+                && shell_id.is_none()
+                && !hold,
             update_restore: (initial_command.is_none() && shell_id.is_none() && !hold)
                 .then(crate::update_download::handoff::pending_restore_path)
                 .flatten(),
@@ -197,7 +201,11 @@ pub fn run_shell(
         },
         runtime_hub.clone(),
     );
-    if runtime_server.is_none() && initial_command.is_none() && !hold && !crate::platform::elevation::requires_isolation() {
+    if runtime_server.is_none()
+        && initial_command.is_none()
+        && !hold
+        && !crate::platform::elevation::requires_isolation()
+    {
         // 与另一份进程同时启动时，对方可能已经拿到 owner lock、但尚未来得及
         // 发布 endpoint。短暂等待并交接，避免继续打开一个无控制面的空窗口。
         let settings = nebula_settings::RuntimeSettings::load();
