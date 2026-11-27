@@ -53,6 +53,8 @@ DisableProgramGroupPage=yes
 DisableWelcomePage=no
 DisableDirPage=no
 DisableReadyPage=no
+; 终端子进程需要访问普通用户创建的 junction 和符号链接，不能继承安装器限制。
+RedirectionGuard=no
 PrivilegesRequired=lowest
 #if Architecture == "arm64"
 ArchitecturesAllowed=arm64
