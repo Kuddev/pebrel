@@ -200,7 +200,9 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::update_recovery_tracks_its_windows_and_retries_only_missing_slots)"
                           " or test(=gpui_shell::settings_pane::tests::rename_keymap_row_is_searchable_and_enters_capture)"
-                          " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)",
+                          " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)"
+                          " or test(=gpui_shell::settings_pane::tests::keep_session_control_matches_process_residency)"
+                          " or test(=gpui_shell::settings_pane::lifecycle::tests::residency_row_keeps_ordinary_instances_interactive)",
                 "test-group": "theme-studio",
             }, {
                 "filter": "test(=gpui_shell::terminal::view::startup_tests::"
@@ -253,6 +255,16 @@ class NativeSuiteTests(unittest.TestCase):
             "update_recovery_tracks_its_windows_and_retries_only_missing_slots",
         ):
             self.assertIn(f"fn {name}(", elevated)
+
+        # Both residency fixtures persist settings and share the same guarded path.
+        for path, name in (
+            ("tests.rs", "keep_session_control_matches_process_residency"),
+            ("lifecycle/tests.rs", "residency_row_keeps_ordinary_instances_interactive"),
+        ):
+            residency = (root / "pebrel_app/src/gpui_shell/settings_pane" / path).read_text(encoding="utf-8")
+            self.assertIn(f"fn {name}(", residency)
+            self.assertIn("let _lock = lock_theme_studio();", residency)
+            self.assertIn("SettingsBytesGuard::capture()", residency)
 
         startup = (root / "pebrel_app/src/gpui_shell/workspace/windowing/startup.rs").read_text(encoding="utf-8")
         self.assertIn("fn launch_visibility_reaches_the_actual_workspace(", startup)

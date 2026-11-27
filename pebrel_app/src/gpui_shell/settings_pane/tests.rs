@@ -2,6 +2,50 @@ use super::*;
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn keep_session_control_matches_process_residency(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    let _lock = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    pebrel_settings::persist_keys(&[("keep_session", "1".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, _| pane.active_section = 8);
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1100.0), px(900.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let bounds = cx.debug_bounds("nebula-switch-keep_session").expect("residency control");
+    assert!(bounds.size.width >= px(32.0) && bounds.size.height >= px(32.0));
+    assert!(bounds.top() > px(0.0) && bounds.bottom() < px(900.0));
+    cx.simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    let private = crate::platform::startup::instance::is_private();
+    assert_eq!(RuntimeSettings::load().keep_session, private);
+    assert_eq!(pane.read_with(cx, |pane, _| pane.runtime.keep_session), private);
+    if private {
+        for key in ["space", "enter"] {
+            cx.simulate_keystrokes(key);
+            cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse(key).unwrap() });
+            cx.run_until_parked();
+            assert!(RuntimeSettings::load().keep_session);
+        }
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn automatic_command_output_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
     use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 

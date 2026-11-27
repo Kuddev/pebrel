@@ -518,6 +518,7 @@
     "reset_title": "Restore default settings?",
     "reset_description": "This will reset your settings and keyboard shortcuts. SSH hosts, credentials and history will be kept, and your current settings will be backed up. Continue?",
     "startup": {
+      "keep_session_unavailable": "Unavailable in an administrator or separate instance. Closing the window ends its sessions.",
       "launch_at_login": "Start at login",
       "launch_at_login_help": "Start Pebrel when you sign in, using the current user's system startup entry.",
       "silent_start": "Start silently",
