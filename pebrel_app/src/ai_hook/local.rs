@@ -287,6 +287,10 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
             continue;
         }
         let name = agent.settings_key().trim_start_matches("ai_hooks_");
+        if agent == AgentHook::Dsh {
+            println!("dsh: {}", if remove { "external hook source disabled" } else { "external hook source enabled; plugin installation remains external" });
+            continue;
+        }
         if !remove && !settings::configuration(agent).is_some_and(|(_, present)| present) {
             println!("{name}: 未检测到配置目录，首次运行该 Agent 后可在设置中开启。");
             continue;
