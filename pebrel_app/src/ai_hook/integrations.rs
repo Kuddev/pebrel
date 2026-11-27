@@ -60,6 +60,7 @@ pub(crate) fn hook_for(agent: AgentKind) -> Option<AgentHook> {
         AgentKind::Qwen => Some(AgentHook::Qwen),
         AgentKind::Droid => Some(AgentHook::Droid),
         AgentKind::Antigravity => Some(AgentHook::Antigravity),
+        AgentKind::Dsh => Some(AgentHook::Dsh),
         _ => None,
     }
 }
@@ -243,7 +244,7 @@ mod tests {
     #[test]
     fn dsh_discovery_accepts_the_npm_launcher_without_installing_hooks() {
         assert!(AGENTS.contains(&AgentKind::Dsh));
-        assert_eq!(hook_for(AgentKind::Dsh), None);
+        assert_eq!(hook_for(AgentKind::Dsh), Some(AgentHook::Dsh));
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("npm");
         let mut path = executable(&bin, "dsh");

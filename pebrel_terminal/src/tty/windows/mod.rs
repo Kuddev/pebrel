@@ -671,6 +671,11 @@ function global:Convert-NebulaBareEnvAssignment {
         return $null
     }
 
+    # 单个 token 也可能是命令或别名；存在的命令必须交给 PowerShell 执行。
+    if (Get-Command -Name $value -ErrorAction Ignore) {
+        return $null
+    }
+
     $escaped = $value.Replace("'", "''")
     return ($Matches['indent'] + '$env:' + $Matches['name'] + "='" + $escaped + "'")
 }
@@ -1429,6 +1434,9 @@ $ErrorActionPreference = 'Stop'
 foreach ($line in @(
     '$env:PEBREL_INPUT_TEST = Read-Host ''workbench password'' -MaskInput',
     '$env:PEBREL_INPUT_TEST = Get-Content input.txt',
+    '$env:PEBREL_INPUT_TEST = Get-Date',
+    '$env:PEBREL_INPUT_TEST = Read-Host',
+    '$env:PEBREL_INPUT_TEST = pwd',
     '$env:PEBREL_INPUT_TEST = echo plain text',
     '$env:PEBREL_INPUT_TEST = 1 + 2',
     '$env:PEBREL_INPUT_TEST = 1+2',

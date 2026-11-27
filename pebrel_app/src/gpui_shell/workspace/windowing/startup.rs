@@ -108,10 +108,14 @@ impl WorkspaceStartup {
         }
         match self {
             Self::LaunchTerminal { cwd, launch, .. } => Self::LaunchTerminal { cwd, launch, hold },
-            Self::NewTerminal { cwd } => Self::LaunchTerminal {
-                launch: super::super::shell_launch::configured_at(cx, cwd.as_deref()),
-                cwd,
-                hold,
+            Self::NewTerminal { cwd } => {
+                // --hold 只改变退出行为，首个终端仍遵循配置的启动目录。
+                let cwd = cwd.or_else(NebulaWorkspace::cold_start_cwd);
+                Self::LaunchTerminal {
+                    launch: super::super::shell_launch::configured_at(cx, cwd.as_deref()),
+                    cwd,
+                    hold,
+                }
             },
             other => other,
         }

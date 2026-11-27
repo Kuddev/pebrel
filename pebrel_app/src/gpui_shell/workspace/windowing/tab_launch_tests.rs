@@ -381,6 +381,7 @@ fn elevated_directory_handover_uses_the_imported_default_profile(cx: &mut TestAp
             command: None,
             shell_id: None,
             hold: false,
+            activate_only: false,
             update_restore: None,
         });
         dispatch_shell_events(vec![GpuiShellEvent::ElevatedLaunch(dispatch)], cx);

@@ -33,6 +33,23 @@ fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
             })?;
         return open_update_windows(sessions, None, None, cx);
     }
+    if request.activate_only
+        && request.command.is_none()
+        && request.shell_id.is_none()
+        && !request.hold
+        && let Some(target) = entries_by_mru(cx).into_iter().find(|entry| {
+            entry.workspace.upgrade().is_some_and(|workspace| workspace.read(cx).window_hidden)
+        })
+    {
+        let pane = target
+            .workspace
+            .upgrade()
+            .and_then(|workspace| workspace.read(cx).active_terminal_pane_id())
+            .unwrap_or_default();
+        // 纯启动唤醒隐藏工作区；显式命令/目录启动继续创建新终端。
+        focus_entry(&target, None, cx);
+        return Ok((target.runtime_window_id, pane));
+    }
     let startup = startup(request, cx)?;
     let behavior = pebrel_settings::RuntimeSettings::load().windowing_behavior;
     let target = (behavior != pebrel_settings::WindowingBehaviorName::UseNew)
@@ -90,6 +107,7 @@ mod tests {
             }),
             shell_id: None,
             hold: false,
+            activate_only: false,
             update_restore: None,
         }
     }

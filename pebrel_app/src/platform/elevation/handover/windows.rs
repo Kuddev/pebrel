@@ -410,6 +410,7 @@ mod tests {
             }),
             shell_id: None,
             hold: false,
+            activate_only: false,
             update_restore: None,
         }
     }

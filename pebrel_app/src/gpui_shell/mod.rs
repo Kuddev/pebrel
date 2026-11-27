@@ -132,6 +132,10 @@ pub fn run_shell(
             command: initial_command.clone(),
             shell_id: shell_id.clone(),
             hold,
+            activate_only: initial_cwd.is_none()
+                && initial_command.is_none()
+                && shell_id.is_none()
+                && !hold,
             update_restore: (initial_command.is_none() && shell_id.is_none() && !hold)
                 .then(crate::update_download::handoff::pending_restore_path)
                 .flatten(),

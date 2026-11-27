@@ -25,6 +25,8 @@ pub(crate) struct Request {
     pub shell_id: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub activate_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_restore: Option<PathBuf>,
 }
