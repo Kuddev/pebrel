@@ -102,6 +102,13 @@ impl SettingsPane {
                 self.runtime.tab_close_visible,
                 cx,
             ))
+            .child(self.switch_row(
+                "clickable_paths_with_spaces",
+                language.text(crate::i18n::Message::SettingsAppearanceClickablePathsWithSpaces),
+                help("clickable_paths_with_spaces", language),
+                self.runtime.clickable_paths_with_spaces,
+                cx,
+            ))
             .child(self.select_row(
                 "language",
                 language.text(crate::i18n::Message::CommonLanguage),

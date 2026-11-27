@@ -1046,6 +1046,7 @@ pub struct RuntimeSettings {
     pub tab_close_visible: bool,
     /// Keep the automatic tab title on the local directory or SSH destination.
     pub static_tab_titles: bool,
+    pub clickable_paths_with_spaces: bool, // 未加引号的可点击路径是否跨空格延长（默认关）。
     /// 新建本地终端是否把 Windows 系统代理写入代理环境变量。自定义代理地址
     /// 不看这个开关：网络页填了地址就会写入新终端。默认关。已打开的会话不改。
     pub terminal_proxy: bool,
@@ -1250,6 +1251,7 @@ impl RuntimeSettings {
             multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
             tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
             static_tab_titles: raw.bool_on("static_tab_titles").unwrap_or(false),
+            clickable_paths_with_spaces: raw.bool_on("clickable_paths_with_spaces").unwrap_or(false),
             terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
             refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
             powerline: raw.bool_on("powerline").unwrap_or(true),

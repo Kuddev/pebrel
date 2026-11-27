@@ -358,6 +358,7 @@
       "cursor_shape": "Cursor shape",
       "blink_cursor": "Blink cursor",
       "show_tab_close_buttons": "Show tab close buttons",
+      "clickable_paths_with_spaces": "Clickable paths with spaces",
       "interface_density": "Interface density",
       "terminal_content_opacity": "Terminal content opacity",
       "background_blur": "Background blur",
@@ -678,7 +679,9 @@
       "continues_the_previous_conversation_when": "Continues the previous conversation when restoring an AI tab.",
       "shows_ai_session_status_in": "Shows AI session status in the notification area.",
       "tab_titles_stay_on_the_directory": "Tabs show the current folder or SSH host.",
-      "tab_titles_host_and_task": "SSH tabs use the saved host name or address. Hover over a tab to see the current AI task."
+      "tab_titles_host_and_task": "SSH tabs use the saved host name or address. Hover over a tab to see the current AI task.",
+      "extends_clickable_paths_across_spaces": "Extend a hovered path across spaces when the whole path exists on disk.",
+      "extends_clickable_paths_across_spaces_details": "Off by default: matching stops at the first space until you enable it."
     },
     "pane": {
       "keep_tab_titles": "Keep directory and host names in tab titles",

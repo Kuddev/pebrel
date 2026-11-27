@@ -358,6 +358,7 @@
       "cursor_shape": "光标形状",
       "blink_cursor": "光标闪烁",
       "show_tab_close_buttons": "显示标签关闭按钮",
+      "clickable_paths_with_spaces": "识别含空格的路径",
       "interface_density": "界面外观",
       "terminal_content_opacity": "终端正文不透明度",
       "background_blur": "背景模糊",
@@ -678,7 +679,9 @@
       "continues_the_previous_conversation_when": "恢复 AI 标签时，继续上次的对话。",
       "shows_ai_session_status_in": "在通知区域查看 AI 会话状态。",
       "tab_titles_stay_on_the_directory": "标签显示当前目录或 SSH 主机。",
-      "tab_titles_host_and_task": "SSH 标签显示保存的主机名或地址。悬停标签可查看当前 AI 任务。"
+      "tab_titles_host_and_task": "SSH 标签显示保存的主机名或地址。悬停标签可查看当前 AI 任务。",
+      "extends_clickable_paths_across_spaces": "悬停路径按磁盘存在性跨空格延长。",
+      "extends_clickable_paths_across_spaces_details": "默认关闭；关闭时路径匹配停在第一个空格。"
     },
     "pane": {
       "keep_tab_titles": "标签标题保留目录名或主机名",

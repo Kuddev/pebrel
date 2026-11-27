@@ -22,6 +22,10 @@ Every release entry is provided in English and Simplified Chinese.
 
 macOS, Linux, and Android downloads are Preview builds.
 
+#### Added
+
+- Added an Appearance switch that lets a hovered terminal path extend across spaces when the whole path exists on disk. It is off by default, so unquoted paths keep stopping at the first space until it is enabled.
+
 #### Fixed
 
 - Fixed a delegated prompt remaining in the terminal editor when the agent changed keyboard mode before Enter was sent.
@@ -34,6 +38,10 @@ macOS, Linux, and Android downloads are Preview builds.
 ### 中文
 
 macOS、Linux 和 Android 下载为预览版。
+
+#### 新增
+
+- 外观设置新增开关：悬停的终端路径可按磁盘存在性跨空格延长。默认关闭，关闭时未加引号的路径仍停在第一个空格。
 
 #### 修复
 

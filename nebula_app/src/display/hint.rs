@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::cmp::{self, Reverse};
 use std::collections::HashSet;
 use std::iter;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -423,6 +425,19 @@ pub fn visible_unique_hyperlinks_iter<T>(term: &Term<T>) -> impl Iterator<Item =
 /// Unlike keyboard hint labels, persistent link decoration must retain repeated
 /// OSC 8 targets: two files resolving to the same URI are still two affordances.
 pub fn visible_clickable_matches<T>(term: &Term<T>, config: &UiConfig) -> Vec<Match> {
+    visible_clickable_matches_with(
+        term,
+        config,
+        CLICKABLE_PATHS_WITH_SPACES.load(Ordering::Relaxed),
+    )
+}
+
+/// 同 [`visible_clickable_matches`]，但显式给出跨空格开关，供测试与两个壳共用。
+pub fn visible_clickable_matches_with<T>(
+    term: &Term<T>,
+    config: &UiConfig,
+    extend_paths: bool,
+) -> Vec<Match> {
     let mut matches = Vec::new();
 
     for hint in config
@@ -465,7 +480,110 @@ pub fn visible_clickable_matches<T>(term: &Term<T>, config: &UiConfig) -> Vec<Ma
         }
     }
 
-    merge_overlapping_matches(matches)
+    let matches = merge_overlapping_matches(matches);
+    if extend_paths {
+        return extend_paths_across_spaces(term, matches);
+    }
+    matches
+}
+
+/// 是否把未加引号的可点击路径跨空格延长（设置项，默认关）。
+///
+/// 渲染热路径每帧都要问一次，所以用进程级原子值而不是读设置文件；值由
+/// `Settings::load_with_runtime` 在启动与应用设置时推进来。
+static CLICKABLE_PATHS_WITH_SPACES: AtomicBool = AtomicBool::new(false);
+
+pub fn set_clickable_paths_with_spaces(enabled: bool) {
+    CLICKABLE_PATHS_WITH_SPACES.store(enabled, Ordering::Relaxed);
+}
+
+/// 每个路径最多探测多少个空格边界，避免长行上无界地打磁盘。
+const PATH_EXTENSION_PROBES: usize = 12;
+/// 单个路径最多向右看多少个格子。
+const PATH_EXTENSION_CELLS: usize = 512;
+
+/// 把未加引号的本地路径按磁盘存在性延长到真实的整段。
+///
+/// 正则只能停在第一个空格，而 Windows 的 `C:\…\Start Menu\Programs\…` 恰好把
+/// 空格放在路径中间。这里从匹配末尾逐格向右收集，遇到空格/行尾就试一次
+/// `Path::exists()`，取最长且真实存在的候选。探测次数与格数都有上限，所以
+/// 每帧的磁盘调用是可预期的几个 stat。
+fn extend_paths_across_spaces<T>(term: &Term<T>, matches: Vec<Match>) -> Vec<Match> {
+    matches
+        .into_iter()
+        .map(|bounds| extend_one_path(term, bounds.clone()).unwrap_or(bounds))
+        .collect()
+}
+
+fn extend_one_path<T>(term: &Term<T>, bounds: Match) -> Option<Match> {
+    let head = term.bounds_to_string(*bounds.start(), *bounds.end());
+    if head.is_empty() || head.starts_with(['"', '\'']) || !looks_like_local_path(&head) {
+        return None;
+    }
+    let terminal = bounds.end();
+    let mut cells = Vec::new();
+    let mut iter = term.grid().iter_from(*terminal);
+    while let Some(cell) = iter.next() {
+        if cell.point.line != terminal.line {
+            break;
+        }
+        if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            continue;
+        }
+        if cells.len() >= PATH_EXTENSION_CELLS {
+            break;
+        }
+        cells.push((cell.c, cell.point));
+    }
+
+    let mut tail = String::new();
+    let mut boundaries = Vec::new();
+    for (index, (character, point)) in cells.iter().enumerate() {
+        tail.push(*character);
+        let next_is_space = cells.get(index + 1).is_none_or(|(next, _)| *next == ' ');
+        if next_is_space {
+            boundaries.push((tail.clone(), *point));
+        }
+    }
+
+    for (candidate, end) in boundaries.into_iter().rev().take(PATH_EXTENSION_PROBES) {
+        let candidate = candidate.trim_end();
+        if candidate.is_empty() {
+            continue;
+        }
+        let mut full = head.clone();
+        full.push_str(candidate);
+        if Path::new(&full).exists() {
+            return Some(*bounds.start()..=end);
+        }
+    }
+    None
+}
+
+/// 只对绝对路径与 home 路径尝试延长；URL、命令名与相对路径保持正则的结果。
+fn looks_like_local_path(text: &str) -> bool {
+    if text.starts_with('~') {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let bytes = text.as_bytes();
+        if text.starts_with("\\\\") {
+            return true;
+        }
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return true;
+        }
+        Path::new(text).is_absolute()
+    }
+    #[cfg(not(windows))]
+    {
+        Path::new(text).is_absolute()
+    }
 }
 
 /// Iterate over every contiguous visible OSC 8 range, including duplicate URIs.
@@ -1145,6 +1263,43 @@ mod tests {
                 .is_none()
             );
         }
+    }
+
+    #[test]
+    fn unquoted_paths_stop_at_the_first_space_unless_the_switch_is_on() {
+        // 默认行为保持上游：未加引号的路径停在第一个空格。
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Start Menu").join("Programs").join("Startup");
+        std::fs::create_dir_all(&directory).unwrap();
+        let script = directory.join("pi-autoupdate.vbs");
+        std::fs::write(&script, b"' fixture" ).unwrap();
+        let text = format!("文件: {} (785 B, MD5 6f31e64f)", script.display());
+        let term = mock_term(&text);
+        let config = UiConfig::default();
+
+        let off = visible_clickable_matches_with(&term, &config, false);
+        assert_eq!(off.len(), 1);
+        let short = term.bounds_to_string(*off[0].start(), *off[0].end());
+        assert!(
+            short.ends_with("\\Start") || short.ends_with("/Start"),
+            "default matching must stop at the first space: {short}"
+        );
+
+        let on = visible_clickable_matches_with(&term, &config, true);
+        assert_eq!(on.len(), 1);
+        let full = term.bounds_to_string(*on[0].start(), *on[0].end());
+        assert_eq!(full, script.display().to_string());
+    }
+
+    #[test]
+    fn cross_space_extension_keeps_short_matches_when_no_file_exists() {
+        let text = r"C:\no\such\Start Menu\file.txt rest";
+        let term = mock_term(text);
+        let config = UiConfig::default();
+        let matches = visible_clickable_matches_with(&term, &config, true);
+        assert_eq!(matches.len(), 1);
+        let matched = term.bounds_to_string(*matches[0].start(), *matches[0].end());
+        assert_eq!(matched, r"C:\no\such\Start", "extension must not invent a path");
     }
 
     #[test]

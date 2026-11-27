@@ -29,6 +29,7 @@ const RESET_KEYS: &[&str] = &[
     "multiline_paste_confirm",
     "tab_close_visible",
     "static_tab_titles",
+    "clickable_paths_with_spaces",
     "terminal_proxy",
     "refresh_environment",
     "powerline",
@@ -221,6 +222,40 @@ mod tests {
         assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).static_tab_titles);
     }
 
+    #[test]
+    fn clickable_paths_with_spaces_defaults_off_and_round_trips() {
+        for text in [
+            "",
+            "clickable_paths_with_spaces=
+",
+            "clickable_paths_with_spaces=invalid
+",
+        ] {
+            assert!(
+                !RuntimeSettings::from_raw(&RawSettings::from_text(text))
+                    .clickable_paths_with_spaces
+            );
+        }
+        let original = "custom=keep
+";
+        let enabled =
+            crate::apply_updates(original, &[("clickable_paths_with_spaces", "1".into())]);
+        assert!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).clickable_paths_with_spaces
+        );
+        let disabled =
+            crate::apply_updates(&enabled, &[("clickable_paths_with_spaces", "0".into())]);
+        assert!(
+            !RuntimeSettings::from_raw(&RawSettings::from_text(&disabled))
+                .clickable_paths_with_spaces
+        );
+        let restored = default_settings_text(&enabled);
+        assert_eq!(restored, original);
+        assert!(
+            !RuntimeSettings::from_raw(&RawSettings::from_text(&restored))
+                .clickable_paths_with_spaces
+        );
+    }
     #[test]
     fn reset_restores_split_dimming_and_removes_mouse_override() {
         let restored =
