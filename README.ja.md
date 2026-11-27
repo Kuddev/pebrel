@@ -69,11 +69,11 @@
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="Pebrel の WeChat グループの QR コード（2026 年 11 月 24 日以降は無効）" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-12-03.jpg"><img src="extra/community/wechat-group-2026-12-03.jpg" alt="Pebrel の WeChat グループの QR コード（2026 年 12 月 3 日以降は無効）" width="300" /></a>
 </p>
 
 <p align="center">
-  2026 年 11 月 24 日より前に WeChat でスキャンして参加してください。画像をクリックすると原寸で表示されます。
+  2026 年 12 月 3 日より前に WeChat でスキャンして参加してください。画像をクリックすると原寸で表示されます。
 </p>
 
 ## ひとつのワークスペース
