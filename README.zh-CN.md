@@ -69,11 +69,11 @@
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="Pebrel 微信交流群二维码，2026 年 11 月 24 日前有效" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-12-03.jpg"><img src="extra/community/wechat-group-2026-12-03.jpg" alt="Pebrel 微信交流群二维码，2026 年 12 月 3 日前有效" width="300" /></a>
 </p>
 
 <p align="center">
-  微信扫码加入，2026 年 11 月 24 日前有效。点击图片可查看原图。
+  微信扫码加入，2026 年 12 月 3 日前有效。点击图片可查看原图。
 </p>
 
 ## 一个工作区
