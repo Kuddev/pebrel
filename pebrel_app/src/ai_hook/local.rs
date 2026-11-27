@@ -288,7 +288,14 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
         }
         let name = agent.settings_key().trim_start_matches("ai_hooks_");
         if agent == AgentHook::Dsh {
-            println!("dsh: {}", if remove { "external hook source disabled" } else { "external hook source enabled; plugin installation remains external" });
+            println!(
+                "dsh: {}",
+                if remove {
+                    "external hook source disabled"
+                } else {
+                    "external hook source enabled; plugin installation remains external"
+                }
+            );
             continue;
         }
         if !remove && !settings::configuration(agent).is_some_and(|(_, present)| present) {
