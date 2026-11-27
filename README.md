@@ -69,11 +69,11 @@ For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](ma
 </p>
 
 <p align="center">
-  <a href="extra/community/wechat-group-2026-11-24.jpg"><img src="extra/community/wechat-group-2026-11-24.jpg" alt="QR code for the Pebrel WeChat group, valid before November 24, 2026" width="300" /></a>
+  <a href="extra/community/wechat-group-2026-12-03.jpg"><img src="extra/community/wechat-group-2026-12-03.jpg" alt="QR code for the Pebrel WeChat group, valid before December 3, 2026" width="300" /></a>
 </p>
 
 <p align="center">
-  Scan with WeChat to join. Valid before November 24, 2026. Click the image to view full size.
+  Scan with WeChat to join. Valid before December 3, 2026. Click the image to view full size.
 </p>
 
 ## One Workspace
