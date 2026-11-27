@@ -282,6 +282,27 @@ pub fn encode(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     }
     let mods = &ks.modifiers;
 
+    // Zsh's default line editor recognizes Ctrl+A/E even without Home/End bindings.
+    // Encode the equivalent keystroke using the receiving pane's keyboard mode.
+    #[cfg(target_os = "macos")]
+    if mods.platform && !mods.control && !mods.alt && !mods.shift && !mods.function {
+        let key = match ks.key.as_str() {
+            "left" => "a",
+            "right" => "e",
+            _ => "",
+        };
+        if !key.is_empty() {
+            return encode(
+                &Keystroke {
+                    modifiers: gpui::Modifiers { control: true, ..Default::default() },
+                    key: key.to_owned(),
+                    key_char: None,
+                },
+                mode,
+            );
+        }
+    }
+
     // macOS supplies the layout/IME result in `key_char` while `key` is the
     // logical key name. A plain printable key must stay on the text input
     // path so commas, underscores, and non-ASCII IME commits are written
@@ -422,6 +443,28 @@ mod tests {
 
     fn keystroke(key: &str) -> Keystroke {
         Keystroke { modifiers: gpui::Modifiers::default(), key: key.to_owned(), key_char: None }
+    }
+
+    #[test]
+    fn macos_command_arrows_follow_terminal_line_editing_bindings() {
+        for mode in [
+            TermMode::empty(),
+            TermMode::APP_CURSOR,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::REPORT_ALL_KEYS_AS_ESC,
+        ] {
+            for (arrow, control) in [("left", "ctrl-a"), ("right", "ctrl-e")] {
+                let encode_chord = |combo: &str| encode(&Keystroke::parse(combo).unwrap(), &mode);
+                let expected = if cfg!(target_os = "macos") { control } else { arrow };
+                assert_eq!(encode_chord(&format!("cmd-{arrow}")), encode_chord(expected));
+                for modifier in ["ctrl", "alt", "shift"] {
+                    assert_eq!(
+                        encode_chord(&format!("{modifier}-cmd-{arrow}")),
+                        encode_chord(&format!("{modifier}-{arrow}")),
+                    );
+                }
+            }
+        }
     }
 
     #[test]
