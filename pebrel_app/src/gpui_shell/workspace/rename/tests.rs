@@ -210,6 +210,47 @@ fn redo(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn title_editor_keeps_the_configured_font_inside_its_line_box(cx: &mut TestAppContext) {
+    let (fixture, mut cx) = RenameFixture::open(cx);
+    for font_size in [15.0, 24.0] {
+        cx.update(|_, cx| {
+            let mut settings = crate::gpui_shell::config::Settings::load_with_runtime(
+                pebrel_settings::ThemeName::Nord,
+                pebrel_settings::RuntimeSettings::from_raw(&pebrel_settings::RawSettings::default()),
+            );
+            settings.ui_font_size_px = font_size;
+            cx.set_global(settings);
+            gpui_component::Theme::global_mut(cx).font_family = "Segoe UI".into();
+        });
+        fixture.edit(0, &mut cx);
+        cx.simulate_input("gjpqy");
+        settle(&mut cx);
+        let glyph_height = cx.update(|window, _| {
+            let glyphs = window.text_system().shape_line(
+                "gjpqy".into(),
+                px(font_size),
+                &[gpui::TextStyle { font_family: "Segoe UI".into(), ..Default::default() }
+                    .to_run(5)],
+                None,
+            );
+            glyphs.ascent + glyphs.descent
+        });
+        fixture.workspace.read_with(&cx, |workspace, cx| {
+            let input = workspace.pane_rename.as_ref().unwrap().input.read(cx);
+            let line_height = input.line_height().expect("the real input has been painted");
+            assert!(
+                line_height >= glyph_height,
+                "{font_size}px text is clipped by a {line_height:?} line box"
+            );
+            assert_eq!(input.value(), "gjpqy");
+        });
+        cx.simulate_keystrokes("enter");
+        settle(&mut cx);
+        assert_eq!(fixture.name(0, &cx).as_deref(), Some("gjpqy"));
+    }
+}
+
+#[gpui::test]
 fn automatic_task_titles_follow_clicked_panes_and_preserve_manual_tab_names(
     cx: &mut TestAppContext,
 ) {

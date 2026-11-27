@@ -132,6 +132,14 @@ impl NebulaWorkspace {
         let input = self.pane_rename.as_ref().filter(|edit| edit.pane_id == pane_id)?.input.clone();
         let (accent, background, ink) =
             (cx.theme().primary, cx.theme().background, cx.theme().foreground);
+        let text_system = cx.text_system();
+        let font_id = text_system.resolve_font(&gpui::font(family.clone()));
+        // Input's rem-based default does not follow the configured UI font.
+        // Keep both its ascent and descent inside the single-line clip area.
+        let line_height = (text_system.ascent(font_id, px(font_size))
+            + text_system.descent(font_id, px(font_size)).abs())
+        .ceil()
+        .max(px(height - 2.0));
         Some(
             div()
                 .id(("pane-title-editor", pane_id as usize))
@@ -173,8 +181,9 @@ impl NebulaWorkspace {
                         .rounded(px(3.0))
                         .text_color(ink)
                         .text_size(px(font_size))
+                        .line_height(line_height)
                         .font_family(family),
-                    px(height),
+                    line_height + px(2.0),
                 ))
                 .into_any_element(),
         )
