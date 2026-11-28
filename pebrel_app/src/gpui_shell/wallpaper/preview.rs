@@ -87,8 +87,8 @@ impl ImagePreview {
                 .and_then(|effects| effects.wallpaper.as_ref())
                 .filter(|wallpaper| Some(&wallpaper.path) == self.path.as_ref())
                 .and_then(|wallpaper| {
-                    wallpaper.image.as_ref().map(|image| PreparedImage {
-                        image: image.clone(),
+                    wallpaper.images.as_ref().map(|images| PreparedImage {
+                        image: images.sharp.clone(),
                         width: wallpaper.width,
                         height: wallpaper.height,
                         owned: false,
@@ -103,7 +103,7 @@ impl ImagePreview {
 
     fn release_image(&mut self, cx: &mut App) {
         if let Some(image) = self.image.take().filter(|image| image.owned) {
-            super::retire_image(Some(image.image), cx);
+            super::retire_images([image.image], cx);
         }
     }
 

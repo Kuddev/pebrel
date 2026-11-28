@@ -899,8 +899,9 @@ impl NebulaWorkspace {
         // 颜色先取出来：`cx.theme()` 不可变借着 cx，后面每个 `cx.listener`
         // 都要可变借，混在一个表达式里借用检查过不去。
         let secondary = cx.theme().secondary;
-        let settings_active_bg = cx.theme().sidebar_accent;
-        let settings_active_fg = cx.theme().sidebar_accent_foreground;
+        let settings_accent = cx.theme().primary;
+        let (settings_fill, settings_border) =
+            if cx.theme().is_dark() { (0.16, 0.34) } else { (0.14, 0.30) };
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
@@ -936,9 +937,15 @@ impl NebulaWorkspace {
                     )
                     .child(
                         toolbar_button("open-settings", IconName::Settings, false)
-                            .selected(settings_active)
+                            .debug_selector(|| "open-settings".into())
+                            .rounded(px(6.0))
+                            .toggled(settings_active)
                             .when(settings_active, |button| {
-                                button.bg(settings_active_bg).text_color(settings_active_fg)
+                                button
+                                    .bg(settings_accent.opacity(settings_fill))
+                                    .border_1()
+                                    .border_color(settings_accent.opacity(settings_border))
+                                    .text_color(settings_accent)
                             })
                             .tooltip(language.text(Message::ChromeSettingsShortcut))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -946,7 +953,8 @@ impl NebulaWorkspace {
                             })),
                     ),
             )
-            .child(self.render_active_pane_title(cx))
+            .when(!settings_active, |row| row.child(self.render_active_pane_title(cx)))
+            .when(settings_active, |row| row.child(div().flex_1()))
             .child(
                 window_titlebar::title_bar_right_controls()
                     .when_some(broadcast_button, |controls, button| controls.child(button))

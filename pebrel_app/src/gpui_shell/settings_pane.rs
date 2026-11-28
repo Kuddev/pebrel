@@ -1089,7 +1089,7 @@ impl SettingsPane {
                                 slider.capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, _, cx| {
                                         if event.button == MouseButton::Left
-                                            && super::wallpaper::wallpaper_available_for_preview(cx)
+                                            && super::wallpaper::settings_wallpaper_visible(cx)
                                         {
                                             this.set_wallpaper_peek(true, cx);
                                         }
@@ -1602,7 +1602,12 @@ impl SettingsPane {
         .into_any_element()
     }
 
-    fn render_nav(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_nav(
+        &self,
+        background: Hsla,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         use gpui::IntoElement as _;
         let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
@@ -1614,7 +1619,6 @@ impl SettingsPane {
         let active_icon = theme.primary;
         let foreground = theme.foreground;
         let hover_bg = crate::gpui_shell::theme::settings_hover_bg(cx, false);
-        let hairline = crate::gpui_shell::theme::settings_hairline(cx);
         let glass = crate::gpui_shell::theme::selection_glass(cx);
         // 返回入口和分类共用紧凑菜单尺寸；字号与搜索框一致，不继承终端配置字号。
         let nav = v_flex()
@@ -1622,6 +1626,7 @@ impl SettingsPane {
             .w(px(SETTINGS_NAV_WIDTH))
             .h_full()
             .flex_shrink_0()
+            .bg(background)
             .px_2()
             .pt(px(12.0))
             .pb(px(8.0))
@@ -1629,7 +1634,6 @@ impl SettingsPane {
             .text_sm()
             .line_height(px(20.0))
             .opacity(if self.wallpaper_peeking() { 0.16 } else { 1.0 })
-            .when(!theme.is_dark(), |nav| nav.border_r_1().border_color(hairline))
             .child(
                 div()
                     .id("settings-back")
@@ -1734,7 +1738,8 @@ impl Focusable for SettingsPane {
 impl Render for SettingsPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
-        let nav = self.render_nav(window, cx);
+        let (sidebar_bg, content_bg) = crate::gpui_shell::theme::settings_surface_colors(cx);
+        let nav = self.render_nav(sidebar_bg, window, cx);
         let content = self.section_content(window, cx);
         // 设置页复用 UI 西文与本机中文回退，终端字体不参与表单排版。
         let base_px = self.font_size_px(cx);
@@ -1752,7 +1757,6 @@ impl Render for SettingsPane {
         let application_page = self.active_section == 0;
         let mobile_page = self.active_section == MOBILE_SECTION;
         let form_page = matches!(self.active_section, 1 | 2 | 5 | 6 | 8);
-        let has_cards = form_page || mobile_page || self.active_section == 9;
         let peeking = self.wallpaper_peeking();
 
         div()
@@ -1800,7 +1804,6 @@ impl Render for SettingsPane {
                 ))
             })
             // 背景和圆角归 workspace 卡容器；此处再次铺底会叠加不透明度。
-            .rounded(crate::gpui_shell::theme::card_radius(cx))
             .text_color(cx.theme().foreground)
             // 正文继承主字号；导航和搜索使用组件小字号，说明与徽标单独缩小。
             .text_size(px(base_px))
@@ -1808,13 +1811,23 @@ impl Render for SettingsPane {
             .flex()
             .flex_row()
             .child(nav)
+            .when(!cx.theme().is_dark(), |root| {
+                root.child(
+                    div()
+                        .debug_selector(|| "settings-nav-divider".into())
+                        .w(px(1.0))
+                        .h_full()
+                        .flex_shrink_0()
+                        .bg(crate::gpui_shell::theme::settings_hairline(cx)),
+                )
+            })
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .debug_selector(|| "settings-content".to_owned())
-                    .when(has_cards, |pane| pane.bg(crate::gpui_shell::theme::settings_canvas_tint(cx)))
+                    .bg(content_bg)
                     .opacity(if peeking { 0.16 } else { 1.0 })
                     .child(
                         v_flex()

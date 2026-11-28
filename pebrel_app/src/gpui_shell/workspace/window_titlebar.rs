@@ -178,9 +178,7 @@ impl NebulaWorkspace {
                 };
                 bar.bg(fill).border_b_0()
             })
-            .when(settings_active, |bar| {
-                bar.border_b_1().border_color(crate::gpui_shell::theme::settings_hairline(cx))
-            })
+            .when(settings_active, |bar| bar.bg(gpui::transparent_black()).border_b_0())
             .when(top_tabs && native_layout.is_none(), |bar| {
                 bar.pl(px(top_tabs::TOP_TAB_LEFT_INSET))
             })
@@ -202,6 +200,46 @@ impl NebulaWorkspace {
         title_bar_frame()
             .debug_selector(|| "workspace-titlebar".to_owned())
             .when(!settings_active, |title| title.child(self.window_backdrop.element(top_tabs)))
+            .when(settings_active, |title| {
+                let (sidebar_bg, content_bg) =
+                    crate::gpui_shell::theme::settings_surface_colors(cx);
+                let hairline = crate::gpui_shell::theme::settings_hairline(cx);
+                title.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .child(
+                            div()
+                                .debug_selector(|| "settings-sidebar-titlebar".to_owned())
+                                .w(px(crate::gpui_shell::settings_pane::SETTINGS_NAV_WIDTH))
+                                .flex_shrink_0()
+                                .bg(sidebar_bg),
+                        )
+                        .when(!cx.theme().is_dark(), |title| {
+                            title.child(
+                                div()
+                                    .debug_selector(|| "settings-titlebar-divider".to_owned())
+                                    .w(px(1.0))
+                                    .flex_shrink_0()
+                                    .bg(hairline),
+                            )
+                        })
+                        .child(div().flex_1().min_w_0().bg(content_bg).when(!top_tabs, |title| {
+                            title
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(cx.theme().foreground)
+                                .child(
+                                    crate::gpui_shell::config::ui_language(cx)
+                                        .text(Message::CommonSettings),
+                                )
+                        })),
+                )
+            })
             .child(bar)
     }
 }

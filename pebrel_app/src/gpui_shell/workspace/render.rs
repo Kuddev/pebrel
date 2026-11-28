@@ -63,7 +63,7 @@ impl Render for NebulaWorkspace {
         let settings_content = settings_active
             || matches!(self.tabs.get(self.active), Some(WorkspaceTab::Settings { .. }));
         let content_background = if settings_content {
-            crate::gpui_shell::theme::settings_content_bg(cx)
+            gpui::transparent_black()
         } else {
             crate::gpui_shell::theme::card_content_bg(cx)
         };
@@ -72,6 +72,8 @@ impl Render for NebulaWorkspace {
                 .settings_surface
                 .as_ref()
                 .is_some_and(|(pane, _)| pane.read(cx).wallpaper_peeking());
+        let settings_wallpaper =
+            settings_content && crate::gpui_shell::wallpaper::settings_wallpaper_visible(cx);
         let top_tabs = self.tabs_position == pebrel_settings::TabsPositionName::Top;
         let reader_focus = self.reader_focus_active(cx);
         let sidebar_collapsed =
@@ -97,9 +99,18 @@ impl Render for NebulaWorkspace {
             .flex()
             .flex_col()
             .relative()
-            // 旧壳每个像素只画一次：整窗先透明清屏，再分别画标题栏、侧栏、
-            // 卡外壳与卡底。根节点不能再铺一张半透明底。
-            .bg(gpui::transparent_black())
+            // 统一底图承担窗口透明度，避免标题栏和正文重复叠底而露出桌面。
+            .bg(if settings_wallpaper && !wallpaper_peek {
+                if cx.theme().is_dark() { gpui::black() } else {
+                    crate::gpui_shell::theme::settings_panel_bg(cx)
+                }
+            } else if crate::gpui_shell::wallpaper::unified_workspace_backdrop(cx) {
+                let mut base = crate::gpui_shell::theme::settings_panel_bg(cx);
+                base.a = crate::gpui_shell::wallpaper::window_opacity(cx);
+                base
+            } else {
+                gpui::transparent_black()
+            })
             .font(crate::gpui_shell::typography::ui_font(cx))
             .text_color(cx.theme().foreground)
             .can_drop({
@@ -273,7 +284,18 @@ impl Render for NebulaWorkspace {
             .child(if wallpaper_peek {
                 crate::gpui_shell::wallpaper::peek_layer(workspace_strip.clone(), cx).into_any_element()
             } else {
-                crate::gpui_shell::wallpaper::window_layer(workspace_strip.clone(), cx).into_any_element()
+                crate::gpui_shell::wallpaper::window_layer(settings_wallpaper, workspace_strip.clone(), cx).into_any_element()
+            })
+            .when(settings_wallpaper && !wallpaper_peek && !cx.theme().is_dark(), |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(54.0))
+                        .bg(crate::gpui_shell::theme::settings_wallpaper_header_fade(cx)),
+                )
             })
             .child(
                 self.render_window_title_bar(
@@ -346,12 +368,12 @@ impl Render for NebulaWorkspace {
                                     card.shadow(vec![crate::gpui_shell::theme::card_shadow(cx)])
                                 })
                                 .overflow_hidden()
-                                .child(
+                                .when(!settings_content, |card| card.child(
                                     // 壁纸层（卡底色之上、内容之下，覆盖整卡含
                                     // 内边距带）：卡模式按卡定位；拓展模式由
                                     // 窗口底层统一绘图，此处不覆盖原有衬底。
                                     crate::gpui_shell::wallpaper::card_layer(workspace_strip, cx),
-                                )
+                                ))
                                 .children(content),
                         )
                             .child(

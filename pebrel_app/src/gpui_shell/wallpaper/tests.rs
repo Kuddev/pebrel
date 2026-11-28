@@ -82,6 +82,42 @@ fn fixture(path: &std::path::Path, color: [u8; 4]) {
 }
 
 #[gpui::test]
+fn light_workspace_uses_the_shared_backdrop_for_inherited_static_wallpaper(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wallpaper.png");
+    fixture(&path, [10, 20, 30, 255]);
+    let mut rt = settings(Some(path));
+    rt.theme = pebrel_settings::ThemeName::BreezeLight;
+    rt.follow_system_theme = false;
+    rt.background_media_kind = pebrel_settings::BackgroundMediaKind::Image;
+    rt.background_image_cover_chrome = true;
+    rt.tab_bar_material = Default::default();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(rt.theme, rt.clone()));
+        update_wallpaper(&rt, 1.0, BlurModeName::None, cx);
+        assert!(!unified_workspace_backdrop(cx));
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(crate::gpui_shell::theme::resolved_skin(cx).is_light);
+        assert!(unified_workspace_backdrop(cx));
+        assert_eq!(window_opacity(cx), 1.0);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
+        assert_eq!(card_surface_opacity(cx), 0.0);
+        assert_eq!(tab_bar_surface_opacity(cx), 0.0);
+
+        rt.tab_bar_material.opacity = Some(0.65);
+        update_wallpaper(&rt, 1.0, BlurModeName::None, cx);
+        assert!(!unified_workspace_backdrop(cx));
+        assert_eq!(tab_bar_surface_opacity(cx), 0.65);
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
 fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("wallpaper.png");
@@ -92,14 +128,18 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
         update_wallpaper(&rt, 1.0, BlurModeName::None, cx);
         let effects = cx.global::<VisualEffects>();
         assert!(effects.loading);
-        assert!(effects.wallpaper.as_ref().unwrap().image.is_none());
+        assert!(effects.wallpaper.as_ref().unwrap().images.is_none());
+        assert!(!settings_wallpaper_visible(cx));
         assert_eq!(chrome_surface_opacity(cx), 1.0);
     });
     cx.run_until_parked();
-    let original = cx.update(|cx| {
+    let (sharp, blurred, mica) = cx.update(|cx| {
         assert!(!cx.global::<VisualEffects>().loading);
-        assert_eq!(chrome_surface_opacity(cx), 0.78);
-        cx.global::<VisualEffects>().wallpaper.as_ref().unwrap().image.clone().unwrap()
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
+        assert!(settings_wallpaper_visible(cx));
+        let wp = cx.global::<VisualEffects>().wallpaper.as_ref().unwrap();
+        let images = wp.images.as_ref().unwrap();
+        (images.sharp.clone(), images.blurred.clone(), images.mica.clone())
     });
     rt.background_image_opacity = 0.75;
     rt.background_image_fit = Some("contain".into());
@@ -109,25 +149,33 @@ fn loading_yields_and_layout_opacity_refreshes_reuse_the_same_image(cx: &mut Tes
     cx.update(|cx| {
         let effects = cx.global::<VisualEffects>();
         let wp = effects.wallpaper.as_ref().unwrap();
-        assert!(Arc::ptr_eq(&original, wp.image.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(&sharp, &wp.images.as_ref().unwrap().sharp));
+        assert!(Arc::ptr_eq(&blurred, &wp.images.as_ref().unwrap().blurred));
+        assert!(Arc::ptr_eq(&mica, &wp.images.as_ref().unwrap().mica));
         assert_eq!(effects.layout.opacity, 0.75);
         assert_eq!(effects.layout.fit, BackgroundImageFit::Uniform);
-        assert_eq!(chrome_surface_opacity(cx), 0.78);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
         for width in 800..1000 {
             let bounds = Bounds::new(point(px(100.0), px(30.0)), size(px(width as f32), px(600.0)));
             let _ = image_bounds(wp, effects.layout, bounds, 1.5);
-            assert!(Arc::ptr_eq(&original, wp.image.as_ref().unwrap()));
+            assert!(Arc::ptr_eq(&sharp, &wp.images.as_ref().unwrap().sharp));
+            assert!(Arc::ptr_eq(&blurred, &wp.images.as_ref().unwrap().blurred));
         }
         rt.background_image_opacity = 0.0;
         update_wallpaper(&rt, 0.8, BlurModeName::None, cx);
-        assert_eq!(chrome_surface_opacity(cx), 0.78);
+        assert!(!settings_wallpaper_visible(cx));
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
         set_opacity_live(0.4, cx);
-        assert_eq!(chrome_surface_opacity(cx), 0.4);
+        assert_eq!(chrome_surface_opacity(cx), 0.0);
+        assert_eq!(window_opacity(cx), 0.4);
         rt.background_image_cover_chrome = false;
+        rt.background_image_opacity = 0.75;
         update_wallpaper(&rt, 0.8, BlurModeName::None, cx);
+        assert!(settings_wallpaper_visible(cx));
         assert_eq!(chrome_surface_opacity(cx), 0.8);
         update_wallpaper(&settings(None), 0.8, BlurModeName::None, cx);
         assert_eq!(chrome_surface_opacity(cx), 0.8);
+        assert!(!settings_wallpaper_visible(cx));
     });
 }
 
@@ -146,7 +194,10 @@ fn latest_request_wins_and_clearing_during_decode_cannot_restore_an_image(cx: &m
     cx.update(|cx| {
         let wp = cx.global::<VisualEffects>().wallpaper.as_ref().unwrap();
         assert_eq!(wp.path, last);
-        assert_eq!(&wp.image.as_ref().unwrap().as_bytes(0).unwrap()[..4], &[255, 0, 0, 255]);
+        let images = wp.images.as_ref().unwrap();
+        for image in [&images.sharp, &images.blurred] {
+            assert_eq!(&image.as_bytes(0).unwrap()[..4], &[255, 0, 0, 255]);
+        }
         update_wallpaper(
             &settings(Some(directory.path().join("missing.png"))),
             1.0,
@@ -164,7 +215,7 @@ fn latest_request_wins_and_clearing_during_decode_cannot_restore_an_image(cx: &m
 
 #[test]
 fn card_and_chrome_share_the_window_anchor_and_preserve_native_physical_size() {
-    let wp = Wallpaper { path: PathBuf::new(), image: None, stamp: None, width: 800, height: 400 };
+    let wp = Wallpaper { path: PathBuf::new(), images: None, stamp: None, width: 800, height: 400 };
     let mut layout = WallpaperLayout {
         fit: BackgroundImageFit::UniformToFill,
         alignment: BackgroundImageAlignment::Center,
