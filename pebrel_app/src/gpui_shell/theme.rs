@@ -2,7 +2,8 @@ mod transition;
 pub(crate) use transition::ThemeTransition;
 
 use gpui::{
-    App, Bounds, Hsla, Pixels, Rgba as GpuiRgba, Styled, Window, fill, hsla, point, px, size,
+    App, Bounds, Hsla, ParentElement as _, Pixels, Rgba as GpuiRgba, Styled, Window, fill, hsla,
+    point, px, size,
 };
 use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
 
@@ -759,7 +760,30 @@ pub(super) fn settings_card(element: gpui::Div, cx: &App) -> gpui::Div {
         border: gpui::white().opacity(0.10),
         sheen: GlassSurface::selection(ink(skin.accent)).sheen,
     };
-    element.rounded(px(12.0)).border_1().border_color(glass.border).bg(glass.background(0.009))
+    element.relative().rounded(px(12.0)).border_1().border_color(glass.border).bg(glass.fill).child(
+        // HTML 的 inset 0 1px 0 从边框内沿起算；按卡高渐变会让长卡的亮边变宽。
+        gpui::canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                window.paint_inset_shadows(
+                    bounds,
+                    gpui::Corners::all(px(11.0)),
+                    &[gpui::BoxShadow {
+                        color: glass.sheen,
+                        offset: point(px(0.0), px(1.0)),
+                        blur_radius: px(0.0),
+                        spread_radius: px(0.0),
+                        inset: true,
+                    }],
+                );
+            },
+        )
+        .absolute()
+        .top(px(1.0))
+        .bottom(px(1.0))
+        .left(px(1.0))
+        .right(px(1.0)),
+    )
 }
 
 fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
