@@ -19,7 +19,7 @@ pub enum AssistantAnswer {
 impl AssistantAnswer {
     pub fn from_hook(source: &str, payload: &Value) -> Option<Self> {
         let field = match source {
-            "claude" if payload.get("hook_event_name")?.as_str()? == "Stop" => {
+            "claude" | "dsh" if payload.get("hook_event_name")?.as_str()? == "Stop" => {
                 "last_assistant_message"
             },
             "codex" if payload.get("hook_event_name").and_then(Value::as_str) == Some("Stop") => {
@@ -96,7 +96,7 @@ impl AnswerInbox {
         use crate::ai_hook::AiHookKind;
 
         if event.pane != Some(pane_id)
-            || !matches!(event.source.as_str(), "claude" | "codex")
+            || !matches!(event.source.as_str(), "claude" | "codex" | "dsh")
             || event.received_sequence <= self.last_sequence
         {
             return false;
@@ -154,7 +154,7 @@ mod tests {
 
     fn payload(provider: &str, text: &str) -> Value {
         match provider {
-            "claude" => json!({"hook_event_name": "Stop", "last_assistant_message": text}),
+            "claude" | "dsh" => json!({"hook_event_name": "Stop", "last_assistant_message": text}),
             "codex" => json!({"type": "agent-turn-complete", "last-assistant-message": text}),
             _ => unreachable!(),
         }
@@ -166,7 +166,7 @@ mod tests {
             "{}\n$$\n\\widehat{{f}}(\\xi)\n=\n+ \\int_0^1 x\\,dx\n\\begin{{cases}}a&b\\\\\nc&d\\end{{cases}}\n$$\n",
             "中文与 $HOME 和代码 `$$`。".repeat(500)
         );
-        for provider in ["claude", "codex"] {
+        for provider in ["claude", "codex", "dsh"] {
             let answer = AssistantAnswer::from_hook(provider, &payload(provider, &source)).unwrap();
             assert_eq!(answer.source().unwrap().as_ref(), source);
         }
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn oversized_answers_are_reported_not_cut_into_partial_formulas() {
-        for provider in ["claude", "codex"] {
+        for provider in ["claude", "codex", "dsh"] {
             let source = "a".repeat(MAX_ANSWER_BYTES + 1);
             let answer = AssistantAnswer::from_hook(provider, &payload(provider, &source)).unwrap();
             assert_eq!(answer, AssistantAnswer::TooLarge { bytes: source.len() });
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn absent_wrongly_named_or_empty_fields_never_become_screen_guesses() {
-        for provider in ["claude", "codex"] {
+        for provider in ["claude", "codex", "dsh"] {
             assert_eq!(
                 AssistantAnswer::from_hook(provider, &payload(provider, " \n")),
                 Some(AssistantAnswer::Missing)
@@ -231,7 +231,7 @@ mod tests {
         kind: crate::ai_hook::AiHookKind,
     ) -> crate::ai_hook::AiHookEvent {
         let mut body = payload(provider, "answer");
-        body[if provider == "claude" { "session_id" } else { "thread-id" }] = json!(session);
+        body[if provider == "codex" { "thread-id" } else { "session_id" }] = json!(session);
         let wire = format!("nebula-hook/1 source={provider} pane={pane}\n{body}");
         let mut event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(pane)).unwrap();
         event.received_sequence = sequence;
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn panes_sessions_and_closed_sessions_cannot_cross_bind_answers() {
         use crate::ai_hook::AiHookKind::*;
-        for provider in ["claude", "codex"] {
+        for provider in ["claude", "codex", "dsh"] {
             let mut inbox = AnswerInbox::default();
             assert!(!inbox.observe(&event(provider, "old", 2, 1, TurnDone), 1));
             assert!(inbox.observe(&event(provider, "old", 1, 2, TurnDone), 1));
@@ -289,7 +289,7 @@ mod tests {
     fn image_directory_is_captured_with_the_completed_answer() {
         use crate::ai_hook::AiHookKind::TurnDone;
         let directory = tempfile::tempdir().unwrap();
-        for provider in ["claude", "codex"] {
+        for provider in ["claude", "codex", "dsh"] {
             let mut completion = event(provider, "session", 1, 1, TurnDone);
             completion.answer_cwd = Some(directory.path().to_path_buf());
             let mut inbox = AnswerInbox::default();

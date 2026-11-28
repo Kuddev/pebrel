@@ -99,6 +99,46 @@ fn successful_exit_still_closes_the_tab(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn held_exit_keeps_output_and_records_exit_until_explicitly_closed(cx: &mut TestAppContext) {
+    let (workspace, terminals, _, mut window) = open_painted_workspace(&[1, 1], cx);
+    let terminal = &terminals[0];
+    terminal.update(&mut window, |view, _| view.hold_on_exit());
+    exit(terminal, 0, &mut window);
+    assert!(!terminal.read_with(&window, |view, _| view.local_session_failed()));
+    assert!(painted(terminal, &mut window).text.contains("cache-output"));
+    workspace.update(&mut window, |workspace, cx| {
+        assert_eq!(workspace.tabs.len(), 2);
+        let snapshot =
+            workspace.runtime_hub.publish(crate::runtime_api::RuntimeSnapshot::new(0, Vec::new()));
+        assert_eq!(snapshot.pane_lifecycles.len(), 1);
+        assert_eq!(snapshot.pane_lifecycles[0].pane_id, terminal.read(cx).pane_id);
+        assert_eq!(
+            snapshot.pane_lifecycles[0].event,
+            crate::runtime_api::RuntimePaneLifecycleKind::Exited,
+        );
+    });
+    // Holding one launch must not change the ordinary pane's exit behavior.
+    exit(&terminals[1], 0, &mut window);
+    workspace.read_with(&window, |workspace, _| {
+        assert_eq!(workspace.tabs.len(), 1);
+        assert!(workspace.locate_pane(terminal.entity_id()).is_some());
+    });
+    terminal.update(&mut window, |_, cx| cx.emit(TerminalViewEvent::RequestClose));
+    cx.run_until_parked();
+    cx.update(|cx| assert!(workspace.read(cx).tabs.is_empty()));
+}
+
+#[gpui::test]
+fn held_nonzero_exit_after_input_keeps_the_pane(cx: &mut TestAppContext) {
+    let (workspace, terminals, _, mut window) = open_painted_workspace(&[1], cx);
+    terminals[0].update(&mut window, |view, _| view.hold_on_exit());
+    window.simulate_keystrokes("x");
+    exit(&terminals[0], 1, &mut window);
+    assert!(!terminals[0].read_with(&window, |view, _| view.local_session_failed()));
+    workspace.read_with(&window, |workspace, _| assert_eq!(workspace.tabs.len(), 1));
+}
+
+#[gpui::test]
 fn nonzero_exit_after_user_input_still_closes_the_tab(cx: &mut TestAppContext) {
     let (workspace, terminals, _, mut window) = open_painted_workspace(&[1, 1], cx);
     window.simulate_keystrokes("x");

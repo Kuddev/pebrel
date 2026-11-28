@@ -19,6 +19,7 @@ fn expected_resume(kind: AgentKind, id: &str) -> Option<String> {
         OhMyPi => format!("omp --resume {id}"),
         Kimi => format!("kimi --session {id}"),
         CommandCode => format!("command-code --resume {id}"),
+        Dsh => format!("dsh --profile tui --resume {id}"),
         Aider | Goose | Droid | Auggie | Hermes | Vibe | Qwen | Cline | Devin | Kiro | Kilo
         | Qoder | Maki | Trae => return None,
     })
@@ -30,6 +31,7 @@ fn leaf(kind: AgentKind, id: &str) -> LayoutSession {
         custom_name: None,
         launch: None,
         agent: Some(AgentSession {
+            permission_mode: None,
             source: kind.slug().into(),
             session_id: Some(id.into()),
             session_file: None,

@@ -47,9 +47,14 @@ impl SessionRecovery {
         if let Some(previous) = &self.target
             && previous.source == target.source
             && previous.session_id == target.session_id
-            && target.session_file.is_none()
         {
-            target.session_file = previous.session_file.clone();
+            if target.session_file.is_none() {
+                target.session_file = previous.session_file.clone();
+            }
+            // 部分 Hook 不带权限字段；缺字段不代表用户切回默认模式。
+            if target.permission_mode.is_none() {
+                target.permission_mode = previous.permission_mode.clone();
+            }
         }
         self.target = Some(target);
         self.awaiting_confirmation = false;
@@ -151,6 +156,7 @@ impl TerminalView {
         let pending = self.pending_shell_command.as_ref();
         if let Some(identity) = &self.ai_session {
             return Some(crate::session::AgentSession {
+                permission_mode: None,
                 source: identity.source.clone(),
                 session_id: Some(identity.session_id.clone()),
                 session_file: None,
@@ -162,6 +168,7 @@ impl TerminalView {
                 self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse)
             })?;
         Some(crate::session::AgentSession {
+            permission_mode: None,
             session_file: None,
             source: kind.slug().to_owned(),
             session_id: None,
@@ -207,6 +214,7 @@ impl TerminalView {
         {
             self.recovery = SessionRecovery {
                 target: Some(crate::session::AgentSession {
+                    permission_mode: None,
                     source,
                     session_id: Some(session_id),
                     session_file: None,
@@ -414,6 +422,7 @@ fn local_omp_recovery_queues_only_a_matching_session_file(cx: &mut gpui::TestApp
                 Some(crate::runtime_exec::PaneExecContext::from_pty_options(&Default::default()));
             view.restore_agent(
                 crate::session::AgentSession {
+                    permission_mode: None,
                     source: "omp".into(),
                     session_id: Some(id.into()),
                     session_file: Some(file.to_str().unwrap().into()),

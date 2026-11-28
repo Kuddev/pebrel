@@ -215,10 +215,24 @@ fn parse_probe_context(output: &str) -> Option<CodexRollouts> {
         if !valid_uuid(id) {
             continue;
         }
-        // Codex's main interactive thread is marked as a CLI/user thread.
-        // Keep accepting older session_meta lines that lack these fields, but
-        // reject an explicit guardian/sub-agent marker.
-        if !matches_optional_string(payload, &meta, "source", "cli")
+        // 部分 Codex TUI 借 app-server 写入 vscode 来源；仅在 originator 和
+        // 主线程标记均明确匹配时接受，仍由前面的进程/文件归属限定候选。
+        let tui_via_app_server = payload
+            .get("source")
+            .or_else(|| meta.get("source"))
+            .and_then(serde_json::Value::as_str)
+            == Some("vscode")
+            && payload
+                .get("originator")
+                .or_else(|| meta.get("originator"))
+                .and_then(serde_json::Value::as_str)
+                == Some("codex-tui")
+            && payload
+                .get("thread_source")
+                .or_else(|| meta.get("thread_source"))
+                .and_then(serde_json::Value::as_str)
+                == Some("user");
+        if !(matches_optional_string(payload, &meta, "source", "cli") || tui_via_app_server)
             || !matches_optional_string(payload, &meta, "thread_source", "user")
         {
             continue;
@@ -527,6 +541,27 @@ mod tests {
             let context = parse_probe_context(&output).unwrap().select(None).unwrap();
             assert_eq!(context.session_id, ROOT_ID);
             assert_eq!(context.cwd.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn app_server_tui_metadata_requires_explicit_interactive_ownership() {
+        for (source, originator, thread, expected) in [
+            ("vscode", "codex-tui", Some("user"), Some(ROOT_ID)),
+            ("vscode", "vscode", Some("user"), None),
+            ("vscode", "codex-tui", Some("guardian"), None),
+            ("vscode", "codex-tui", None, None),
+            ("subagent", "codex-tui", Some("user"), None),
+        ] {
+            let mut payload =
+                serde_json::json!({"id":ROOT_ID,"source":source,"originator":originator});
+            if let Some(thread) = thread {
+                payload["thread_source"] = thread.into();
+            }
+            let meta = serde_json::json!({"type":"session_meta","payload":payload});
+            let output =
+                format!("42\t7\t/home/user/.codex/sessions/rollout-x-{ROOT_ID}.jsonl\t{meta}\n");
+            assert_eq!(parse_probe_records(&output).as_deref(), expected);
         }
     }
 
