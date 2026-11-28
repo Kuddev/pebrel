@@ -96,6 +96,7 @@ pub fn run_shell(
     shell_id: Option<String>,
     config_file: Option<std::path::PathBuf>,
     launched_at_login: bool,
+    hold: bool,
 ) {
     if crate::platform::CAPABILITIES.self_update_install {
         match crate::update_download::handoff::installation_in_progress() {
@@ -132,7 +133,12 @@ pub fn run_shell(
             ),
             command: initial_command.clone(),
             shell_id: shell_id.clone(),
-            update_restore: (initial_command.is_none() && shell_id.is_none())
+            hold,
+            activate_only: initial_cwd.is_none()
+                && initial_command.is_none()
+                && shell_id.is_none()
+                && !hold,
+            update_restore: (initial_command.is_none() && shell_id.is_none() && !hold)
                 .then(crate::update_download::handoff::pending_restore_path)
                 .flatten(),
         };
@@ -202,7 +208,7 @@ pub fn run_shell(
         },
         runtime_hub.clone(),
     );
-    if runtime_server.is_none() && initial_command.is_none() && !instance::is_private() {
+    if runtime_server.is_none() && initial_command.is_none() && !hold && !instance::is_private() {
         // 与另一份进程同时启动时，对方可能已经拿到 owner lock、但尚未来得及
         // 发布 endpoint。短暂等待并交接，避免继续打开一个无控制面的空窗口。
         let settings = pebrel_settings::RuntimeSettings::load();
@@ -258,6 +264,7 @@ pub fn run_shell(
         if initial_cwd.is_some()
             || initial_command.is_some()
             || shell_id.is_some()
+            || hold
             || instance::is_private()
             || !crate::platform::startup::start_hidden(
                 &pebrel_settings::RuntimeSettings::load(),
@@ -275,6 +282,7 @@ pub fn run_shell(
             initial_command,
             shell_id,
             launched_at_login,
+            hold,
         );
     });
     crate::tray::shutdown();
@@ -360,6 +368,7 @@ fn open_main_window(
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
     launched_at_login: bool,
+    hold: bool,
 ) {
     workspace::windowing::initialize(cx, runtime_hub);
     workspace::windowing::open_initial_window(
@@ -370,6 +379,7 @@ fn open_main_window(
         initial_command,
         shell_id,
         launched_at_login,
+        hold,
     );
 }
 

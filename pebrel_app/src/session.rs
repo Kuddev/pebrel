@@ -102,6 +102,9 @@ pub struct AgentSession {
     /// Native session file, interpreted only inside the owning pane environment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_file: Option<String>,
+    /// 最近一次可信 Hook 报告的权限模式；只恢复白名单中的 Claude 模式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 /// Validate both Windows and guest absolute paths without consulting the host
@@ -127,7 +130,7 @@ impl AgentSession {
         {
             return agent.resume_command(id);
         }
-        match self.session_id.as_deref() {
+        let command = match self.session_id.as_deref() {
             Some(id) if agent == crate::ai_agents::AgentKind::Pi && id.starts_with("pid-") => None,
             // Concurrent interactive restores otherwise contend for CodeBuddy's saved web port.
             Some(id) if agent == crate::ai_agents::AgentKind::CodeBuddy => {
@@ -146,7 +149,17 @@ impl AgentSession {
             },
             // codex 没有按目录 continue 的形式，缺 id 只能放弃接续。
             _ => None,
+        }?;
+        if agent == crate::ai_agents::AgentKind::Claude
+            && let Some(
+                mode @ ("default" | "acceptEdits" | "bypassPermissions" | "plan" | "auto"
+                | "dontAsk"),
+            ) = self.permission_mode.as_deref()
+        {
+            // Claude 普通 resume 不恢复 bypass；只重用该会话明确报告过的模式。
+            return Some(format!("{command} --permission-mode {mode}"));
         }
+        Some(command)
     }
 }
 
@@ -503,6 +516,7 @@ mod tests {
                 launch: None,
                 cwd: "D:/work".into(),
                 agent: Some(AgentSession {
+                    permission_mode: None,
                     session_file: None,
                     source: "claude".into(),
                     session_id: Some("0199a213-c2a4-7cf5-8f6b-d746fbb6e86c".into()),
@@ -555,6 +569,7 @@ mod tests {
             launch: None,
             cwd: "D:/w".into(),
             agent: Some(AgentSession {
+                permission_mode: None,
                 session_file: None,
                 source: "codex".into(),
                 session_id: Some("abc-1".into()),
@@ -569,6 +584,7 @@ mod tests {
     #[test]
     fn agent_resume_commands_are_exact_and_injection_safe() {
         let agent = |source: &str, id: Option<&str>| AgentSession {
+            permission_mode: None,
             session_file: None,
             source: source.into(),
             session_id: id.map(str::to_owned),
@@ -660,6 +676,7 @@ mod tests {
                     launch: None,
                     cwd: "/home/user/project".into(),
                     agent: Some(AgentSession {
+                        permission_mode: None,
                         session_file: None,
                         source: "codex".into(),
                         session_id: Some((*id).into()),

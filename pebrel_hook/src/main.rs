@@ -237,6 +237,7 @@ fn known_source(source: &str) -> bool {
             | "qwen"
             | "droid"
             | "antigravity"
+            | "dsh"
     )
 }
 
@@ -257,6 +258,7 @@ fn payload_on_stdin(source: &str) -> bool {
             | "qwen"
             | "droid"
             | "antigravity"
+            | "dsh"
     )
 }
 
@@ -482,7 +484,7 @@ mod tests {
 
     #[test]
     fn claude_style_sources_are_known_and_drain_stdin_without_an_event_contract() {
-        for source in ["qoder", "codebuddy", "qwen", "droid"] {
+        for source in ["qoder", "codebuddy", "qwen", "droid", "dsh"] {
             assert!(super::known_source(source) && super::payload_on_stdin(source), "{source}");
             let args = [source.to_owned(), "--event".to_owned(), "done".to_owned()];
             assert_eq!(super::native_event(&args), None);

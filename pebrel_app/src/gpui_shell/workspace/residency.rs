@@ -1114,9 +1114,11 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Private windows have no public resident discovery path.
+        // 管理员拥有同用户、同登录会话的专用交接通道；独立实例仍随窗口退出。
         if self.window_role != super::windowing::WindowRole::Regular
-            || crate::platform::startup::instance::is_private()
+            || crate::platform::startup::instance::explicitly_requested()
+            || (crate::platform::startup::instance::is_private()
+                && !crate::platform::elevation::is_elevated().is_ok_and(|value| value))
         {
             return false;
         }

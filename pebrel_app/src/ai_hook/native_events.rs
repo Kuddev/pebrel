@@ -690,6 +690,7 @@ mod tests {
         )
         .unwrap();
         let saved = crate::session::AgentSession {
+            permission_mode: None,
             source: event.source,
             session_id: event.session_id,
             session_file: event.session_file,
@@ -713,6 +714,7 @@ mod tests {
         for id in [None, Some(""), Some("x; calc"), Some("$(id)"), Some("two words"), Some("x\ny")]
         {
             let saved = crate::session::AgentSession {
+                permission_mode: None,
                 source: "antigravity".into(),
                 session_id: id.map(str::to_owned),
                 session_file: None,
