@@ -457,6 +457,7 @@ impl TerminalView {
             error,
             exited: None,
             retain_failed_session: false,
+            hold_on_exit: false,
             scrollbar_drag: None,
             scrollbar_hovered: false,
             scrollbar_visibility: cx
