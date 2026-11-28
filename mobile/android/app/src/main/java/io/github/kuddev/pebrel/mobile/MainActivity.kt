@@ -309,7 +309,7 @@ class MainActivity : ComponentActivity() {
                     "git" -> GitScreen(DesktopGitTarget(desktopId, windowId, paneId, gitCwd, gitGeneration, paneProcess), repository, ::back)
                     "conversation" -> {
                         if (desktop != null && pane != null && paneProcess == desktop.runtimeProcess &&
-                            chatKind in setOf("codex", "claude") && chatSession.isNotEmpty()) {
+                            supportsConversationView(chatKind) && chatSession.isNotEmpty()) {
                             ConversationScreen(desktop, pane, ConversationIdentity(chatKind, chatSession), repository,
                                 ::back, { switcher = true }, { openTab(desktopId, it) })
                         } else {
@@ -471,3 +471,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+internal fun supportsConversationView(kind: String): Boolean = kind in setOf("codex", "claude", "antigravity")

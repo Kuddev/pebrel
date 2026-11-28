@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use serde_json::{Value, json};
 
-use super::{Capture, HEAD_BYTES, PAGE_BYTES, changed, io_failure};
+use super::{Capture, HEAD_BYTES, PAGE_BYTES, Source, changed, io_failure};
 use crate::runtime_api::ApiError;
 use crate::ssh_session::PaneConnection;
 
@@ -9,20 +9,30 @@ const SCRIPT: &str = include_str!("remote_read.py");
 
 pub(super) fn capture(
     reader: &PaneConnection,
-    path: &str,
+    source: &Source,
     before: Option<u64>,
 ) -> Result<Capture, ApiError> {
+    let antigravity_id =
+        (source.identity.kind == "antigravity").then_some(source.identity.session_id.as_str());
+    if let Some(id) = antigravity_id
+        && !super::valid_antigravity_session_id(id)
+    {
+        return Err(io_failure("session_id"));
+    }
     let base64 = base64::engine::general_purpose::STANDARD;
-    let argument = base64.encode(json!({"path": path, "before": before}).to_string());
+    let argument = base64.encode(
+        json!({"path": source.path, "before": before, "antigravity_id": antigravity_id})
+            .to_string(),
+    );
     let script = format!("{SCRIPT}\nmain(json.loads(base64.b64decode('{argument}')))\n");
     let raw = crate::ssh_session::runtime()
         .map_err(io_failure)?
         .block_on(reader.capture(script.as_bytes()))
         .map_err(io_failure)?;
-    decode(&raw, before)
+    decode(&raw, &source.path, before)
 }
 
-fn decode(raw: &str, before: Option<u64>) -> Result<Capture, ApiError> {
+fn decode(raw: &str, requested_path: &str, before: Option<u64>) -> Result<Capture, ApiError> {
     if raw.len() > 2 * 1024 * 1024 {
         return Err(io_failure("response budget"));
     }
@@ -41,6 +51,17 @@ fn decode(raw: &str, before: Option<u64>) -> Result<Capture, ApiError> {
     if value.get("error").is_some() {
         return Err(io_failure("remote file"));
     }
+    let path = match value.get("path") {
+        Some(Value::String(resolved))
+            if !resolved.is_empty()
+                && resolved.len() <= 4096
+                && !resolved.chars().any(char::is_control) =>
+        {
+            resolved.clone()
+        },
+        None => requested_path.to_owned(),
+        _ => return Err(io_failure("path")),
+    };
     let end = value["end"].as_u64().ok_or_else(|| io_failure("end"))?;
     let start = value["start"].as_u64().ok_or_else(|| io_failure("start"))?;
     if before.is_some_and(|before| end != before) || start != end.saturating_sub(PAGE_BYTES as u64)
@@ -65,7 +86,7 @@ fn decode(raw: &str, before: Option<u64>) -> Result<Capture, ApiError> {
     {
         return Err(io_failure("byte range"));
     }
-    Ok(Capture { head, bytes, start, end, stamp })
+    Ok(Capture { path, head, bytes, start, end, stamp })
 }
 
 #[cfg(test)]
@@ -75,15 +96,17 @@ mod tests {
     #[test]
     fn ssh_capture_checks_revision_shape_and_does_not_accept_unbounded_bytes() {
         let response = |value: Value| format!("banner\nPEBREL_TRANSCRIPT={value}\n");
-        let valid =
-            json!({"version":1,"start":0,"end":3,"head":"YWJj","bytes":"YWJj","stamp":"owner"});
-        assert_eq!(decode(&response(valid.clone()), None).unwrap().bytes, b"abc");
-        assert!(decode(&response(valid.clone()), Some(4)).is_err());
+        let resolved = "/home/dev/.gemini/antigravity-cli/brain/conv-1/.system_generated/logs/transcript_full.jsonl";
+        let valid = json!({"version":1,"path":resolved,"start":0,"end":3,"head":"YWJj","bytes":"YWJj","stamp":"owner"});
+        let decoded = decode(&response(valid.clone()), "", None).unwrap();
+        assert_eq!(decoded.bytes, b"abc");
+        assert_eq!(decoded.path, resolved);
+        assert!(decode(&response(valid.clone()), "", Some(4)).is_err());
         let mut invalid = valid;
         invalid["end"] = json!(5);
-        assert!(decode(&response(invalid), None).is_err());
+        assert!(decode(&response(invalid), "", None).is_err());
         assert_eq!(
-            decode(&response(json!({"version":1,"error":"conversation_changed"})), None)
+            decode(&response(json!({"version":1,"error":"conversation_changed"})), "", None)
                 .err()
                 .unwrap()
                 .code,

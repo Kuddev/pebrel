@@ -75,15 +75,28 @@ impl TerminalView {
             .ok_or_else(|| {
                 ApiError::new("conversation_unavailable", "native conversation metadata is pending")
             })?;
-        let path = target
-            .session_file
-            .filter(|path| crate::session::valid_native_session_file(path))
-            .ok_or_else(|| {
-                ApiError::new(
+        let path = if identity.kind == "antigravity" {
+            if !crate::assistant_answer::conversation::valid_antigravity_session_id(
+                &identity.session_id,
+            ) {
+                return Err(ApiError::new(
                     "conversation_unavailable",
-                    "the Agent has not reported a transcript path",
-                )
-            })?;
+                    "the Agent has not reported a valid conversation identity",
+                ));
+            }
+            // UI 线程不触盘或派生 WSL/SSH；真实路径由后台在所属环境中按固定 brain 布局解析。
+            String::new()
+        } else {
+            target
+                .session_file
+                .filter(|path| crate::session::valid_native_session_file(path))
+                .ok_or_else(|| {
+                    ApiError::new(
+                        "conversation_unavailable",
+                        "the Agent has not reported a transcript path",
+                    )
+                })?
+        };
         let location = if self.ssh_destination.is_some() {
             let reader = self
                 .session
