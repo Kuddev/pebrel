@@ -125,6 +125,7 @@ fn duplicate_rebuilds_nested_mixed_layout_with_fresh_sessions(cx: &mut TestAppCo
             }),
         }),
         active_pane: 1,
+        output_refs: Vec::new(),
     };
     let (_, window) = cx.add_window_view(|window, cx| {
         let workspace = cx.new(|cx| {

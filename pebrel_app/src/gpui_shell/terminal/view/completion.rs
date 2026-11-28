@@ -176,6 +176,7 @@ impl TerminalView {
             && !self.suggest.screen_line.trim().is_empty();
         suggest::commit_line(&mut self.suggest);
         if confirmed_submission {
+            self.begin_recent_output();
             self.mark_submitted_command(native_submission);
             self.classify_submitted_command();
             cx.notify();

@@ -27,6 +27,9 @@ mod path_drop;
 mod pointer;
 mod program_status;
 mod reading;
+mod recent_output;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod recent_output_tests;
 mod remote_activity;
 mod runtime;
 mod session_failure;
@@ -352,6 +355,11 @@ pub struct TerminalView {
     /// `NEBULA|` 标题报 `running_program`，装了 OSC133 集成的 bash/zsh/nu 只
     /// 发这一对语义标记——两条路都要能点亮侧栏的「运行中」。
     command_running: bool,
+    recent_output: crate::recent_output::RecentOutput,
+    recent_output_restore_closed: bool,
+    recent_output_enabled: bool,
+    reveal_recent_output_on_restore: bool,
+    restored_viewport_offset: Option<usize>,
     /// 进程树给出的反证：`command_running` 为真、但 shell 树下只剩交互式
     /// shell 与 console plumbing 时置位，转圈据此熄灭（issue #42）。判据与
     /// 节流都在 `runtime::reconcile_shell_activity`，裁定理由见那里。
@@ -646,6 +654,7 @@ impl TerminalView {
         }
         match event {
             TermEvent::Wakeup => {
+                self.follow_restored_viewport();
                 self.restore_shell_pointer_selection();
                 self.observe_reading_output(cx);
                 self.flush_pending_runtime_submit(cx);
@@ -974,11 +983,14 @@ impl TerminalView {
                 if !preserves_prompt {
                     term.nebula_end_prompt();
                 }
-                term.scroll_display(Scroll::Bottom);
+                if self.restored_viewport_offset.is_none() {
+                    term.scroll_display(Scroll::Bottom);
+                }
                 term.selection = None;
             }
             session.notifier.notify(bytes);
         }
+        self.follow_restored_viewport();
         if status_acknowledged {
             self.refresh_program_status(cx);
         }
@@ -1178,6 +1190,7 @@ impl TerminalView {
         let font_size = px(settings.font_size_px);
         let palette = Arc::new(settings.palette.clone());
         let copy_on_select = settings.copy_on_select;
+        let command_output_enabled = settings.command_output_enabled;
         let default_cursor_style = settings.term_config().default_cursor_style;
         let cursor_style_changed = self.default_cursor_style != default_cursor_style;
         self.ghost_enabled = settings.ghost;
@@ -1231,6 +1244,7 @@ impl TerminalView {
                 term.reset_cursor_style_override();
             }
         }
+        self.set_recent_output_enabled(command_output_enabled);
         self.restart_cursor_blink(cx);
         cx.notify();
     }

@@ -48,6 +48,7 @@ mod prompt_suggestions;
 pub use prompt_suggestions::PromptSuggestions;
 mod quick_terminal;
 mod scrolling;
+mod startup;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
     SCROLL_SPEED_STEP, SCROLLBACK_VALUES, ScrollbarVisibility, normalize_scroll_speed,
@@ -1094,6 +1095,8 @@ pub struct RuntimeSettings {
     /// Start the first window hidden when a system tray is available and enabled.
     pub silent_start: bool,
     pub restore_session: bool,
+    /// 仅本机有界命令输出；会话恢复关闭时不采集、不持久化。
+    pub save_command_output: bool,
     pub resume_ai: bool,
     /// 常驻系统托盘图标。
     pub tray: bool,
@@ -1190,16 +1193,6 @@ pub const MAX_PANE_CARD_DIVIDER: f32 = 4.0;
 impl RuntimeSettings {
     pub fn load() -> Self {
         Self::from_raw(&RawSettings::load())
-    }
-
-    /// 启动时再检查目录：保存后可能被删除，各启动入口应使用同一有效性规则。
-    pub fn startup_directory_path(&self) -> Option<std::path::PathBuf> {
-        let directory = self.startup_directory.as_deref()?.trim();
-        if directory.is_empty() {
-            return None;
-        }
-        let path = std::path::PathBuf::from(directory);
-        path.is_dir().then_some(path)
     }
 
     pub fn from_raw(raw: &RawSettings) -> Self {
@@ -1302,6 +1295,7 @@ impl RuntimeSettings {
             keep_session: raw.bool_on("keep_session").unwrap_or(false),
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
+            save_command_output: raw.bool_on("save_command_output").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
