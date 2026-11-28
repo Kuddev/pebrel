@@ -23,6 +23,10 @@ pub(crate) struct Request {
     pub cwd: Option<PathBuf>,
     pub command: Option<Program>,
     pub shell_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub activate_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_restore: Option<PathBuf>,
 }
@@ -43,6 +47,7 @@ impl Request {
                     || path.to_str().is_none_or(|value| !valid_text(value))
                     || self.command.is_some()
                     || self.shell_id.is_some()
+                    || self.hold
             })
         {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid elevated launch"));
@@ -114,4 +119,23 @@ pub(crate) fn start_or_forward(
     _send: impl Fn(Arc<Dispatch>) -> bool + Send + 'static,
 ) -> io::Result<Startup> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "elevated launch handover requires Windows"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hold_survives_handover_and_older_requests_default_to_closing() {
+        let old = serde_json::json!({"cwd": null, "command": null, "shell_id": null});
+        let mut request: Request = serde_json::from_value(old.clone()).unwrap();
+        assert!(!request.hold);
+        assert_eq!(serde_json::to_value(&request).unwrap(), old);
+        request.hold = true;
+        let wire = serde_json::to_vec(&request).unwrap();
+        assert_eq!(serde_json::from_slice::<Request>(&wire).unwrap(), request);
+        assert!(request.validate().is_ok());
+        request.update_restore = Some(std::env::current_dir().unwrap().join("restore.json"));
+        assert!(request.validate().is_err(), "holding a launch is not update recovery");
+    }
 }

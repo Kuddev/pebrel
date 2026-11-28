@@ -5,6 +5,14 @@ use crate::gpui_shell::prelude::*;
 use crate::i18n::Message;
 
 impl TerminalView {
+    pub(in crate::gpui_shell) fn hold_on_exit(&mut self) {
+        self.hold_on_exit = true;
+    }
+
+    pub(in crate::gpui_shell) fn retain_on_exit(&self) -> bool {
+        self.hold_on_exit || self.local_session_failed()
+    }
+
     pub(super) fn local_startup_unconfirmed(&self) -> bool {
         self.ssh_destination.is_none()
             && self.prompt_input_epoch == 0

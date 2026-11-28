@@ -42,12 +42,14 @@ pub use pane_connection::PaneConnection;
 pub use resume::{ResumeTarget, TmuxActivity};
 use route::{ResolvedRoute, RouteTransport};
 
-/// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
+/// Direct SSH carries enhanced keyboard input without ConPTY's translation, handshake
+/// or host row anchoring, regardless of the desktop's operating system.
 pub(crate) fn terminal_config(
     mut config: pebrel_terminal::term::Config,
 ) -> pebrel_terminal::term::Config {
     config.suppress_bringup_da1 = false;
     config.conpty_resize = false;
+    config.kitty_keyboard = true;
     config
 }
 
