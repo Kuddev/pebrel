@@ -423,6 +423,7 @@ pub struct TerminalView {
     error: Option<String>,
     exited: Option<String>,
     retain_failed_session: bool,
+    hold_on_exit: bool,
     /// 滚动条拖拽中：按下时记下的「指针在拇指内的 y 偏移」，拖动全程据此
     /// 反算 `display_offset`，拇指不会在按下那一刻跳到指针中心。
     scrollbar_drag: Option<f32>,

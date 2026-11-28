@@ -117,7 +117,7 @@ pub(crate) enum WorkspaceStartup {
     RestoreOrDefault,
     RestoreUpdate(crate::session::Session),
     NewTerminal { cwd: Option<PathBuf> },
-    LaunchTerminal { cwd: Option<PathBuf>, launch: crate::session::LaunchSession },
+    LaunchTerminal { cwd: Option<PathBuf>, launch: crate::session::LaunchSession, hold: bool },
     Empty,
 }
 
@@ -489,7 +489,7 @@ fn open_runtime_tab_window(
         command.as_ref(),
         cx,
     )?;
-    open_runtime_startup(cx, WorkspaceStartup::LaunchTerminal { cwd, launch })
+    open_runtime_startup(cx, WorkspaceStartup::LaunchTerminal { cwd, launch, hold: false })
 }
 
 fn open_runtime_startup(cx: &mut App, startup: WorkspaceStartup) -> Result<(u64, u64), ApiError> {

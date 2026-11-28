@@ -281,6 +281,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             shell_id,
             options.config_file.clone(),
             options.launched_at_login,
+            terminal_options.hold,
         );
         return Ok(());
     }
@@ -592,7 +593,7 @@ fn try_hand_over_to_resident(options: &Options) -> bool {
     }
     let terminal_options = &options.window_options.terminal_options;
     // 这些入口从不交接；提前返回，避免为独立命令启动新增设置读取和目录检查。
-    if options.daemon || terminal_options.command().is_some() {
+    if options.daemon || terminal_options.command().is_some() || terminal_options.hold {
         return false;
     }
     let shell_id = terminal_options.shell_id();

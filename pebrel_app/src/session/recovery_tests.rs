@@ -31,6 +31,7 @@ fn leaf(kind: AgentKind, id: &str) -> LayoutSession {
         custom_name: None,
         launch: None,
         agent: Some(AgentSession {
+            permission_mode: None,
             source: kind.slug().into(),
             session_id: Some(id.into()),
             session_file: None,
