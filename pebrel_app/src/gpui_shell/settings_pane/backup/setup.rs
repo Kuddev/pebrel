@@ -61,6 +61,8 @@ impl SettingsPane {
             Message::CloudScope,
         ];
         let compact = window.viewport_size().width < px(960.0);
+        // 宽窗下单列存储选项会被拉成整行长条，改为两列。
+        let cols = if compact { 1 } else { 2 };
         let progress = div()
             .debug_selector(|| "backup-wizard-progress".into())
             .grid()
@@ -168,7 +170,7 @@ impl SettingsPane {
                     .child(caption(l.text(lead), cx).max_w(px(520.0))),
             );
         body = match step {
-            1 => body.child(v_flex().w_full().flex_shrink_0().gap_2().children(
+            1 => body.child(div().grid().grid_cols(cols).flex_shrink_0().gap_2().children(
                 PROVIDERS.into_iter().enumerate().map(
                     |(i, (protocol, nutstore, title, hint, icon))| {
                         Button::new(("backup-provider", i))
