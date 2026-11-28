@@ -62,7 +62,7 @@ fn native_linux_silent_start_close_and_restore_keep_the_same_session() {
             initialize(cx, crate::runtime_api::RuntimeHub::new());
             let (_sender, receiver) = std::sync::mpsc::channel();
             let (_ai_sender, ai_receiver) = std::sync::mpsc::channel();
-            open_initial_window(cx, ai_receiver, receiver, None, None, None, true);
+            open_initial_window(cx, ai_receiver, receiver, None, None, None, true, false);
             let workspace = cx.global::<WindowRegistry>().entries[0].workspace.upgrade().unwrap();
             let handle = cx.windows()[0];
             let (backend, id) = handle

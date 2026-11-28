@@ -10,8 +10,10 @@ pub(crate) fn open_initial_window(
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
     launched_at_login: bool,
+    hold: bool,
 ) {
-    if !crate::platform::startup::instance::explicitly_requested()
+    if !hold
+        && !crate::platform::startup::instance::explicitly_requested()
         && let Some(sessions) = crate::update_download::handoff::restore_ticket()
     {
         if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
@@ -34,9 +36,10 @@ pub(crate) fn open_initial_window(
             initial_startup(
                 initial_cwd,
                 initial_command,
-                crate::platform::startup::instance::is_private(),
+                crate::platform::startup::instance::is_private() || hold,
             )
         };
+        let startup = startup.with_hold(hold, cx);
         let start_hidden = initial_window_hidden(
             &startup,
             &pebrel_settings::RuntimeSettings::load(),
@@ -75,7 +78,7 @@ pub(super) fn runtime_window_startup(
 ) -> Result<WorkspaceStartup, ApiError> {
     match shell_id {
         Some(id) => super::super::shell_launch::resolve_shell_at(id, cwd.as_deref())
-            .map(|launch| WorkspaceStartup::LaunchTerminal { cwd, launch })
+            .map(|launch| WorkspaceStartup::LaunchTerminal { cwd, launch, hold: false })
             .map_err(|error| ApiError::new("invalid_shell", error)),
         None => Ok(WorkspaceStartup::NewTerminal { cwd }),
     }
@@ -88,12 +91,34 @@ pub(super) fn initial_startup(
 ) -> WorkspaceStartup {
     if let Some(command) = command {
         let launch = super::super::shell_launch::command_launch(&command, cwd.as_deref());
-        return WorkspaceStartup::LaunchTerminal { cwd, launch };
+        return WorkspaceStartup::LaunchTerminal { cwd, launch, hold: false };
     }
     if cwd.is_some() || isolated {
         WorkspaceStartup::NewTerminal { cwd }
     } else {
         WorkspaceStartup::RestoreOrDefault
+    }
+}
+
+impl WorkspaceStartup {
+    /// A CLI hold request belongs to its new pane, never to the resident window.
+    pub(super) fn with_hold(self, hold: bool, cx: &App) -> Self {
+        if !hold {
+            return self;
+        }
+        match self {
+            Self::LaunchTerminal { cwd, launch, .. } => Self::LaunchTerminal { cwd, launch, hold },
+            Self::NewTerminal { cwd } => {
+                // --hold 只改变退出行为，首个终端仍遵循配置的启动目录。
+                let cwd = cwd.or_else(NebulaWorkspace::cold_start_cwd);
+                Self::LaunchTerminal {
+                    launch: super::super::shell_launch::configured_at(cx, cwd.as_deref()),
+                    cwd,
+                    hold,
+                }
+            },
+            other => other,
+        }
     }
 }
 
@@ -104,6 +129,118 @@ mod new_instance_tests;
 #[cfg(test)]
 mod startup_tests {
     use super::*;
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn isolated_startup_directory_reaches_first_terminal(cx: &mut gpui::TestAppContext) {
+        let filter = "gpui_shell::workspace::windowing::startup::startup_tests::isolated_startup_directory_reaches_first_terminal";
+        if crate::platform::profile_test_isolation::run_exact_child(filter, None) {
+            return;
+        }
+        let configured = tempfile::tempdir().unwrap();
+        let explicit = tempfile::tempdir().unwrap();
+        // Keep the real launch path, but fail process creation before a native PTY reader starts.
+        let profile =
+            super::super::tab_launch_tests::imported_profile(configured.path(), "startup.exe");
+        let mut store = crate::terminal_profiles::TerminalProfiles::default();
+        store.upsert(profile.clone()).unwrap();
+        store.save().unwrap();
+        pebrel_settings::persist_keys(&[
+            ("startup_directory", configured.path().to_string_lossy().into_owned()),
+            ("shell", format!("profile:custom|{}", profile.id)),
+        ])
+        .unwrap();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            crate::gpui_shell::file_editor::init(cx);
+            super::super::super::init(cx);
+            cx.set_global(crate::gpui_shell::config::Settings::load(
+                pebrel_settings::ThemeName::Nord,
+            ));
+            initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        for (requested, expected) in
+            [(None, configured.path()), (Some(explicit.path().to_path_buf()), explicit.path())]
+        {
+            let (_, workspace) = cx.update(|cx| {
+                open_workspace_window_with_visibility(
+                    cx,
+                    initial_startup(requested, None, true),
+                    None,
+                    None,
+                    true,
+                    WindowRole::Regular,
+                    false,
+                )
+                .unwrap()
+            });
+            let actual = workspace.read_with(cx, |workspace, cx| {
+                let view = workspace.tabs[0].focused_view().unwrap().read(cx);
+                assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Failed);
+                view.cwd.clone()
+            });
+            assert_eq!(std::path::Path::new(&actual), expected);
+        }
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn cli_hold_reaches_the_initial_pane_after_successful_exit(cx: &mut gpui::TestAppContext) {
+        use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+        use clap::Parser as _;
+        use pebrel_terminal::event::Event;
+
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
+        let options = crate::cli::Options::try_parse_from([
+            "pebrel",
+            "--hold",
+            "-e",
+            "pebrel-test-missing-shell-executable",
+            "literal argument",
+        ])
+        .unwrap();
+        let terminal_options = options.window_options.terminal_options;
+        let (_, ai_events) = std::sync::mpsc::channel();
+        let (_, shell_events) = std::sync::mpsc::channel();
+        transfer_tests::initialize_test(cx);
+        let (workspace, terminal, _receiver) = cx.update(|cx| {
+            open_initial_window(
+                cx,
+                ai_events,
+                shell_events,
+                None,
+                terminal_options.command(),
+                None,
+                false,
+                terminal_options.hold,
+            );
+            let workspace = cx.global::<WindowRegistry>().entries[0].workspace.upgrade().unwrap();
+            let terminal = workspace.read(cx).tabs[0].focused_view().unwrap().clone();
+            let receiver = terminal.update(cx, |view, cx| {
+                let receiver = view.install_completion_test_session();
+                assert!(view.retain_on_exit(), "CLI --hold must reach the first pane");
+                view.remote_files_test_event(
+                    Event::ChildExit(crate::platform::process::test_exit_status(0)),
+                    cx,
+                );
+                view.remote_files_test_event(Event::Exit, cx);
+                receiver
+            });
+            (workspace, terminal, receiver)
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(workspace.read(cx).tabs.len(), 1);
+            assert!(!terminal.read(cx).local_session_failed());
+            let saved = workspace.read(cx).snapshot_session(cx);
+            assert!(
+                !serde_json::to_value(saved).unwrap().to_string().contains("hold"),
+                "--hold is a launch option, not a saved-session setting"
+            );
+        });
+    }
 
     #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
@@ -200,6 +337,7 @@ mod startup_tests {
                 )),
                 None,
                 false,
+                false,
             );
             let workspace = cx.global::<WindowRegistry>().entries[0].workspace.upgrade().unwrap();
             workspace.read(cx).active_terminal_pane_id().unwrap()
@@ -235,7 +373,7 @@ mod startup_tests {
             args: vec!["--literal=two words".into()],
         };
         let cwd = Some(PathBuf::from("C:/work area"));
-        let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd } =
+        let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd, .. } =
             initial_startup(cwd.clone(), Some(command), true)
         else {
             panic!("explicit launch was discarded");
@@ -259,7 +397,7 @@ mod startup_tests {
                 program: "wsl.exe".into(),
                 args: vec!["-d".into(), "Ubuntu".into(), "--exec".into(), "pwd".into()],
             };
-            let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd } =
+            let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd, .. } =
                 initial_startup(Some(cwd.into()), Some(command), false)
             else {
                 panic!("explicit WSL launch was discarded");
