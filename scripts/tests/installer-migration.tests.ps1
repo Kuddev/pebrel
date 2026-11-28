@@ -45,6 +45,10 @@ try {
     foreach ($name in @('pebrel.exe', 'pebrel-cli.exe', 'pebrel-hook.exe', 'conpty.dll', 'OpenConsole.exe')) {
         [System.IO.File]::WriteAllText((Join-Path $payload $name), 'Syntax fixture, not a runtime executable.')
     }
+    New-Item -ItemType Directory -Path (Join-Path $payload 'context-menu/assets') -Force | Out-Null
+    foreach ($name in @('pebrel_context_menu.dll', 'pebrel-context-menu-setup.exe', 'AppxManifest.xml', 'assets/logo.png')) {
+        [IO.File]::WriteAllText((Join-Path $payload "context-menu/$name"), 'Syntax fixture only.')
+    }
     & $InnoCompiler '/Q' '/DAppVersion=0.0.0' '/DNumericVersion=0.0.0.0' `
         '/DPackageBrand=PebrelInstallerSyntaxFixture' "/DBuildRoot=$payload" "/O$syntaxOutput" `
         (Join-Path $repo 'scripts\installer.iss')

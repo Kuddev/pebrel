@@ -87,6 +87,8 @@ english.AutoStart=Start Pebrel when I sign in to Windows
 english.InstallFont=Install Maple Mono font for the current user
 english.AddToPath=Add Pebrel to the user PATH
 english.OpenInPebrel=Open in Pebrel
+english.ModernContextMenuFailed=The Windows 11 context menu could not be registered. See context-menu\setup.log in the installation folder. An unsigned development build requires Developer Mode; public builds require a trusted signed package. The classic menu remains available.
+english.ModernContextMenuRemoveFailed=The context menu could not be unregistered. See context-menu\setup.log in the installation folder, then retry uninstalling.
 english.OpenInPebrelWsl=Open in Pebrel (WSL)
 english.WslMenuConflict=An existing WSL submenu belongs to another installation or was edited, so it was preserved: %1.
 english.WslMenuRegistrationFailed=Unable to register the WSL context submenu.
@@ -102,6 +104,8 @@ chinesesimplified.AutoStart=登录 Windows 后启动 Pebrel
 chinesesimplified.InstallFont=为当前用户安装 Maple Mono 字体
 chinesesimplified.AddToPath=将 Pebrel 添加到当前用户 PATH
 chinesesimplified.OpenInPebrel=在 Pebrel 中打开
+chinesesimplified.ModernContextMenuFailed=Windows 11 右键菜单注册失败。请查看安装目录中的 context-menu\setup.log。未签名开发构建需要开发者模式；公开发布需要受信任的签名包。传统右键菜单仍可使用。
+chinesesimplified.ModernContextMenuRemoveFailed=右键菜单注销失败。请查看安装目录中的 context-menu\setup.log，然后重试卸载。
 chinesesimplified.OpenInPebrelWsl=在 Pebrel 中打开（WSL）
 chinesesimplified.WslMenuConflict=现有 WSL 子菜单属于其他安装或已被修改，因此已保留：%1。
 chinesesimplified.WslMenuRegistrationFailed=无法注册 WSL 右键子菜单。
@@ -129,6 +133,13 @@ Source: "{#RepoRoot}\README.zh-CN.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildRoot}\pebrel-hook.exe"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#BuildRoot}\conpty.dll"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#BuildRoot}\OpenConsole.exe"; DestDir: "{app}\runtime"; Flags: ignoreversion
+#ifndef AcceptanceFixture
+Source: "{#BuildRoot}\context-menu\pebrel_context_menu.dll"; DestDir: "{app}\context-menu"; Flags: ignoreversion; Check: HasModernExplorer
+Source: "{#BuildRoot}\context-menu\pebrel-context-menu-setup.exe"; DestDir: "{app}\context-menu"; Flags: ignoreversion; Check: HasModernExplorer
+Source: "{#BuildRoot}\context-menu\AppxManifest.xml"; DestDir: "{app}\context-menu"; Flags: ignoreversion; Check: HasModernExplorer
+Source: "{#BuildRoot}\context-menu\assets\logo.png"; DestDir: "{app}\context-menu\assets"; Flags: ignoreversion; Check: HasModernExplorer
+Source: "{#BuildRoot}\context-menu\Pebrel.ContextMenu.msix"; DestDir: "{app}\context-menu"; Flags: ignoreversion skipifsourcedoesntexist; Check: HasModernExplorer
+#endif
 Source: "{#RepoRoot}\assets\fonts\MapleMonoNormal-NF-CN-Regular.ttf"; DestDir: "{app}\fonts"; Flags: ignoreversion
 #ifndef AcceptanceFixture
 Source: "{#RepoRoot}\assets\fonts\MapleMonoNormal-NF-CN-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Maple Mono Normal NF CN"; Tasks: installfont; Flags: onlyifdoesntexist uninsneveruninstall
@@ -178,7 +189,20 @@ Filename: "{app}\pebrel.exe"; Parameters: "{code:PebrelLaunchParameters}"; Descr
 Filename: "{app}\pebrel.exe"; Parameters: "setup-ai --remove"; WorkingDir: "{app}"; RunOnceId: "RemovePebrelAiHooks"; Flags: runhidden skipifdoesntexist
 #endif
 
+[InstallDelete]
+#ifndef AcceptanceFixture
+Type: files; Name: "{app}\context-menu\Pebrel.ContextMenu.msix"; Check: HasModernExplorer
+#endif
+
+[UninstallDelete]
+#ifndef AcceptanceFixture
+Type: files; Name: "{app}\context-menu\setup.log"
+#endif
+
 [Code]
+#ifndef AcceptanceFixture
+#include "installer-context-menu.iss"
+#endif
 #include "installer-migration.iss"
 #include "installer-launch.iss"
 

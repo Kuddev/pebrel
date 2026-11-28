@@ -510,6 +510,9 @@ begin
     Exit;
   { 与旧版迁移无关，装完就要做：菜单项取决于本机装了哪些 WSL 发行版。 }
   RegisterWslContextMenus;
+#ifndef AcceptanceFixture
+  RegisterModernContextMenu;
+#endif
   if LegacyInstallDir = '' then
     Exit;
   try
@@ -534,5 +537,9 @@ begin
   Result := 0;
   if MigrationFailed then
     Result := 1;
+#ifndef AcceptanceFixture
+  if ModernContextMenuFailed then
+    Result := 1;
+#endif
 end;
 #endif
