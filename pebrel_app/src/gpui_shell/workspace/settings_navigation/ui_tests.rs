@@ -82,6 +82,44 @@ fn numbered_tab_shortcuts() -> [&'static str; 2] {
 }
 
 #[gpui::test]
+fn settings_sidebar_is_flush_with_the_titlebar_and_gear_closes_the_page(cx: &mut TestAppContext) {
+    let (_directory, workspace, mut cx) = open_workspace(1, cx);
+    workspace.update(&mut cx, |workspace, cx| {
+        workspace.tabs_position = pebrel_settings::TabsPositionName::Sidebar;
+        workspace.sync_settings_layout(true);
+        cx.notify();
+    });
+    for width in [1280.0, 760.0] {
+        cx.simulate_resize(gpui::size(px(width), px(768.0)));
+        let title = tab_bounds("settings-sidebar-titlebar", &mut cx);
+        let sidebar = cx.debug_bounds("settings-sidebar").unwrap();
+        let content = cx.debug_bounds("settings-content").unwrap();
+        assert_eq!(sidebar.left(), title.left());
+        assert_eq!(sidebar.top(), title.bottom());
+        assert_eq!(sidebar.right(), title.right());
+        assert_eq!(sidebar.bottom(), content.bottom());
+        if let Some(divider) = cx.debug_bounds("settings-sidebar-divider") {
+            assert_eq!(divider.top(), title.top());
+            assert_eq!(divider.right(), content.left());
+            assert_eq!(divider.bottom(), content.bottom());
+            assert_eq!(divider.size.width, px(1.0));
+        } else {
+            let divider = cx.debug_bounds("settings-nav-divider").unwrap();
+            let title_divider = cx.debug_bounds("settings-titlebar-divider").unwrap();
+            assert_eq!(title_divider.left(), divider.left());
+            assert_eq!(title_divider.right(), divider.right());
+            assert_eq!(sidebar.right(), divider.left());
+            assert_eq!(divider.right(), content.left());
+        }
+    }
+    let gear = tab_bounds("open-settings", &mut cx);
+    cx.simulate_click(gpui::point(gear.right() - px(2.0), gear.center().y), Modifiers::default());
+    assert!(!workspace.read_with(&cx, |workspace, _| workspace.settings_open));
+    click_tab("open-settings", &mut cx);
+    assert!(workspace.read_with(&cx, |workspace, _| workspace.settings_open));
+}
+
+#[gpui::test]
 fn switching_top_tabs_keeps_settings_reachable_until_explicit_close(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = open_workspace(2, cx);
     let settings_id = workspace.read_with(&cx, |workspace, _| {

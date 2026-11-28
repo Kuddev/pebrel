@@ -9,3 +9,4 @@
 - Bounds, alpha, and channel order must remain consistent with the shared wallpaper layout.
 - Resource/lifecycle rationale: [bounded draft preview](../../../../architecture/notes/pebrel_app/gpui_shell/wallpaper/2026-10-02-draft-background-preview.md).
 - Tab-region alpha and the single native-backdrop boundary: [tab bar material](../../../../architecture/notes/pebrel_app/gpui_shell/wallpaper/2026-10-24-tab-bar-material.md).
+- Shared static wallpaper composition and bounded Settings Mica: [shared glass](../../../../architecture/notes/pebrel_app/gpui_shell/wallpaper/2026-11-22-shared-glass-composition.md).

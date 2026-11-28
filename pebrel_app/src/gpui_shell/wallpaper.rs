@@ -9,7 +9,7 @@
 //!   fit/alignment/透明度语义；图自身透明度独立于窗口 opacity）。
 //!
 //! 设置来源是共享层 `pebrel_settings`（新增壁纸五键），解码结果按
-//! (路径, 文件状态) 缓存；加载在后台串行执行，绘制只复用一张纹理。
+//! (路径, 文件状态) 缓存；后台串行准备原图和设置页复用的模糊图。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::platform::window_material::{apply_windows_accent_policy, background_appearance};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, ContentMask, Corners, Hsla, IntoElement, ParentElement, Pixels, RenderImage,
     Styled, Window, WindowBackgroundAppearance, div, fill, point, px, size,
@@ -64,7 +65,7 @@ impl Drop for VisualEffects {
 
 struct Wallpaper {
     path: PathBuf,
-    image: Option<Arc<RenderImage>>,
+    images: Option<WallpaperImages>,
     stamp: Option<image_loader::FileStamp>,
     width: u32,
     height: u32,
@@ -87,6 +88,12 @@ impl Default for WallpaperLayout {
             opacity: 1.0,
         }
     }
+}
+
+struct WallpaperImages {
+    sharp: Arc<RenderImage>,
+    blurred: Arc<RenderImage>,
+    mica: Arc<RenderImage>,
 }
 
 /// Refresh prepared visual state without reading or decoding image files on the UI thread.
@@ -135,9 +142,9 @@ fn update_wallpaper(
     effects.tab_bar_material = rt.tab_bar_material;
     effects.kind = rt.background_media_kind;
     let retired = if source_changed {
-        let retired = effects.wallpaper.take().and_then(|wp| wp.image);
+        let retired = effects.wallpaper.take().and_then(|wp| wp.images);
         effects.wallpaper =
-            desired.map(|path| Wallpaper { path, image: None, stamp: None, width: 1, height: 1 });
+            desired.map(|path| Wallpaper { path, images: None, stamp: None, width: 1, height: 1 });
         retired
     } else {
         None
@@ -157,7 +164,7 @@ fn update_wallpaper(
         opacity: rt.background_image_opacity.clamp(0.0, 1.0),
     };
     effects.generation.fetch_add(1, Ordering::Release);
-    retire_image(retired, cx);
+    retire_wallpaper(retired, cx);
     cx.global_mut::<VisualEffects>().terminal_config = rt.terminal_effects.clone();
     animated::configure(rt, source_changed, cx);
     if !rt.background_media_kind.is_animated() {
@@ -195,12 +202,15 @@ fn start_load(cx: &mut App) {
                     let Some(wp) = cx.global_mut::<VisualEffects>().wallpaper.as_mut() else {
                         return;
                     };
-                    wp.width = loaded.layout_width;
-                    wp.height = loaded.layout_height;
-                    wp.stamp = Some(loaded.stamp);
-                    let image = Arc::new(RenderImage::new([Frame::new(loaded.pixels)]));
-                    let retired = wp.image.replace(image);
-                    retire_image(retired, cx);
+                    wp.width = loaded.source.layout_width;
+                    wp.height = loaded.source.layout_height;
+                    wp.stamp = Some(loaded.source.stamp);
+                    let retired = wp.images.replace(WallpaperImages {
+                        sharp: Arc::new(RenderImage::new([Frame::new(loaded.source.pixels)])),
+                        blurred: Arc::new(RenderImage::new([Frame::new(loaded.blurred)])),
+                        mica: Arc::new(RenderImage::new([Frame::new(loaded.mica)])),
+                    });
+                    retire_wallpaper(retired, cx);
                     refresh_surface_opacity(cx);
                     cx.refresh_windows();
                 },
@@ -253,15 +263,21 @@ fn sync_root_background(cx: &mut App) {
     });
 }
 
-fn retire_image(image: Option<Arc<RenderImage>>, cx: &mut App) {
-    if let Some(image) = image {
-        // Settings callbacks may have taken the current window out of App.windows.
-        // Defer until all windows are back, and invalidate cached scene replay.
-        cx.defer(move |cx| {
-            cx.drop_image(image, None);
-            cx.refresh_windows();
-        });
+fn retire_wallpaper(images: Option<WallpaperImages>, cx: &mut App) {
+    if let Some(images) = images {
+        retire_images([images.sharp, images.blurred, images.mica], cx);
     }
+}
+
+fn retire_images<const N: usize>(images: [Arc<RenderImage>; N], cx: &mut App) {
+    // Settings callbacks may have taken the current window out of App.windows.
+    // Defer until all windows are back, and invalidate cached scene replay.
+    cx.defer(move |cx| {
+        for image in images {
+            cx.drop_image(image, None);
+        }
+        cx.refresh_windows();
+    });
 }
 
 fn show_load_error(error: image_loader::LoadError, cx: &mut App) {
@@ -307,13 +323,15 @@ pub fn set_opacity_live(opacity: f32, cx: &mut App) {
     }
 }
 
-/// Preserve the original extended-wallpaper scrim: shell and card surfaces
-/// retain the user's opacity, capped at 0.78, while text remains opaque.
-/// Before an image is ready (or after clearing it), use the normal surface.
+/// Inherited static wallpaper uses one base beneath transparent surfaces.
+/// Other modes retain their existing surface opacity and native backdrop.
 pub fn chrome_surface_opacity(cx: &App) -> f32 {
     let Some(effects) = cx.try_global::<VisualEffects>() else {
         return 1.0;
     };
+    if unified_workspace_backdrop(cx) {
+        return 0.0;
+    }
     let opacity = base_surface_opacity(effects, cx);
     if effects.layout.cover_chrome && animated::underlay_ready(cx) {
         return underlay_composition(opacity, effects.layout.opacity).0;
@@ -331,6 +349,17 @@ pub fn card_surface_opacity(cx: &App) -> f32 {
         return underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).0;
     }
     chrome_surface_opacity(cx)
+}
+
+/// 静态壁纸统一承担窗口底图，标题栏、两侧和终端不再分别叠底。
+/// Custom tab materials retain their independent native-backdrop contract.
+pub(super) fn unified_workspace_backdrop(cx: &App) -> bool {
+    !tab_bar_material_is_custom(cx)
+        && cx.try_global::<VisualEffects>().is_some_and(|effects| {
+            effects.layout.cover_chrome
+                && !effects.kind.is_animated()
+                && effects.wallpaper.as_ref().is_some_and(|wp| wp.images.is_some())
+        })
 }
 
 fn base_surface_opacity(effects: &VisualEffects, cx: &App) -> f32 {
@@ -359,10 +388,10 @@ fn underlay_composition(surface: f32, wallpaper: f32) -> (f32, f32) {
     (surface_alpha, layer.min(1.0))
 }
 
-pub(super) fn wallpaper_available_for_preview(cx: &App) -> bool {
+pub(super) fn settings_wallpaper_visible(cx: &App) -> bool {
     cx.try_global::<VisualEffects>().is_some_and(|effects| {
         effects.layout.opacity > 0.0
-            && effects.wallpaper.as_ref().is_some_and(|wp| wp.image.is_some())
+            && effects.wallpaper.as_ref().is_some_and(|wp| wp.images.is_some())
     })
 }
 
@@ -593,10 +622,12 @@ pub(super) fn card_layer(strip: Option<(Pixels, Arc<RenderImage>)>, cx: &App) ->
 }
 
 pub(super) fn window_layer(
+    settings_open: bool,
     strip: Option<(Pixels, Arc<RenderImage>)>,
     cx: &App,
 ) -> impl IntoElement {
-    layer(WallpaperLayer::Window, strip, cx)
+    let mode = if settings_open { WallpaperLayer::Settings } else { WallpaperLayer::Window };
+    layer(mode, strip, cx)
 }
 
 pub(super) fn peek_layer(strip: Option<(Pixels, Arc<RenderImage>)>, cx: &App) -> impl IntoElement {
@@ -607,6 +638,7 @@ pub(super) fn peek_layer(strip: Option<(Pixels, Arc<RenderImage>)>, cx: &App) ->
 enum WallpaperLayer {
     Card,
     Window,
+    Settings,
     Preview,
 }
 
@@ -619,7 +651,18 @@ fn layer(
     let opacity = effects.map_or(1.0, |effects| effects.layout.opacity);
     let extended_static =
         effects.is_some_and(|effects| effects.layout.cover_chrome && !effects.kind.is_animated());
+    let unified = unified_workspace_backdrop(cx);
+    let dark_settings = matches!(layer, WallpaperLayer::Settings)
+        && !crate::gpui_shell::theme::resolved_skin(cx).is_light;
     let opacity = match layer {
+        WallpaperLayer::Card if unified => 0.0,
+        WallpaperLayer::Preview if unified => opacity,
+        WallpaperLayer::Settings if dark_settings => opacity.min(0.56),
+        WallpaperLayer::Settings => {
+            // The settings palette supplies the veil underneath the two tints.
+            let is_light = crate::gpui_shell::theme::resolved_skin(cx).is_light;
+            opacity * if is_light { 0.42 } else { 0.56 }
+        },
         WallpaperLayer::Card if extended_static => extended_card_reveal(opacity),
         WallpaperLayer::Preview if extended_static => {
             let underlay = opacity * (1.0 - chrome_surface_opacity(cx));
@@ -629,7 +672,7 @@ fn layer(
     };
     // Canvas's style.paint does not apply element opacity in pinned GPUI;
     // Div owns that scope for its child, without baking alpha into the image.
-    div().absolute().inset_0().opacity(opacity).child(
+    let image = div().absolute().inset_0().opacity(opacity).child(
         gpui::canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
@@ -639,7 +682,13 @@ fn layer(
             },
         )
         .size_full(),
-    )
+    );
+    div().absolute().inset_0().child(image).when(dark_settings, |layer| {
+        let mut tint = crate::gpui_shell::theme::settings_panel_bg(cx);
+        tint.l *= 0.62;
+        tint.a = 0.60;
+        layer.child(div().absolute().inset_0().bg(tint))
+    })
 }
 
 fn extended_card_reveal(opacity: f32) -> f32 {
@@ -683,7 +732,7 @@ fn paint_wallpaper(
     if matches!(layer, WallpaperLayer::Window) && !layout.cover_chrome {
         return;
     }
-    if effects.kind.is_animated() {
+    if effects.kind.is_animated() && !matches!(layer, WallpaperLayer::Settings) {
         if !matches!(layer, WallpaperLayer::Preview) && under_chrome == layout.cover_chrome {
             animated::paint(bounds, under_chrome, layout, window, cx);
         }
@@ -691,13 +740,20 @@ fn paint_wallpaper(
     }
     let effects = cx.global::<VisualEffects>();
     let Some(wp) = effects.wallpaper.as_ref() else { return };
-    let Some(image) = wp.image.as_ref() else { return };
-    let radius = if matches!(layer, WallpaperLayer::Card) {
-        crate::gpui_shell::theme::card_radius(cx)
-    } else {
-        px(0.0)
+    let Some(images) = wp.images.as_ref() else { return };
+    let (image, radius) = match layer {
+        WallpaperLayer::Settings => (
+            if crate::gpui_shell::theme::resolved_skin(cx).is_light {
+                &images.blurred
+            } else {
+                &images.mica
+            },
+            px(0.0),
+        ),
+        WallpaperLayer::Window | WallpaperLayer::Preview => (&images.sharp, px(0.0)),
+        WallpaperLayer::Card => (&images.sharp, crate::gpui_shell::theme::card_radius(cx)),
     };
-    let anchor = if layout.cover_chrome {
+    let anchor = if layout.cover_chrome || matches!(layer, WallpaperLayer::Settings) {
         Bounds::new(point(px(0.0), px(0.0)), window.viewport_size())
     } else {
         bounds
@@ -707,7 +763,9 @@ fn paint_wallpaper(
     let paint_sharp = |window: &mut Window| {
         window.paint_image(bounds, image_bounds, corners, image.clone(), 0, false)
     };
-    let result = if let Some((width, strip)) = strip {
+    let result = if let Some((width, strip)) =
+        strip.filter(|_| !matches!(layer, WallpaperLayer::Settings))
+    {
         let strip_rect = Bounds::new(anchor.origin, size(width, anchor.size.height));
         let strip_corners = image_corners(bounds, strip_rect, radius);
         let right = Bounds::from_corners(
@@ -815,7 +873,7 @@ pub(super) fn show_shader_error(cx: &mut App) {
 }
 fn background_ready(effects: &VisualEffects, cx: &App) -> bool {
     animated::shader_ready(cx)
-        || effects.wallpaper.as_ref().is_some_and(|wp| wp.image.is_some())
+        || effects.wallpaper.as_ref().is_some_and(|wp| wp.images.is_some())
         || animated::media_ready(cx)
 }
 pub(super) fn show_video_error(cx: &mut App) {

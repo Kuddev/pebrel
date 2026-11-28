@@ -150,11 +150,12 @@ impl SettingsPane {
             })
             .child(div().min_w_0().truncate().child(status));
         let identity =
-            h_flex()
+            crate::gpui_shell::theme::settings_card(h_flex(), cx)
                 .w_full()
                 .items_center()
                 .gap(px(24.0))
-                .pb(px(64.0))
+                .px(px(20.0))
+                .py(px(18.0))
                 .when_some(
                     crate::app_icon::preview(
                         crate::app_icon::selected(),
@@ -249,6 +250,8 @@ impl SettingsPane {
         let update_column = crate::gpui_shell::theme::settings_card(v_flex(), cx)
             .flex_1()
             .min_w(px(280.0))
+            .px(px(18.0))
+            .py(px(14.0))
             .child(section_title(
                 language.text(crate::i18n::Message::SettingsAboutVersionAndUpdates),
             ))
@@ -284,6 +287,8 @@ impl SettingsPane {
         let actions = crate::gpui_shell::theme::settings_card(v_flex(), cx)
             .flex_1()
             .min_w(px(280.0))
+            .px(px(18.0))
+            .py(px(14.0))
             .child(section_title(
                 language.text(crate::i18n::Message::SettingsAboutProjectAndSupport),
             ))
@@ -316,7 +321,7 @@ impl SettingsPane {
                 cx,
             ));
 
-        v_flex().w_full().child(identity).child(
+        v_flex().w_full().gap(px(16.0)).child(identity).child(
             h_flex()
                 .w_full()
                 .flex_wrap()
