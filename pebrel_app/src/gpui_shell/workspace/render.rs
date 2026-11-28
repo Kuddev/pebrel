@@ -270,6 +270,12 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &OpenQuickJump, window, cx| {
                 this.open_quick_jump_palette(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &CopyWorkingDirectory, window, cx| {
+                if let Some(view) = this.tabs.get(this.active).and_then(WorkspaceTab::focused_view)
+                {
+                    view.update(cx, |view, cx| view.copy_working_directory(window, cx));
+                }
+            }))
             .child(if wallpaper_peek {
                 crate::gpui_shell::wallpaper::peek_layer(workspace_strip.clone(), cx).into_any_element()
             } else {

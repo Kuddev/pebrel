@@ -405,6 +405,11 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.display().toggle_side_panel(crate::display::side_panel::PanelView::Git);
                 ctx.mark_dirty();
             },
+            Action::CopyWorkingDirectory => {
+                if let Some(path) = ctx.display().focused_cwd_string() {
+                    ctx.clipboard_mut().store(ClipboardType::Clipboard, path);
+                }
+            },
             Action::PromptJumpUp | Action::PromptJumpDown => {
                 let up = *self == Action::PromptJumpUp;
                 if ctx.terminal_mut().nebula_prompt_jump(up) {

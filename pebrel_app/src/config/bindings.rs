@@ -265,6 +265,9 @@ pub enum Action {
     /// Toggle the right-side drawer's git view.
     ToggleGitPanel,
 
+    /// Copy the focused pane's working directory to the clipboard.
+    CopyWorkingDirectory,
+
     /// Jump to the previous shell prompt (OSC 133 marks).
     PromptJumpUp,
 
