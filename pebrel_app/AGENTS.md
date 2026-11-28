@@ -7,6 +7,7 @@
 - 首帧窗口尺寸、非阻塞 logo 准备与原生呈现顺序的因果记录见 [`workspace`](../architecture/notes/pebrel_app/gpui_shell/workspace/)。
 - Windows 指定目录启动时的窗口尺寸恢复见 [`startup geometry`](../architecture/notes/pebrel_app/gpui_shell/workspace/windowing/2026-11-11-directory-launch-window-size.md)。
 - 本地启动失败的诊断保留与显式 Shell 选择见 [`terminal/view`](../architecture/notes/pebrel_app/gpui_shell/terminal/view/2026-10-24-failed-local-session-retention.md)。
+- CLI `--hold` 的窗格生命周期与管理员交接见 [`hold lifetime`](../architecture/notes/pebrel_app/gpui_shell/workspace/windowing/2026-11-25-cli-hold-lifetime.md)。
 - 独立本地草稿写入的 canonical target 并发合同见 [`file_editor writers`](../architecture/notes/pebrel_app/gpui_shell/file_editor/2026-10-11-canonical-target-writers.md)。
 - GPUI 图片解码帧与 zoom/pan 几何一致性见 [`doc_tabs`](../architecture/notes/pebrel_app/gpui_shell/doc_tabs/)。
 - SFTP 图片/文本的分段预览、取消、来源身份与可写快照边界见 [`streamed previews`](../architecture/notes/pebrel_app/ssh_sftp/2026-11-02-streamed-file-previews.md)。

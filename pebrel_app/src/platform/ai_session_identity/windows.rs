@@ -159,7 +159,7 @@ fn collect_records(shell_pid: u32, created: u64) -> Option<String> {
             // fields to its first record in a future version.
             let payload = meta.get("payload").unwrap_or(&meta);
             let mut safe = serde_json::Map::new();
-            for key in ["id", "cwd", "source", "thread_source"] {
+            for key in ["id", "cwd", "source", "originator", "thread_source"] {
                 if let Some(value) = payload.get(key).or_else(|| meta.get(key)) {
                     safe.insert(key.to_owned(), value.clone());
                 }

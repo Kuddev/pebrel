@@ -510,9 +510,18 @@ fn find_windows_zsh(directories: impl IntoIterator<Item = PathBuf>) -> Option<De
 }
 
 #[cfg(windows)]
-fn find_pwsh() -> Option<String> {
+pub(crate) fn find_pwsh() -> Option<String> {
     use winreg::RegKey;
     use winreg::enums::HKEY_LOCAL_MACHINE;
+
+    // 便携安装只登记 PATH；尊重用户选择的顺序，并跳过隐式当前目录。
+    if let Some(path) = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .filter(|directory| directory.is_absolute())
+            .find_map(|directory| existing(directory.join("pwsh.exe")))
+    }) {
+        return Some(path);
+    }
 
     let app_paths = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\pwsh.exe")
