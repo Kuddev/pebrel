@@ -815,6 +815,7 @@ impl SettingsPane {
             "dim_inactive_panes" => flag!(dim_inactive_panes),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
+            "show_tab_status" => flag!(show_tab_status),
             "static_tab_titles" => flag!(static_tab_titles),
             "terminal_proxy" => flag!(terminal_proxy),
             "refresh_environment" => flag!(refresh_environment),
