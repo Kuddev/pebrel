@@ -24,6 +24,7 @@ const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
 
 pub(crate) mod assets;
 mod fallback;
+pub(crate) mod release_notes;
 
 #[cfg(feature = "update-test-source")]
 pub(crate) mod test_source;
@@ -37,6 +38,8 @@ struct UpdatePromptState {
     last_prompted: Option<String>,
     remind_after: Option<u64>,
     skipped_version: Option<String>,
+    #[serde(default)]
+    release_notes_shown: Option<String>,
 }
 
 impl UpdatePromptState {
@@ -154,6 +157,7 @@ struct LatestRelease {
     version: String,
     asset: Option<UpdateAsset>,
     portable_zip_url: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -224,6 +228,9 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
         return;
     }
     let spawned = std::thread::Builder::new().name("update-check-gpui".into()).spawn(move || {
+        if let Some(notes) = release_notes::pending_installed() {
+            let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateInstalled(notes));
+        }
         crate::update_download::hydrate();
         if let Some(asset) = crate::update_download::cached_asset() {
             let failed = matches!(
@@ -274,7 +281,11 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
 pub fn check_now() -> Result<UpdateCheckResult, String> {
     use crate::platform::distribution::{Distribution, require_release_check};
     let distribution = require_release_check()?;
-    UpdateCheckResult::from_release(fetch_latest_release()?, distribution == Distribution::Portable)
+    let release = fetch_latest_release()?;
+    if let Some(body) = &release.body {
+        release_notes::remember(&release.version, body);
+    }
+    UpdateCheckResult::from_release(release, distribution == Distribution::Portable)
 }
 
 fn update_state_path() -> std::path::PathBuf {
@@ -303,7 +314,7 @@ fn load_prompt_state() -> UpdatePromptState {
     }
 }
 
-fn update_prompt_state(change: impl FnOnce(&mut UpdatePromptState)) -> Result<(), String> {
+fn update_prompt_state<T>(change: impl FnOnce(&mut UpdatePromptState) -> T) -> Result<T, String> {
     let _guard = UPDATE_STATE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let path = update_state_path();
     let Some(_file_lock) = crate::atomic_file::try_lock(&path)
@@ -312,11 +323,12 @@ fn update_prompt_state(change: impl FnOnce(&mut UpdatePromptState)) -> Result<()
         return Err("更新提醒状态正由另一个 Pebrel 进程写入".to_owned());
     };
     let mut state = load_prompt_state();
-    change(&mut state);
+    let result = change(&mut state);
     let bytes = serde_json::to_vec_pretty(&state)
         .map_err(|error| format!("无法序列化更新提醒状态：{error}"))?;
     crate::atomic_file::write(&path, &bytes)
-        .map_err(|error| format!("无法保存更新提醒状态：{error}"))
+        .map_err(|error| format!("无法保存更新提醒状态：{error}"))?;
+    Ok(result)
 }
 
 pub fn should_prompt(version: &str) -> bool {
@@ -410,7 +422,7 @@ fn select_release(
     let portable_zip_url = windows_arch.and_then(|architecture| {
         assets::portable_from_assets(&release.tag_name, architecture, &release.assets)
     });
-    LatestRelease { version, asset, portable_zip_url }
+    LatestRelease { version, asset, portable_zip_url, body: Some(release.body.unwrap_or_default()) }
 }
 
 /// Only a stable, numeric release tag may supply a path component for a link.
