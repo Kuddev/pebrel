@@ -202,6 +202,7 @@ fn antigravity_in_process_subagents_never_hijack_primary_conversation_or_turn() 
         assert_eq!(active_session.as_deref(), Some(root_id));
 
         let saved = crate::session::AgentSession {
+            permission_mode: None,
             source: "antigravity".into(),
             session_id: active_session.clone(),
             session_file: None,
