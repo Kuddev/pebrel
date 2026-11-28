@@ -18,12 +18,13 @@ pub enum AgentHook {
     Qwen,
     Droid,
     Antigravity,
+    Dsh,
 }
 
 impl AgentHook {
     pub const DEFAULT: [Self; 2] = [Self::Claude, Self::Codex];
 
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Claude,
         Self::Codex,
         Self::OpenCode,
@@ -38,6 +39,7 @@ impl AgentHook {
         Self::Qwen,
         Self::Droid,
         Self::Antigravity,
+        Self::Dsh,
     ];
 
     pub const fn settings_key(self) -> &'static str {
@@ -56,6 +58,7 @@ impl AgentHook {
             Self::Qwen => "ai_hooks_qwen",
             Self::Droid => "ai_hooks_droid",
             Self::Antigravity => "ai_hooks_antigravity",
+            Self::Dsh => "ai_hooks_dsh",
         }
     }
 

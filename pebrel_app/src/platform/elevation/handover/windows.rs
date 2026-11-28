@@ -409,6 +409,8 @@ mod tests {
                 args: vec!["-NoExit".into(), "quotes \" and $(literal); %PATH%".into()],
             }),
             shell_id: None,
+            hold: false,
+            activate_only: false,
             update_restore: None,
         }
     }

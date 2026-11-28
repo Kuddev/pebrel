@@ -118,6 +118,7 @@ fn explicit_startup_argv_survives_saved_workspace_and_native_restore(cx: &mut Te
         launch: None,
         cwd: fixture.directory.to_str().unwrap().into(),
         agent: Some(crate::session::AgentSession {
+            permission_mode: None,
             source: "codex".into(),
             session_id: Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into()),
             session_file: None,
