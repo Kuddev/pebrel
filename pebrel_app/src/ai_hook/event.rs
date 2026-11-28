@@ -149,6 +149,8 @@ pub enum AiPermissionMode {
     BypassPermissions,
     /// 只读规划，不落盘。
     Plan,
+    Auto,
+    DontAsk,
 }
 
 impl AiPermissionMode {
@@ -162,14 +164,27 @@ impl AiPermissionMode {
             "acceptEdits" | "accept_edits" => Some(Self::AcceptEdits),
             "bypassPermissions" | "bypass_permissions" => Some(Self::BypassPermissions),
             "plan" => Some(Self::Plan),
+            "auto" => Some(Self::Auto),
+            "dontAsk" => Some(Self::DontAsk),
             _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::AcceptEdits => "acceptEdits",
+            Self::BypassPermissions => "bypassPermissions",
+            Self::Plan => "plan",
+            Self::Auto => "auto",
+            Self::DontAsk => "dontAsk",
         }
     }
 
     /// 这一档会不会产生权限请求。用来判断一个没有明确类型的通知该不该被解释
     /// 成「等你批准」。
     pub fn can_ask_for_permission(self) -> bool {
-        !matches!(self, Self::BypassPermissions)
+        !matches!(self, Self::BypassPermissions | Self::DontAsk)
     }
 }
 
