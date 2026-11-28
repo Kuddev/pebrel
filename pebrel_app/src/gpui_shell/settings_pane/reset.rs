@@ -47,9 +47,8 @@ impl SettingsPane {
                 return;
             },
         };
+        self.invalidate_update_source();
         let active_section = self.active_section;
-        let about_update = std::mem::replace(&mut self.about_update, AboutUpdateState::Idle);
-        let about_last_checked = self.about_last_checked.take();
         let about_update_seq = self.about_update_seq;
         let proxy_test_seq = self.proxy_test_seq.wrapping_add(1);
         let provider_test_seq = self.provider_test_seq.wrapping_add(1);
@@ -62,8 +61,6 @@ impl SettingsPane {
         cx.set_global(settings);
         *self = Self::new(window, cx);
         self.active_section = active_section;
-        self.about_update = about_update;
-        self.about_last_checked = about_last_checked;
         self.about_update_seq = about_update_seq;
         self.proxy_test_seq = proxy_test_seq;
         self.provider_test_seq = provider_test_seq;
