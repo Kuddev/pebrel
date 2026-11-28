@@ -523,7 +523,7 @@ fn ssh_first_capability_query_receives_reply_and_input_keeps_flowing() {
         let options = super::super::terminal_config(pebrel_terminal::term::Config {
             suppress_bringup_da1: true,
             conpty_resize: true,
-            kitty_keyboard: true,
+            kitty_keyboard: false,
             ..Default::default()
         });
         assert!(!options.conpty_resize);
